@@ -8,101 +8,6 @@
 # - Windows-only env vars ($env:TEMP) need $env:TMPDIR fallback.
 # - Guard "chcp" and other Windows-only commands behind platform checks.
 # ═══════════════════════════════════════════════════════════════════
-<#
-.SYNOPSIS
-    Acceptance test for a production (or prerelease) release of browser4-cli.
-
-.DESCRIPTION
-    Downloads, installs, exercises, uninstalls, and re-installs the global
-    browser4-cli from the public OSS distribution channel.
-
-    By default tests the latest stable release.  Use -Version to test a
-    specific version (including prereleases like v4.12.0-rc.1).
-
-    The stress suite (multi-scenarios.ps1) is opt-in via -Stress.
-
-    The script is designed to be run in CI or locally before tagging a release.
-    It simulates a real end user's journey:
-
-      1. Create a random working directory under ${system_temp_dir}/.browser4-acceptance.
-      2. Clean any pre-existing global installation.
-      3. Install browser4-cli via the remote bootstrap script (as-is, no patching).
-      4. Verify the CLI is on PATH after install (no manual fixups — fails if install script is broken).
-      5. Smoke-test the CLI (--help, --version, config --help, agent-run --help, invalid command).
-      6. Cold-start the browser server (browser4-cli open), verify server responds to health checks.
-      7. Measure warm-start latency and compare against cold-start.
-      8. Clean up server processes (close-all, kill-all), verify server is no longer reachable.
-      9. Uninstall and verify runtime data / caches are removed.
-     10. Repeat the install cycle to verify idempotency.
-     11. (With -Stress) Run multi-scenarios.ps1 against the global CLI with captured output.
-
-    KEY PRINCIPLE: This test acts like a real end user. It does NOT patch the
-    install script, create missing symlinks, or manually clean up after uninstall.
-    If any of those are needed, the test FAILS — because a real user would hit
-    the same broken behavior.
-
-    Running with no arguments shows this help message (safe default).
-
-.PARAMETER WorkingDir
-    Working directory for temporary artifacts.
-    Default: a random subdirectory under the system temp directory
-    (e.g. /tmp/.browser4-acceptance/20260611-143052-a3f2 on Unix,
-    %TEMP%\.browser4-acceptance\20260611-143052-a3f2 on Windows).
-
-.PARAMETER Stress
-    Enable the multi-scenario stress suite (multi-scenarios.ps1).
-    Stress tests are skipped by default.
-
-.PARAMETER MultiScenariosIterations
-    Number of iterations for the multi-scenario suite (default: 1).
-    Only applies when -Stress is set.
-
-.PARAMETER RemoveWorkingDir
-    Delete the working directory on exit (default: keep it for review).
-
-.PARAMETER Version
-    Specific release version tag to test (e.g. "v4.12.0-rc.1" or "v4.11.0").
-    When set, the install scripts are invoked with this version instead of
-    downloading the latest stable release.  The release status report also
-    queries the specific tag endpoint (GitHub /releases/tags/:tag, npm
-    package version, OSS /download/:tag) rather than — or in addition to —
-    the /latest endpoints.
-
-    Supports prerelease tags like "v4.12.0-rc.1".  The GitHub API
-    /releases/latest endpoint excludes prereleases, but /releases/tags/*
-    returns them, so the report uses the tag-specific endpoint when a
-    version is given.
-
-    Default: empty (use latest stable release).
-
-.PARAMETER Run
-    Run the acceptance test with default settings (latest stable release,
-    auto-generated working directory, no stress suite).  Without -Run or any
-    other parameter the script shows this help message and exits — a safe
-    default so that accidentally invoking the script with no arguments
-    doesn't start a long-running test.
-
-.PARAMETER Help
-    Show this help message.
-
-.EXAMPLE
-    .\test-production.ps1
-    (shows help — no arguments = safe default)
-
-.EXAMPLE
-    .\test-production.ps1 -Run
-    (run with all defaults: latest stable, temp working dir, no stress)
-
-.EXAMPLE
-    .\test-production.ps1 -Stress
-
-.EXAMPLE
-    .\test-production.ps1 -Stress -MultiScenariosIterations 3 -RemoveWorkingDir
-
-.EXAMPLE
-    .\test-production.ps1 -Version v4.12.0-rc.1 -Stress
-    (test a prerelease candidate)
-#>
 
 [CmdletBinding()]
 param(
@@ -112,16 +17,616 @@ param(
     [int] $MultiScenariosIterations = 1,
     [switch] $RemoveWorkingDir,
     [switch] $Run,
-    [switch] $Help
+    [switch] $Help,
+    [switch] $Examples
 )
 
-# Show help when called with no arguments (safe default).
-if ($PSBoundParameters.Count -eq 0 -or $Help) {
+# ═══════════════════════════════════════════════════════════════════
+# Help subsystem
+#
+# The comment-based help block at the END of this file is the single
+# source of truth for this page; it is parsed here and rendered as a
+# readable help screen.
+#
+# Why not just call Get-Help?  PowerShell only discovers a script's
+# comment-based help when the block is the first or the last thing in
+# the file.  With the block near the top (after the shebang and a
+# #requires line) Get-Help -Full prints the syntax line and nothing
+# else, so invoking this script with no arguments used to show a
+# single unreadable line.  Rendering the block ourselves also lets the
+# page report parameters that are missing a description or an
+# example — the two things that are easy to leave behind when a switch
+# is added.
+# ═══════════════════════════════════════════════════════════════════
+
+function Get-EmbeddedHelpText {
+    <#
+    .SYNOPSIS
+        Extract the script-level comment-based help block from raw text.
+    .DESCRIPTION
+        PowerShell accepts a script's comment-based help only as the first or
+        the last thing in the file, so a block qualifies when it ends before
+        -AllowBefore (the first statement) or starts at/after -AllowAfter (the
+        last function).  Function-level help blocks match neither window and
+        are skipped — they may even sit above the function they document, so a
+        simple "inside a function" test is not enough.
+    .PARAMETER Text
+        Raw contents of the script file.
+    .PARAMETER AllowBefore
+        Offset the candidate block must end at or before.
+    .PARAMETER AllowAfter
+        Offset the candidate block may start at or after.  Negative disables it.
+    #>
+    param(
+        [string] $Text,
+        [int] $AllowBefore = [int]::MaxValue,
+        [int] $AllowAfter = -1
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
+
+    foreach ($candidate in [regex]::Matches($Text, '(?s)<#(?<body>.*?)#>')) {
+        if ($candidate.Groups['body'].Value -notmatch '(?m)^\s*\.SYNOPSIS\b') { continue }
+
+        $endsBeforeStatements = (($candidate.Index + $candidate.Length) -le $AllowBefore)
+        $startsAfterFunctions = ($AllowAfter -ge 0 -and $candidate.Index -ge $AllowAfter)
+        if ($endsBeforeStatements -or $startsAfterFunctions) { return $candidate.Groups['body'].Value }
+    }
+
+    return ''
+}
+
+function Format-HelpBlock {
+    <#
+    .SYNOPSIS
+        Trim blank edges and the common indentation from a help section.
+    .PARAMETER Lines
+        Lines that belong to one help directive.
+    #>
+    param([object[]] $Lines)
+
+    $rows = @($Lines)
+    $start = 0
+    $end = $rows.Count - 1
+    while ($start -le $end -and [string]::IsNullOrWhiteSpace($rows[$start])) { $start++ }
+    while ($end -ge $start -and [string]::IsNullOrWhiteSpace($rows[$end])) { $end-- }
+    if ($end -lt $start) { return '' }
+
+    # Remove the smallest common indentation so nested lists keep their shape.
+    $indent = [int]::MaxValue
+    for ($i = $start; $i -le $end; $i++) {
+        $line = [string]$rows[$i]
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $lead = $line.Length - $line.TrimStart().Length
+        if ($lead -lt $indent) { $indent = $lead }
+    }
+    if ($indent -eq [int]::MaxValue) { $indent = 0 }
+
+    $output = for ($i = $start; $i -le $end; $i++) {
+        $line = [string]$rows[$i]
+        if ($line.Length -ge $indent) { $line.Substring($indent) } else { $line.TrimStart() }
+    }
+    return ((@($output) -join "`n").TrimEnd())
+}
+
+function ConvertFrom-HelpExample {
+    <#
+    .SYNOPSIS
+        Split one .EXAMPLE block into its command and explanation.
+    .DESCRIPTION
+        Convention: the first non-blank line is the command, everything
+        after it is the explanation.  A leading PowerShell prompt
+        ("PS C:\>") is stripped so the command stays copy-pasteable.
+    .PARAMETER Text
+        Body of a single .EXAMPLE directive.
+    #>
+    param([string] $Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+    $lines = @($Text -split "\r?\n")
+
+    $commandIndex = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if (-not [string]::IsNullOrWhiteSpace($lines[$i])) {
+            $commandIndex = $i
+            break
+        }
+    }
+    if ($commandIndex -lt 0) { return $null }
+
+    $command = ([string]$lines[$commandIndex]).Trim() -replace '^(?i)PS(\s+[^>]*)?>\s*', ''
+
+    $noteLines = @()
+    if ($commandIndex + 1 -lt $lines.Count) {
+        $noteLines = @($lines[($commandIndex + 1)..($lines.Count - 1)] |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            ForEach-Object { ([string]$_).TrimEnd() })
+    }
+
+    return [pscustomobject]@{
+        Command = $command.Trim()
+        Note    = ((@($noteLines) -join "`n").Trim())
+    }
+}
+
+function ConvertFrom-HelpText {
+    <#
+    .SYNOPSIS
+        Parse a comment-based help block into structured sections.
+    .PARAMETER Text
+        Body of the comment block (without its delimiters).
+    .OUTPUTS
+        PSCustomObject with Synopsis, Description, Parameters
+        (OrderedDictionary keyed by parameter name), Examples, Notes, Links.
+    #>
+    param([string] $Text)
+
+    $help = [pscustomobject]@{
+        Synopsis    = ''
+        Description = ''
+        Parameters  = [ordered]@{}
+        Examples    = @()
+        Notes       = ''
+        Links       = @()
+    }
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $help }
+
+    # Split the block into directive sections (".SYNOPSIS", ".PARAMETER X", ...).
+    $sections = [System.Collections.Generic.List[object]]::new()
+    $current = $null
+    foreach ($rawLine in ($Text -split "\r?\n")) {
+        $directive = [regex]::Match($rawLine, '^\s*\.(?<key>[A-Za-z]+)(?:[ \t]+(?<arg>.*?))?[ \t]*$')
+        if ($directive.Success) {
+            $current = [pscustomobject]@{
+                Key   = $directive.Groups['key'].Value.ToUpperInvariant()
+                Arg   = $directive.Groups['arg'].Value.Trim()
+                Lines = [System.Collections.Generic.List[string]]::new()
+            }
+            $sections.Add($current)
+            continue
+        }
+        if ($null -ne $current) { $current.Lines.Add([string]$rawLine) }
+    }
+
+    $examples = [System.Collections.Generic.List[object]]::new()
+    $links = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($section in $sections) {
+        $body = Format-HelpBlock -Lines $section.Lines
+        switch ($section.Key) {
+            'SYNOPSIS'    { if (-not $help.Synopsis)    { $help.Synopsis = (($body -replace '\s+', ' ').Trim()) } }
+            'DESCRIPTION' { if (-not $help.Description) { $help.Description = $body } }
+            'NOTES'       { if (-not $help.Notes)       { $help.Notes = $body } }
+            'PARAMETER'   {
+                if ($section.Arg -and -not $help.Parameters.Contains($section.Arg)) {
+                    $help.Parameters[$section.Arg] = $body
+                }
+            }
+            'EXAMPLE'     {
+                $example = ConvertFrom-HelpExample -Text $body
+                if ($example) { $examples.Add($example) }
+            }
+            'LINK'        { if ($body) { $links.Add(((($body -split "\r?\n") | ForEach-Object { $_.Trim() }) -join ' ').Trim()) } }
+        }
+    }
+
+    $help.Examples = @($examples)
+    $help.Links = @($links)
+    return $help
+}
+
+function Get-ScriptHelpCoverage {
+    <#
+    .SYNOPSIS
+        Report parameters that lack a description or an example.
+    .DESCRIPTION
+        This is the "add an example" guard rail: every parameter must have
+        a .PARAMETER entry and must appear in at least one .EXAMPLE command,
+        otherwise the rendered help prints a reminder (and the helper test
+        suite fails) instead of silently shipping an untested example.
+    .PARAMETER Parameters
+        Parameter models produced by Get-ScriptHelpModel.
+    .PARAMETER Help
+        Parsed help model produced by ConvertFrom-HelpText.
+    .OUTPUTS
+        PSCustomObject with MissingDescriptions, MissingExamples, IsComplete.
+    #>
+    param($Parameters, $Help)
+
+    $missingDescriptions = @()
+    $missingExamples = @()
+
+    $exampleText = ''
+    if ($Help -and $Help.Examples) {
+        $exampleText = (@($Help.Examples) | ForEach-Object { "$($_.Command)`n$($_.Note)" }) -join "`n"
+    }
+
+    foreach ($parameter in @($Parameters)) {
+        if (-not $parameter) { continue }
+        if (-not $Help -or -not $Help.Parameters.Contains($parameter.Name)) {
+            $missingDescriptions += $parameter.Name
+        }
+        if ($exampleText -notmatch ('(?i)(?:^|\s)-' + [regex]::Escape($parameter.Name) + '\b')) {
+            $missingExamples += $parameter.Name
+        }
+    }
+
+    return [pscustomobject]@{
+        MissingDescriptions = @($missingDescriptions)
+        MissingExamples     = @($missingExamples)
+        IsComplete          = ($missingDescriptions.Count -eq 0 -and $missingExamples.Count -eq 0)
+    }
+}
+
+function Get-ScriptHelpModel {
+    <#
+    .SYNOPSIS
+        Build the help model for a script: parsed help text plus its parameters.
+    .DESCRIPTION
+        Parameters are read from the script's AST, so a newly added switch
+        appears in the help (and in the coverage report) without editing a
+        second list by hand.
+    .PARAMETER Path
+        Script to read.  Defaults to this script.
+    .OUTPUTS
+        PSCustomObject with Path, Help, Parameters and Coverage.
+    #>
+    param([string] $Path = $PSCommandPath)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { throw 'No script path was supplied for help generation.' }
+    if (-not (Test-Path -LiteralPath $Path)) { throw "Help source not found: $Path" }
+    $fullPath = (Resolve-Path -LiteralPath $Path).Path
+
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($fullPath, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors -and $parseErrors.Count -gt 0) {
+        throw "Cannot read help from ${fullPath}: $($parseErrors[0].Message)"
+    }
+
+    # A script's help block may sit before the first statement (top of file) or
+    # after the last function (end of file).  Function-level help blocks — the
+    # ones inside a function and the ones placed just above it — match neither
+    # window and must not be mistaken for the script's own help.
+    $firstStatementOffset = if ($ast.ParamBlock) {
+        $ast.ParamBlock.Extent.StartOffset
+    } elseif ($ast.EndBlock) {
+        $ast.EndBlock.Extent.StartOffset
+    } else {
+        [int]::MaxValue
+    }
+
+    $lastFunctionEnd = 0
+    foreach ($functionAst in $ast.FindAll({
+        param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
+    }, $true)) {
+        if ($functionAst.Extent.EndOffset -gt $lastFunctionEnd) { $lastFunctionEnd = $functionAst.Extent.EndOffset }
+    }
+
+    $text = Get-Content -LiteralPath $fullPath -Raw
+    $helpBody = Get-EmbeddedHelpText -Text $text -AllowBefore $firstStatementOffset -AllowAfter $lastFunctionEnd
+    $help = ConvertFrom-HelpText -Text $helpBody
+
+    $parameters = @()
+    if ($ast.ParamBlock) {
+        foreach ($parameterAst in $ast.ParamBlock.Parameters) {
+            $typeName = if ($parameterAst.StaticType) { $parameterAst.StaticType.Name } else { 'object' }
+            $parameters += [pscustomobject]@{
+                Name     = $parameterAst.Name.VariablePath.UserPath
+                Type     = $typeName
+                IsSwitch = ($typeName -eq 'SwitchParameter')
+                Default  = if ($parameterAst.DefaultValue) { $parameterAst.DefaultValue.Extent.Text } else { $null }
+            }
+        }
+    }
+
+    return [pscustomobject]@{
+        Path       = $fullPath
+        Help       = $help
+        Parameters = @($parameters)
+        Coverage   = Get-ScriptHelpCoverage -Parameters @($parameters) -Help $help
+    }
+}
+
+function Get-HelpWidth {
+    <#
+    .SYNOPSIS
+        Console width used for wrapping, clamped to a readable range.
+    #>
+    $width = 0
+    try { $width = [Console]::WindowWidth } catch { $width = 0 }
+    if ($width -le 0) {
+        try { $width = $Host.UI.RawUI.WindowSize.Width } catch { $width = 0 }
+    }
+    if ($width -lt 80) { $width = 80 }
+    if ($width -gt 120) { $width = 120 }
+    return $width
+}
+
+function Format-WrappedText {
+    <#
+    .SYNOPSIS
+        Wrap paragraphs to a maximum line width.
+    .PARAMETER Text
+        Text to wrap; blank lines separate paragraphs.
+    .PARAMETER Width
+        Maximum characters per line.
+    .OUTPUTS
+        String[] — wrapped lines, with empty strings between paragraphs.
+    #>
+    param([string] $Text, [int] $Width)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return @() }
+    if ($Width -lt 20) { $Width = 20 }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    foreach ($paragraph in [regex]::Split($Text.Trim(), "\r?\n[ \t]*\r?\n")) {
+        $current = ''
+        foreach ($word in ($paragraph -split '\s+' | Where-Object { $_ })) {
+            if (-not $current) {
+                $current = $word
+            } elseif (($current.Length + 1 + $word.Length) -le $Width) {
+                $current = "$current $word"
+            } else {
+                $lines.Add($current)
+                $current = $word
+            }
+        }
+        if ($current) { $lines.Add($current) }
+        $lines.Add('')
+    }
+    while ($lines.Count -gt 0 -and $lines[$lines.Count - 1] -eq '') { $lines.RemoveAt($lines.Count - 1) }
+
+    return @($lines)
+}
+
+function Get-HelpTypeName {
+    <#
+    .SYNOPSIS
+        Render a parameter type the way it is written in the docs.
+    .DESCRIPTION
+        The AST reports .NET names ("String", "Int32"); the help page uses the
+        PowerShell names users type in casts and skill documents ("string",
+        "int").
+    .PARAMETER TypeName
+        Type name as reported by the script's AST.
+    #>
+    param([string] $TypeName)
+
+    switch ($TypeName) {
+        'String'   { return 'string' }
+        'Int32'    { return 'int' }
+        'Int64'    { return 'long' }
+        'Double'   { return 'double' }
+        'Decimal'  { return 'decimal' }
+        'Boolean'  { return 'bool' }
+        'Object'   { return 'object' }
+        default    { return "$TypeName".ToLowerInvariant() }
+    }
+}
+
+function Get-HelpUsageLines {
+    <#
+    .SYNOPSIS
+        Render the usage line(s) for a help model.
+    .PARAMETER Model
+        Model produced by Get-ScriptHelpModel.
+    .PARAMETER Width
+        Maximum characters per line.
+    .OUTPUTS
+        String[] — one or more usage lines, already indented.
+    #>
+    param($Model, [int] $Width)
+
+    $command = 'pwsh ./bin/test-production.ps1'
+    $continuation = '       '   # aligns under "pwsh " after the two-space margin
+    $line = "  $command"
+    $lines = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($parameter in @($Model.Parameters)) {
+        $token = if ($parameter.IsSwitch) {
+            "[-$($parameter.Name)]"
+        } else {
+            "[-$($parameter.Name) <$(Get-HelpTypeName -TypeName $parameter.Type)>]"
+        }
+        if (($line.Length + 1 + $token.Length) -le $Width) {
+            $line = "$line $token"
+        } else {
+            $lines.Add($line)
+            $line = "$continuation$token"
+        }
+    }
+    $lines.Add($line)
+
+    return @($lines)
+}
+
+function Write-HelpHeading {
+    <#
+    .SYNOPSIS
+        Print a help section heading.
+    .PARAMETER Text
+        Heading text.
+    #>
+    param([string] $Text)
     Write-Host ''
-    Write-Host 'Browser4 Production Acceptance Test' -ForegroundColor Cyan
-    Write-Host '────────────────────────────────────' -ForegroundColor Cyan
+    Write-Host "  $Text" -ForegroundColor Cyan
+}
+
+function Show-ScriptHelp {
+    <#
+    .SYNOPSIS
+        Render this script's help page from its comment-based help block.
+    .PARAMETER Path
+        Script whose help should be rendered.  Defaults to this script.
+    .PARAMETER ExamplesOnly
+        Print only the EXAMPLES section (copy-paste ready).
+    .PARAMETER InvokedWithoutArguments
+        Print the "no arguments = safe default" hint under the title.
+    #>
+    param(
+        [string] $Path = $PSCommandPath,
+        [switch] $ExamplesOnly,
+        [switch] $InvokedWithoutArguments
+    )
+
+    $model = Get-ScriptHelpModel -Path $Path
+    $help = $model.Help
+    $width = Get-HelpWidth
+    $bodyWidth = $width - 4
+    $title = 'Browser4 Production Acceptance Test'
+
     Write-Host ''
-    Get-Help -Full $MyInvocation.MyCommand.Path
+    Write-Host "  $title" -ForegroundColor Cyan
+    Write-Host "  $('─' * [Math]::Max(20, [Math]::Min($width - 4, $title.Length + 12)))" -ForegroundColor DarkCyan
+
+    if ($InvokedWithoutArguments) {
+        Write-Host ''
+        Write-Host '  No arguments given — printing help only. Nothing was installed, changed, or started.' -ForegroundColor DarkGray
+        Write-Host '  To run the acceptance test:  pwsh ./bin/test-production.ps1 -Run' -ForegroundColor Gray
+    }
+
+    if ($help.Synopsis) {
+        Write-Host ''
+        Write-Host "  $($help.Synopsis)"
+    }
+
+    if (-not $ExamplesOnly) {
+        if ($help.Description) {
+            Write-Host ''
+            foreach ($line in @(Format-WrappedText -Text $help.Description -Width $bodyWidth)) {
+                if ($line) { Write-Host "    $line" } else { Write-Host '' }
+            }
+        }
+
+        Write-HelpHeading 'USAGE'
+        foreach ($line in @(Get-HelpUsageLines -Model $model -Width $width)) {
+            Write-Host $line -ForegroundColor Gray
+        }
+
+        Write-HelpHeading 'OPTIONS'
+
+        $rows = @()
+        foreach ($parameter in @($model.Parameters)) {
+            $label = if ($parameter.IsSwitch) {
+                "-$($parameter.Name)"
+            } else {
+                "-$($parameter.Name) <$(Get-HelpTypeName -TypeName $parameter.Type)>"
+            }
+            $rows += [pscustomobject]@{ Label = $label; Name = $parameter.Name }
+        }
+
+        $labelWidth = 0
+        foreach ($row in $rows) {
+            if ($row.Label.Length -gt $labelWidth) { $labelWidth = $row.Label.Length }
+        }
+        # Very long signatures get their description on the next line instead
+        # of squeezing every line into a narrow column.
+        $stackLabels = ($labelWidth -gt 34)
+        if ($stackLabels) { $labelWidth = 0 }
+
+        foreach ($row in $rows) {
+            $description = if ($help.Parameters.Contains($row.Name)) { [string]$help.Parameters[$row.Name] } else { '' }
+            if (-not $description) {
+                Write-Host ("    $($row.Label)") -ForegroundColor Yellow
+                Write-Host '        no description yet — add a .PARAMETER entry (see HELP MAINTENANCE)' -ForegroundColor Yellow
+                continue
+            }
+
+            $wrapped = @(Format-WrappedText -Text $description -Width ($bodyWidth - $labelWidth - 2))
+            if ($wrapped.Count -eq 0) { $wrapped = @('') }
+
+            if ($stackLabels) {
+                Write-Host ("    $($row.Label)") -ForegroundColor Yellow
+                foreach ($line in $wrapped) { if ($line) { Write-Host "        $line" } }
+            } else {
+                Write-Host ("    $($row.Label.PadRight($labelWidth))") -ForegroundColor Yellow -NoNewline
+                Write-Host ("  $($wrapped[0])")
+                for ($i = 1; $i -lt $wrapped.Count; $i++) {
+                    if (-not $wrapped[$i]) { continue }
+                    Write-Host ("    $(' ' * $labelWidth)  $($wrapped[$i])")
+                }
+            }
+        }
+    }
+
+    Write-HelpHeading 'EXAMPLES'
+    if (@($help.Examples).Count -eq 0) {
+        Write-Host '    No examples yet — add .EXAMPLE blocks to the help block at the end of this script.' -ForegroundColor Yellow
+    } else {
+        $index = 0
+        foreach ($example in @($help.Examples)) {
+            $index++
+            Write-Host ''
+            Write-Host ("    [{0}] {1}" -f $index, $example.Command) -ForegroundColor Green
+            foreach ($line in @(Format-WrappedText -Text $example.Note -Width ($bodyWidth - 4))) {
+                if ($line) { Write-Host "        $line" -ForegroundColor DarkGray }
+            }
+        }
+    }
+
+    if (-not $ExamplesOnly) {
+        if ($help.Notes) {
+            Write-HelpHeading 'NOTES'
+            foreach ($line in @(Format-WrappedText -Text $help.Notes -Width $bodyWidth)) {
+                if ($line) { Write-Host "    $line" } else { Write-Host '' }
+            }
+        }
+
+        if (@($help.Links).Count -gt 0) {
+            Write-HelpHeading 'SEE ALSO'
+            foreach ($link in @($help.Links)) { Write-Host "    $link" -ForegroundColor Gray }
+        }
+    }
+
+    Write-HelpHeading 'HELP MAINTENANCE'
+    if ($model.Coverage.IsComplete) {
+        Write-Host '    OK  every parameter has a description and appears in an example.' -ForegroundColor DarkGray
+    } else {
+        if ($model.Coverage.MissingDescriptions.Count -gt 0) {
+            $names = (@($model.Coverage.MissingDescriptions) | ForEach-Object { "-$_" }) -join ', '
+            Write-Host "    ⚠ no .PARAMETER entry for: $names" -ForegroundColor Yellow
+        }
+        if ($model.Coverage.MissingExamples.Count -gt 0) {
+            $names = (@($model.Coverage.MissingExamples) | ForEach-Object { "-$_" }) -join ', '
+            Write-Host "    ⚠ no example yet for: $names — add an .EXAMPLE block that runs the script with it" -ForegroundColor Yellow
+        }
+        Write-Host '      EXAMPLES convention: first line = the command, following lines = what it shows.' -ForegroundColor Yellow
+    }
+    Write-Host '    This page is generated from the comment-based help block at the end of this' -ForegroundColor DarkGray
+    Write-Host '    script — edit that block, not this output.' -ForegroundColor DarkGray
+    Write-Host ''
+}
+
+# ─────────────────────────────────────────────────────
+# Help dispatch — no arguments (or -Help / -Examples)
+# prints the help page and exits 0 before anything is
+# installed, uninstalled, or started.
+# ─────────────────────────────────────────────────────
+$scriptPathForHelp = if ($PSCommandPath) {
+    $PSCommandPath
+} elseif ($MyInvocation.MyCommand.Path) {
+    $MyInvocation.MyCommand.Path
+} else {
+    ''
+}
+
+$showHelp = ($PSBoundParameters.Count -eq 0) -or $Help -or $Examples
+if (-not $showHelp -and $PSBoundParameters.Count -eq 1 -and $PSBoundParameters.ContainsKey('Run') -and -not $Run) {
+    # `-Run:$false` on its own is a request to do nothing: behave like no arguments.
+    $showHelp = $true
+}
+
+if ($showHelp) {
+    $invokedWithoutArguments = ($PSBoundParameters.Count -eq 0)
+    try {
+        Show-ScriptHelp -Path $scriptPathForHelp -ExamplesOnly:$Examples -InvokedWithoutArguments:$invokedWithoutArguments
+    } catch {
+        Write-Host ''
+        Write-Host '  Browser4 Production Acceptance Test' -ForegroundColor Cyan
+        Write-Host "  Help could not be rendered: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "  The help text lives in the comment-based help block at the end of: $scriptPathForHelp" -ForegroundColor DarkGray
+    }
     exit 0
 }
 
@@ -1988,3 +2493,124 @@ if ($FailedSteps -gt 0) {
 }
 
 exit $(if ($FailedSteps -eq 0) { 0 } else { 1 })
+
+# ═══════════════════════════════════════════════════════════════════
+# Comment-based help for the script as a whole
+#
+# This block must stay at the END of the file: PowerShell only
+# discovers a script's comment-based help when it is the first or the
+# last thing in the file, and the shebang/`#requires` pair above
+# defeats the "first" position.  Show-ScriptHelp parses this block and
+# renders the help page, so this is the only place help text is
+# written — add a .PARAMETER entry and an .EXAMPLE whenever a
+# parameter is added.
+# ═══════════════════════════════════════════════════════════════════
+
+<#
+.SYNOPSIS
+    Acceptance-test a published browser4-cli release: install, exercise,
+    uninstall, reinstall.
+
+.DESCRIPTION
+    Downloads and installs the global browser4-cli from the public OSS
+    distribution channel, then behaves like a real end user: it starts the
+    browser backend, runs smoke checks, measures cold start against warm
+    start, shuts everything down, uninstalls, and repeats the install cycle
+    to verify idempotency.  It never patches the installer or repairs the
+    PATH — if a real user would hit it, the step fails.
+
+    The run is isolated.  State, the runtime bundle, config sandboxes and
+    logs live under -WorkingDir, and BROWSER4_CLI_STATE_DIR,
+    BROWSER4_RUNTIME_DIR, BROWSER4_SERVER_OPTS and BROWSER4_AUTO_UPGRADE
+    are redirected there for the duration of the run and restored on exit,
+    so the developer's own Browser4 installation is never touched.
+
+    Invoking the script with no arguments prints this help.  That is a safe
+    default: an accidental invocation cannot install, uninstall, or start
+    anything.  Pass -Run (or any other option) to start the test.
+
+    Requires PowerShell 7+, network access to the OSS CDN, GitHub releases
+    and npm, and a machine where the CLI can launch its browser backend.  A
+    repository checkout is not required.
+
+.PARAMETER WorkingDir
+    Directory for temporary artifacts: config sandbox, downloaded
+    installer, CLI temp files and logs.
+    Default: a random subdirectory under the system temp directory, e.g.
+    /tmp/.browser4-acceptance/20260611-143052-a3f2 on Unix or
+    %TEMP%\.browser4-acceptance\20260611-143052-a3f2 on Windows.  The
+    directory is kept after the run unless -RemoveWorkingDir is given.
+
+.PARAMETER Version
+    Release tag to install instead of the latest stable release, e.g.
+    v4.14.0 or v4.15.0-rc.1.  Prereleases are supported: the release status
+    report then queries the tag-specific endpoints (GitHub
+    /releases/tags/<tag>, npm package version, OSS /download/<tag>) instead
+    of the /latest ones.
+
+.PARAMETER Stress
+    Also run the opt-in multi-scenario stress suite (multi-scenarios.ps1)
+    against the globally installed CLI.  Skipped by default.
+
+.PARAMETER MultiScenariosIterations
+    How many times the stress suite repeats.  Only meaningful together with
+    -Stress.  Default: 1.
+
+.PARAMETER RemoveWorkingDir
+    Delete the working directory when the run finishes.  Default: keep it
+    so logs and artifacts can be inspected after a failure.
+
+.PARAMETER Run
+    Start the acceptance test with all defaults: latest stable release, a
+    fresh random working directory, no stress suite.  Without -Run (and
+    without any other option) the script only prints help.
+
+.PARAMETER Help
+    Print this help and exit 0 without touching the machine.
+
+.PARAMETER Examples
+    Print only the EXAMPLES section, ready to copy and paste, and exit 0.
+
+.EXAMPLE
+    pwsh ./bin/test-production.ps1 -Help
+    Print the help page without installing, uninstalling, or starting anything.
+
+.EXAMPLE
+    pwsh ./bin/test-production.ps1 -Examples
+    Print only the ready-to-run examples (this page's EXAMPLES section).
+
+.EXAMPLE
+    pwsh ./bin/test-production.ps1 -Run
+    Run the full acceptance test against the latest stable release and keep
+    the working directory for review.
+
+.EXAMPLE
+    pwsh ./bin/test-production.ps1 -Version v4.15.0-rc.1
+    Run the acceptance test against a specific prerelease tag instead of the
+    latest stable release.
+
+.EXAMPLE
+    pwsh ./bin/test-production.ps1 -Stress -MultiScenariosIterations 3 -RemoveWorkingDir
+    Run the acceptance test plus the stress suite three times, then delete
+    the working directory — the shape the weekly CI job uses.
+
+.EXAMPLE
+    pwsh ./bin/test-production.ps1 -WorkingDir /tmp/b4-acceptance -Stress
+    Reuse a known working directory so artifacts from several runs sit
+    together (on Windows use a path such as C:\temp\b4-acceptance).
+
+.NOTES
+    Exit codes: 0 means every step passed (or help/examples were printed);
+    1 means at least one step failed — the failing steps are listed in the
+    results table printed at the end.
+
+    See browser4-tests/tests-production/README.md for the full production
+    test suite and coworker/skills/run-tests/SKILL.md for how the suite is
+    driven from the test runner.
+
+.LINK
+    browser4-tests/tests-production/README.md
+
+.LINK
+    coworker/skills/run-tests/SKILL.md
+#>

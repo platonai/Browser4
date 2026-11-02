@@ -13,7 +13,13 @@ individual step failures, and a full summary is printed at the end.
 
 ```powershell
 # Run the full production acceptance test (install → exercise → uninstall → re-install)
-pwsh bin/test-production.ps1
+pwsh bin/test-production.ps1 -Run
+
+# Show the help page (options, examples, exit codes) without running anything
+pwsh bin/test-production.ps1 -Help
+
+# Show only the copy-paste-ready examples
+pwsh bin/test-production.ps1 -Examples
 
 # Run all test categories
 pwsh browser4-tests/tests-production/run-tests.ps1 all
@@ -80,7 +86,7 @@ argument-escaping validation.
 | Script | Description |
 |---|---|
 | `test-production-helpers.ps1` | Unit tests for helper functions in `test-production.ps1` (AST-extracted, no side effects) |
-| `test-utils-helpers.ps1` | Unit tests for `ConvertTo-WindowsCmdArg` in `test-utils.psm1` against MSDN CommandLineToArgvW spec |
+| `test-utils-helpers.ps1` | Unit tests for `test-utils.psm1`: `ConvertTo-WindowsCmdArg` against the MSDN CommandLineToArgvW spec, plus the AI-analysis console policy (`Test-AiAnalysisVisible`, `Format-AiAnalysisNotice`) |
 
 ### Utilities & runners
 
@@ -91,6 +97,35 @@ argument-escaping validation.
 | `test-utils.psm1` | Shared PowerShell test utilities module (self-contained). Importing it also pins the process to UTF-8 output: the suite's stdout is captured to files that are read back as UTF-8, and a redirected stream otherwise starts on the Windows OEM code page, where `·` / `—` become `??` and `═` becomes `?T` (CP936 `A8 54` — the `0x54` is a literal `T`). |
 | `seeds.txt` | Seed URLs for swarm tests |
 | `seeds-stress.txt` | Extended seed list for stress-swarm-agents |
+
+## Production acceptance test (`bin/test-production.ps1`)
+
+`bin/test-production.ps1` is the end-to-end release gate: install → exercise →
+uninstall → re-install, against the **published** CLI. Running it with no
+arguments prints help and exits 0 — a safe default, because an accidental
+invocation must not install, uninstall, or start anything. Pass `-Run` (or any
+other option) to actually run it.
+
+| Option | Description |
+|---|---|
+| `-Run` | Run with all defaults (latest stable release, random temp working directory, no stress suite) |
+| `-WorkingDir <path>` | Working directory for temporary artifacts (default: random subdir under the system temp dir; preserved for review) |
+| `-Version <tag>` | Test a specific release, including prereleases (e.g. `v4.15.0-rc.1`); the release status report then queries the tag-specific endpoints |
+| `-Stress` | Also run the opt-in multi-scenario stress suite (`multi-scenarios.ps1`) |
+| `-MultiScenariosIterations <n>` | Iterations for the stress suite (default: 1, only with `-Stress`) |
+| `-RemoveWorkingDir` | Delete the working directory on exit (default: kept for review) |
+| `-Help` | Print the help page and exit 0 |
+| `-Examples` | Print only the copy-paste-ready examples and exit 0 |
+
+The help page is generated from the comment-based help block at the end of the
+script, so it always matches the parameter list. It also reports parameters that
+lack a `.PARAMETER` description or an `.EXAMPLE`, and
+`test-production-helpers.ps1` fails while that coverage is incomplete — a new
+switch needs a description and at least one example before the helper suite is
+green again.
+
+Exit codes: `0` — every step passed (or help/examples were printed); `1` — at
+least one step failed (the failing steps are listed in the results table).
 
 ## Locale
 
@@ -125,8 +160,15 @@ location with only a globally-installed `browser4-cli` on PATH.
 ## Logs
 
 Each run creates a timestamped log directory under `browser4-tests/tests-production/logs/`.
-On failure, log paths are printed and AI analysis is invoked automatically
-when `claude` or `copilot` is on PATH (priority: `claude`, then `copilot`).
+On failure, log paths are printed and AI analysis is invoked automatically when
+an AI CLI (`dsh`, `opencode`, `claude`, `copilot`) is on PATH.
+
+The analysis body is **not printed to the console** by default: it is free-form
+AI output (often the analyzer's own reasoning plus raw error dumps) that buries
+the test report. Only a one-line pointer to `ai-analysis.txt` is printed. To get
+the full text on the console, pass `-ShowAnalysis` to `Invoke-CopilotAnalysis` or
+set `BROWSER4_SHOW_AI_ANALYSIS=1` for the whole session (e.g. when capturing CI
+logs).
 
 ## See Also
 

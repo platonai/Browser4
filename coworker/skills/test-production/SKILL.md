@@ -29,22 +29,38 @@ release.
 
 ## Safe Default
 
-Running with no arguments shows help (safe default):
+Running with no arguments prints a generated help page (options, examples, exit
+codes) and exits 0 — an accidental invocation never installs, uninstalls, or
+starts anything:
 
 ```bash
-./bin/test-production.ps1
+./bin/test-production.ps1           # help page
+./bin/test-production.ps1 -Help      # same, explicitly
+./bin/test-production.ps1 -Examples  # only the copy-paste-ready examples
 ```
+
+To actually run the acceptance test, pass `-Run` (or any other option):
+
+```bash
+./bin/test-production.ps1 -Run
+```
+
+The help page is generated from the comment-based help block at the end of the
+script, so it always matches the parameter list, and it reports parameters that
+lack a `.PARAMETER` description or an `.EXAMPLE`.
 
 ## Options
 
 | Flag | Description |
 |------|-------------|
+| `-Run` | Run with all defaults (latest stable release, random temp working directory, no stress suite) |
 | `-WorkingDir <path>` | Working directory for temporary artifacts (default: random subdir under system temp) |
 | `-Stress` | Enable the multi-scenario stress suite (opt-in) |
 | `-MultiScenariosIterations <n>` | Iterations for the multi-scenario suite (default: 1, only with `-Stress`) |
 | `-RemoveWorkingDir` | Delete the working directory on exit (default: preserved for review) |
 | `-Version <tag>` | Test a specific release version (e.g. `v4.12.0-rc.1`, `v4.11.0`). Default: latest stable |
-| `-Help` | Show help message |
+| `-Help` | Print the help page and exit 0 |
+| `-Examples` | Print only the examples and exit 0 |
 
 ## What It Tests
 
@@ -84,13 +100,13 @@ into the test sandbox during Cycle 2.
 ### Examples
 
 ```bash
-# Show help (no arguments = safe default)
-./bin/test-production.ps1
+# Show help (no arguments = safe default; -Help makes it explicit)
+./bin/test-production.ps1 -Help
 
-# Run the full acceptance test (no stress)
-./bin/test-production.ps1
+# Run the full acceptance test with all defaults (no stress suite)
+./bin/test-production.ps1 -Run
 
-# Run with stress suite
+# Run with the stress suite
 ./bin/test-production.ps1 -Stress
 
 # Production CI: stress test with multiple iterations, clean up afterward
@@ -117,8 +133,8 @@ into the test sandbox during Cycle 2.
 
 | Code | Meaning |
 |------|---------|
-| 0 | All steps passed |
-| 1 | One or more steps failed |
+| 0 | All steps passed (or the help page / examples were printed) |
+| 1 | One or more steps failed (the failing steps are listed in the results table) |
 
 ## Working Directory
 

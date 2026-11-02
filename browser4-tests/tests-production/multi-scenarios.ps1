@@ -7,57 +7,6 @@
 # - Windows-only env vars ($env:TEMP) need $env:TMPDIR fallback.
 # - Guard "chcp" and other Windows-only commands behind platform checks.
 # ═══════════════════════════════════════════════════════════════════
-<#
-.SYNOPSIS
-    Multi-scenario stress-test orchestrator for browser4-cli.
-
-.DESCRIPTION
-    Runs the scenario suite in a loop.  Each iteration launches every scenario
-    as an isolated sub-process so a single crash cannot poison the runner.
-    Results are tracked per-iteration and a summary is printed at the end.
-
-    By default this script uses the globally-installed browser4-cli and does
-    NOT build the Browser4 server — it expects a server to already be running
-    (or auto-started by browser4-cli).  Use -BuildCli to build from the local
-    Rust source tree, and -BuildServer to rebuild the server JAR via Maven.
-
-.PARAMETER Iterations
-    Number of full suite iterations (default: 60).
-
-.PARAMETER Scenarios
-    Paths to scenario scripts relative to the script directory.  Defaults to the
-    four core scenarios.
-
-.PARAMETER Release
-    Build with `--release` (only meaningful with -BuildCli).
-
-.PARAMETER SkipBuild
-    Skip CLI build.  This is the default behaviour; accepted for bw-compat.
-
-.PARAMETER SkipServerBuild
-    Skip the Browser4 server (Maven) rebuild.  This is the default behaviour;
-    accepted for bw-compat.
-
-.PARAMETER BuildServer
-    Rebuild the Browser4 server JAR via Maven before running scenarios.
-
-.PARAMETER BuildCli
-    Build the CLI binary from the local Rust source tree instead of using the
-    globally-installed browser4-cli.
-
-.PARAMETER UseGlobalCli
-    Use the globally-installed browser4-cli.  This is the default behaviour;
-    accepted for bw-compat.  Override with -BuildCli.
-
-.EXAMPLE
-    .\multi-scenarios.ps1 -Iterations 10
-
-.EXAMPLE
-    .\multi-scenarios.ps1 -BuildCli -BuildServer -Iterations 5
-
-.EXAMPLE
-    .\multi-scenarios.ps1 -UseGlobalCli -SkipServerBuild
-#>
 
 [CmdletBinding()]
 param(
@@ -631,3 +580,55 @@ if ($TotalFailures -gt 0) {
 $null = Finish-TestSession -ExtraCopilotPrompt "Browser4 CLI multi-scenario stress test."
 
 exit $(if ($TotalFailures -eq 0) { 0 } else { 1 })
+
+<#
+.SYNOPSIS
+    Multi-scenario stress-test orchestrator for browser4-cli.
+
+.DESCRIPTION
+    Runs the scenario suite in a loop.  Each iteration launches every scenario
+    as an isolated sub-process so a single crash cannot poison the runner.
+    Results are tracked per-iteration and a summary is printed at the end.
+
+    By default this script uses the globally-installed browser4-cli and does
+    NOT build the Browser4 server — it expects a server to already be running
+    (or auto-started by browser4-cli).  Use -BuildCli to build from the local
+    Rust source tree, and -BuildServer to rebuild the server JAR via Maven.
+
+.PARAMETER Iterations
+    Number of full suite iterations (default: 60).
+
+.PARAMETER Scenarios
+    Paths to scenario scripts relative to the script directory.  Defaults to the
+    four core scenarios.
+
+.PARAMETER Release
+    Build with `--release` (only meaningful with -BuildCli).
+
+.PARAMETER SkipBuild
+    Skip CLI build.  This is the default behaviour; accepted for bw-compat.
+
+.PARAMETER SkipServerBuild
+    Skip the Browser4 server (Maven) rebuild.  This is the default behaviour;
+    accepted for bw-compat.
+
+.PARAMETER BuildServer
+    Rebuild the Browser4 server JAR via Maven before running scenarios.
+
+.PARAMETER BuildCli
+    Build the CLI binary from the local Rust source tree instead of using the
+    globally-installed browser4-cli.
+
+.PARAMETER UseGlobalCli
+    Use the globally-installed browser4-cli.  This is the default behaviour;
+    accepted for bw-compat.  Override with -BuildCli.
+
+.EXAMPLE
+    .\multi-scenarios.ps1 -Iterations 10
+
+.EXAMPLE
+    .\multi-scenarios.ps1 -BuildCli -BuildServer -Iterations 5
+
+.EXAMPLE
+    .\multi-scenarios.ps1 -UseGlobalCli -SkipServerBuild
+#>

@@ -1012,6 +1012,258 @@ Assert-Returns -Label 'WSH refused: Healthy=false' -Actual $health.Healthy -Expe
 Assert-Returns -Label 'WSH refused: Content is empty' -Actual $health.Content -Expected ''
 
 # ═══════════════════════════════════════════════════════════════════
+# TESTS: help model — comment-based help parsing and example coverage
+#
+# These pin the "default help" contract of test-production.ps1: invoking
+# it with no arguments (or -Help) must render a real help page, and every
+# parameter must keep a description plus at least one example.  Before
+# this existed the no-argument path printed only the syntax line, and
+# -Version/-Run/-Help were undocumented in the examples.
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ ConvertFrom-HelpText: directives ━━━" -ForegroundColor Cyan
+
+$helpSample = @'
+.SYNOPSIS
+    Does a thing.
+
+.DESCRIPTION
+    First paragraph.
+
+    Second paragraph.
+
+.PARAMETER Name
+    The name to use.
+    Default: none.
+
+.PARAMETER Count
+    How many.
+
+.EXAMPLE
+    pwsh ./demo.ps1 -Name x
+    Runs with a name.
+
+.EXAMPLE
+    PS C:\> pwsh ./demo.ps1 -Count 2
+    Runs twice.
+
+.NOTES
+    Just notes.
+
+.LINK
+    docs/readme.md
+'@
+
+$parsedHelp = ConvertFrom-HelpText -Text $helpSample
+Assert-Returns -Label 'help: synopsis flattened to one line' -Actual $parsedHelp.Synopsis -Expected 'Does a thing.'
+Assert-Returns -Label 'help: description keeps paragraph break' -Actual ($parsedHelp.Description -match 'First paragraph\.\r?\n\r?\nSecond paragraph\.') -Expected $true
+# NOTE: a parameter really named 'Count' shadows OrderedDictionary.Count in
+# PowerShell member access, so count the keys instead of the dictionary.
+Assert-Returns -Label 'help: two parameters parsed' -Actual $parsedHelp.Parameters.Keys.Count -Expected 2
+Assert-Returns -Label 'help: parameter named Count does not shadow the key list' -Actual ((@($parsedHelp.Parameters.Keys) -join ',') -eq 'Name,Count') -Expected $true
+Assert-Returns -Label 'help: parameter body dedented and trimmed' -Actual $parsedHelp.Parameters['Name'] -Expected "The name to use.`nDefault: none."
+Assert-Returns -Label 'help: two examples parsed' -Actual @($parsedHelp.Examples).Count -Expected 2
+Assert-Returns -Label 'help: example command is the first non-blank line' -Actual $parsedHelp.Examples[0].Command -Expected 'pwsh ./demo.ps1 -Name x'
+Assert-Returns -Label 'help: example note follows the command' -Actual $parsedHelp.Examples[0].Note -Expected 'Runs with a name.'
+Assert-Returns -Label 'help: leading PS prompt stripped from command' -Actual $parsedHelp.Examples[1].Command -Expected 'pwsh ./demo.ps1 -Count 2'
+Assert-Returns -Label 'help: notes parsed' -Actual $parsedHelp.Notes -Expected 'Just notes.'
+Assert-Returns -Label 'help: links parsed' -Actual (@($parsedHelp.Links) -join ',') -Expected 'docs/readme.md'
+
+Write-Host "━━━ ConvertFrom-HelpText: empty / malformed input ━━━" -ForegroundColor Cyan
+
+$emptyHelp = ConvertFrom-HelpText -Text ''
+Assert-Returns -Label 'help: empty text → empty synopsis' -Actual $emptyHelp.Synopsis -Expected ''
+Assert-Returns -Label 'help: empty text → no examples' -Actual @($emptyHelp.Examples).Count -Expected 0
+$nullHelp = ConvertFrom-HelpText -Text $null
+Assert-Returns -Label 'help: null text → empty synopsis' -Actual $nullHelp.Synopsis -Expected ''
+Assert-Returns -Label 'help: directives-only text → empty synopsis' -Actual (ConvertFrom-HelpText -Text ".SYNOPSIS`n`n.EXAMPLE").Synopsis -Expected ''
+
+Write-Host "━━━ Get-EmbeddedHelpText: block selection ━━━" -ForegroundColor Cyan
+
+# A dot-SYNOPSIS block ABOVE a function documents that function, not the
+# script.  Only the end-of-file window may match it, never the start-of-file
+# window ("before the first statement").
+$betweenBlocks = @'
+<#
+.SYNOPSIS
+    Helper help above its function.
+#>
+function Foo {
+    'x'
+}
+
+<#
+.SYNOPSIS
+    Script help at the end.
+#>
+'@
+$firstStatement = $betweenBlocks.IndexOf('<#')
+$lastFunctionEnd = $betweenBlocks.IndexOf("`n}`n") + 3
+Assert-Returns -Label 'embedded help: fixture has a closing brace to measure' -Actual ($lastFunctionEnd -gt 1) -Expected $true
+$selected = Get-EmbeddedHelpText -Text $betweenBlocks -AllowBefore $firstStatement -AllowAfter $lastFunctionEnd
+Assert-Returns -Label 'embedded help: end-of-file block wins' -Actual ($selected -match 'Script help at the end\.') -Expected $true
+Assert-Returns -Label 'embedded help: block above a function is not script help' -Actual ($selected -match 'Helper help above its function\.') -Expected $false
+Assert-Returns -Label 'embedded help: no help block → empty string' -Actual (Get-EmbeddedHelpText -Text 'Write-Host hello') -Expected ''
+Assert-Returns -Label 'embedded help: null text → empty string' -Actual (Get-EmbeddedHelpText -Text $null) -Expected ''
+Assert-Returns -Label 'embedded help: no window match → empty string' -Actual ((Get-EmbeddedHelpText -Text $betweenBlocks -AllowBefore 0 -AllowAfter -1)) -Expected ''
+
+# CRLF help blocks: the file may be checked out with Windows line endings.
+$crlfText = "# banner`r`n`r`n<#`r`n.SYNOPSIS`r`n    CRLF help.`r`n.EXAMPLE`r`n    pwsh ./x.ps1 -Yes`r`n#>"
+Assert-Returns -Label 'embedded help: CRLF block parsed' -Actual (ConvertFrom-HelpText -Text (Get-EmbeddedHelpText -Text $crlfText)).Synopsis -Expected 'CRLF help.'
+
+Write-Host "━━━ Format-HelpBlock / ConvertFrom-HelpExample: edge cases ━━━" -ForegroundColor Cyan
+
+Assert-Returns -Label 'help block: blank-only body → empty string' -Actual (Format-HelpBlock -Lines @('', '   ', '')) -Expected ''
+Assert-Returns -Label 'help block: common indentation removed' -Actual (Format-HelpBlock -Lines @('    a', '      b', '    c')) -Expected "a`n  b`nc"
+Assert-Returns -Label 'example: blank body → null' -Actual (ConvertFrom-HelpExample -Text '   ') -Expected $null
+Assert-Returns -Label 'example: command only, empty note' -Actual (ConvertFrom-HelpExample -Text 'pwsh ./x.ps1').Note -Expected ''
+
+Write-Host "━━━ Format-WrappedText: wrapping ━━━" -ForegroundColor Cyan
+
+$wrapped = @(Format-WrappedText -Text ('word ' * 40) -Width 30)
+$tooLong = @($wrapped | Where-Object { $_.Length -gt 30 })
+Assert-Returns -Label 'wrap: every line within width' -Actual $tooLong.Count -Expected 0
+Assert-Returns -Label 'wrap: empty text → no lines' -Actual @(Format-WrappedText -Text '' -Width 40).Count -Expected 0
+$paragraphs = @(Format-WrappedText -Text "one`n`ntwo" -Width 40)
+Assert-Returns -Label 'wrap: blank line separates paragraphs' -Actual (($paragraphs -join '|')) -Expected 'one||two'
+
+Write-Host "━━━ Get-ScriptHelpCoverage: example guard rail ━━━" -ForegroundColor Cyan
+
+$fakeParameters = @(
+    [pscustomobject]@{ Name = 'Alpha'; Type = 'String'; IsSwitch = $false },
+    [pscustomobject]@{ Name = 'Beta'; Type = 'SwitchParameter'; IsSwitch = $true }
+)
+$partialHelp = ConvertFrom-HelpText -Text @'
+.SYNOPSIS
+    Coverage probe.
+
+.PARAMETER Alpha
+    Described.
+
+.EXAMPLE
+    pwsh ./x.ps1 -Alpha value
+    Only Alpha is exercised.
+'@
+$partialCoverage = Get-ScriptHelpCoverage -Parameters $fakeParameters -Help $partialHelp
+Assert-Returns -Label 'coverage: described parameter has no missing description' -Actual (@($partialCoverage.MissingDescriptions) -contains 'Alpha') -Expected $false
+Assert-Returns -Label 'coverage: undocumented parameter reported' -Actual (@($partialCoverage.MissingDescriptions) -contains 'Beta') -Expected $true
+Assert-Returns -Label 'coverage: parameter without example reported' -Actual (@($partialCoverage.MissingExamples) -contains 'Beta') -Expected $true
+Assert-Returns -Label 'coverage: example match is exact (Alpha not Beta)' -Actual (@($partialCoverage.MissingExamples) -contains 'Alpha') -Expected $false
+Assert-Returns -Label 'coverage: partial help is not complete' -Actual $partialCoverage.IsComplete -Expected $false
+
+# A parameter name that only appears as a prefix of another must not count.
+$prefixHelp = ConvertFrom-HelpText -Text @'
+.SYNOPSIS
+    Prefix probe.
+
+.PARAMETER Run
+    Switch.
+
+.PARAMETER RunAll
+    Switch.
+
+.EXAMPLE
+    pwsh ./x.ps1 -RunAll
+    Exercises only -RunAll.
+'@
+$prefixParameters = @(
+    [pscustomobject]@{ Name = 'Run'; Type = 'SwitchParameter'; IsSwitch = $true },
+    [pscustomobject]@{ Name = 'RunAll'; Type = 'SwitchParameter'; IsSwitch = $true }
+)
+$prefixCoverage = Get-ScriptHelpCoverage -Parameters $prefixParameters -Help $prefixHelp
+Assert-Returns -Label 'coverage: -Run is not matched by -RunAll example' -Actual (@($prefixCoverage.MissingExamples) -contains 'Run') -Expected $true
+
+Write-Host "━━━ Get-ScriptHelpModel: real script ━━━" -ForegroundColor Cyan
+
+$helpModel = Get-ScriptHelpModel -Path $TestProductionPath
+Assert-Returns -Label 'model: synopsis present' -Actual ([bool]$helpModel.Help.Synopsis) -Expected $true
+Assert-Returns -Label 'model: description present' -Actual ([bool]$helpModel.Help.Description) -Expected $true
+Assert-Returns -Label 'model: script help (not a function help) is selected' -Actual ($helpModel.Help.Synopsis -match 'Acceptance-test') -Expected $true
+Assert-Returns -Label 'model: parameters read from the param block' -Actual ($helpModel.Parameters.Count -ge 8) -Expected $true
+Assert-Returns -Label 'model: -Run documented' -Actual $helpModel.Help.Parameters.Contains('Run') -Expected $true
+Assert-Returns -Label 'model: -Version documented' -Actual $helpModel.Help.Parameters.Contains('Version') -Expected $true
+Assert-Returns -Label 'model: -Examples documented' -Actual $helpModel.Help.Parameters.Contains('Examples') -Expected $true
+Assert-Returns -Label 'model: at least five examples' -Actual ((@($helpModel.Help.Examples)).Count -ge 5) -Expected $true
+
+# The guard rail itself: a new parameter without a description or an example
+# fails this suite instead of shipping an unhelpful help page.
+Assert-Returns -Label 'model: every parameter has a description' -Actual ((@($helpModel.Coverage.MissingDescriptions)) -join ',') -Expected ''
+Assert-Returns -Label 'model: every parameter has an example' -Actual ((@($helpModel.Coverage.MissingExamples)) -join ',') -Expected ''
+Assert-Returns -Label 'model: coverage complete' -Actual $helpModel.Coverage.IsComplete -Expected $true
+
+# Each example must be copy-pasteable: the command line has to name the script.
+$badExamples = @($helpModel.Help.Examples | Where-Object { $_.Command -notmatch 'test-production\.ps1' })
+Assert-Returns -Label 'model: every example runs this script' -Actual $badExamples.Count -Expected 0
+
+Write-Host "━━━ Get-ScriptHelpModel: function-level help is not script help ━━━" -ForegroundColor Cyan
+
+# Regression: a dot-SYNOPSIS block placed ABOVE a function belongs to that
+# function, not to the script.  Picking the first block in the file made the
+# help page show Get-ServerBaseUrlCandidates' documentation.
+$tempScript = Join-Path ([System.IO.Path]::GetTempPath()) "b4-help-model-$([System.IO.Path]::GetRandomFileName()).ps1"
+@'
+#!/usr/bin/env pwsh
+#requires -Version 7
+[CmdletBinding()]
+param([switch] $Run)
+
+<#
+.SYNOPSIS
+    Helper documentation placed above its function.
+
+.PARAMETER Run
+    Helper switch.
+#>
+function Get-Helper {
+    param([switch] $Run)
+    return 'x'
+}
+
+<#
+.SYNOPSIS
+    Script-level help.
+
+.DESCRIPTION
+    Script-level description.
+
+.PARAMETER Run
+    Script switch.
+
+.EXAMPLE
+    pwsh ./sample.ps1 -Run
+    Runs the sample.
+#>
+'@ | Set-Content -Path $tempScript -Encoding utf8
+
+try {
+    $tempModel = Get-ScriptHelpModel -Path $tempScript
+    Assert-Returns -Label 'model: between-function help ignored' -Actual $tempModel.Help.Synopsis -Expected 'Script-level help.'
+    Assert-Returns -Label 'model: script help file selected' -Actual $tempModel.Help.Description -Expected 'Script-level description.'
+    Assert-Returns -Label 'model: temp script coverage complete' -Actual $tempModel.Coverage.IsComplete -Expected $true
+} finally {
+    Remove-Item $tempScript -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "━━━ Show-ScriptHelp: rendered page ━━━" -ForegroundColor Cyan
+
+$renderedHelp = @(Show-ScriptHelp -Path $TestProductionPath 6>&1 | ForEach-Object { [string]$_ })
+$renderedText = $renderedHelp -join "`n"
+Assert-Returns -Label 'render: has a title' -Actual ($renderedText -match 'Browser4 Production Acceptance Test') -Expected $true
+Assert-Returns -Label 'render: has USAGE' -Actual ($renderedText -match 'USAGE') -Expected $true
+Assert-Returns -Label 'render: has OPTIONS' -Actual ($renderedText -match 'OPTIONS') -Expected $true
+Assert-Returns -Label 'render: has EXAMPLES' -Actual ($renderedText -match 'EXAMPLES') -Expected $true
+Assert-Returns -Label 'render: has HELP MAINTENANCE section' -Actual ($renderedText -match 'HELP MAINTENANCE') -Expected $true
+Assert-Returns -Label 'render: reports coverage OK' -Actual ($renderedText -match 'OK  every parameter') -Expected $true
+$missingInRender = @($helpModel.Parameters | Where-Object { $renderedText -notmatch [regex]::Escape("-$($_.Name)") })
+Assert-Returns -Label 'render: every parameter shown' -Actual (($missingInRender | ForEach-Object { $_.Name }) -join ',') -Expected ''
+
+$renderedExamples = @(Show-ScriptHelp -Path $TestProductionPath -ExamplesOnly 6>&1 | ForEach-Object { [string]$_ })
+$renderedExamplesText = $renderedExamples -join "`n"
+Assert-Returns -Label 'render -Examples: no USAGE section' -Actual ($renderedExamplesText -match 'USAGE') -Expected $false
+Assert-Returns -Label 'render -Examples: EXAMPLES section present' -Actual ($renderedExamplesText -match 'EXAMPLES') -Expected $true
+Assert-Returns -Label 'render -Examples: -Run example present' -Actual ($renderedExamplesText -match '-Run') -Expected $true
+Assert-Returns -Label 'render -Examples: no arguments hint suppressed' -Actual ($renderedExamplesText -match 'No arguments given') -Expected $false
+
+# ═══════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════
 Write-Host ''

@@ -175,20 +175,32 @@ before tagging a release.
 
 ### Safe default
 
-Running with no arguments shows help (safe default):
+Running with no arguments prints the help page and exits 0 (safe default — an
+accidental invocation must not install, uninstall, or start anything):
 
 ```bash
-./bin/test-production.ps1
+./bin/test-production.ps1          # help page
+./bin/test-production.ps1 -Help     # same, explicitly
+./bin/test-production.ps1 -Examples # only the copy-paste-ready examples
 ```
 
 ### Options
 
 | Flag | Description |
 |------|-------------|
+| `-Run` | Run with all defaults (latest stable release, random temp working directory, no stress suite) |
 | `-WorkingDir <path>` | Working directory for temporary artifacts (default: random subdir under system temp) |
+| `-Version <tag>` | Test a specific release, including prereleases (e.g. `v4.15.0-rc.1`); the report then queries tag-specific endpoints |
 | `-Stress` | Enable the multi-scenario stress suite (opt-in) |
 | `-MultiScenariosIterations <n>` | Iterations for the multi-scenario suite (default: 1, only with `-Stress`) |
 | `-RemoveWorkingDir` | Delete the working directory on exit (default: preserved for review) |
+| `-Help` | Print the help page and exit 0 |
+| `-Examples` | Print only the examples and exit 0 |
+
+The help page is generated from the comment-based help block at the end of the
+script; it also reports parameters that lack a `.PARAMETER` description or an
+`.EXAMPLE`. `test-production-helpers.ps1` fails while that coverage is
+incomplete, so a new switch needs a description and an example.
 
 ### What it tests
 
@@ -214,15 +226,18 @@ behavior.
 ### Examples
 
 ```bash
-# Show help (no arguments = safe default)
-./bin/test-production.ps1
+# Show help (no arguments = safe default; -Help makes it explicit)
+./bin/test-production.ps1 -Help
 
-# Run the full acceptance test
-./bin/test-production.ps1 -Stress
+# Run the full acceptance test with all defaults
+./bin/test-production.ps1 -Run
+
+# Test a specific prerelease tag
+./bin/test-production.ps1 -Version v4.15.0-rc.1
 
 # Production CI: stress test with multiple iterations, clean up afterward
 ./bin/test-production.ps1 -Stress -MultiScenariosIterations 3 -RemoveWorkingDir
 
 # Use a specific working directory
-./bin/test-production.ps1 -WorkingDir /tmp/my-acceptance-test
+./bin/test-production.ps1 -WorkingDir /tmp/my-acceptance-test -Stress
 ```

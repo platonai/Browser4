@@ -74,20 +74,27 @@ Comprehensive test runner for the current Maven reactors plus the Browser4 CLI p
 Acceptance test for the latest production release of `browser4-cli`.
 
 Downloads, installs, exercises, uninstalls, and re-installs the global `browser4-cli`
-from the public distribution channel. Shows help when called with no arguments
-(safe default). The multi-scenario stress suite is opt-in via `-Stress`.
+from the public distribution channel. Prints a generated help page when called with
+no arguments or `-Help` (safe default — nothing is installed, uninstalled, or
+started). The multi-scenario stress suite is opt-in via `-Stress`.
 
 Tests the full lifecycle: install → smoke-test → uninstall → re-install → (with `-Stress`) multi-scenario stress.
 
 | Parameter | Description |
 |---|---|
+| `-Run` | Run with all defaults (latest stable, random temp working dir, no stress suite) |
 | `-Stress` | Enable the multi-scenario stress suite (opt-in) |
-| `-SkipMultiScenarios` | Skip the final `multi-scenarios.ps1` run |
-| `-MultiScenariosIterations N` | Number of iterations (default: 1) |
-| `-KeepWorkingDir` | Do not delete the working directory on exit |
-| `-RemoveWorkingDir` | Delete the working directory on exit |
+| `-MultiScenariosIterations N` | Number of stress iterations (default: 1, only with `-Stress`) |
+| `-Version <tag>` | Test a specific release, including prereleases (default: latest stable) |
+| `-RemoveWorkingDir` | Delete the working directory on exit (default: kept for review) |
 | `-WorkingDir <path>` | Override the working directory |
-| `-Help` | Show help message |
+| `-Help` | Print the help page (options, examples, exit codes) and exit 0 |
+| `-Examples` | Print only the copy-paste-ready examples and exit 0 |
+
+The help page is generated from the comment-based help block at the end of the
+script, so it tracks the parameter list. It also reports parameters without a
+`.PARAMETER` description or an `.EXAMPLE`, and `test-production-helpers.ps1` fails
+while that coverage is incomplete.
 
 ### `eval-devtask.ps1`, `eval-devtask.sh`
 
@@ -362,7 +369,7 @@ These scripts are self-contained and portable — they never depend on git, the 
 - **`test-utils-helpers.ps1`**: Unit tests for `ConvertTo-WindowsCmdArg` in `test-utils.psm1`. Validates Windows command-line argument escaping against the MSDN CommandLineToArgvW specification.
 
 **Support Files:**
-- **`test-utils.psm1`**: Shared PowerShell module providing CLI invocation tracking, logging, failure reporting, and AI analysis.
+- **`test-utils.psm1`**: Shared PowerShell module providing CLI invocation tracking, logging, failure reporting, and AI analysis. The analysis body is kept out of the console by default (only a one-line pointer to `ai-analysis.txt`); opt in with `-ShowAnalysis` or `BROWSER4_SHOW_AI_ANALYSIS=1`.
 - **`seeds.txt`**, **`seeds-stress.txt`**: Seed URL lists for test scenarios.
 - **`logs/`**: Per-run log directories with full command output.
 

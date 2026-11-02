@@ -230,6 +230,50 @@ $result = ConvertTo-WindowsCmdArg 'a\ b'
 Assert-Returns -Label 'backslash-space → quoted with preserved backslash' -Actual $result -Expected '"a\ b"'
 
 # ═══════════════════════════════════════════════════════════════════
+# TESTS: AI analysis console policy
+#
+# The analysis text is free-form AI output (often its own reasoning plus raw
+# error dumps), so it must not be dumped into the console by default — it
+# buries the test report.  The full text still goes to ai-analysis.txt and
+# -ShowAnalysis / BROWSER4_SHOW_AI_ANALYSIS=1 opt back in.
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ Test-AiAnalysisVisible / Format-AiAnalysisNotice ━━━" -ForegroundColor Cyan
+
+$originalShowAi = $env:BROWSER4_SHOW_AI_ANALYSIS
+try {
+    Remove-Item Env:\BROWSER4_SHOW_AI_ANALYSIS -ErrorAction SilentlyContinue
+    Assert-Returns -Label 'AI visibility: unset env → hidden' -Actual (Test-AiAnalysisVisible) -Expected $false
+
+    foreach ($truthy in @('1', 'true', 'TRUE', 'yes', ' on ')) {
+        $env:BROWSER4_SHOW_AI_ANALYSIS = $truthy
+        Assert-Returns -Label "AI visibility: env '$truthy' → visible" -Actual (Test-AiAnalysisVisible) -Expected $true
+    }
+    foreach ($falsy in @('0', 'false', 'no', 'off', '', 'verbose')) {
+        $env:BROWSER4_SHOW_AI_ANALYSIS = $falsy
+        Assert-Returns -Label "AI visibility: env '$falsy' → hidden" -Actual (Test-AiAnalysisVisible) -Expected $false
+    }
+
+    $env:BROWSER4_SHOW_AI_ANALYSIS = '0'
+    Assert-Returns -Label 'AI visibility: -ShowAnalysis overrides env=0' -Actual (Test-AiAnalysisVisible -ShowAnalysis) -Expected $true
+} finally {
+    if ($null -eq $originalShowAi) {
+        Remove-Item Env:\BROWSER4_SHOW_AI_ANALYSIS -ErrorAction SilentlyContinue
+    } else {
+        $env:BROWSER4_SHOW_AI_ANALYSIS = $originalShowAi
+    }
+}
+
+$notice = Format-AiAnalysisNotice -AnalysisFile '/tmp/ai-analysis.txt' -AnalysisText "line1`nline2`nline3"
+Assert-Returns -Label 'AI notice: names the saved file' -Actual ($notice -match '/tmp/ai-analysis.txt') -Expected $true
+Assert-Returns -Label 'AI notice: reports the line count' -Actual ($notice -match '\(3 lines') -Expected $true
+Assert-Returns -Label 'AI notice: says it was not printed' -Actual ($notice -match 'not printed') -Expected $true
+Assert-Returns -Label 'AI notice: one line, no analysis body' -Actual (@($notice -split "`n").Count) -Expected 1
+
+$unsavedNotice = Format-AiAnalysisNotice -AnalysisFile '' -AnalysisText 'only line'
+Assert-Returns -Label 'AI notice: unsaved analysis is reported' -Actual ($unsavedNotice -match 'not saved') -Expected $true
+Assert-Returns -Label 'AI notice: empty analysis counts zero lines' -Actual ((Format-AiAnalysisNotice -AnalysisFile 'x') -match '\(0 lines') -Expected $true
+
+# ═══════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════
 Write-Host ''

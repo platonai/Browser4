@@ -813,6 +813,36 @@ function Write-PerTestSummary {
 # ============================================================================
 # Public: AI failure analysis (prefers claude, falls back to copilot)
 # ============================================================================
+# ── AI analysis console policy ───────────────────────────────────────────────
+# The analysis is free-form AI output: usually hundreds of lines, and it often
+# carries the analyzer's own reasoning plus raw error dumps.  Printing it at the
+# end of a run buries the test report the reader actually needs, so the console
+# only gets a one-line pointer.  The full text is always written to
+# <log dir>/ai-analysis.txt; opt back in per call with -ShowAnalysis, or for a
+# whole session with BROWSER4_SHOW_AI_ANALYSIS=1 (useful in CI logs).
+function Test-AiAnalysisVisible {
+    [CmdletBinding()]
+    param([switch] $ShowAnalysis)
+
+    if ($ShowAnalysis) { return $true }
+    $value = ([string]$env:BROWSER4_SHOW_AI_ANALYSIS).Trim()
+    return ($value -match '^(?i)(1|true|yes|on)$')
+}
+
+function Format-AiAnalysisNotice {
+    [CmdletBinding()]
+    param(
+        [string] $AnalysisFile,
+        [string] $AnalysisText
+    )
+
+    $lineCount = if ([string]::IsNullOrEmpty($AnalysisText)) { 0 } else { @($AnalysisText -split "\r?\n").Count }
+    if ($AnalysisFile) {
+        return "  📄 AI analysis saved to: $AnalysisFile ($lineCount lines; not printed)"
+    }
+    return "  📄 AI analysis: $lineCount lines (not saved, not printed)"
+}
+
 <#
 .SYNOPSIS
     Invoke the best available AI CLI to analyse test failures.
@@ -820,12 +850,21 @@ function Write-PerTestSummary {
     Log paths are collected from tracked failures automatically.
     Call during Finish-TestSession (which calls this automatically)
     or directly when you have custom log paths.
+
+    The analysis body is NOT printed to the console by default: it is free-form
+    AI output (often the analyzer's own reasoning plus raw error dumps) that
+    buries the test report.  The full text is always written to
+    <log dir>/ai-analysis.txt and only a one-line pointer is shown.  Pass
+    -ShowAnalysis, or set BROWSER4_SHOW_AI_ANALYSIS=1, to print it as well.
 #>
 function Invoke-CopilotAnalysis {
     [CmdletBinding()]
     param(
         [string[]]$LogPaths,
-        [string]$ExtraPrompt = ''
+        [string]$ExtraPrompt = '',
+
+        # Print the analysis body to the console as well as saving it.
+        [switch]$ShowAnalysis
     )
 
     $paths = if ($LogPaths -and $LogPaths.Count -gt 0) {
@@ -908,19 +947,30 @@ function Invoke-CopilotAnalysis {
     }
 
     if ($analysisText) {
-        # Save analysis to file
+        # Always save the full analysis; the console gets a pointer unless the
+        # caller opted in to the (long) text itself.
         $analysisFile = Join-Path $script:LogDir 'ai-analysis.txt'
+        $analysisSaved = $false
         try {
             $analysisText | Set-Content -LiteralPath $analysisFile -Encoding UTF8
-            Write-Host "  📄 Analysis saved to: $analysisFile" -ForegroundColor DarkGray
+            $analysisSaved = $true
         } catch {
             Write-Warning "Invoke-CopilotAnalysis: Could not write analysis file: $analysisFile"
         }
 
-        $header = '─── AI ANALYSIS ─────────────────────────────────────────'
-        Write-Host "`n$header" -ForegroundColor Magenta
-        Write-Host $analysisText
-        Write-Host '──────────────────────────────────────────────────────────' -ForegroundColor Magenta
+        if (Test-AiAnalysisVisible -ShowAnalysis:$ShowAnalysis) {
+            $header = '─── AI ANALYSIS ─────────────────────────────────────────'
+            Write-Host "`n$header" -ForegroundColor Magenta
+            Write-Host $analysisText
+            Write-Host '──────────────────────────────────────────────────────────' -ForegroundColor Magenta
+            if ($analysisSaved) {
+                Write-Host "  📄 Analysis saved to: $analysisFile" -ForegroundColor DarkGray
+            }
+        } else {
+            $noticeFile = if ($analysisSaved) { $analysisFile } else { '' }
+            Write-Host (Format-AiAnalysisNotice -AnalysisFile $noticeFile -AnalysisText $analysisText) -ForegroundColor DarkGray
+            Write-Host '     Set BROWSER4_SHOW_AI_ANALYSIS=1 (or pass -ShowAnalysis) to print it.' -ForegroundColor DarkGray
+        }
     }
 
     return $analysisText
@@ -1252,6 +1302,8 @@ Export-ModuleMember -Function @(
     'Invoke-TrackedCli',
     'Register-CliResult',
     'Invoke-CopilotAnalysis',
+    'Test-AiAnalysisVisible',
+    'Format-AiAnalysisNotice',
     'Finish-TestSession',
     'Invoke-CliAssert',
     'Get-LogDir',
