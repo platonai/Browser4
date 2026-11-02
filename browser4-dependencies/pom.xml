@@ -578,10 +578,13 @@
              4.11.28 (published 2026-10-31) is byte-for-byte identical to 4.11.27 in its
              pulsar-bom apart from the version element.
 
-             4.11.29 (published 2026-11-01) is the current latest release; its pulsar-bom is
-             byte-for-byte identical to 4.11.28 apart from the version element, so this bump
-             carries only the base library's patch fixes (no dependency changes). -->
-        <browser4-base.version>4.11.29</browser4-base.version>
+             4.11.29 (published 2026-11-01) added the keyboard, wheel and mouse input fixes.
+
+             4.11.30 (published 2026-11-02) is the current latest release; its pulsar-bom is
+             byte-for-byte identical to 4.11.29 apart from the version element, so this bump
+             carries only the base library's own source changes (no dependency changes) —
+             notably the curved, speed-profiled multi-step pointer movement in Mouse.moveTo. -->
+        <browser4-base.version>4.11.30</browser4-base.version>
         <cdt-kotlin-client.version>4.8.0</cdt-kotlin-client.version>
 
         <!-- Agent memory system: SQLite FTS derived index (design: docs-dev/copilot/robust-browser-agent-memory-system-design.md) -->

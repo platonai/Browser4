@@ -151,8 +151,8 @@ class EmulationHandlerTest {
         }
 
         @Test
-        @DisplayName("moveTo interpolates linearly from start to end")
-        fun moveToInterpolatesLinearly() = runBlocking {
+        @DisplayName("moveTo emits one event per step, always ending exactly at the target")
+        fun moveToEmitsStepsEventsEndingAtTarget() = runBlocking {
             // Use argument captor to verify interpolation math
             mouse.moveTo(0.0, 0.0, steps = 1) // ensure known start position
             reset(bp)
@@ -160,9 +160,9 @@ class EmulationHandlerTest {
             mouse.moveTo(100.0, 200.0, steps = 5, delayMillis = 0)
 
             val captor = argumentCaptor<Double>()
-            // 5 steps: t=0.2, 0.4, 0.6, 0.8, 1.0
-            // x at each step: 20, 40, 60, 80, 100
-            // We just verify we get 5 move events ending at the target
+            // The interpolation lives in pulsar-browser (linear in 4.11.x ≤ 29,
+            // a random Bézier curve from 4.11.30 on), so only the event count
+            // and the exact endpoint are pinned down here.
             verify(bp, times(5)).dispatchMouseMoved(captor.capture(), captor.capture(), any(), eq(null))
 
             val allX = captor.allValues.filterIndexed { i, _ -> i % 2 == 0 }
