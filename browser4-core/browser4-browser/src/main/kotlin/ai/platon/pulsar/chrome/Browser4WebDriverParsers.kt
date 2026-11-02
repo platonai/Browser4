@@ -3,7 +3,6 @@ package ai.platon.pulsar.chrome
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.databind.JsonNode
-import kotlin.random.Random
 
 /**
  * Parsers and converters for the values [Browser4WebDriver] receives back from CDP.
@@ -209,39 +208,6 @@ internal fun parseDragCenter(value: Any?): Browser4WebDriver.DragCenter? {
         height = node.get("h")?.takeIf { it.isNumber }?.asDouble() ?: 0.0,
         hit = node.get("hit")?.asBoolean() ?: false,
     )
-}
-
-/**
- * Nudge the element center ([x], [y]) by a random offset of at most
- * `min(jitter, box/2 - inset)` per axis, so the result stays inside the element of the given
- * [width]/[height] box.
- *
- * An element whose box is unknown (0) or too small to hold any offset keeps the exact
- * center: moving the pointer outside the element would break the CSS `:hover` state this
- * move exists to establish (see `movePointerToClickTarget`), which is worse than a
- * repeatable coordinate.
- *
- * @param nextOffset produces a uniform offset in `[-range, range]`; injected in tests
- */
-internal fun jitteredPointerPosition(
-    x: Double,
-    y: Double,
-    width: Double,
-    height: Double,
-    jitter: Double = Browser4WebDriver.POINTER_JITTER_PX,
-    nextOffset: (Double) -> Double = { range -> Random.nextDouble(-range, range) },
-): Pair<Double, Double> {
-    val maxOffset = if (width > 0.0 && height > 0.0) {
-        minOf(jitter, minOf(width, height) / 2.0 - Browser4WebDriver.POINTER_JITTER_EDGE_INSET_PX).coerceAtLeast(0.0)
-    } else {
-        0.0
-    }
-
-    if (maxOffset <= 0.0) {
-        return x to y
-    }
-
-    return (x + nextOffset(maxOffset)) to (y + nextOffset(maxOffset))
 }
 
 /**

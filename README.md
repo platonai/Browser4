@@ -803,6 +803,7 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 - **CLI** (`cli/browser4-cli`) — native Rust binary, talks to the backend via MCP tool calls
 - **Backend** (`browser4-rest`) — Spring Boot server, dispatches MCP tools to browser drivers
 - **Browser driver** (`browser4-core/browser4-browser`) — wraps Chrome DevTools Protocol
+- **Replaceable browser behavior** (`browser4-core/browser4-behavior-api` + `browser4-behavior-default`) — stealth and interaction-humanization SPI; the current implementation is the default (community) edition, and a professional/custom edition replaces the module — see [browser-behavior-modules.md](docs/browser-behavior-modules.md)
 - **Agent tools** (`browser4-agentic`) — maps MCP tool names to browser automation methods
 - **Programming kernel** (`browser4-coding`) — dependency-light agent toolkit (sandboxed shell/filesystem, scaffolding, validation, self-development tools) — see [below](#-programming-agent-kernel-browser4-coding)
 

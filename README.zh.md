@@ -795,6 +795,7 @@ browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) �
 - **CLI**（`cli/browser4-cli`）— 原生 Rust 二进制，通过 MCP tool call 与后端通信
 - **Backend**（`browser4-rest`）— Spring Boot 服务，负责把 MCP 工具请求分发给浏览器驱动
 - **Browser driver**（`browser4-core/browser4-browser`）— 对 Chrome DevTools Protocol 的封装
+- **可替换的浏览器行为**（`browser4-core/browser4-behavior-api` + `browser4-behavior-default`）— 浏览器隐身与交互拟人化的 SPI；当前实现即默认（社区）版，专业版/定制版通过替换该模块提供 — 见 [browser-behavior-modules.md](docs/browser-behavior-modules.md)
 - **Agent tools**（`browser4-agentic`）— 把 MCP 工具名映射到浏览器自动化方法
 - **编程内核**（`browser4-coding`）— 轻依赖 agent 工具箱（沙箱 shell/文件系统、脚手架、校验、自身开发工具），见[下文](#-编程内核browser4-coding)
 

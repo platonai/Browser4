@@ -4,7 +4,17 @@
  * ===========================================================================
  *
  * This file shadows the `js/stealth.js` that the base library (pulsar-browser)
- * ships in its jar. `ai.platon.pulsar.api.scripting.DualWorldScriptLoader`
+ * ships in its jar. It is the page-world layer of the default browser-stealth
+ * policy (`browser4-behavior-default`, see `DefaultBrowserStealthProvider`);
+ * it stays in the driver module on purpose: the base
+ * `DualWorldScriptLoader` resolves the resource from the classpath, and this
+ * module is a *direct* dependency of every product module, while the default
+ * behavior module is transitive — only a direct dependency is guaranteed to be
+ * resolved before the base jar. A professional or custom edition replaces the
+ * driver-level policy and adds its own layer through
+ * `BrowserStealthProvider.documentStartScripts` (registered after this payload,
+ * so it can override it).
+ * `ai.platon.pulsar.api.scripting.DualWorldScriptLoader`
  * concatenates every PAGE_WORLD_RESOURCE from the classpath and registers the
  * result with `Page.addScriptToEvaluateOnNewDocument` for each document; an
  * application-classpath resource is resolved before the dependency jar, so this

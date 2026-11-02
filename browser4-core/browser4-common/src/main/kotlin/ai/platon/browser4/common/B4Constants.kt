@@ -133,6 +133,31 @@ object B4Constants {
 
     private val EGO_LITE_CHANNEL_ALIASES = setOf(BROWSER_CHANNEL_EGO_LITE, "egolite", "ego lite", "ego")
 
+    /**
+     * Selects which [ai.platon.browser4.behavior.stealth.BrowserStealthProvider] handles
+     * browser stealth, by provider id (case-insensitive).
+     *
+     * Absent/blank (the default) selects the highest-priority provider discovered on the
+     * classpath, which is the community default (`browser4-behavior-default`, id `default`)
+     * unless a professional or custom edition module is installed. The value is read from the
+     * browser configuration, so it can be set in `application.properties` or passed as a
+     * `-Dbrowser.behavior.stealth.provider=<id>` JVM option.
+     *
+     * An id that is not installed is not fatal: the highest-priority provider is used and a
+     * warning names the configured and the effective provider once.
+     */
+    const val BEHAVIOR_STEALTH_PROVIDER = "browser.behavior.stealth.provider"
+
+    /**
+     * Selects which [ai.platon.browser4.behavior.humanization.InteractionHumanizer] paces
+     * browser interactions, by provider id (case-insensitive).
+     *
+     * Same resolution rules as [BEHAVIOR_STEALTH_PROVIDER]: absent/blank selects the
+     * highest-priority provider on the classpath (the community `default` implementation),
+     * and an unknown id falls back to that provider with one warning.
+     */
+    const val BEHAVIOR_HUMANIZATION_PROVIDER = "browser.behavior.humanization.provider"
+
     const val SESSION_ID_CAPABILITY = "sessionId"
     const val PROFILE_MODE_CAPABILITY = "profileMode"
     const val PROFILE_PATH_CAPABILITY = "profilePath"

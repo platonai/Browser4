@@ -12,7 +12,6 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.Assertions.fail
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.mock
@@ -621,105 +620,6 @@ class Browser4WebDriverTest {
         val js = Browser4WebDriver.dragCenterJs()
         assertTrue(js.contains("w: r.width"), "expected the element width: $js")
         assertTrue(js.contains("h: r.height"), "expected the element height: $js")
-    }
-
-    // -------------------------------------------------------------------------
-    // Pointer jitter (click-family pointer moves)
-    // -------------------------------------------------------------------------
-
-    @Test
-    @DisplayName("jitteredPointerPosition stays inside a large element")
-    fun jitteredPointerPositionStaysInsideLargeElement() {
-        // 200x40 element: the full ±2 px jitter is allowed (half of 40 px minus the 1 px inset).
-        val (x, y) = Browser4WebDriver.jitteredPointerPosition(100.0, 50.0, 200.0, 40.0) { range ->
-            assertEquals(Browser4WebDriver.POINTER_JITTER_PX, range)
-            -range
-        }
-        assertEquals(98.0, x)
-        assertEquals(48.0, y)
-    }
-
-    @Test
-    @DisplayName("jitteredPointerPosition shrinks the offset for a small element")
-    fun jitteredPointerPositionShrinksOffsetForSmallElement() {
-        // 4x4 element: half of the box minus the 1 px inset leaves 1 px instead of 2 px.
-        val (x, y) = Browser4WebDriver.jitteredPointerPosition(10.0, 10.0, 4.0, 4.0) { range ->
-            assertEquals(1.0, range)
-            range
-        }
-        assertEquals(11.0, x)
-        assertEquals(11.0, y)
-    }
-
-    @Test
-    @DisplayName("jitteredPointerPosition keeps the exact center when the box is unknown")
-    fun jitteredPointerPositionKeepsCenterWithoutBox() {
-        val (x, y) = Browser4WebDriver.jitteredPointerPosition(7.0, 9.0, 0.0, 0.0) { range ->
-            fail("no offset may be drawn without an element box, got range=$range")
-        }
-        assertEquals(7.0, x)
-        assertEquals(9.0, y)
-    }
-
-    @Test
-    @DisplayName("jitteredPointerPosition never leaves the element box")
-    fun jitteredPointerPositionNeverLeavesTheBox() {
-        val boxes = listOf(
-            200.0 to 40.0,
-            13.0 to 13.0,
-            6.0 to 6.0,
-            5.0 to 40.0,
-            1000.0 to 8.0,
-        )
-
-        boxes.forEach { (width, height) ->
-            repeat(200) {
-                val (x, y) = Browser4WebDriver.jitteredPointerPosition(500.0, 500.0, width, height)
-                assertTrue(
-                    x >= 500.0 - width / 2 && x <= 500.0 + width / 2,
-                    "x=$x escaped a ${width}x$height box",
-                )
-                assertTrue(
-                    y >= 500.0 - height / 2 && y <= 500.0 + height / 2,
-                    "y=$y escaped a ${width}x$height box",
-                )
-            }
-        }
-    }
-
-    @Test
-    @DisplayName("jitteredPointerPosition varies between calls")
-    fun jitteredPointerPositionVariesBetweenCalls() {
-        val positions = (1..20).map { Browser4WebDriver.jitteredPointerPosition(100.0, 100.0, 200.0, 40.0) }
-        assertTrue(positions.any { it != positions.first() }, "the pointer position must not be constant")
-        positions.forEach {
-            assertTrue(
-                kotlin.math.abs(it.first - 100.0) <= Browser4WebDriver.POINTER_JITTER_PX &&
-                    kotlin.math.abs(it.second - 100.0) <= Browser4WebDriver.POINTER_JITTER_PX,
-                "offset out of range: $it",
-            )
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // pointerMoveSteps — the step count shared by mouseMove and the
-    // wheel-over-element glide
-    // -------------------------------------------------------------------------
-
-    @Test
-    @DisplayName("pointerMoveSteps scales with the distance at about one step per 20 px")
-    fun pointerMoveStepsScalesWithDistance() {
-        assertEquals(7, Browser4WebDriver.pointerMoveSteps(140.0))
-        assertEquals(20, Browser4WebDriver.pointerMoveSteps(400.0))
-    }
-
-    @Test
-    @DisplayName("pointerMoveSteps clamps short hops to 3 and long moves to 30")
-    fun pointerMoveStepsClampsTheRange() {
-        assertEquals(3, Browser4WebDriver.pointerMoveSteps(0.0))
-        assertEquals(3, Browser4WebDriver.pointerMoveSteps(39.0))
-        assertEquals(30, Browser4WebDriver.pointerMoveSteps(600.0))
-        assertEquals(30, Browser4WebDriver.pointerMoveSteps(100_000.0))
     }
 
     @Test

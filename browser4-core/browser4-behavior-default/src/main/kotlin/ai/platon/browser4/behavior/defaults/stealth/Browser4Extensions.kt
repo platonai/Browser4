@@ -1,4 +1,4 @@
-package ai.platon.pulsar.chrome
+package ai.platon.browser4.behavior.defaults.stealth
 
 import ai.platon.browser4.common.B4Constants
 import ai.platon.pulsar.api.ChromeOptions
@@ -7,6 +7,10 @@ import ai.platon.pulsar.common.getLogger
 
 /**
  * Applies the environment-purity policy for browser extensions at launch time.
+ *
+ * Part of the default browser-stealth policy: it is invoked by
+ * [DefaultBrowserStealthProvider.applyLaunchOptions] from the single funnel every browser
+ * launch goes through (`DefaultBrowserFactory`).
  *
  * A browser profile inherits the user's extensions from the prototype data dir. When a live
  * extension injects its content script, Chromium installs the `chrome.runtime` skeleton in
@@ -42,4 +46,3 @@ object Browser4Extensions {
         return true
     }
 }
-

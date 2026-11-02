@@ -121,6 +121,12 @@
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
+                <artifactId>browser4-behavior-api</artifactId>
+                <version>4.16.1-SNAPSHOT</version>
+            </dependency>
+
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
                 <artifactId>browser4-skeleton</artifactId>
                 <version>4.16.1-SNAPSHOT</version>
             </dependency>
@@ -132,6 +138,14 @@
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>browser4-protocol</artifactId>
+                <version>4.16.1-SNAPSHOT</version>
+            </dependency>
+
+            <!-- An edition plugin that replaces browser stealth / interaction humanization
+                 implements the behavior SPI and must exclude this default implementation. -->
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>browser4-behavior-default</artifactId>
                 <version>4.16.1-SNAPSHOT</version>
             </dependency>
 

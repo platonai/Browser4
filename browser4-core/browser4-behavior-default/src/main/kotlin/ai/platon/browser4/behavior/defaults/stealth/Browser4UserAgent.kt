@@ -1,4 +1,4 @@
-package ai.platon.pulsar.chrome
+package ai.platon.browser4.behavior.defaults.stealth
 
 import ai.platon.browser4.common.B4Constants
 import ai.platon.pulsar.api.ChromeOptions
@@ -11,6 +11,11 @@ import java.nio.file.Path
 /**
  * Resolves and applies the launch-time `--user-agent` switch that keeps a headless
  * Chrome from advertising the `HeadlessChrome` product token.
+ *
+ * Part of the default browser-stealth policy: it is invoked by
+ * [DefaultBrowserStealthProvider.applyLaunchOptions] from the single funnel every browser
+ * launch goes through (`DefaultBrowserFactory`). It is a separate object so the policy can be
+ * tested (and a custom edition can reuse it) without constructing a provider.
  *
  * ## Why this exists
  *

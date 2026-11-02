@@ -12,12 +12,19 @@ import org.junit.jupiter.api.Test
  * `ai.platon.pulsar.api.scripting.DualWorldScriptLoader` concatenates every classpath
  * `js/` PAGE_WORLD_RESOURCE and registers the result with
  * `Page.addScriptToEvaluateOnNewDocument` for every document. The base library ships a
- * puppeteer-extra-plugin-stealth bundle there; this module's `js/stealth.js` shadows it with
- * the *same* bundle behind one guard:
+ * puppeteer-extra-plugin-stealth bundle there; this module ships the same bundle behind one
+ * guard (the page-world layer of the default browser-stealth policy):
  *
  * ```js
  * if (navigator.webdriver === true) { …bundle… }
  * ```
+ *
+ * The resource ships in *this* module (the driver), not in `browser4-behavior-default`: the
+ * base library resolves it from the classpath, this module is a direct dependency of every
+ * product module, and only a direct dependency is guaranteed to be resolved before the base
+ * jar — the default behavior module is transitive. It is still the page-world layer of the
+ * default browser-stealth policy; an edition adds its own layer through
+ * `BrowserStealthProvider.documentStartScripts` (registered after this payload).
  *
  * The bundle's evasions only work together with a `Function.prototype.toString` Proxy and an
  * `iframe.contentWindow` evasion, and public native-tampering detectors rate both as rating-1

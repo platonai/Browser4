@@ -471,6 +471,26 @@ docker run -d -p 18182:18182 `
   while the attached browser is not connected, a page tool fails with an actionable
   error instead of silently starting a second Chrome. Re-attach to recover.
 
+* **`browser.behavior.stealth.provider`** / **`browser.behavior.humanization.provider`** *(default: empty = highest priority)*
+  Selects which installed browser-behavior module handles **stealth** (launch hardening,
+  document-start scripts, CDP emulation) and **interaction humanization** (pointer trajectory,
+  click jitter, button-hold and typing pace), by provider id (case-insensitive).
+
+  Browser4 ships the current behavior as the default (community) implementation in
+  `browser4-behavior-default` (ids: `default`). A professional or custom edition is a separate
+  module that implements the same SPI with its own id and a higher `priority`; installing it as
+  the only behavior module (excluding the default one) needs no configuration at all.
+
+  ```properties
+  browser.behavior.stealth.provider=
+  browser.behavior.humanization.provider=
+  ```
+
+  An unknown id is not fatal: the highest-priority installed provider is used and one warning
+  names the configured and the effective id. The active implementation is logged once at first
+  use (`Browser behavior: stealth=default [default], humanization=default [default]`).
+  See [Browser behavior modules](browser-behavior-modules.md).
+
 * **`crawl.autoResume`** *(default: `false`)*
   Whether a crawl that was **running when the backend process died** is resumed
   automatically at startup, from its checkpoint.

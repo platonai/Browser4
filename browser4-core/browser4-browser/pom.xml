@@ -12,6 +12,20 @@
     <artifactId>browser4-browser</artifactId>
 
     <dependencies>
+        <!-- Replaceable browser behavior: the stealth and interaction-humanization SPI is a
+             compile dependency, the community default implementation a *runtime* one. The
+             driver therefore never references the default classes, and a professional/custom
+             edition swaps the module on the classpath (or outranks it by provider priority). -->
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-behavior-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-behavior-default</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
         <!-- pulsar-browser: extracted core browser automation library -->
         <dependency>
             <groupId>ai.platon.pulsar</groupId>

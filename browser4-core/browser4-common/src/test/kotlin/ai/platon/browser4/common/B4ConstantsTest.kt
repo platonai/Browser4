@@ -91,4 +91,12 @@ class B4ConstantsTest {
             assertTrue(B4Constants.stealthAppliesTo(channel), "channel: $channel")
         }
     }
+
+    @Test
+    @DisplayName("the replaceable behavior provider keys are pinned")
+    fun behaviorProviderKeysArePinned() {
+        // Deployments pin an edition by these ids, so a rename is a breaking configuration change.
+        assertEquals("browser.behavior.stealth.provider", B4Constants.BEHAVIOR_STEALTH_PROVIDER)
+        assertEquals("browser.behavior.humanization.provider", B4Constants.BEHAVIOR_HUMANIZATION_PROVIDER)
+    }
 }

@@ -1,5 +1,14 @@
 package ai.platon.pulsar.chrome
 
+import ai.platon.browser4.behavior.BrowserBehavior
+import ai.platon.browser4.behavior.humanization.ClickPointRequest
+import ai.platon.browser4.behavior.humanization.DelaySource
+import ai.platon.browser4.behavior.humanization.DragRequest
+import ai.platon.browser4.behavior.humanization.InteractionHumanizer
+import ai.platon.browser4.behavior.humanization.PointerMoveRequest
+import ai.platon.browser4.behavior.stealth.BrowserStealthProvider
+import ai.platon.browser4.behavior.stealth.StealthSessionContext
+import ai.platon.browser4.common.B4Constants
 import ai.platon.cdt.kt.protocol.events.log.EntryAdded
 import ai.platon.cdt.kt.protocol.support.types.EventListener
 import ai.platon.cdt.kt.protocol.types.console.ConsoleMessageSource
@@ -27,7 +36,6 @@ import ai.platon.pulsar.chrome.protocol.Mouse
 import ai.platon.pulsar.chrome.protocol.util.withNodeObjectId
 import ai.platon.pulsar.chrome.util.ChromeDriverException
 import ai.platon.pulsar.chrome.util.ChromeIOException
-import ai.platon.browser4.common.B4Constants
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -47,11 +55,8 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlin.math.abs
-import kotlin.math.hypot
 import kotlin.math.max
-import kotlin.math.roundToInt
 import kotlin.math.roundToLong
-import kotlin.random.Random
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -107,15 +112,17 @@ import java.util.concurrent.atomic.AtomicBoolean
  * [BrowserProtocol] decorator that suppresses the page-world stealth payload
  * when Browser4's stealth layer does not apply to the session.
  *
- * The layer does not apply when [B4Constants.STEALTH_ENABLED] is off **or** the
- * session runs on a fingerprint-browser channel ([B4Constants.BROWSER_CHANNEL_EGO_LITE]):
- * ego lite owns its fingerprint and its own anti-detection behaviour, so
- * Browser4 must not stack its patches on top.
+ * The decision is made by the active stealth provider
+ * ([BrowserStealthProvider.baselinePageWorldScriptsEnabled]): the default edition turns the
+ * layer off when [B4Constants.STEALTH_ENABLED] is off **or** the session runs on a
+ * fingerprint-browser channel ([B4Constants.BROWSER_CHANNEL_EGO_LITE]) — ego lite owns its
+ * fingerprint and its own anti-detection behaviour, so Browser4 must not stack its patches on
+ * top.
  *
  * The only production call site of
  * [BrowserProtocol.addScriptToEvaluateOnNewDocument] in the base library is the
  * registration of the page-world stealth bundle
- * (`PulsarWebDriver.registerPageWorldScript`). When stealth is disabled that
+ * (`PulsarWebDriver.registerPageWorldScript`). When the provider suppresses it, that
  * call is turned into a no-op returning a synthetic identifier — the base
  * stores it in `pageWorldScriptId` but never removes it, so any non-null
  * string is valid. Every other method (the isolated-world runtime injection
@@ -125,10 +132,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 internal class StealthAwareBrowserProtocol(
     private val delegate: BrowserProtocol,
-    private val stealthEnabled: Boolean,
+    private val baselinePageWorldScriptsEnabled: Boolean,
 ) : BrowserProtocol by delegate {
     override suspend fun addScriptToEvaluateOnNewDocument(script: String): String {
-        if (!stealthEnabled) {
+        if (!baselinePageWorldScriptsEnabled) {
             return STEALTH_DISABLED_SCRIPT_ID
         }
         return delegate.addScriptToEvaluateOnNewDocument(script)
@@ -149,10 +156,12 @@ open class Browser4WebDriver(
     chromeTab,
     StealthAwareBrowserProtocol(
         browserProtocol,
-        browser.settings.config.getBoolean(
-            B4Constants.STEALTH_ENABLED,
-            B4Constants.STEALTH_ENABLED_DEFAULT
-        ) && B4Constants.stealthAppliesTo(browser.settings.config[B4Constants.BROWSER_CHANNEL])
+        // The active stealth provider owns the baseline-payload decision (the default edition
+        // implements `browser.stealth.enabled` and the fingerprint-browser channel rule); this
+        // class only turns the answer into a protocol wrapper. Resolved here because the base
+        // driver registers the payload during construction.
+        BrowserBehavior.stealth(browser.settings.config)
+            .baselinePageWorldScriptsEnabled(StealthSessionContext(browser.settings))
     ),
     browser
 ) {
@@ -344,23 +353,6 @@ open class Browser4WebDriver(
 
     internal fun parseDragCenter(value: Any?): DragCenter? = Browser4WebDriverParsers.parseDragCenter(value)
 
-    /**
-     * Step count for a pointer glide over [distance] pixels: roughly one step per
-     * 20 px, clamped to 3..30 so even a short hop is visibly multi-step and a
-     * viewport-crossing move stays within ~500 ms at the 8-16 ms per step the
-     * callers use.
-     */
-    internal fun pointerMoveSteps(distance: Double): Int = (distance / 20.0).roundToInt().coerceIn(3, 30)
-
-    internal fun jitteredPointerPosition(
-        x: Double,
-        y: Double,
-        width: Double,
-        height: Double,
-        jitter: Double = POINTER_JITTER_PX,
-    nextOffset: (Double) -> Double = { range -> Random.nextDouble(-range, range) },
-    ) = Browser4WebDriverParsers.jitteredPointerPosition(x, y, width, height, jitter, nextOffset)
-
     internal fun canClickWithTrustedInput(
         point: DragCenter?,
     ): Boolean = Browser4WebDriverParsers.canClickWithTrustedInput(point)
@@ -429,19 +421,6 @@ open class Browser4WebDriver(
         routes: Int?,
     ): Map<String, Any?> = Browser4WebDriverParsers.routeSummary(urlPattern, abort, contentType, resourceTypes, routes)
 
-
-        /**
-         * Maximum pointer jitter (CSS pixels) applied before a click-family pointer move.
-         *
-         * Landing on the element's exact center every single time is itself a fingerprint, so the
-         * pointer is nudged the same way the drag sequence already nudges its press/release points
-         * (±2 px). Explicit coordinates from `mouse-move` are never jittered — the caller asked for
-         * a specific point.
-         */
-        internal const val POINTER_JITTER_PX = 2.0
-
-        /** Keep a jittered pointer this far inside the element box. */
-        internal const val POINTER_JITTER_EDGE_INSET_PX = 1.0
 
         /**
          * The page global installed for the duration of one trusted click, see
@@ -908,10 +887,10 @@ internal enum class DragDropPosition(val key: String) {
             mouseMove(point.x, point.y)
             repeat(count) { i ->
                 mouseDown(button, i + 1)
-                delay(randomDelayMillis("click"))
+                delay(humanizer.pressHoldMillis(delaySource))
                 mouseUp(button, i + 1)
                 if (i + 1 < count) {
-                    delay(randomDelayMillis("click"))
+                    delay(humanizer.multiClickGapMillis(delaySource))
                 }
             }
         }
@@ -1009,11 +988,12 @@ internal enum class DragDropPosition(val key: String) {
      * The upstream move dispatches a single `mouseMoved` from wherever the
      * pointer rests to the target (`steps = 1`), so a click lands after exactly
      * one jump of possibly hundreds of pixels — a trail no human produces and
-     * a signal mouse-tracking bot detectors score directly.  Here the step
-     * count scales with the distance (see [pointerMoveSteps]) at a randomized
-     * 8-16 ms per step, so the pointer crosses the viewport in a human-like
-     * 100-500 ms and the page observes a realistic `mousemove` trail.  Like
-     * the upstream, an inactive driver skips the move silently.
+     * a signal mouse-tracking bot detectors score directly. The trajectory is
+     * decided by the selected [InteractionHumanizer] (the default edition scales
+     * the step count with the distance at a randomized 8-16 ms per step, so the
+     * pointer crosses the viewport in a human-like 100-500 ms and the page
+     * observes a realistic `mousemove` trail). Like the upstream, an inactive
+     * driver skips the move silently.
      */
     @Throws(WebDriverException::class)
     override suspend fun mouseMove(x: Double, y: Double) {
@@ -1028,14 +1008,18 @@ internal enum class DragDropPosition(val key: String) {
      * pointer-movement policy shared by [mouseMove] and the wheel-over-element
      * path.
      *
-     * The step count follows the distance ([pointerMoveSteps]) and each step
-     * waits a randomized 8-16 ms; the base library bends the path itself into a
+     * The selected [InteractionHumanizer] decides both the step count and the
+     * per-step wait (the default edition: roughly one step per 20 px, clamped to
+     * 3..30, 8-16 ms each). The base library bends the path itself into a
      * distance-dependent Bézier curve from 4.11.30 on, so the trajectory is
      * curved whenever it is long enough to matter.
      */
     private suspend fun glidePointerTo(m: Mouse, x: Double, y: Double) {
-        val distance = hypot(x - m.currentX, y - m.currentY)
-        m.moveTo(x, y, steps = pointerMoveSteps(distance), delayMillis = Random.nextLong(8, 17))
+        val plan = humanizer.pointerMove(
+            PointerMoveRequest(fromX = m.currentX, fromY = m.currentY, toX = x, toY = y),
+            delaySource,
+        )
+        m.moveTo(x, y, steps = plan.steps, delayMillis = plan.delayMillis)
     }
 
     /**
@@ -1088,8 +1072,8 @@ internal enum class DragDropPosition(val key: String) {
      * persist across clicks and snapshots taken right after a click miss the
      * tooltip that a real user would see.
      *
-     * The point is jittered inside the element (see [jitteredPointerPosition]) rather than always
-     * being the exact center, which would repeat the same pixel on every request.
+     * The point is jittered inside the element (see [InteractionHumanizer.clickPoint]) rather
+     * than always being the exact center, which would repeat the same pixel on every request.
      *
      * Uses the drag-style instant scroll + visibility poll, so the resolved
      * center is stable before the pointer moves.  The pointer move itself stays
@@ -1140,15 +1124,18 @@ internal enum class DragDropPosition(val key: String) {
         }
 
         // Nudge the pointer inside the element instead of always hitting its exact center: identical
-        // coordinates on every request for the same element are a fingerprint. The offset is clamped
-        // to the element box so `:hover` still applies (see [jitteredPointerPosition]).
-        val (pointerX, pointerY) = jitteredPointerPosition(point.x, point.y, point.width, point.height)
-        mouseMove(pointerX, pointerY)
+        // coordinates on every request for the same element are a fingerprint. The offset and its
+        // clamp to the element box (so `:hover` still applies) belong to the selected
+        // [InteractionHumanizer]; the default edition keeps the historical ±2 px / 1 px inset.
+        val pointer = humanizer.clickPoint(
+            ClickPointRequest(point.x, point.y, point.width, point.height)
+        )
+        mouseMove(pointer.x, pointer.y)
 
         // `hit` describes the element's centre, which is not the point just hovered any more: the
         // caller re-tests the hit where the pointer actually is before pressing (see
         // [trustedClickPoint]).
-        return point.copy(x = pointerX, y = pointerY, hit = false)
+        return point.copy(x = pointer.x, y = pointer.y, hit = false)
     }
 
     /**
@@ -1379,9 +1366,9 @@ internal enum class DragDropPosition(val key: String) {
                 )
                 sent += 1
                 // Hold the button before releasing: a press released within the same
-                // millisecond is a bot fingerprint — real holds sit in the "click"
+                // millisecond is a bot fingerprint — the default humanizer uses the "click"
                 // delay bucket (90-180 ms by default).
-                delay(randomDelayMillis("click"))
+                delay(humanizer.pressHoldMillis(delaySource))
                 browserProtocol.executeCdpCommand(
                     "Input.dispatchMouseEvent", mouseEvent("mouseReleased", point, clickCount, buttons = 0, button)
                 )
@@ -1389,7 +1376,7 @@ internal enum class DragDropPosition(val key: String) {
                 if (index + 1 < count) {
                     // Pace multi-click rounds: a real double click has a human gap
                     // between rounds, not a 0 ms burst.
-                    delay(randomDelayMillis("click"))
+                    delay(humanizer.multiClickGapMillis(delaySource))
                 }
             }
         } catch (e: Exception) {
@@ -1587,7 +1574,7 @@ internal enum class DragDropPosition(val key: String) {
     override suspend fun press(key: String, selector: String?) {
         if (selector.isNullOrBlank()) {
             rpc.invokeOnPage("press") {
-                keyboard.press(key, randomDelayMillis("press"))
+                keyboard.press(key, humanizer.keyPressDelayMillis(delaySource))
                 if (key == "Enter") trySubmitFormOnEnter()
                 gap("press")
             }
@@ -1614,7 +1601,7 @@ internal enum class DragDropPosition(val key: String) {
                 }
             }
 
-            keyboard.press(key, randomDelayMillis("press"))
+            keyboard.press(key, humanizer.keyPressDelayMillis(delaySource))
             if (key == "Enter") trySubmitFormOnEnter()
             gap("press")
         }
@@ -1653,12 +1640,12 @@ internal enum class DragDropPosition(val key: String) {
                     browserProtocol.insertText(charString)
                 }
 
-                if (charString.length > 1) {
-                    // Supplementary character — give the browser a little more time
-                    delay(randomDelayMillis("type") * 2)
-                } else {
-                    delay(randomDelayMillis("type"))
-                }
+                // The humanizer decides the inter-character pace: the default edition uses the
+                // "type" delay bucket and doubles it for a supplementary character, which gives
+                // the renderer time for the second UTF-16 unit. A 0 ms delay drops `input`
+                // events on some pages, so even a non-humanizing provider must return a usable
+                // value (see InteractionHumanizer.typeCharDelayMillis).
+                delay(humanizer.typeCharDelayMillis(charString, delaySource))
             }
         }
     }
@@ -2303,6 +2290,95 @@ internal enum class DragDropPosition(val key: String) {
     }
 
     // ---------------------------------------------------------------------------
+    // Replaceable browser behavior — browser stealth and interaction humanization are
+    // provided by the browser4-behavior-api SPI. The default (community) implementation
+    // lives in browser4-behavior-default and is discovered with ServiceLoader, so this
+    // module never references it: a professional or custom edition replaces it on the
+    // classpath, or outranks it by provider priority / by pinning its id in
+    // `browser.behavior.stealth.provider` and `browser.behavior.humanization.provider`.
+    //
+    // The seam keeps the mechanisms in this class on purpose: trusted CDP input, dialog
+    // handling, frame resolution and the DOM fallbacks are correctness, not pacing, so a
+    // humanizer only decides *when* and *where* an interaction happens. The baseline
+    // page-world gate is applied in the constructor (see StealthAwareBrowserProtocol).
+    // ---------------------------------------------------------------------------
+
+    /** The stealth provider selected for this browser's configuration. */
+    private val stealthProvider: BrowserStealthProvider by lazy {
+        BrowserBehavior.stealth(settings.config)
+    }
+
+    /** The interaction humanizer selected for this browser's configuration. */
+    private val humanizer: InteractionHumanizer by lazy {
+        BrowserBehavior.humanizer(settings.config)
+    }
+
+    /**
+     * The delay source handed to the humanizer: the base library's configured delay policy
+     * (bucket → `IntRange`, chosen by the operator's `delay.preset`), so an edition module can
+     * keep the deployment's pacing as its baseline instead of hard-coding milliseconds.
+     */
+    private val delaySource: DelaySource by lazy {
+        DelaySource { bucket -> randomDelayMillis(bucket) }
+    }
+
+    /** Guards the one-time stealth setup below; see [ensureStealthApplied]. */
+    private val stealthApplied = AtomicBoolean(false)
+
+    /**
+     * Apply the selected [BrowserStealthProvider]'s driver-level layer, once per driver.
+     *
+     * The document-start scripts are registered through `Page.addScriptToEvaluateOnNewDocument`
+     * so they reach every document of this target before any page script, and
+     * [BrowserStealthProvider.onDriverReady] runs with the tab already attached — the two hooks
+     * that make a pro edition's CDP emulation (locale, timezone, UA metadata, device metrics)
+     * effective before the first page load. The baseline `js/stealth.js` payload is gated
+     * separately, in the constructor; this method only adds the provider's own layer.
+     *
+     * Called from the same two entry points as [ensureFocusEmulation] ([navigate] and
+     * [evaluate]), because every driver binding path — a new driver, a pooled tab, an attached
+     * session — arrives through one of them. A provider failure is logged and never fails the
+     * navigation: a browser without its extra stealth layer still works, a browser that refuses
+     * to navigate does not.
+     */
+    private suspend fun ensureStealthApplied() {
+        if (stealthApplied.get()) {
+            return
+        }
+        // Claim the slot before calling the provider: a hook that evaluates JS on this driver
+        // must not re-enter this method (see the `evaluate` override below).
+        if (!stealthApplied.compareAndSet(false, true)) {
+            return
+        }
+
+        val provider = stealthProvider
+        val context = StealthSessionContext(settings)
+
+        val scripts = runCatching { provider.documentStartScripts(context) }
+            .onFailure {
+                logger.warn(
+                    "Stealth provider [{}] could not compute its document-start scripts: {}",
+                    provider.id, it.message
+                )
+            }
+            .getOrDefault(emptyList())
+        for (script in scripts) {
+            runCatching { addInitScript(script.content) }
+                .onFailure {
+                    logger.warn(
+                        "Stealth script [{}] of provider [{}] could not be registered: {}",
+                        script.name, provider.id, it.message
+                    )
+                }
+        }
+
+        runCatching { provider.onDriverReady(this) }
+            .onFailure {
+                logger.warn("Stealth provider [{}] failed its driver-ready hook: {}", provider.id, it.message)
+            }
+    }
+
+    // ---------------------------------------------------------------------------
     // Focus emulation — see the field group above for why the driver needs it.
     // ---------------------------------------------------------------------------
 
@@ -2398,6 +2474,7 @@ internal enum class DragDropPosition(val key: String) {
      */
     @Throws(WebDriverException::class)
     override suspend fun navigate(entry: NavigateEntry) {
+        ensureStealthApplied()
         ensureFocusEmulation()
         clearFrameScopeBeforeNavigation("navigation")
         startConsoleCaptureIfEnabled()
@@ -2468,6 +2545,7 @@ internal enum class DragDropPosition(val key: String) {
      */
     @Throws(WebDriverException::class)
     override suspend fun evaluate(expression: String): Any? {
+        ensureStealthApplied()
         ensureFocusEmulation()
         return super.evaluate(expression)
     }
@@ -3187,28 +3265,32 @@ internal enum class DragDropPosition(val key: String) {
         val sourceNode = rpc.invokeOnPage("drag") { page.dom.queryLocator(sourceSelector) }
             ?: throw WebDriverException("Source element was not found: $sourceSelector", driver = this@Browser4WebDriver)
 
-        // Humanize the sequence: jitter the press/release points (±2px) and
-        // randomize inter-event delays (120-300ms, the same magnitude as the
-        // type() bucket).  Constant centers and fixed delays are a fingerprint
-        // for synthetic drags.  Positioned drops (top/bottom) pin their own
-        // point from the live rect inside the page script, so no jitter is
-        // applied here — ±2px around a center line is exactly what makes
-        // insert-before/insert-after a coin flip on child-index-based reorder
-        // lists, and a jittered point could drift outside the edge region.
+        // Humanize the sequence through the selected [InteractionHumanizer]: it jitters the
+        // press/release points (±2px in the default edition) and randomizes the inter-event
+        // delays (120-300ms), because constant centers and fixed delays are a fingerprint for
+        // synthetic drags. Positioned drops (top/bottom) pin their own point from the live rect
+        // inside the page script — ±2px around a center line is exactly what makes
+        // insert-before/insert-after a coin flip on child-index-based reorder lists — so the
+        // humanizer is told the drop is positioned and must not jitter the target.
         val positioned = position == DragDropPosition.TOP.key || position == DragDropPosition.BOTTOM.key
-        val sourcePoint = Pair(source.x + randomOffset(2.0), source.y + randomOffset(2.0))
-        val targetPoint = if (positioned) Pair(target.x, target.y) else Pair(target.x + randomOffset(2.0), target.y + randomOffset(2.0))
-        // Positioned drops add two intermediate dragover sweep events, so they
-        // pace six inter-event delays instead of four.
-        val delays = List(if (positioned) 6 else 4) { randomDragDelayMillis() }
+        val dragPlan = humanizer.dragPlan(
+            DragRequest(
+                sourceX = source.x,
+                sourceY = source.y,
+                targetX = target.x,
+                targetY = target.y,
+                positioned = positioned,
+            ),
+            delaySource,
+        )
 
         val script = buildDragSequenceScript(
             targetCssPath = target.cssPath,
-            sourceX = sourcePoint.first,
-            sourceY = sourcePoint.second,
-            targetX = targetPoint.first,
-            targetY = targetPoint.second,
-            delays = delays,
+            sourceX = dragPlan.sourceX,
+            sourceY = dragPlan.sourceY,
+            targetX = dragPlan.targetX,
+            targetY = dragPlan.targetY,
+            delays = dragPlan.delays,
             dropPosition = position,
         )
 
@@ -3361,12 +3443,6 @@ internal enum class DragDropPosition(val key: String) {
         }
         return last
     }
-
-    /** Uniform random offset in [-range, range], used to jitter drag points. */
-    private fun randomOffset(range: Double): Double = Random.nextDouble(-range, range)
-
-    /** Randomized inter-event delay for the drag sequence, 120-300 ms. */
-    private fun randomDragDelayMillis(): Long = Random.nextLong(120L, 301L)
 
     // ---------------------------------------------------------------------------
     // upload fix — the upstream pulsar-browser upload

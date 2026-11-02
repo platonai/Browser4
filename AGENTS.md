@@ -94,6 +94,8 @@ sufficient; each gate below has burned this project before.
 | Module | Description |
 |---|---|
 | `browser4-core` | Core engine: sessions, scheduling, DOM, browser control |
+| `browser4-core/browser4-behavior-api` | Replaceable browser stealth / interaction-humanization SPI (contracts + provider registry, no implementation) |
+| `browser4-core/browser4-behavior-default` | Default (community) stealth and interaction-humanization implementation |
 | `browser4-dependencies` | BOM and dependency alignment |
 | `browser4-tools` | Operational tools and launch helpers |
 | `browser4-agentic` | AI agents, MCP, skill registration |
@@ -452,6 +454,7 @@ When adding a new CLI option or changing command behavior, always check these lo
 - [Testing Taxonomy](docs/TESTING.md)
 - [Build from Source](docs/build-from-source.md)
 - [Configuration Guide](docs/config.md)
+- [Browser Behavior Modules](docs/browser-behavior-modules.md)
 - [CLI Skill Guide](skills/browser4-cli/SKILL.md)
 - [ARIA Snapshots](docs/aria-snapshots.md)
 - [HTML Snapshot](docs/htmlsnapshot-inspect-summary.md)

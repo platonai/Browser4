@@ -602,6 +602,19 @@
                 <version>${project.version}</version>
             </dependency>
 
+            <!-- Replaceable browser stealth / interaction-humanization SPI and its default
+                 (community) implementation; see docs/browser-behavior-modules.md. -->
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>browser4-behavior-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>browser4-behavior-default</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>browser4-resources</artifactId>

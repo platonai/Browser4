@@ -24,9 +24,10 @@ import java.net.InetSocketAddress
  *    `HeadlessChrome/<version>` by default, which is a one-line bot verdict (SannySoft
  *    `HEADCHR_UA`, Incolumitas `intoli.userAgent`, BrowserScan's aggregate "Robot" badge,
  *    "You are a bot!" on deviceandbrowserinfo) and contradicts the `Sec-CH-UA*` client hints the
- *    same browser sends. The launch-time `--user-agent` fix lives in [Browser4UserAgent] and is
- *    installed by `DefaultBrowserFactory.createStandardLaunchOptions()`; the unit tests pin the
- *    string it builds, this test proves that string reaches the page.
+ *    same browser sends. The launch-time `--user-agent` fix lives in the default stealth
+ *    provider's `Browser4UserAgent` (`browser4-behavior-default`) and is installed by
+ *    `DefaultBrowserFactory.launch()` through the stealth SPI; the unit tests pin the string it
+ *    builds, this test proves that string reaches the page.
  * 2. **Values browser4 does not own must stay plausible.** `navigator.deviceMemory` and
  *    `navigator.maxTouchPoints` come from Chrome and the host, not from browser4. The assertions
  *    below encode the coherence rules real Chrome satisfies, so a future override that produces a

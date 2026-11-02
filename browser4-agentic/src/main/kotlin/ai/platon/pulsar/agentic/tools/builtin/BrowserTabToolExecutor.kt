@@ -1,5 +1,7 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.browser4.behavior.BrowserBehavior
+import ai.platon.browser4.behavior.humanization.DelaySource
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.FrameManager
 import ai.platon.pulsar.chrome.PulsarWebDriver
@@ -1770,18 +1772,18 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                                 val pulsarDriver = driver as? PulsarWebDriver
                                 if (pulsarDriver != null) {
                                     pulsarDriver.page.focusOnSelector(selector)
+                                    // Pace the characters through the same replaceable
+                                    // humanizer the Browser4 driver uses, so a professional or
+                                    // custom edition applies to this fallback path too.
+                                    val humanizer = BrowserBehavior.humanizer(pulsarDriver.settings.config)
+                                    val delays = DelaySource { bucket -> pulsarDriver.randomDelayMillis(bucket) }
                                     for (charString in Browser4WebDriver.codePoints(text)) {
                                         if (Character.isISOControl(charString.codePointAt(0))) {
                                             pulsarDriver.press(charString)
                                         } else {
                                             pulsarDriver.browserProtocol.insertText(charString)
                                         }
-                                        val typeDelay = pulsarDriver.randomDelayMillis("type")
-                                        if (charString.length > 1) {
-                                            delay(typeDelay * 2)
-                                        } else {
-                                            delay(typeDelay)
-                                        }
+                                        delay(humanizer.typeCharDelayMillis(charString, delays))
                                     }
                                 } else {
                                     driver.type(text, selector)

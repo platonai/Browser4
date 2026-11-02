@@ -15,18 +15,20 @@ import org.mockito.kotlin.wheneverBlocking
  * [StealthAwareBrowserProtocol] is the single hook that turns Browser4's page-world stealth
  * payload off. The base library's only production call to
  * [BrowserProtocol.addScriptToEvaluateOnNewDocument] registers that payload, so the wrapper's
- * contract is binary: delegate when stealth is on, no-op (with a non-null identifier) when off.
+ * contract is binary: delegate when the active
+ * [ai.platon.browser4.behavior.stealth.BrowserStealthProvider] allows the baseline payload,
+ * no-op (with a non-null identifier) when it suppresses it.
  */
 @DisplayName("StealthAwareBrowserProtocol")
 class StealthAwareBrowserProtocolTest {
 
     @Test
-    @DisplayName("delegates addScriptToEvaluateOnNewDocument when stealth is enabled")
-    fun delegatesWhenStealthEnabled() = runBlocking {
+    @DisplayName("delegates addScriptToEvaluateOnNewDocument when the baseline payload is enabled")
+    fun delegatesWhenBaselinePayloadEnabled() = runBlocking {
         val delegate = mock<BrowserProtocol>()
         wheneverBlocking { delegate.addScriptToEvaluateOnNewDocument("payload") }.thenReturn("real-id")
 
-        val wrapper = StealthAwareBrowserProtocol(delegate, stealthEnabled = true)
+        val wrapper = StealthAwareBrowserProtocol(delegate, baselinePageWorldScriptsEnabled = true)
 
         assertEquals("real-id", wrapper.addScriptToEvaluateOnNewDocument("payload"))
         verify(delegate).addScriptToEvaluateOnNewDocument("payload")
@@ -34,10 +36,10 @@ class StealthAwareBrowserProtocolTest {
     }
 
     @Test
-    @DisplayName("suppresses addScriptToEvaluateOnNewDocument when stealth is disabled")
-    fun suppressesWhenStealthDisabled() = runBlocking {
+    @DisplayName("suppresses addScriptToEvaluateOnNewDocument when the baseline payload is disabled")
+    fun suppressesWhenBaselinePayloadDisabled() = runBlocking {
         val delegate = mock<BrowserProtocol>()
-        val wrapper = StealthAwareBrowserProtocol(delegate, stealthEnabled = false)
+        val wrapper = StealthAwareBrowserProtocol(delegate, baselinePageWorldScriptsEnabled = false)
 
         val id = wrapper.addScriptToEvaluateOnNewDocument("payload")
 

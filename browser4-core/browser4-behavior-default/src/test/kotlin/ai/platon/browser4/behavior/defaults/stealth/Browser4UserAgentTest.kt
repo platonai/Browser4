@@ -1,4 +1,4 @@
-package ai.platon.pulsar.chrome
+package ai.platon.browser4.behavior.defaults.stealth
 
 import ai.platon.browser4.common.B4Constants
 import ai.platon.pulsar.api.ChromeOptions

@@ -28,6 +28,11 @@
 
     <modules>
         <module>browser4-common</module>
+        <!-- Replaceable stealth/humanization SPI plus its default community implementation.
+             browser4-browser depends on the API at compile time and on the default
+             implementation at runtime, so a professional/custom edition can swap it. -->
+        <module>browser4-behavior-api</module>
+        <module>browser4-behavior-default</module>
         <module>browser4-resources</module>
         <module>browser4-skeleton</module>
         <module>browser4-browser</module>
