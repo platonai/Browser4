@@ -2,6 +2,7 @@ package ai.platon.browser4.common
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 
@@ -60,5 +61,34 @@ class B4ConstantsTest {
         // Inheritance stays the default: extensions carry useful login state for real-world
         // tasks, so the user must opt into a pure environment rather than the other way round.
         assertEquals(true, B4Constants.EXTENSIONS_INHERIT_DEFAULT)
+    }
+
+    @Test
+    @DisplayName("the stealth injection key and its default are pinned")
+    fun stealthKeyAndDefaultArePinned() {
+        assertEquals("browser.stealth.enabled", B4Constants.STEALTH_ENABLED)
+        // Stealth stays on by default: Browser4's existing sessions must keep their current
+        // anti-detection layer until a session explicitly opts into handing stealth over to a
+        // fingerprint browser.
+        assertEquals(true, B4Constants.STEALTH_ENABLED_DEFAULT)
+    }
+
+    @Test
+    @DisplayName("ego lite is a fingerprint browser and owns its own stealth")
+    fun egoLiteChannelOwnsItsOwnStealth() {
+        for (channel in listOf("ego-lite", "egolite", "ego lite", "ego", "EGO-LITE", " Ego ")) {
+            assertTrue(B4Constants.isEgoLiteChannel(channel), "channel: $channel")
+            // Regardless of the master stealth switch, Browser4's layer never applies here.
+            assertFalse(B4Constants.stealthAppliesTo(channel), "channel: $channel")
+        }
+    }
+
+    @Test
+    @DisplayName("ordinary channels keep Browser4's stealth layer")
+    fun ordinaryChannelsKeepBrowser4Stealth() {
+        for (channel in listOf(null, "", "  ", "chrome", "google-chrome", "msedge", "firefox")) {
+            assertFalse(B4Constants.isEgoLiteChannel(channel), "channel: $channel")
+            assertTrue(B4Constants.stealthAppliesTo(channel), "channel: $channel")
+        }
     }
 }

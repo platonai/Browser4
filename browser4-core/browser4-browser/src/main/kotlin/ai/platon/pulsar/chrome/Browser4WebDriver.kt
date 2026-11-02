@@ -102,12 +102,59 @@ import java.util.concurrent.atomic.AtomicBoolean
  * @see PulsarWebDriver
  * @see executeCdpCommand
  */
+/**
+ * [BrowserProtocol] decorator that suppresses the page-world stealth payload
+ * when Browser4's stealth layer does not apply to the session.
+ *
+ * The layer does not apply when [B4Constants.STEALTH_ENABLED] is off **or** the
+ * session runs on a fingerprint-browser channel ([B4Constants.BROWSER_CHANNEL_EGO_LITE]):
+ * ego lite owns its fingerprint and its own anti-detection behaviour, so
+ * Browser4 must not stack its patches on top.
+ *
+ * The only production call site of
+ * [BrowserProtocol.addScriptToEvaluateOnNewDocument] in the base library is the
+ * registration of the page-world stealth bundle
+ * (`PulsarWebDriver.registerPageWorldScript`). When stealth is disabled that
+ * call is turned into a no-op returning a synthetic identifier — the base
+ * stores it in `pageWorldScriptId` but never removes it, so any non-null
+ * string is valid. Every other method (the isolated-world runtime injection
+ * goes through `Page.createIsolatedWorld` + `Runtime.evaluate`, not here) is
+ * delegated unchanged, so human-like input and the Browser4 runtime keep
+ * working.
+ */
+internal class StealthAwareBrowserProtocol(
+    private val delegate: BrowserProtocol,
+    private val stealthEnabled: Boolean,
+) : BrowserProtocol by delegate {
+    override suspend fun addScriptToEvaluateOnNewDocument(script: String): String {
+        if (!stealthEnabled) {
+            return STEALTH_DISABLED_SCRIPT_ID
+        }
+        return delegate.addScriptToEvaluateOnNewDocument(script)
+    }
+
+    private companion object {
+        private const val STEALTH_DISABLED_SCRIPT_ID = "browser4-stealth-disabled"
+    }
+}
+
 open class Browser4WebDriver(
     uniqueID: String,
     chromeTab: BrowserTab,
     browserProtocol: BrowserProtocol,
     browser: PulsarBrowser
-) : PulsarWebDriver(uniqueID, chromeTab, browserProtocol, browser) {
+) : PulsarWebDriver(
+    uniqueID,
+    chromeTab,
+    StealthAwareBrowserProtocol(
+        browserProtocol,
+        browser.settings.config.getBoolean(
+            B4Constants.STEALTH_ENABLED,
+            B4Constants.STEALTH_ENABLED_DEFAULT
+        ) && B4Constants.stealthAppliesTo(browser.settings.config[B4Constants.BROWSER_CHANNEL])
+    ),
+    browser
+) {
 
     init {
         // Claim the CDP event-listener slots before the base library's
@@ -116,8 +163,12 @@ open class Browser4WebDriver(
         // registered later would silently never fire. Per-protocol sharing
         // (see NetworkObserver.forProtocol) makes this a single registration
         // per tab no matter how many drivers wrap it.
-        NetworkObserver.forProtocol(browserProtocol).preRegister()
-        RouteManager.forProtocol(browserProtocol).preRegister()
+        //
+        // Use the inherited (wrapped) protocol so the observer cache is keyed
+        // by the same instance the base library and this driver's own methods
+        // talk to.
+        NetworkObserver.forProtocol(this.browserProtocol).preRegister()
+        RouteManager.forProtocol(this.browserProtocol).preRegister()
     }
 
     /**

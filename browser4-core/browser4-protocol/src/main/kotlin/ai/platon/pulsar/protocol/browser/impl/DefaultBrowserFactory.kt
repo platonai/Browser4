@@ -43,16 +43,6 @@ class DefaultBrowserFactory(
                     "Supported channels: chrome (the default), ${B4Constants.BROWSER_CHANNEL_EGO_LITE}"
             )
         }
-        // For the ego (lite) channel the stealth user agent must be derived from the
-        // ego binary's own Chromium version, probed over CDP: ego stamps its binaries
-        // and its install-layout version folder with the application version (0.6.x),
-        // so [Browser4UserAgent]'s install-layout lookup would resolve to major 0 and
-        // produce "Chrome/0.0.0.0" — a worse bot signal than the native HeadlessChrome
-        // token. Never call [Browser4UserAgent.applyTo] with the ego binary.
-        val userAgentBinary = if (egoLite) {
-            EgoLiteBrowsers.resolveBinaryOrNull(launcherOptions.settings.config)
-        } else null
-
         // Every browser launch in the application funnels through this method, which makes it
         // the one place able to guarantee that no session ever puts the headless
         // `HeadlessChrome` product token on the wire. It has to be done here because the
@@ -60,12 +50,11 @@ class DefaultBrowserFactory(
         // (see [Browser4UserAgent] for the exact reason), so no `--user-agent` switch is added
         // by `createStandardLaunchOptions()`. A user agent already decided by the caller or by
         // `browser.launch.user.agent` is left untouched.
-        if (egoLite) {
-            // A missing binary is reported by EgoLiteBrowserLauncher.launch below.
-            if (userAgentBinary != null) {
-                EgoLiteBrowsers.applyStealthUserAgent(launchOptions, launcherOptions.settings, userAgentBinary)
-            }
-        } else {
+        //
+        // The ego (lite) channel is a fingerprint browser that owns its own anti-detection
+        // behaviour — user agent included — so Browser4 never rewrites it: human-like input
+        // stays, stealth does not. See [B4Constants.stealthAppliesTo].
+        if (!egoLite) {
             Browser4UserAgent.applyTo(launchOptions, launcherOptions.settings)
         }
         Browser4Extensions.applyTo(launchOptions, launcherOptions.settings)

@@ -6,6 +6,7 @@ import ai.platon.pulsar.api.ChromeOptions
 import ai.platon.pulsar.api.LauncherOptions
 import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.common.config.MutableConfig
+import com.fasterxml.jackson.databind.ObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -57,23 +58,54 @@ class EgoLiteBrowserLauncherTest {
         assertNull(EgoLiteBrowsers.resolveBinaryOrNull(conf))
     }
 
-    // -- EgoLiteBrowsers.parseBrowserMajorFromVersionJson ---------------------------
+    // -- EgoLiteBrowsers.applyWebRtcIpHandlingPolicy --------------------------------
 
     @Test
-    fun parseBrowserMajorReadsChromeProduct() {
-        val json = """{"Browser":"Chrome/156.0.6829.0","Protocol-Version":"1.3"}"""
-        assertEquals(156, EgoLiteBrowsers.parseBrowserMajorFromVersionJson(json))
+    @org.junit.jupiter.api.DisplayName("WebRTC IP policy preference is written into a fresh profile")
+    fun webRtcPolicyWrittenIntoFreshProfile() {
+        val dir = Files.createTempDirectory("ego-webrtc-fresh")
+
+        EgoLiteBrowsers.applyWebRtcIpHandlingPolicy(dir)
+
+        val preferences = dir.resolve("Default").resolve("Preferences")
+        assertTrue(Files.isRegularFile(preferences))
+        val root = ObjectMapper().readTree(Files.readString(preferences))
+        assertEquals(
+            EgoLiteBrowsers.WEBRTC_IP_HANDLING_POLICY_VALUE,
+            root.get("webrtc").get("ip_handling_policy").asText()
+        )
     }
 
     @Test
-    fun parseBrowserMajorReadsHeadlessChromeProduct() {
-        val json = """{"Browser":"HeadlessChrome/156.0.6829.0"}"""
-        assertEquals(156, EgoLiteBrowsers.parseBrowserMajorFromVersionJson(json))
+    @org.junit.jupiter.api.DisplayName("WebRTC IP policy merge preserves existing preferences")
+    fun webRtcPolicyMergePreservesExistingPreferences() {
+        val dir = Files.createTempDirectory("ego-webrtc-merge")
+        val preferences = dir.resolve("Default").resolve("Preferences")
+        Files.createDirectories(preferences.parent)
+        Files.writeString(preferences, """{"homepage": "https://example.com"}""")
+
+        EgoLiteBrowsers.applyWebRtcIpHandlingPolicy(dir)
+
+        val root = ObjectMapper().readTree(Files.readString(preferences))
+        assertEquals("https://example.com", root.get("homepage").asText())
+        assertEquals(
+            EgoLiteBrowsers.WEBRTC_IP_HANDLING_POLICY_VALUE,
+            root.get("webrtc").get("ip_handling_policy").asText()
+        )
     }
 
     @Test
-    fun parseBrowserMajorReturnsNullWithoutBrowserField() {
-        assertNull(EgoLiteBrowsers.parseBrowserMajorFromVersionJson("""{"Protocol-Version":"1.3"}"""))
+    @org.junit.jupiter.api.DisplayName("an existing WebRTC IP policy preference always wins")
+    fun webRtcPolicyKeepsExistingPreferenceValue() {
+        val dir = Files.createTempDirectory("ego-webrtc-keep")
+        val preferences = dir.resolve("Default").resolve("Preferences")
+        Files.createDirectories(preferences.parent)
+        Files.writeString(preferences, """{"webrtc": {"ip_handling_policy": "default"}}""")
+
+        EgoLiteBrowsers.applyWebRtcIpHandlingPolicy(dir)
+
+        val root = ObjectMapper().readTree(Files.readString(preferences))
+        assertEquals("default", root.get("webrtc").get("ip_handling_policy").asText())
     }
 
     // -- DefaultBrowserFactory channel dispatch -----------------------------------

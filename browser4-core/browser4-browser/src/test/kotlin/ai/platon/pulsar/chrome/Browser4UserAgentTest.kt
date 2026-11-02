@@ -1,5 +1,6 @@
 package ai.platon.pulsar.chrome
 
+import ai.platon.browser4.common.B4Constants
 import ai.platon.pulsar.api.ChromeOptions
 import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.api.model.ReducedUserAgent
@@ -95,6 +96,31 @@ class Browser4UserAgentTest {
         val settings = settingsWith { set(CapabilityTypes.BROWSER_LAUNCH_USER_AGENT_STEALTH, "false") }
 
         assertNull(Browser4UserAgent.resolveOrNull(settings, fakeChromeInstall(dir)))
+    }
+
+    @Test
+    @DisplayName("browser.stealth.enabled=false leaves the browser alone even with UA stealth on")
+    fun masterStealthSwitchDisablesUaStealth(@TempDir dir: Path) {
+        // userAgentStealth is left at its pinned "true" default; only the master switch is off,
+        // which must be enough to suppress the derived reduced UA.
+        val settings = settingsWith { set(B4Constants.STEALTH_ENABLED, "false") }
+
+        assertNull(Browser4UserAgent.resolveOrNull(settings, fakeChromeInstall(dir)))
+    }
+
+    @Test
+    @DisplayName("a configured user agent still wins when the master stealth switch is off")
+    fun configuredUserAgentStillWinsWhenMasterStealthIsOff(@TempDir dir: Path) {
+        val configured = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) HeadlessChrome/153.0.0.0 Safari/537.36"
+        val settings = settingsWith {
+            set(B4Constants.STEALTH_ENABLED, "false")
+            set(CapabilityTypes.BROWSER_LAUNCH_USER_AGENT, configured)
+        }
+
+        val userAgent = Browser4UserAgent.resolveOrNull(settings, fakeChromeInstall(dir))
+
+        assertEquals(configured.replace("HeadlessChrome/", "Chrome/"), userAgent)
     }
 
     @Test

@@ -78,6 +78,61 @@ object B4Constants {
     /** Default of [EXTENSIONS_INHERIT]; pinned by B4ConstantsTest. */
     const val EXTENSIONS_INHERIT_DEFAULT = true
 
+    /**
+     * Whether Browser4 injects its own anti-detection layer into driven pages
+     * (`true`, the default) or leaves every page untouched (`false`).
+     *
+     * Browser4 ships a page-world stealth payload (the guarded `js/stealth.js`
+     * registered through `Page.addScriptToEvaluateOnNewDocument`) and, on
+     * headless launches, a reduced user agent. Both are automation-facing
+     * patches. When a session is attached to a fingerprint browser that
+     * already manages its own evasion (ego-lite, AdsPower, Multilogin, ...),
+     * stacking Browser4's patches on top only adds footprints without
+     * improving the verdict, and can even conflict with the fingerprint
+     * browser's own patches.
+     *
+     * `false` skips the page-world payload registration entirely and also
+     * suppresses the launch-time UA reduction. Human-like input behaviour
+     * (trusted click cadence, segmented mouse moves, inter-character typing
+     * delays) is **not** affected by this switch — that is the automation
+     * style, not a stealth patch, and the fingerprint browser still needs it.
+     *
+     * A session launched through a **fingerprint-browser channel**
+     * ([BROWSER_CHANNEL_EGO_LITE], i.e. ego lite) skips Browser4's stealth layer
+     * automatically: ego lite owns the fingerprint and its own anti-detection
+     * behaviour, so this switch is only consulted for ordinary channels. See
+     * [stealthAppliesTo].
+     */
+    const val STEALTH_ENABLED = "browser.stealth.enabled"
+
+    /** Default of [STEALTH_ENABLED]; pinned by B4ConstantsTest. */
+    const val STEALTH_ENABLED_DEFAULT = true
+
+    /**
+     * True when [channel] names a **fingerprint browser** Browser4 drives without
+     * injecting its own stealth layer. ego lite is such a browser: it ships its own
+     * fingerprint (user agent, canvas/WebGL noise, …) and owns its anti-detection
+     * behaviour, so Browser4 neither registers the page-world `js/stealth.js`
+     * payload nor rewrites its user agent for a session on this channel.
+     *
+     * Accepts the same spellings the CLI accepts: `ego-lite`, `egolite`,
+     * `ego lite`, `ego`, case-insensitive.
+     */
+    fun isEgoLiteChannel(channel: String?): Boolean {
+        val normalized = channel?.trim()?.lowercase() ?: return false
+        return normalized in EGO_LITE_CHANNEL_ALIASES
+    }
+
+    /**
+     * True when Browser4's stealth layer applies to a session on [channel].
+     *
+     * Fingerprint-browser channels ([isEgoLiteChannel]) own their evasion, so
+     * Browser4 stays out of the way regardless of [STEALTH_ENABLED].
+     */
+    fun stealthAppliesTo(channel: String?): Boolean = !isEgoLiteChannel(channel)
+
+    private val EGO_LITE_CHANNEL_ALIASES = setOf(BROWSER_CHANNEL_EGO_LITE, "egolite", "ego lite", "ego")
+
     const val SESSION_ID_CAPABILITY = "sessionId"
     const val PROFILE_MODE_CAPABILITY = "profileMode"
     const val PROFILE_PATH_CAPABILITY = "profilePath"

@@ -232,6 +232,18 @@ like GUI, and in Docker/headless environments the launch is forced headless anyw
   determined the driver logs a warning and leaves Chrome's default user agent in place —
   expect the `HeadlessChrome` token in that case, and set `browser.launch.user.agent` to
   fix it.
+- **Master switch: `browser.stealth.enabled` (default `true`).** Setting it to `false`
+  turns off **every** Browser4 stealth injection in one place: the page-world
+  `js/stealth.js` payload is no longer registered on new documents, and the headless
+  `HeadlessChrome` user-agent replacement is skipped (the browser keeps its native UA).
+  Human-like input behaviour is **not** affected — trusted CDP clicks, segmented mouse
+  movement, typing jitter, and the Browser4 isolated-world runtime all keep working.
+  This is intended for sessions driven through a fingerprint browser (`attach --cdp` to
+  an anti-detect browser, …): let the fingerprint browser own the fingerprint instead of
+  stacking Browser4's evasions on top. Set it in `application.properties` (server-wide)
+  or pass `-Dbrowser.stealth.enabled=false` when starting the backend.
+  **The `ego-lite` channel skips Browser4's stealth layer automatically** (see the
+  managed-channel section below) — no configuration is needed for that case.
 - `navigator.deviceMemory` and `navigator.maxTouchPoints` are **Chrome's own readings of the
   host**, not Browser4 overrides — verify before reporting them as defects. Chrome derives
   `deviceMemory` from the host RAM by rounding down to a power of two, and recent Chrome
@@ -314,11 +326,27 @@ session. `chrome` is the default and needs no flag. `ego-lite` launches an insta
 [ego lite](https://www.citrolab.ai/) browser instead of Chrome: the binary is resolved from
 `ego.path` (configuration or `-Dego.path=...` on the backend) or the standard install locations
 (`Program Files` / `Program Files (x86)` / `LOCALAPPDATA` under `Citro Labs\ego lite\Application\ego.exe`),
-and everything after the binary choice — CDP transport, profile modes, headless stealth user agent,
-`close` process reaping — is the standard managed-launch machinery. Like the display mode, the
+and everything after the binary choice — CDP transport, profile modes, `close` process
+reaping — is the standard managed-launch machinery. Like the display mode, the
 channel is fixed when the session is created: reconnecting ignores it, use `close` or `open --fresh`
 to switch. Any other channel name (`msedge`, …) is attach-only — `open` rejects it with a hint to
 `attach --cdp`.
+
+> **ego lite is a fingerprint browser and owns its own anti-detection behaviour.**
+> Browser4 therefore never injects its stealth layer into an ego-lite session: no page-world
+> `js/stealth.js` payload and no `--user-agent` rewrite, regardless of
+> `browser.stealth.enabled`. Human-like input (trusted clicks, segmented mouse moves, typing
+> jitter) is still used. This is automatic — there is nothing to configure.
+>
+> Managed ego launches additionally write `webrtc.ip_handling_policy =
+> disable_non_proxied_udp` into the profile's `Preferences`, so WebRTC candidates never
+> expose the host's real IP (srflx UDP is forced through the proxy, or dropped without
+> one) — the same policy privacy extensions apply, WebRTC itself stays available. The
+> `--force-webrtc-ip-handling-policy` switch is **ignored by Chromium 156**, only the
+> preference works; an existing value in the profile always wins.
+> **Attaching instead?** A running browser cannot be reconfigured, so set the same key
+> once in the profile's `Default/Preferences` while ego is closed (or in ego's own
+> WebRTC setting), then restart.
 
 **`attach --cdp` endpoint resolution**
 

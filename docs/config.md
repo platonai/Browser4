@@ -439,6 +439,25 @@ docker run -d -p 18182:18182 `
   Enables the built-in `browser4-browser` runtime plugin wiring.
   Set `browser.enabled=false` to disable browser runtime beans.
 
+* **`browser.stealth.enabled`** *(default: `true`)*
+  Master switch for Browser4's anti-detection stealth injection.
+  Set to `false` to disable **all** Browser4 stealth in one place: the page-world
+  `js/stealth.js` payload is no longer registered on new documents, and the headless
+  `HeadlessChrome` user-agent reduction is skipped (the browser keeps its native UA).
+  Human-like input behaviour (trusted CDP clicks, mouse-move segmentation, typing
+  jitter) is **not** affected — only the stealth/fingerprint evasions are.
+
+  Intended for sessions driven through a fingerprint browser (`attach --cdp` to an
+  anti-detect browser, …): let the fingerprint browser own the fingerprint instead of
+  stacking Browser4's evasions on top. Server-wide only — set in
+  `application.properties` / `application-private.properties` or pass
+  `-Dbrowser.stealth.enabled=false` when starting the backend.
+
+  **The `ego-lite` channel (`open --channel ego-lite`) skips this layer automatically.**
+  ego lite is a fingerprint browser that owns its own anti-detection behaviour, so no
+  page-world payload is registered and its user agent is left untouched regardless of
+  this switch — nothing needs to be configured for that case.
+
 * **Lazy browser launch (session behaviour, no key to set)**
   Creating a session — including the agent session created for `agent run`, `open`
   or `chat` — does **not** launch a browser. The browser is started by the first

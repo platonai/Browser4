@@ -1,5 +1,6 @@
 package ai.platon.pulsar.chrome
 
+import ai.platon.browser4.common.B4Constants
 import ai.platon.pulsar.api.ChromeOptions
 import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.api.model.ReducedUserAgent
@@ -67,8 +68,10 @@ object Browser4UserAgent {
      *
      * A configured `browser.launch.user.agent` wins (and is normalised, so a configured
      * value that still carries a `Headless` token is repaired rather than trusted).
-     * Otherwise `browser.launch.user.agent.stealth` decides: when it is disabled the session
-     * is left exactly as Chrome launched it.
+     * Otherwise the master [B4Constants.STEALTH_ENABLED] switch decides first: when it is
+     * off the session is left exactly as the browser launched it, so a fingerprint
+     * browser's own user agent is never overwritten. Only when stealth is on does
+     * `browser.launch.user.agent.stealth` get a say.
      */
     fun resolveOrNull(
         settings: BrowserSettings,
@@ -79,7 +82,11 @@ object Browser4UserAgent {
         if (configured != null) {
             return ReducedUserAgent.reduce(configured)
         }
-        if (!launchConfig.userAgentStealth) {
+
+        val stealthEnabled = settings.config.getBoolean(
+            B4Constants.STEALTH_ENABLED, B4Constants.STEALTH_ENABLED_DEFAULT
+        )
+        if (!stealthEnabled || !launchConfig.userAgentStealth) {
             return null
         }
 
@@ -92,6 +99,10 @@ object Browser4UserAgent {
      * Called from the single funnel every launch goes through, so the invariant "no
      * `HeadlessChrome` token on the wire" holds for session launches, pooled launches and
      * the legacy display-mode launch path alike.
+     *
+     * The master [B4Constants.STEALTH_ENABLED] switch gates this too: when it is off,
+     * [resolveOrNull] returns `null` and the browser keeps its native user agent, so a
+     * fingerprint browser's UA is never overwritten by Browser4.
      *
      * ## Headless only, because the switch is not free
      *
