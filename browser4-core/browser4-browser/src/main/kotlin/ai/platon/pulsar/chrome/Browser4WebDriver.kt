@@ -23,6 +23,7 @@ import ai.platon.pulsar.chrome.network.RobustRPC
 import ai.platon.pulsar.chrome.network.RouteManager
 import ai.platon.pulsar.chrome.network.TrackedNetworkRequest
 import ai.platon.pulsar.chrome.protocol.Keyboard
+import ai.platon.pulsar.chrome.protocol.Mouse
 import ai.platon.pulsar.chrome.protocol.util.withNodeObjectId
 import ai.platon.pulsar.chrome.util.ChromeDriverException
 import ai.platon.pulsar.chrome.util.ChromeIOException
@@ -342,6 +343,14 @@ open class Browser4WebDriver(
     ): Boolean = Browser4WebDriverParsers.isDocumentOriginReady(evaluatedOrigin, targetOrigin)
 
     internal fun parseDragCenter(value: Any?): DragCenter? = Browser4WebDriverParsers.parseDragCenter(value)
+
+    /**
+     * Step count for a pointer glide over [distance] pixels: roughly one step per
+     * 20 px, clamped to 3..30 so even a short hop is visibly multi-step and a
+     * viewport-crossing move stays within ~500 ms at the 8-16 ms per step the
+     * callers use.
+     */
+    internal fun pointerMoveSteps(distance: Double): Int = (distance / 20.0).roundToInt().coerceIn(3, 30)
 
     internal fun jitteredPointerPosition(
         x: Double,
@@ -945,6 +954,10 @@ internal enum class DragDropPosition(val key: String) {
     /**
      * Scroll the mouse wheel over the element [selector]; same fallback contract
      * as [mouseWheel], with the synthetic event targeted at the element.
+     *
+     * The pointer glides to the element first (see [glidePointerTo]) instead of
+     * teleporting its centre: a single jump right before the wheel burst is the
+     * same bot-shaped trail this class removes from clicks.
      */
     @Throws(WebDriverException::class)
     override suspend fun mouseWheel(selector: String, deltaX: Double, deltaY: Double) {
@@ -957,7 +970,7 @@ internal enum class DragDropPosition(val key: String) {
                     ?: throw WebDriverException("Element not found or not clickable: $selector")
                 try {
                     withTimeout(wheelTimeoutMillis(deltaX, deltaY)) {
-                        m.moveTo(point, steps = 1)
+                        glidePointerTo(m, point.x, point.y)
                         m.wheel(deltaX, deltaY)
                     }
                 } catch (e: TimeoutCancellationException) {
@@ -997,19 +1010,32 @@ internal enum class DragDropPosition(val key: String) {
      * pointer rests to the target (`steps = 1`), so a click lands after exactly
      * one jump of possibly hundreds of pixels — a trail no human produces and
      * a signal mouse-tracking bot detectors score directly.  Here the step
-     * count scales with the distance (~20 px per step, clamped to 3..30) at a
-     * randomized 8-16 ms per step, so the pointer crosses the viewport in a
-     * human-like 100-500 ms and the page observes a realistic `mousemove`
-     * trail.  Like the upstream, an inactive driver skips the move silently.
+     * count scales with the distance (see [pointerMoveSteps]) at a randomized
+     * 8-16 ms per step, so the pointer crosses the viewport in a human-like
+     * 100-500 ms and the page observes a realistic `mousemove` trail.  Like
+     * the upstream, an inactive driver skips the move silently.
      */
     @Throws(WebDriverException::class)
     override suspend fun mouseMove(x: Double, y: Double) {
         rpc.invokeOnPage("mouseMove") {
             val m = page.mouse.takeIf { isActive } ?: return@invokeOnPage
-            val distance = hypot(x - m.currentX, y - m.currentY)
-            val steps = (distance / 20.0).roundToInt().coerceIn(3, 30)
-            m.moveTo(x, y, steps = steps, delayMillis = Random.nextLong(8, 17))
+            glidePointerTo(m, x, y)
         }
+    }
+
+    /**
+     * Glide [m] to ([x], [y]) in short steps rather than teleporting, the single
+     * pointer-movement policy shared by [mouseMove] and the wheel-over-element
+     * path.
+     *
+     * The step count follows the distance ([pointerMoveSteps]) and each step
+     * waits a randomized 8-16 ms; the base library bends the path itself into a
+     * distance-dependent Bézier curve from 4.11.30 on, so the trajectory is
+     * curved whenever it is long enough to matter.
+     */
+    private suspend fun glidePointerTo(m: Mouse, x: Double, y: Double) {
+        val distance = hypot(x - m.currentX, y - m.currentY)
+        m.moveTo(x, y, steps = pointerMoveSteps(distance), delayMillis = Random.nextLong(8, 17))
     }
 
     /**

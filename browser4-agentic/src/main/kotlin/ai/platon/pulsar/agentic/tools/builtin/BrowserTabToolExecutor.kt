@@ -225,6 +225,33 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             generateAllOnce()
             selectPreferred(webDriverToolSpecs).toMap(toolSpec)
         }
+        // The code-mirror WebDriver.kt declares two `mouseWheel` overloads:
+        // - mouseWheel(deltaX, deltaY)  -- no selector
+        // - mouseWheel(selector, deltaX, deltaY)  -- selector is the first arg
+        //
+        // `selectPreferred` keeps the first it scans (the no-selector one), so the
+        // auto-generated spec advertises only `deltaX`/`deltaY`. Override it here
+        // with a spec that lists `selector` as optional — the executor above routes
+        // to the matching driver overload based on its presence.
+        toolSpec["mouseWheel"] = ToolSpec(
+            domain = domain,
+            method = "mouseWheel",
+            arguments = listOf(
+                ToolSpec.Arg("selector", "String?", "null"),
+                ToolSpec.Arg("deltaX", "Double", "0.0"),
+                ToolSpec.Arg("deltaY", "Double", "150.0"),
+            ),
+            returnType = "Unit",
+            description = "Scroll the mouse wheel at the current pointer, or over the element matched by selector. ",
+            help = """
+                tab.mouseWheel(deltaX: Double = 0.0, deltaY: Double = 150.0)
+                tab.mouseWheel(selector: String, deltaX: Double = 0.0, deltaY: Double = 150.0)
+
+                With no selector, wheels at wherever the pointer currently rests.
+                With a selector, scrolls into view first, glides the pointer to the
+                element, then dispatches the wheel event.
+            """.trimIndent()
+        )
         toolSpec["eval"] = ToolSpec(
             domain = domain,
             method = "eval",
@@ -2292,11 +2319,19 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             }
 
             "mouseWheel" -> {
-                validateArgs(args, allowed("deltaX", "deltaY"), emptySet(), functionName)
-                driver.mouseWheel(
-                    deltaX = args["deltaX"]?.toString()?.toDoubleOrNull() ?: 0.0,
-                    deltaY = args["deltaY"]?.toString()?.toDoubleOrNull() ?: 150.0
-                )
+                val deltaX = args["deltaX"]?.toString()?.toDoubleOrNull() ?: 0.0
+                val deltaY = args["deltaY"]?.toString()?.toDoubleOrNull() ?: 150.0
+                when {
+                    args.containsKey("selector") -> {
+                        validateArgs(args, allowed("selector", "deltaX", "deltaY"), setOf("selector"), functionName)
+                        driver.mouseWheel(paramString(args, "selector", functionName)!!, deltaX, deltaY)
+                    }
+
+                    else -> {
+                        validateArgs(args, allowed("deltaX", "deltaY"), emptySet(), functionName)
+                        driver.mouseWheel(deltaX, deltaY)
+                    }
+                }
             }
 
             "mouseMove" -> {

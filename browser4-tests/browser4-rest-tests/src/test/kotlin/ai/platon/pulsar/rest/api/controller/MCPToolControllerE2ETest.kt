@@ -758,6 +758,36 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     }
 
     @Test
+    @DisplayName("mouse wheel on a selector glides the pointer before the wheel burst")
+    fun testMouseWheelOnSelectorGlidesPointer() {
+        val sessionId = openResizedInteractiveSession()
+
+        // Park the pointer away from the target so the glide has to cross pixels,
+        // then reset the fixture's trail counter: what remains is the movement the
+        // wheel itself performs.
+        assertNotError(callTool("mousemove", mapOf("sessionId" to sessionId, "x" to 10, "y" to 10)))
+        evalText(sessionId, "window.__browser4State.mouseMoveSinceWheel = 0")
+
+        runToolAndWaitForState(
+            sessionId = sessionId,
+            toolName = "mousewheel",
+            arguments = mapOf(
+                "sessionId" to sessionId,
+                "selector" to "#mouse-area",
+                "deltaX" to 0,
+                "deltaY" to 160,
+            ),
+            failureMessage = "Expected a selector wheel to be preceded by a multi-step pointer glide",
+            // The glide uses at least 3 steps (Browser4WebDriver.pointerMoveSteps),
+            // so the wheel event must see several `mousemove` events first.
+            predicate = {
+                val preceding = it["wheelPrecedingMoves"]
+                !preceding.isNull && preceding.asInt() >= 3
+            }
+        )
+    }
+
+    @Test
     @DisplayName("mouse move/down/up, dialog, and tab tools match the interactive CLI scenarios")
     fun testMouseDialogAndTabCommands() {
         val sessionId = openResizedInteractiveSession()

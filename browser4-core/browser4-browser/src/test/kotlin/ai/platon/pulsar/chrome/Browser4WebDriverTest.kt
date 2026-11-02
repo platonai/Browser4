@@ -701,6 +701,27 @@ class Browser4WebDriverTest {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // pointerMoveSteps — the step count shared by mouseMove and the
+    // wheel-over-element glide
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("pointerMoveSteps scales with the distance at about one step per 20 px")
+    fun pointerMoveStepsScalesWithDistance() {
+        assertEquals(7, Browser4WebDriver.pointerMoveSteps(140.0))
+        assertEquals(20, Browser4WebDriver.pointerMoveSteps(400.0))
+    }
+
+    @Test
+    @DisplayName("pointerMoveSteps clamps short hops to 3 and long moves to 30")
+    fun pointerMoveStepsClampsTheRange() {
+        assertEquals(3, Browser4WebDriver.pointerMoveSteps(0.0))
+        assertEquals(3, Browser4WebDriver.pointerMoveSteps(39.0))
+        assertEquals(30, Browser4WebDriver.pointerMoveSteps(600.0))
+        assertEquals(30, Browser4WebDriver.pointerMoveSteps(100_000.0))
+    }
+
     @Test
     @DisplayName("dragCenterJs resolves center, css path, frame residency and viewport")
     fun dragCenterJsContainsResolutionLogic() {

@@ -80,6 +80,12 @@
       lastMouse: null,
       lastWheel: null,
       wheelEvents: [],
+      // Document-level pointer trail: a wheel aimed at a selector must first glide
+      // the pointer there (see Browser4WebDriver.glidePointerTo), so the wheel
+      // burst is preceded by several `mousemove` events.  The wheel handler
+      // snapshots `mouseMoveSinceWheel` into `wheelPrecedingMoves` and resets it.
+      mouseMoveSinceWheel: 0,
+      wheelPrecedingMoves: null,
       scrollY: 0,
       typeValue: '',
       fillValue: '',
@@ -273,6 +279,12 @@
       window.__browser4State.mouseLeftArea = true;
       syncState();
     });
+    // Document-level: a selector-targeted wheel glides the pointer to the element,
+    // and those `mousemove` events land wherever the element is, not necessarily
+    // on `mouse-area`.
+    document.addEventListener('mousemove', () => {
+      window.__browser4State.mouseMoveSinceWheel += 1;
+    });
     // Chromium CDP bug workaround (crbug.com/444929150): Input.dispatchMouseEvent
     // for wheel events uses a non-blocking synthetic event that may fire after
     // the CDP promise resolves — or never fire at all in headless/Docker.
@@ -280,6 +292,8 @@
     // the race condition that causes CDP mouseWheel commands to hang/timeout.
     mouseArea.addEventListener('wheel', (event) => {
       window.__browser4State.lastWheel = [Math.round(event.deltaX), Math.round(event.deltaY)];
+      window.__browser4State.wheelPrecedingMoves = window.__browser4State.mouseMoveSinceWheel;
+      window.__browser4State.mouseMoveSinceWheel = 0;
       window.__browser4State.wheelEvents.push({
         deltaX: Math.round(event.deltaX),
         deltaY: Math.round(event.deltaY),
