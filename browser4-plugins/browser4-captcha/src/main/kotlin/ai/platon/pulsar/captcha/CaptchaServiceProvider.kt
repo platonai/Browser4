@@ -28,6 +28,9 @@ enum class CaptchaServiceProvider {
     /** Anti-Captcha — similar API to 2Captcha, well-established */
     ANTI_CAPTCHA,
 
+    /** Solvecha — image and text CAPTCHAs only, CapSolver-style API */
+    SOLVECHA,
+
     /** No provider configured */
     NONE
 }

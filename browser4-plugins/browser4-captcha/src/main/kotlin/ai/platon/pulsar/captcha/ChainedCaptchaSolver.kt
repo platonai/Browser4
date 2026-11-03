@@ -145,7 +145,8 @@ open class ChainedCaptchaSolver(val conf: ImmutableConfig) : CaptchaSolver {
         private val API_KEY_PROPERTIES = listOf(
             "captcha.capsolver.api.key",
             "captcha.twocaptcha.api.key",
-            "captcha.anticaptcha.api.key"
+            "captcha.anticaptcha.api.key",
+            "captcha.solvecha.api.key"
         )
 
         private const val REDACTED_SECRET = "***"

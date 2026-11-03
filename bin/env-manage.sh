@@ -76,6 +76,7 @@ KNOWN_VARS=(
   "CAPSOLVER_KEY|captcha||Capsolver API key for CAPTCHA solving|1"
   "TWOCAPTCHA_KEY|captcha||2Captcha API key for CAPTCHA solving|1"
   "ANTICAPTCHA_KEY|captcha||Anti-Captcha API key for CAPTCHA solving|1"
+  "SOLVECHA_KEY|captcha||Solvecha API key for image CAPTCHA solving|1"
 
   # ---- Observability (OpenTelemetry + Metrics) ----
   "OTEL_TRACES_ENABLED|observability|true|Enable OpenTelemetry tracing (true/false)|"

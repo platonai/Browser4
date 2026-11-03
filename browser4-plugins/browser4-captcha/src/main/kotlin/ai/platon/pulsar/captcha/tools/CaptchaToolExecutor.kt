@@ -125,7 +125,7 @@ open class CaptchaToolExecutor(
                 - token: the solved response token, ready for the widget's response field
                 - taskId: the provider's task id (for reporting a bad solve), null when the provider has none
                 - status: SOLVED
-                - provider: CAPSOLVER, TWO_CAPTCHA or ANTI_CAPTCHA
+                - provider: CAPSOLVER, TWO_CAPTCHA, ANTI_CAPTCHA or SOLVECHA
                 - solveTimeMs: how long the provider took, in milliseconds
                 - error: null on success, the provider's message when the solve failed
             """.trimIndent(),
