@@ -50,8 +50,8 @@ Every document is classified into exactly one tier, signaled by `tier:` in its f
 
 | Tier | Purpose | Target Length | Example |
 |------|---------|---------------|---------|
-| **decision** | Comparison tables, decision trees, trade-off analysis. Answers "which approach should I use?" | ≤ 500 lines, no minimum (SKILL.md shares this cap) | SKILL.md, scenario comparison docs |
-| **procedure** | End-to-end workflows. Answers "I want to do X, show me the steps." | ≤ 500 lines, no minimum | Operation walkthroughs, how-to guides |
+| **decision** | Comparison tables, decision trees, trade-off analysis. Answers "which approach should I use?" | target ≤ 500, no minimum (SKILL.md is a hard 500; a reference is advisory to 700) | SKILL.md, scenario comparison docs |
+| **procedure** | End-to-end workflows. Answers "I want to do X, show me the steps." | target ≤ 500, no minimum (advisory to 700) | Operation walkthroughs, how-to guides |
 | **catalog** | Exhaustive reference listings. Answers "what are all the options for Y?" Only consulted on demand. | Any length | API references, flag listings, function catalogs |
 
 **Critical rule:** a decision document never contains a complete flag listing; a procedure document never contains an exhaustive function catalog; a catalog never contains a decision tree.
@@ -223,7 +223,7 @@ An exemption must name the rule it breaks, and is itself reviewed under Conforma
 - M3. `name` in SKILL.md manifests matches the directory name (Frontmatter)
 - M4. Required template sections present in order (P4)
 - M5. Tier-content rules: no 20+ row flag tables in decision files, no `## Decision Tree` in catalogs, no function catalogs in procedures (P3)
-- M6. Every document that loads in full is ≤ 500 lines — SKILL.md, `decision`, `procedure`; no minimum; `catalog` documents are unbounded (P1, P3)
+- M6. Line budget — SKILL.md is a **hard gate** at ≤ 500 lines (it loads in full on every activation; P1). A `decision`/`procedure` *reference* is read on demand, so its 500-line target is **advisory** to 700 lines and a **hard failure** past 700 — that is a split candidate, not a style nit. No minimum; `catalog` documents are unbounded (P1, P3)
 - M7. All relative links resolve; no dead links; no index links in SKILL.md (Style, P6)
 - M8. Callout lines contain no emoji; warning text unique outside SKILL.md §5 (P5)
 

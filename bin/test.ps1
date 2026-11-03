@@ -4093,12 +4093,14 @@ function Invoke-SkillDocConformance {
         Lint the skills/ documents against methodology M1-M8 (bin/skill-doc-lint.ps1).
 
     .DESCRIPTION
-        Every workflow runs bin/skill-doc-lint.ps1 as its own step right after the
-        PowerShell tests (see .github/workflows/ps1-tests.yml), which makes CI the
-        first reader of a drifted skills/ document.  Running the same check from the
-        local gates turns that into a ~1s local failure instead of a red run after
-        the push — a procedure document past the 500-line cap, a reference without
-        frontmatter, a broken relative link.
+        The document gate is its own workflow now (.github/workflows/skill-docs.yml),
+        so a skills/ drift reports as a document failure instead of painting the
+        PowerShell job red — that misattribution is what made `ps1-tests` read as
+        flaky (24 of its last 100 runs went red over a document while every Pester
+        file passed).  Running the same check from the local groups keeps the fast
+        feedback: a ~1s local failure instead of a red run after the push — a
+        reference without frontmatter, a broken relative link, a SKILL.md past its
+        500-line cap.  `ps -SkipDocs` leaves it to the CI workflow.
 
         The linter runs in its own pwsh process, exactly the way CI invokes it, so
         its `exit` cannot terminate the caller; the exit code is returned instead.
@@ -4141,19 +4143,23 @@ function Invoke-SkillDocConformance {
     return [int]$LASTEXITCODE
 }
 
-function Invoke-PowerShellTests([string[]]$additionalArgs, [switch]$StrictArgs) {
+function Invoke-PowerShellTests([string[]]$additionalArgs, [switch]$StrictArgs, [switch]$SkipDocs) {
     <#
     .SYNOPSIS
         Discover and run all *.tests.ps1 files in the repository.
-
     .DESCRIPTION
         Recursively searches the repo root for *.tests.ps1 files, excluding
         node_modules, target, .git, and .claude directories.  Each file is
         executed with `pwsh -NoProfile -ExecutionPolicy Bypass -File`.
 
         In DryRun/Show mode, lists the discovered files without executing.
-        -Quiet is the one argument this target understands: it is forwarded to
-        every plain test script and switches the Pester path to `-Show None`.
+
+        -Quiet is the one argument forwarded to every plain test script
+        (`-Show None` on the Pester path).  -SkipDocs is the runner's own switch:
+        it leaves the skills/ conformance lint out of the group, so CI can report
+        a drifted document from its own workflow instead of from the PowerShell
+        job (see .github/workflows/skill-docs.yml).  The local default keeps the
+        lint in, so one command still covers the whole fast gate.
 
         Any other argument is rejected when `ps` is the only selected target.
         One that nothing consumes used to be forwarded and silently dropped, so
@@ -4168,14 +4174,25 @@ function Invoke-PowerShellTests([string[]]$additionalArgs, [switch]$StrictArgs) 
         `ps` is the only selected target; in a combined run (e.g.
         `test.ps1 ps fast -pl browser4-core`) the same tokens legitimately
         belong to the other suites.
+
+    .PARAMETER SkipDocs
+        Leave bin/skill-doc-lint.ps1 out of this run.
     #>
+
+    # -SkipDocs belongs to this runner, not to the child test scripts: strip it
+    # before anything is forwarded, then treat it as a switch.
+    if ($additionalArgs -contains '-SkipDocs') {
+        $SkipDocs = $true
+        $additionalArgs = @($additionalArgs | Where-Object { $_ -ne '-SkipDocs' })
+    }
+
     if ($StrictArgs) {
-        $knownArgs = @('-Quiet')
+        $knownArgs = @('-Quiet', '-SkipDocs')
         $unknownArgs = @($additionalArgs | Where-Object { $_ -and ($knownArgs -notcontains $_) })
         if ($unknownArgs.Count -gt 0) {
             Write-Host "ERROR: unrecognized argument(s) for 'ps': $($unknownArgs -join ' ')" -ForegroundColor Red
             Write-Host '  ps runs every *.tests.ps1 in the repository (Pester or pwsh -File).' -ForegroundColor DarkGray
-            Write-Host "  Known arguments: $($knownArgs -join ', ')  (forwarded to the test scripts)" -ForegroundColor DarkGray
+            Write-Host "  Known arguments: $($knownArgs -join ', ')  (-Quiet is forwarded; -SkipDocs is consumed here)" -ForegroundColor DarkGray
             Write-Host '  To list the files instead of running them:  test.ps1 -Show ps' -ForegroundColor DarkGray
             Write-Host '  The scenario runner keeps its own flags:    test.ps1 rws sc --list' -ForegroundColor DarkGray
             exit 1
@@ -4206,9 +4223,10 @@ function Invoke-PowerShellTests([string[]]$additionalArgs, [switch]$StrictArgs) 
             $runner = if ($usesPester) { 'Invoke-Pester' } else { 'pwsh -File' }
             Write-Host "  - $relativePath [$runner]"
         }
-        # The conformance check travels with these tests: CI runs it as the next
-        # step of the same job, so the listing names it too.
-        Write-Host '  - skill-doc-lint.ps1 [skills/ document conformance, methodology M1-M8]'
+        # The conformance check travels with these tests: CI runs the document
+        # gate as its own workflow, but the local default still covers it here.
+        $conformanceNote = if ($SkipDocs) { ' [skipped: -SkipDocs]' } else { '' }
+        Write-Host "  - skill-doc-lint.ps1 [skills/ document conformance, methodology M1-M8]$conformanceNote"
         return
     }
 
@@ -4352,10 +4370,19 @@ function Invoke-PowerShellTests([string[]]$additionalArgs, [switch]$StrictArgs) 
     }
 
     # -- Skill document conformance (methodology M1-M8) -------------------
-    # CI runs the linter as its own step right after this group, so it runs here
-    # too: a skills/ document that drifted fails locally in ~1s instead of in CI
-    # after the push.  Its result joins the group's verdict below.
-    $conformanceExit = Invoke-SkillDocConformance
+    # Local default: part of `ps`, so one command covers the whole fast gate and a
+    # skills/ document that drifted fails in ~1s instead of in CI after the push.
+    # CI's PowerShell job passes -SkipDocs: the document gate is its own workflow
+    # (skill-docs.yml), so a 500-line document can never be reported as a
+    # PowerShell test failure — which is exactly what a red `ps1-tests` used to mean.
+    $conformanceExit = 0
+    if ($SkipDocs) {
+        Write-Host ''
+        Write-Host '  [SKIP] Skill document conformance: -SkipDocs (owned by the Skill Documents workflow)' -ForegroundColor DarkGray
+    }
+    else {
+        $conformanceExit = Invoke-SkillDocConformance
+    }
 
     $swTotal.Stop()
     $total = $passed + $failed.Count

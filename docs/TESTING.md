@@ -194,28 +194,49 @@ AND NOT ManualOnly
 
   过滤后先看 `Running <类名>` 行确认真的跑起来了。
 
-### PowerShell / skills 文档门禁（`ps1-tests.yml` 的两步）
+### PowerShell / skills 文档门禁（两个独立 workflow）
 
-`PowerShell Tests` job 就是两步：`./bin/test.ps1 ps`（Pester 测试）→ `./bin/skill-doc-lint.ps1`
-（skills/ 文档合规 M1-M8）。这两步现在一条命令就能在本地跑完：
+这两件事在 2026-11 之前被焊在同一个 job 里，结果是**文档超行数会报成 PowerShell 失败**：
+`test.ps1 ps` 先打印 `[PASS] PowerShell tests: 25 passed, 0 failed`，紧接着
+`[FAIL] Skill document conformance`，而单独命名的 `Skill document conformance` 步骤因为前一步
+已失败被 **skipped**。`ps1-tests` 最近 100 次运行里 34 次失败，其中 **24 次**是 skills/ 文档的
+M6 行数规则，Pester 的 25 个文件在每一次里都全绿。
+
+现在拆成两个 workflow、两个独立的 check：
+
+| Workflow | 检查 | 触发路径 | 预算 |
+| --- | --- | --- | --- |
+| `ps1-tests.yml` | `./bin/test.ps1 ps -SkipDocs`（Pester） | `**/*.ps1` 等 | ~3 min |
+| `skill-docs.yml` | `./bin/skill-doc-lint.ps1`（M1-M8） | `skills/**/*.md`、linter 及其边界测试 | ~15 s |
+
+`-SkipDocs` 是关键：CI 的 PowerShell job 在原理上就不可能因为一份文档而红。
+
+本地对应命令：
 
 ```powershell
-pwsh bin/test.ps1 ps          # Pester 测试 + 紧随其后的 skills/ 合规检查
-pwsh bin/test.ps1 skills      # 先跑合规检查（约 1s），再跑 Maven 的 *Skill* 测试
-pwsh bin/skill-doc-lint.ps1   # 只跑合规检查（与 CI 那一步等价的原文）
+pwsh bin/test.ps1 ps                  # Pester + skills/ 合规检查（本地默认，一条命令覆盖两个门禁）
+pwsh bin/test.ps1 ps -SkipDocs        # 只跑 Pester（与 CI 的 ps1-tests job 完全一致）
+pwsh bin/skill-doc-lint.ps1           # 只跑合规检查（与 skill-docs job 等价）
+pwsh bin/skill-doc-lint.ps1 -Strict   # advisory 也当失败（发版 / 还债时用）
 ```
 
-* 挂进 `ps` / `skills` / `mcp-contract` 的原因：`crawl.md` 的 M6（procedure 上限 500 行，
-  当时 512 行）在 13 小时内**三次**把 `ps1-tests` 打红，而本地没有任何入口跑这个 linter ——
-  CI 是它唯一的读者。现在文档漂移在推送前失败，而不是在 CI 里失败。
-* `skills` / `mcp-contract` 组里合规检查跑在**最前面**：文档不合规就 1 秒失败，不浪费一次构建。
-* `pr.yml` / `ci.yml` 仍各自显式跑 `./bin/skill-doc-lint.ps1`（步骤名
-  `Skill document conformance (methodology M1-M8)`）；本地挂载不改变 CI 的判定。
-* 挂载本身的回归保护在 `bin/tests/test.ps1.tests.ps1`（退出码契约 + 三个组的 `-Show` 可达性）。
-* `ps` 只认 `-Quiet`（转发给每个测试脚本，Pester 分支转成 `-Show None`）；**其余参数一律报错**
-  （仅当 `ps` 是唯一目标时；`ps fast -pl x` 这类组合仍按原样透传）。此前未识别的参数会被静静转发、
-  再被测试脚本丢弃，所以 `ps --list` 不是列文件而是把整套测试跑了一遍——长到看起来像卡死。
-  要列文件用 `pwsh bin/test.ps1 -Show ps`。
+* M6 现在是**分层**规则，而不是一个 500 行的悬崖：
+  * `SKILL.md`（每次激活整篇载入）—— 硬上限 500，超过即失败，并直接告出"移多少行到 references/"；
+  * `decision` / `procedure` 参考文档（按需读取，方法论对它给的是 target 而非机器测试）——
+    501–700 行只报 **advisory**（计数、可被 `-Strict` 升级），> 700 行才算失败（该拆分了）；
+  * `catalog` 仍然不限长度。
+  依据见 [ps1 门禁失败分析](../docs-dev/copilot/ps1-ci-gate-failure-analysis.md)。
+* 不靠"提高上限"或"失败重试"：这些失败是**确定性**的（同一断言、同一份文档，100 次里 10 次是同一个
+  map 漂移断言），自动重试只会掩盖；历史 24 次 M6 失败中没有一次对应真实的 PowerShell 缺陷。
+* `skills` / `mcp-contract` 组里合规检查仍跑在**最前面**：文档不合规就 1 秒失败，不浪费一次构建。
+* `pr.yml` / `ci.yml` 仍各自显式跑 `./bin/skill-doc-lint.ps1`；`skill-docs.yml` 是它在 push 分支上的
+  独立看门人（含 nightly cron），不改变既有判定。
+* 挂载与 `-SkipDocs` 的回归保护在 `bin/tests/test.ps1.tests.ps1`；M6 边界在
+  `bin/tests/skill-doc-lint.tests.ps1`（500 / 501 / 700 / 701、`-Strict`、catalog 无上限）。
+* `ps` 只认 `-Quiet`（转发给每个测试脚本，Pester 分支转成 `-Show None`）与 `-SkipDocs`；
+  **其余参数一律报错**（仅当 `ps` 是唯一目标时；`ps fast -pl x` 这类组合仍按原样透传）。
+  此前未识别的参数会被静静转发、再被测试脚本丢弃，所以 `ps --list` 不是列文件而是把整套测试跑了一遍
+  ——长到看起来像卡死。要列文件用 `pwsh bin/test.ps1 -Show ps`。
 
 ---
 

@@ -1,11 +1,19 @@
 name: PowerShell Tests
 
-# Runs bin/test.ps1 ps — every *.tests.ps1 in the repository — plus the
-# skill-document lint. Fast and self-contained: no Java/Maven/Docker, ~3 min.
+# Runs bin/test.ps1 ps — every *.tests.ps1 in the repository. Fast and
+# self-contained: no Java/Maven/Docker, ~3 min.
 #
-# `test.ps1 ps` runs that lint itself now (as its last step), so the local gate
-# and this job check the same two things; the explicit step below stays for a
-# named, separately-reported verdict.
+# The skills/**/*.md conformance lint is *not* part of this workflow.  It lives in
+# .github/workflows/skill-docs.yml with its own status check, because welding the
+# two together made a drifted document report as a PowerShell failure: on a
+# document past the M6 line cap, `test.ps1 ps` printed "[PASS] PowerShell tests:
+# 25 passed, 0 failed" followed by "[FAIL] Skill document conformance", and the
+# separately-named lint step was skipped (the step before it had failed).  Of the
+# last 100 runs of this workflow, 34 failed; 24 were the M6 line-count rule on a
+# skills/ document, and the Pester suites were green in every one of them.
+#
+# `-SkipDocs` keeps that separation at the source: this job cannot fail for a
+# document, so a red "PowerShell Tests" now means PowerShell code.
 #
 # This is the only place the *.tests.ps1 suite runs: pr.yml parses five
 # hardcoded RWS scripts without executing a suite, and ci.yml is tag-only plus
@@ -15,12 +23,6 @@ name: PowerShell Tests
 # stale test-type map and a call to a function the script never defined, both
 # fixed in e863f936a3 and 2dd1658ea1.
 #
-# The M1-M8 lint step reads skills/**/*.md, so those paths belong in the filters
-# below.  Without them, a merge that inflated references/crawl.md to 621 lines —
-# past the 500-line M6 cap — never triggered this workflow at all, and only the
-# nightly cron saw it: the gate was red from 2026-09-24 until the document was
-# trimmed back under the cap.
-#
 # The command registry and the real-world scenario tasks are in the filters for
 # the same reason: scripts/coverage.tests.ps1 audits them against each other
 # (every browser4-cli command needs a scenario or a documented exclusion), and
@@ -28,9 +30,8 @@ name: PowerShell Tests
 # plus the nightly cron — i.e. never on the change that creates the gap.
 
 on:
-  # Any release line that touches PowerShell code, or the skill documents the
-  # M1-M8 lint step below reads.  This workflow file is part of the filter, so a
-  # change to the gate is exercised by the gate.
+  # Any release line that touches PowerShell code.  This workflow file is part of
+  # the filter, so a change to the gate is exercised by the gate.
   push:
     branches:
       - main
@@ -39,7 +40,6 @@ on:
       - '**/*.ps1'
       - '**/*.psm1'
       - '**/*.psd1'
-      - 'skills/**/*.md'
       - 'cli/browser4-cli/src/commands.rs'
       - 'browser4-tests/real-world-scenarios/tasks/**'
       - '.github/workflows/ps1-tests.yml'
@@ -50,7 +50,6 @@ on:
       - '**/*.ps1'
       - '**/*.psm1'
       - '**/*.psd1'
-      - 'skills/**/*.md'
       - 'cli/browser4-cli/src/commands.rs'
       - 'browser4-tests/real-world-scenarios/tasks/**'
       - '.github/workflows/ps1-tests.yml'
@@ -97,8 +96,4 @@ jobs:
 
       - name: Run PowerShell tests
         shell: pwsh
-        run: ./bin/test.ps1 ps
-
-      - name: Skill document conformance (methodology M1-M8)
-        shell: pwsh
-        run: ./bin/skill-doc-lint.ps1
+        run: ./bin/test.ps1 ps -SkipDocs

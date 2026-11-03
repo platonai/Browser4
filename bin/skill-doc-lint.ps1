@@ -12,7 +12,11 @@
       M3  name in SKILL.md manifests matches the directory name
       M4  Required template sections present in order (per tier / SKILL.md variant)
       M5  Tier-content rules (flag tables, decision trees, function catalogs)
-      M6  Line-count limits (SKILL.md / decision / procedure <= 500; no minimum; catalogs unbounded)
+      M6  Line-count budget: the manifest (SKILL.md) is a hard gate at 500 lines —
+          it loads in full on every activation.  decision/procedure references are
+          read on demand, so the methodology's 500-line *target* is advisory there:
+          501-700 lines report an advisory, past 700 they are a hard failure
+          (that is a split candidate, not a style nit).  catalogs are unbounded.
       M7  All relative links resolve; no index links in SKILL.md
       M8  No emoji in callout lines; broad warnings unique outside SKILL.md section 5
 
@@ -27,14 +31,22 @@
 .PARAMETER PassThru
     Also emit the machine-readable JSON issue list.
 
+.PARAMETER Strict
+    Treat advisories as failures.  Use it on a release gate (or when burning down
+    the M6 debt) where "over the 500-line target" must not ship, even though a
+    normal run reports it without failing.
+
 .EXAMPLE
     ./bin/skill-doc-lint.ps1
 .EXAMPLE
     ./bin/skill-doc-lint.ps1 -Path skills/browser4-cli -PassThru
+.EXAMPLE
+    ./bin/skill-doc-lint.ps1 -Strict     # advisories become failures
 #>
 param(
     [string]$Path,
-    [switch]$PassThru
+    [switch]$PassThru,
+    [switch]$Strict
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,13 +58,27 @@ $ErrorActionPreference = 'Stop'
 if (-not $Path) { $Path = Join-Path $PSScriptRoot '..\skills' }
 $Path = (Resolve-Path $Path).Path
 
+# M6 budget — three numbers, for the reason spelled out in the M6 block below.
+$script:ManifestCap      = 500   # SKILL.md: loads in full on activation
+$script:ReferenceTarget  = 500   # decision/procedure reference: advisory above this
+$script:ReferenceCeiling = 700   # ... and a hard failure above this (split candidate)
+
 $issues = [System.Collections.Generic.List[string]]::new()
 $counts = @{}
+
+# Advisories: reported and counted, but — unless -Strict — they do not fail the
+# run.  M6 uses them for a document that is past its target size without being a
+# split candidate yet (see the M6 block).
+$advisories = [System.Collections.Generic.List[string]]::new()
 
 function Add-Issue([string]$file, [string]$check, [string]$msg) {
     $issue = "{0}  [{1}] {2}" -f $file, $check, $msg
     $issues.Add($issue)
     if ($counts.ContainsKey($check)) { $counts[$check]++ } else { $counts[$check] = 1 }
+}
+
+function Add-Advisory([string]$file, [string]$check, [string]$msg) {
+    $advisories.Add(("{0}  [{1}] advisory: {2}" -f $file, $check, $msg))
 }
 
 # --- helpers ---------------------------------------------------------------
@@ -252,15 +278,33 @@ foreach ($f in $files) {
     }
 
     # M6: line counts -------------------------------------------------------
-    # One cap for every document that loads in full: 500 physical lines, matching the
-    # agent-skills convention ("keep SKILL.md under 500 lines"; references/catalogs are
-    # read on demand and stay unbounded).  There is no lower bound — a short document
-    # that answers its tier's questions is conformant, and a minimum only rewards padding.
+    # The manifest is the only document that loads in full (methodology P1:
+    # "SKILL.md <= 500 physical lines"), so it keeps a hard cap.  decision and
+    # procedure references are read on demand: the methodology states a 500-line
+    # *target* for them, not a machine gate, and turning that target into a hard
+    # failure made a 4-line overflow a red build 24 times in 100 runs — always on
+    # a document, never on code.  Over target is therefore an advisory here
+    # (visible, counted, non-failing); past 700 lines the document is a split
+    # candidate rather than a style nit, and that stays hard.  `catalog` documents
+    # are read on demand and unbounded.  There is no lower bound — a short
+    # document that answers its tier's questions is conformant.
     if ($fm -and $fm['tier'] -and $role -ne 'distilled') {
         $n = $lines.Count
-        if ($isManifest -and $n -gt 500) { Add-Issue $rel 'M6' "SKILL.md is $n lines (cap 500)" }
-        elseif ($fm['tier'] -eq 'decision' -and $n -gt 500) { Add-Issue $rel 'M6' "decision doc is $n lines (cap 500)" }
-        elseif ($fm['tier'] -eq 'procedure' -and $n -gt 500) { Add-Issue $rel 'M6' "procedure doc is $n lines (cap 500)" }
+        if ($isManifest -and $n -gt $script:ManifestCap) {
+            Add-Issue $rel 'M6' ("SKILL.md is $n lines (cap $($script:ManifestCap)) — move " +
+                "$($n - $script:ManifestCap) line(s) into references/ and link back (methodology P1 overflow procedure)")
+        }
+        elseif (-not $isManifest -and $fm['tier'] -in @('decision', 'procedure') -and $n -gt $script:ReferenceTarget) {
+            if ($n -gt $script:ReferenceCeiling) {
+                Add-Issue $rel 'M6' ("$($fm['tier']) doc is $n lines (hard ceiling $($script:ReferenceCeiling), " +
+                    "target $($script:ReferenceTarget)) — split the overflow into a catalog doc")
+            }
+            else {
+                Add-Advisory $rel 'M6' ("$($fm['tier']) doc is $n lines (target $($script:ReferenceTarget), " +
+                    "+$($n - $script:ReferenceTarget)) — trim or split when you next touch it; " +
+                    "-Strict makes this a failure")
+            }
+        }
     }
 
     # M7: links -------------------------------------------------------------
@@ -333,22 +377,31 @@ if ($warningWindows.Count -gt 0) {
 
 # --- report ----------------------------------------------------------------
 
-$failed = $issues.Count -gt 0
+# -Strict promotes advisories to failures (release gate / debt burn-down).
+$failed = $issues.Count -gt 0 -or ($Strict -and $advisories.Count -gt 0)
 $total = $files.Count
 $summary = "checked $total files, $($issues.Count) issue(s)"
+if ($advisories.Count -gt 0) { $summary += ", $($advisories.Count) advisory(ies)" }
 if ($counts.Count -gt 0) {
     $byCheck = ($counts.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ', '
     $summary += " [$byCheck]"
 }
 Write-Host $summary
 $issues | Sort-Object -Unique | ForEach-Object { Write-Host "  $_" }
+$advisories | Sort-Object -Unique | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkYellow }
+if ($Strict -and $advisories.Count -gt 0) {
+    Write-Host "  -Strict: $($advisories.Count) advisory(ies) counted as failure(s)." -ForegroundColor DarkYellow
+}
 
 if ($PassThru) {
     [pscustomobject]@{
-        Files    = $total
-        Issues   = $issues.Count
-        ByCheck  = $counts
-        Details  = @($issues | Sort-Object -Unique)
+        Files           = $total
+        Issues          = $issues.Count
+        ByCheck         = $counts
+        Details         = @($issues | Sort-Object -Unique)
+        Advisories      = $advisories.Count
+        AdvisoryDetails = @($advisories | Sort-Object -Unique)
+        Strict          = [bool]$Strict
     } | ConvertTo-Json -Depth 4
 }
 

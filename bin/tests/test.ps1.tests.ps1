@@ -1053,8 +1053,11 @@ Remove-Item -LiteralPath $fallbackChild -Force -ErrorAction SilentlyContinue
 # ═══════════════════════════════════════════════════════════════════
 # A skills/ document that drifted past the M6 cap reached CI because nothing
 # local ran bin/skill-doc-lint.ps1 — CI was its first reader.  These tests pin
-# the exit-code contract the groups rely on (0 = conformant, 1 = issues) and the
-# wiring that makes the check reachable locally, both against throwaway fixtures.
+# the exit-code contract the groups rely on (0 = conformant, 1 = issues), and the
+# M6 split: a reference over its 500-line target is advisory (still exit 0), only
+# a reference past 700 lines or a SKILL.md past 500 fails.  That split exists
+# because the hard cap on references turned 24 of 100 ps1-tests runs red over a
+# skills/ document while every Pester suite stayed green.
 Write-Host "━━━ Invoke-SkillDocConformance: exit-code contract ━━━" -ForegroundColor Cyan
 
 $lintScriptAbs = (Resolve-Path (Join-Path $ScriptDir '..' 'skill-doc-lint.ps1')).Path
@@ -1078,11 +1081,16 @@ function New-ConformanceFixture {
         ''
         '# doc-under-test'
     )
-    if ($Tier -eq 'catalog') {
-        # The catalog template is the cheapest fully conformant fixture: two
-        # required sections, unbounded length, no flag tables to satisfy.
-        $body += @('', '## Overview', '', '## Quick Index')
+    # Every fixture carries its tier's required template sections, so the only
+    # check it can trip is the one under test (M6); otherwise an M4 skeleton
+    # failure would mask a passing advisory and make the exit code meaningless.
+    $sections = switch ($Tier) {
+        'catalog'   { @('Overview', 'Quick Index') }
+        'procedure' { @('Quick Start', 'When to Use', 'How It Works', 'Patterns', 'Flags', 'Errors & Recovery') }
+        'decision'  { @('Quick Comparison', 'Decision Tree', 'When to Use Each', 'Quick Patterns', 'Reference Map') }
+        default     { @() }
     }
+    foreach ($section in $sections) { $body += @('', "## $section") }
     while ($body.Count -lt $Lines) { $body += 'Padding line for the line-count fixture.' }
 
     Set-Content -Path $doc -Value $body
@@ -1114,11 +1122,21 @@ Assert-Returns -Label 'Conformance: success stream carries only the exit code' -
 Assert-Returns -Label 'Conformance: the returned value is 0 for a clean tree' -Actual ($successStream[-1] -eq 0) -Expected $true
 Remove-Item -LiteralPath $conformantRoot -Recurse -Force -ErrorAction SilentlyContinue
 
-$overCapRoot = New-ConformanceFixture -Tier 'procedure' -Lines 501
+$overCapRoot = New-ConformanceFixture -Tier 'procedure' -Lines 701
 $overCap = Invoke-ConformanceCapture -Root $overCapRoot
-Assert-Returns -Label 'Conformance: over-cap fixture exits 1' -Actual $overCap.ExitCode -Expected 1
-Assert-ContainsString -Label 'Conformance: over-cap fixture reports M6' -Haystack $overCap.Output -Needle '[M6] procedure doc is 501 lines (cap 500)'
+Assert-Returns -Label 'Conformance: fixture past the hard ceiling exits 1' -Actual $overCap.ExitCode -Expected 1
+Assert-ContainsString -Label 'Conformance: hard-ceiling fixture reports M6' -Haystack $overCap.Output -Needle '[M6] procedure doc is 701 lines (hard ceiling 700, target 500)'
 Remove-Item -LiteralPath $overCapRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+# M6 is a hard gate for the manifest and a *soft* target for references: a
+# decision/procedure document between 501 and 700 lines is reported as an
+# advisory and must NOT fail the group.  Before this split, a 4-line overflow in
+# a reference turned 24 of 100 ps1-tests runs red, always on a document.
+$advisoryRoot = New-ConformanceFixture -Tier 'procedure' -Lines 541
+$advisory = Invoke-ConformanceCapture -Root $advisoryRoot
+Assert-Returns -Label 'Conformance: advisory-only fixture exits 0' -Actual $advisory.ExitCode -Expected 0
+Assert-ContainsString -Label 'Conformance: advisory is reported, not dropped' -Haystack $advisory.Output -Needle '[M6] advisory: procedure doc is 541 lines (target 500, +41)'
+Remove-Item -LiteralPath $advisoryRoot -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host "━━━ Invoke-SkillDocConformance: a missing linter never fails a run ━━━" -ForegroundColor Cyan
 
@@ -1148,6 +1166,13 @@ Assert-ContainsString -Label 'ps --list: names the known argument set' -Haystack
 # The one accepted argument must keep working, including with -Show.
 $psQuietShow = pwsh -NoProfile -Command "& '$testPs1Abs' -NoSession -Show ps -Quiet *>&1" *>&1 | Out-String
 Assert-ContainsString -Label 'ps -Quiet: still listed under -Show' -Haystack $psQuietShow -Needle 'Found '
+
+# -SkipDocs leaves the document gate to its own workflow (.github/workflows/
+# skill-docs.yml) so a skills/ document can never fail the PowerShell job.  The
+# listing must say so — a silently dropped check is how the two concerns got
+# welded together in the first place.
+$psSkipDocsShow = pwsh -NoProfile -Command "& '$testPs1Abs' -NoSession -Show ps -SkipDocs *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'ps -SkipDocs: accepted and listed as skipped' -Haystack $psSkipDocsShow -Needle '[skipped: -SkipDocs]'
 
 # A combined run keeps the old pass-through behaviour: the flag belongs to the
 # other suite, so `ps` must not reject it.

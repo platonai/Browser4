@@ -1,0 +1,106 @@
+name: Skill Documents
+
+# The skills/**/*.md conformance lint (methodology M1-M8) — its own workflow and
+# its own status check, because it is not a PowerShell test.
+#
+# It used to be the last step of the PowerShell Tests job (and, redundantly, the
+# last thing `bin/test.ps1 ps` did).  The two concerns were then welded together:
+# on a drifted document, `test.ps1 ps` printed
+#
+#     [PASS] PowerShell tests: 25 passed, 0 failed (25 total)
+#     [FAIL] Skill document conformance: ...
+#     ##[error]Process completed with exit code 1.
+#
+# and the separately-named `Skill document conformance` step was *skipped*,
+# because the step before it had already failed.  The run read as "PowerShell is
+# failing again".  The numbers back that up: of the last 100 ps1-tests runs, 34
+# failed and 24 of those were the M6 line-count rule on a skills/ document; the
+# Pester suites were green (25/25 files) in every one of them.
+#
+# Keeping the two checks in one workflow cannot fix the name: a workflow run's
+# conclusion is the AND of its jobs, so a document violation would still paint
+# "PowerShell Tests" red.  Hence a separate file.
+#
+# The paths below are what this check reads: the documents themselves, the
+# linter, and its boundary tests (a rule change is exercised by the rule).
+
+on:
+  push:
+    branches:
+      - main
+      - '*.x'
+    paths:
+      - 'skills/**/*.md'
+      - 'bin/skill-doc-lint.ps1'
+      - 'bin/tests/skill-doc-lint.tests.ps1'
+      - '.github/workflows/skill-docs.yml'
+  pull_request:
+    paths:
+      - 'skills/**/*.md'
+      - 'bin/skill-doc-lint.ps1'
+      - 'bin/tests/skill-doc-lint.tests.ps1'
+      - '.github/workflows/skill-docs.yml'
+  workflow_dispatch:
+  # Nightly safety net: catches a document that drifted on a branch nobody
+  # pushed to, and reports the M6 advisory debt in one place.
+  schedule:
+    - cron: '41 3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skill-docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  skill-doc-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Lint skills/ documents (methodology M1-M8)
+        shell: pwsh
+        run: |
+          # Run the linter as a child process: it ends with `exit`, which would
+          # terminate this step's pwsh before the pipeline flushes.
+          $log = Join-Path $env:RUNNER_TEMP 'skill-doc-lint.txt'
+          & pwsh -NoProfile -File ./bin/skill-doc-lint.ps1 *>&1 |
+              Tee-Object -FilePath $log |
+              ForEach-Object { Write-Host $_ }
+          $code = $LASTEXITCODE
+          "SKILL_DOC_LINT_EXIT=$code" >> $env:GITHUB_ENV
+          "SKILL_DOC_LINT_LOG=$log" >> $env:GITHUB_ENV
+          if ($code -ne 0) {
+              Write-Host "::error::Skill document conformance failed - fix the M-checks listed above, or run 'pwsh bin/skill-doc-lint.ps1' locally."
+          }
+          exit $code
+
+      # One-screen verdict: the lint's own output is short, but it is three steps
+      # down a collapsed log and the summary is where someone triaging starts.
+      - name: Job summary
+        if: always()
+        shell: pwsh
+        run: |
+          $summaryPath = $env:GITHUB_STEP_SUMMARY
+          $code = if ($env:SKILL_DOC_LINT_EXIT) { $env:SKILL_DOC_LINT_EXIT } else { 'not run' }
+          $verdict = if ($code -eq '0') { 'pass' } else { 'fail' }
+          Add-Content -Path $summaryPath -Value @(
+              '## Skill document conformance (M1-M8)'
+              ''
+              "Verdict: **$verdict** (exit $code)"
+              ''
+              '- Hard failures: M1-M5, M7, M8, SKILL.md over the 500-line cap, and any reference past 700 lines.'
+              '- Advisories (do not fail): a decision/procedure reference over its 500-line target. `-Strict` promotes them.'
+              ''
+              'Reproduce locally: `pwsh bin/skill-doc-lint.ps1`'
+              ''
+          )
+          if ($env:SKILL_DOC_LINT_LOG -and (Test-Path $env:SKILL_DOC_LINT_LOG)) {
+              Add-Content -Path $summaryPath -Value @('```text')
+              Get-Content -Path $env:SKILL_DOC_LINT_LOG | Add-Content -Path $summaryPath
+              Add-Content -Path $summaryPath -Value @('```')
+          }
