@@ -34,7 +34,7 @@ The target must be a file input:
 upload: the target [...] is a <...>, not a file input. ... only file inputs accept uploads.
 ```
 
-In **local mode** the CLI rejects empty files and non-existent paths up front with a clear hint. Against a remote backend, path checks happen on the backend host, where `DOM.setFileInputFiles` also requires absolute paths readable by the browser process.
+In **local mode** the CLI validates paths before dispatch and reports the resolved absolute path with a specific filesystem cause (for example, missing file, permission denied, or a non-file path). Paths are literal; square brackets are not treated as glob syntax. Against a remote backend, path checks happen on the backend host, where `DOM.setFileInputFiles` also requires absolute paths readable by the browser process.
 
 ## Usage
 
@@ -87,7 +87,7 @@ Arguments are positional — one target followed by one or more files:
 Rules that apply to every invocation:
 
 - Paths must be readable by the **browser process** — locally that is your machine; against a remote backend they are resolved on the backend host.
-- Local mode rejects empty files and missing paths before the CDP call, naming the offending path.
+- Local mode rejects empty path arguments and inaccessible, missing, or non-file paths before the CDP call; errors include the resolved absolute path.
 - Uploading is one CDP call (`DOM.setFileInputFiles`) on the element's `backendNodeId`: no OS file dialog is involved, so it works headless.
 
 ## Errors & Recovery
@@ -96,7 +96,9 @@ Rules that apply to every invocation:
 |---------|-------|-----|
 | `upload requires a target ref and at least one file path` | Command form wrong | Use `upload <ref> <file> [file...]` |
 | `... is a <div/button/...>, not a file input` | Ref/selector points at a non-file element | Target the `<input type="file">` (hidden inputs still work); use `snapshot grep file` or `input[type=file]` |
-| File rejected as empty / not found (local mode) | Path invalid or file is empty | Point at an existing non-empty file; the CLI hint names the offending path |
+| `upload: file does not exist; resolved: ...` | No file exists at that literal path | Correct the displayed path; square brackets are not expanded as a glob |
+| `upload: file is not readable ...` | The current machine cannot open the file for reading | Check file permissions and retry |
+| `upload: path is not a regular file ...` | The path names a directory or another non-file object | Pass a regular file path |
 | `DOM.setFileInputFiles requires absolute paths ...` | Relative or unreadable path (especially remote backend) | Pass absolute paths that the **browser/backend host** can read |
 | Nothing visibly happens | Page shows a styled "Upload" button wrapping the hidden input | Uploading still worked if the input was targeted; verify via snapshot grep for the file name |
 
