@@ -30,6 +30,8 @@ object ModuleMap {
         "browser4-boot",
         "browser4-coding",
         "browser4-core",
+        "browser4-core/browser4-behavior-api",
+        "browser4-core/browser4-behavior-default",
         "browser4-core/browser4-browser",
         "browser4-core/browser4-common",
         "browser4-core/browser4-parse",
@@ -94,8 +96,13 @@ object ModuleMap {
         ),
         "browser4-coding" to listOf("browser4-agentic"),
         "browser4-core" to listOf(
+            "browser4-core/browser4-behavior-api", "browser4-core/browser4-behavior-default",
             "browser4-core/browser4-parse", "browser4-core/browser4-protocol",
         ),
+        "browser4-core/browser4-behavior-api" to listOf(
+            "browser4-core/browser4-behavior-default", "browser4-core/browser4-browser",
+        ),
+        "browser4-core/browser4-behavior-default" to listOf("browser4-core/browser4-browser"),
         "browser4-core/browser4-browser" to listOf(
             "browser4-agentic", "browser4-core/browser4-protocol",
             "browser4-core/browser4-skeleton", "browser4-pdk/browser4-pdk-test-plugin",
@@ -104,7 +111,8 @@ object ModuleMap {
             "browser4-plugins/browser4-pptx", "browser4-rest",
         ),
         "browser4-core/browser4-common" to listOf(
-            "browser4-agentic", "browser4-core/browser4-browser",
+            "browser4-agentic", "browser4-core/browser4-behavior-api",
+            "browser4-core/browser4-behavior-default", "browser4-core/browser4-browser",
             "browser4-core/browser4-skeleton", "browser4-pdk/browser4-pdk-test-plugin",
             "browser4-tests/pulsar-tests-common", "examples/browser4-examples",
         ),

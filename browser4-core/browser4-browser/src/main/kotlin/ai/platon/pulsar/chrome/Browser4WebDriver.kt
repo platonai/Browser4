@@ -174,11 +174,13 @@ open class Browser4WebDriver(
         // (see NetworkObserver.forProtocol) makes this a single registration
         // per tab no matter how many drivers wrap it.
         //
-        // Use the inherited (wrapped) protocol so the observer cache is keyed
-        // by the same instance the base library and this driver's own methods
-        // talk to.
-        NetworkObserver.forProtocol(this.browserProtocol).preRegister()
-        RouteManager.forProtocol(this.browserProtocol).preRegister()
+        // Use the tab's protocol (the constructor parameter), not the inherited
+        // wrapped one: NetworkObserver/RouteManager in this class are keyed by
+        // the tab protocol, and the stealth wrapper is a per-driver instance, so
+        // keying by the wrapper would give every driver its own observer while
+        // only one of them can own the shared CDP listener slots.
+        NetworkObserver.forProtocol(browserProtocol).preRegister()
+        RouteManager.forProtocol(browserProtocol).preRegister()
     }
 
     /**
