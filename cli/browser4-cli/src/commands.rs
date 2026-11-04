@@ -700,6 +700,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "display-mode <mode>", description: "Display mode of the new session: GUI, HEADLESS (the default), or SUPERVISED. Fixed at session creation; it replaces --headed/--headless, so pass one of them, not both", is_bool: false, short: None },
                 OptionDef { name: "channel <name>", description: "Browser channel to launch and manage: chrome (the default) or ego-lite. Fixed at session creation", is_bool: false, short: None },
                 OptionDef { name: "max-open-tabs <n>", description: "Maximum number of open tabs in the session's browser context (backend default when omitted)", is_bool: false, short: None },
+                OptionDef { name: "expect-url <glob>", description: "Warn on stderr when the page the launch landed on does not match this glob (`*` = any run, `?` = one character, case-insensitive). Opt-in: catches redirects and login walls without treating them as failures. CLI-side only — never sent to the backend", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |args| {
@@ -763,6 +764,14 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(max_open_tabs) = get_opt_str(args, "max-open-tabs") {
                     params["maxOpenTabs"] = json!(max_open_tabs.trim());
                 }
+                // `--expect-url` is a CLI-side assertion, not a backend
+                // capability: `handle_open` reads it after navigation and warns
+                // on a mismatch.  It is carried here (not forwarded) because
+                // `handle_open` builds the navigate params itself, so the key
+                // never reaches the server.
+                if let Some(expected) = get_opt_str(args, "expect-url") {
+                    params["expectUrl"] = json!(expected.trim());
+                }
                 params
             },
         },
@@ -806,6 +815,12 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[
+                OptionDef {
+                    name: "list",
+                    description: "List the local browsers started with --remote-debugging-port (family, port, profile directory, CDP identity, page count) and exit. Client-side only: no backend, no session, nothing attached — pass a printed port to --cdp",
+                    is_bool: true,
+                    short: None,
+                },
                 OptionDef {
                     name: "cdp",
                     description: "CDP endpoint URL (e.g. http://localhost:9222) or channel name. Supported channels: chrome, chrome-beta, chrome-dev, chrome-canary, msedge, msedge-beta, msedge-dev, msedge-canary, ego-lite. A channel is verified against the browser that answers: a different family fails the attach instead of driving the wrong browser. ego-lite is resolved from its own processes only (start it with ego --remote-debugging-port=<port>)",
@@ -10591,6 +10606,42 @@ mod tests {
             has_extension,
             "attach command should have --extension option"
         );
+    }
+
+    #[test]
+    fn test_attach_command_has_list_option() {
+        // `attach --list` is the discovery half of the command: without a
+        // declared boolean option the parser would treat `--list` as a stray
+        // flag and the command would attach instead of listing.
+        let cmds = commands_map();
+        let cmd = cmds.get("attach").unwrap();
+        let list = cmd
+            .options
+            .iter()
+            .find(|o| o.key() == "list")
+            .expect("attach should have a --list option");
+        assert!(list.is_bool, "--list takes no value");
+    }
+
+    #[test]
+    fn test_open_command_has_expect_url_option() {
+        // The option must stay CLI-side: `tool_params_fn` carries it for
+        // `handle_open`, but it is not a backend capability.
+        let cmds = commands_map();
+        let cmd = cmds.get("open").unwrap();
+        let expect_url = cmd
+            .options
+            .iter()
+            .find(|o| o.key() == "expect-url")
+            .expect("open should have an --expect-url option");
+        assert!(!expect_url.is_bool, "--expect-url takes a glob value");
+
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("expect-url".to_string(), json!("https://example.com/*"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["expectUrl"], json!("https://example.com/*"));
+        assert_eq!(params["url"], json!("https://example.com"));
     }
 
     // ---- CDP command tests ----

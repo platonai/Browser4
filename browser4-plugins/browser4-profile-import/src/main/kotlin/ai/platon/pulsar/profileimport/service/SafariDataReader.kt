@@ -23,8 +23,9 @@ import java.util.UUID
  * - Passwords: the login Keychain — never read programmatically
  *
  * Bookmarks are converted into a Chrome `Bookmarks` JSON file; cookies are
- * converted into a JSON array compatible with Browser4's `state-load` /
- * `cookies set` JSON format.
+ * converted into a JSON array of cookie objects. `state-load` expects that
+ * array inside a `{cookies, origins}` wrapper, so wrap it before loading (or
+ * use `cookie-set` for individual cookies).
  */
 open class SafariDataReader {
 
@@ -244,8 +245,9 @@ open class SafariDataReader {
     }
 
     /**
-     * Writes cookies as a JSON array of cookie objects, compatible with the
-     * JSON accepted by Browser4's `cookies set --curl` and `state-load`.
+     * Writes cookies as a JSON array of cookie objects. `state-load` expects a
+     * `{cookies, origins}` storage-state object, so wrap this array before
+     * loading it into a session.
      */
     fun writeCookiesJson(cookies: List<SafariCookie>, dest: Path) {
         val json = cookies.map { c ->

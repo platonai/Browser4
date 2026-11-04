@@ -76,6 +76,69 @@ const AOT_TRAINING_CREATION_FLAGS: u32 = {
 #[cfg(windows)]
 const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
 
+/// Windows: `CREATE_BREAKAWAY_FROM_JOB` — ask Windows to create the child
+/// outside the job object this process belongs to.
+///
+/// Windows terminates every process in a job when that job goes away, so a
+/// host shell that runs each command inside a `KILL_ON_JOB_CLOSE` job (the Trae
+/// Shell tool does) kills the "detached" backend as soon as the command that
+/// started it returns. `DETACHED_PROCESS` does not help: it only detaches the
+/// console.
+///
+/// The flag is only honoured when the host job sets
+/// `JOB_OBJECT_LIMIT_BREAKAWAY_OK` (or `JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK`);
+/// otherwise `CreateProcess` fails with `ERROR_ACCESS_DENIED`. That refusal is
+/// detected at the spawn and answered by `spawn_outside_windows_job`, which asks
+/// a process outside the job (the WMI provider) to create the backend.
+#[cfg(windows)]
+const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+
+/// Windows: `ERROR_ACCESS_DENIED`, the error `CreateProcess` reports when the
+/// calling job does not permit breakaway.
+#[cfg(windows)]
+const ERROR_ACCESS_DENIED: i32 = 5;
+
+/// Windows: is this CLI process inside a job object?
+///
+/// The distinction decides how the backend is created: outside a job a plain
+/// detached spawn already survives the CLI; inside a job the child has to break
+/// away (or be created by a process that is not in the job).
+///
+/// The job's own limits are deliberately not queried: `QueryInformationJobObject`
+/// needs a job handle this process does not have, so the `CreateProcess` result
+/// is the authoritative answer to "may I break away?".
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowsJobMembership {
+    /// Not in a job object.
+    NotInJob,
+    /// Inside a job object — breakaway may or may not be permitted.
+    InJob,
+}
+
+#[cfg(windows)]
+fn windows_job_membership() -> WindowsJobMembership {
+    extern "system" {
+        fn IsProcessInJob(
+            process_handle: *mut core::ffi::c_void,
+            job_handle: *mut core::ffi::c_void,
+            result: *mut i32,
+        ) -> i32;
+    }
+
+    let mut in_job: i32 = 0;
+    // SAFETY: both handles are NULL, which asks Windows about *this* process and
+    // *any* job; `in_job` is a valid out-parameter for the duration of the call.
+    // A failed query is treated as "not in a job" so the ordinary spawn path is
+    // used.
+    let queried = unsafe { IsProcessInJob(std::ptr::null_mut(), std::ptr::null_mut(), &mut in_job) };
+    if queried != 0 && in_job != 0 {
+        WindowsJobMembership::InJob
+    } else {
+        WindowsJobMembership::NotInJob
+    }
+}
+
 /// Prevents the long-lived backend JVM from inheriting this process's std
 /// handles while it is being spawned.
 ///
@@ -5914,6 +5977,104 @@ fn is_localhost_port_listening(port: u16) -> bool {
     TcpStream::connect_timeout(&ipv6, Duration::from_millis(250)).is_ok()
 }
 
+/// One local browser that serves CDP because it was started with
+/// `--remote-debugging-port`, as reported by `attach --list`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredBrowser {
+    /// Browser family from the process command line: `chrome`, `edge`,
+    /// `ego-lite`, or `unknown` when only the CDP identity below names it.
+    pub family: &'static str,
+    /// The port `attach --cdp <port>` should use.
+    pub port: u16,
+    /// `--user-data-dir=…`, which identifies *which* profile is logged in.
+    pub user_data_dir: Option<String>,
+    /// True when `GET /json/version` answered — a browser process can outlive
+    /// its debug listener, so this is what distinguishes a usable endpoint.
+    pub reachable: bool,
+    /// Identity the endpoint reported (e.g. `Chrome/141.0.7390.55`).
+    pub browser: Option<String>,
+    /// Page targets the endpoint lists; `None` when it did not answer.
+    pub page_targets: Option<usize>,
+}
+
+impl DiscoveredBrowser {
+    /// The `--cdp` value that attaches to this browser.
+    pub fn cdp_endpoint(&self) -> String {
+        cdp_endpoint_url(self.port)
+    }
+}
+
+/// Browser family of a discovered command line, including ego lite.
+///
+/// [browser_family_of_process_line] classifies the Chrome and Edge families;
+/// ego lite is Chromium-based but is not called Chrome, so its own executable
+/// stem settles it.
+fn discovered_browser_family(line: &str) -> &'static str {
+    if let Some(family) = browser_family_of_process_line(line) {
+        return family;
+    }
+    let first = line.split_whitespace().next().unwrap_or("");
+    let name = first.rsplit(['/', '\\']).next().unwrap_or(first);
+    let name = name.trim_matches('"').to_ascii_lowercase();
+    let name = name.strip_suffix(".exe").unwrap_or(&name);
+    if name.starts_with("ego") {
+        return "ego-lite";
+    }
+    "unknown"
+}
+
+/// Enumerate local browsers started with a remote debugging port.
+///
+/// This is the discovery half of `attach --list`: a browser the user is already
+/// logged in to is normally started with `--remote-debugging-port=9222`, and the
+/// port is otherwise only findable by digging through process command lines.
+/// One OS process query covers every supported browser family, then one CDP
+/// probe per distinct port — a browser process can outlive its listener, so the
+/// probe result is what makes an entry usable.
+///
+/// `--remote-debugging-port=0` asks the browser for a random port and publishes
+/// the answer in `<user-data-dir>/DevToolsActivePort`; that file is read so a
+/// Browser4-managed browser is listed too.
+pub fn discover_debuggable_browsers() -> Vec<DiscoveredBrowser> {
+    // Chrome/beta/dev/canary all run `chrome.exe`/`google-chrome*`, so the
+    // family names cover every `--cdp <channel>` the CLI accepts.
+    const BROWSER_PROCESS_NAMES: &[&str] = &["chrome", "chromium", "msedge", "ego"];
+
+    let mut discovered: Vec<DiscoveredBrowser> = Vec::new();
+    let mut seen_ports: Vec<u16> = Vec::new();
+
+    for line in browser_processes_command_lines(BROWSER_PROCESS_NAMES) {
+        let user_data_dirs = parse_user_data_dirs_from_line(&line);
+        let port = match parse_remote_debugging_port(std::slice::from_ref(&line)) {
+            Some(0) => user_data_dirs
+                .iter()
+                .find_map(|dir| read_devtools_active_port(dir))
+                .map(|active| active.port),
+            other => other.filter(|port| *port != 0),
+        };
+        let Some(port) = port else {
+            continue;
+        };
+        if seen_ports.contains(&port) {
+            continue;
+        }
+        seen_ports.push(port);
+
+        let probe = probe_cdp_candidate(CdpCandidate::new(port, CdpCandidateSource::ProcessFlag));
+        discovered.push(DiscoveredBrowser {
+            family: discovered_browser_family(&line),
+            port,
+            user_data_dir: user_data_dirs.first().map(|dir| dir.display().to_string()),
+            reachable: probe.http_discovery,
+            browser: probe.browser,
+            page_targets: probe.page_targets,
+        });
+    }
+
+    discovered.sort_by_key(|browser| browser.port);
+    discovered
+}
+
 /// Concurrent scan of `start..=end` for the first endpoint that lists a page
 /// target.
 fn scan_for_attachable_cdp_endpoint(start: u16, end: u16) -> Option<CdpProbe> {
@@ -8644,8 +8805,48 @@ async fn try_build_local_runtime_bundle(
                     // never clear no matter how often the user rebuilds.
                     "-Dmaven.jar.forceCreation=true",
                     "-q",
+                    // `-e` keeps the real stack trace in the failure tail; with
+                    // `-q` alone an internal Kotlin/GraalVM error arrives as a
+                    // bare "[ERROR] BUILD FAILURE" with no cause.
+                    "-e",
                 ])
                 .map_err(|e| format!("Failed to run Maven install for browser4-bundle: {e}"))?;
+                let install = if install.status.success() {
+                    install
+                } else {
+                    // GraalVM (JDK 25) defaults `UseJVMCICompiler=true`, which
+                    // breaks the Kotlin compile/kapt daemon's RMI handshake
+                    // ("Failed connecting to the daemon in 4 retries") even
+                    // though the sources are fine — the same tree compiles
+                    // seconds later.  `build-runtime-bundle.ps1` disables the
+                    // daemon when the build JDK is GraalVM; mirror that here and
+                    // retry the failed install once in-process, so `-Rebuild`
+                    // recovers instead of aborting on the flake.
+                    let graalvm = crate::java::is_graalvm(
+                        &build_jdk.join("bin").join(crate::java::executable_name()),
+                    );
+                    eprintln!(
+                        "Maven install failed{}; retrying once with the Kotlin compiler daemon \
+                         disabled (-Dkotlin.compiler.daemon=false).",
+                        if graalvm {
+                            " on GraalVM (UseJVMCICompiler breaks the Kotlin daemon handshake)"
+                        } else {
+                            ""
+                        }
+                    );
+                    run(&[
+                        "install",
+                        "-Pall-main-modules,asset-bundle",
+                        "-DskipTests",
+                        "-Dmaven.jar.forceCreation=true",
+                        "-Dkotlin.compiler.daemon=false",
+                        "-q",
+                        "-e",
+                    ])
+                    .map_err(|e| {
+                        format!("Failed to run Maven install retry for browser4-bundle: {e}")
+                    })?
+                };
                 if !install.status.success() {
                     return Err(maven_failure_message("package", &install));
                 }
@@ -8661,7 +8862,18 @@ async fn try_build_local_runtime_bundle(
                 maven_ran = true;
             }
             Err(message) => {
-                eprintln!("{message}; falling back to download.");
+                // No download fallback exists in dev mode: the caller
+                // (`find_or_install_runtime`) refuses to start a checkout
+                // without a locally built bundle, because a downloaded runtime
+                // would not match the checked-out code.  The old
+                // "falling back to download" line contradicted the hard error
+                // printed a moment later.
+                eprintln!("{message}");
+                eprintln!(
+                    "Local runtime bundle build aborted. Fix the Maven error above and re-run, \
+                     or set BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1 to use the installed runtime \
+                     instead of this checkout."
+                );
                 return Ok(None);
             }
         }
@@ -8682,7 +8894,8 @@ async fn try_build_local_runtime_bundle(
     match build_result {
         Ok(()) => {}
         Err(error) => {
-            eprintln!("Runtime bundle build script failed: {error}; falling back to download.");
+            eprintln!("Runtime bundle build script failed: {error}");
+            eprintln!("Local runtime bundle build aborted (a source checkout has no download fallback).");
             return Ok(None);
         }
     }
@@ -8709,7 +8922,8 @@ async fn try_build_local_runtime_bundle(
     }
 
     eprintln!(
-        "Runtime bundle build completed but expected layout under {} was not found; falling back to download.",
+        "Runtime bundle build completed but expected layout under {} was not found \
+         (a source checkout has no download fallback).",
         paths.work_dir.display()
     );
     Ok(None)
@@ -9039,6 +9253,209 @@ async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
     install_browser4_runtime(None, false).await
 }
 
+/// How the backend process was created.
+enum LaunchedBackend {
+    /// A child process spawned from this CLI, with a handle to wait on.
+    Child(std::process::Child),
+    /// A process created outside this CLI's Windows job object, identified only
+    /// by the pid the launcher reported — there is no handle to wait on.
+    Detached { pid: u32 },
+}
+
+impl LaunchedBackend {
+    /// The launcher process id.
+    fn pid(&self) -> u32 {
+        match self {
+            Self::Child(child) => child.id(),
+            Self::Detached { pid } => *pid,
+        }
+    }
+
+    /// Exit status, when this CLI holds a handle for the process.
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        match self {
+            Self::Child(child) => child.try_wait(),
+            // Nothing to wait on: another process created this one.
+            Self::Detached { .. } => Ok(None),
+        }
+    }
+}
+
+/// Quote one argument for a Windows command line as `CommandLineToArgvW` parses
+/// it — the convention every `CreateProcess` child sees.
+///
+/// `Win32_Process.Create` takes a single command line instead of an argument
+/// vector, so every argument has to be re-quoted exactly as the OS will
+/// un-quote it: backslashes are literal unless they precede a double quote (or
+/// the closing quote), where they must be doubled.
+#[cfg(any(windows, test))]
+fn windows_quote_arg(arg: &str) -> String {
+    if !arg.is_empty() && !arg.chars().any(|ch| ch.is_whitespace() || ch == '"') {
+        return arg.to_string();
+    }
+
+    let mut quoted = String::with_capacity(arg.len() + 2);
+    quoted.push('"');
+    let mut backslashes = 0usize;
+    for ch in arg.chars() {
+        match ch {
+            '\\' => {
+                backslashes += 1;
+                quoted.push('\\');
+            }
+            '"' => {
+                // Double the run of backslashes that precede the quote, then
+                // escape the quote itself.
+                for _ in 0..backslashes {
+                    quoted.push('\\');
+                }
+                backslashes = 0;
+                quoted.push('\\');
+                quoted.push('"');
+            }
+            other => {
+                backslashes = 0;
+                quoted.push(other);
+            }
+        }
+    }
+    // Trailing backslashes must not escape the closing quote.
+    for _ in 0..backslashes {
+        quoted.push('\\');
+    }
+    quoted.push('"');
+    quoted
+}
+
+/// Rebuild the prepared command as one Windows command line.
+#[cfg(windows)]
+fn windows_command_line(command: &Command) -> String {
+    let mut parts = vec![windows_quote_arg(&command.get_program().to_string_lossy())];
+    parts.extend(
+        command
+            .get_args()
+            .map(|arg| windows_quote_arg(&arg.to_string_lossy())),
+    );
+    parts.join(" ")
+}
+
+/// Escape a value for a PowerShell single-quoted literal (`'` → `''`).
+#[cfg(windows)]
+fn powershell_single_quote(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+/// Spawn the prepared backend command.
+///
+/// Outside a Windows job object this is a plain `spawn`. Inside one, the command
+/// carries `CREATE_BREAKAWAY_FROM_JOB`; Windows refuses that with
+/// `ERROR_ACCESS_DENIED` unless the host job sets
+/// `JOB_OBJECT_LIMIT_BREAKAWAY_OK`, in which case the backend is created by the
+/// WMI provider — a process that is not in the job — instead.
+fn spawn_backend_command(
+    command: &mut Command,
+    in_windows_job: bool,
+    launch_working_dir: &Path,
+    startup_log_path: &Path,
+) -> io::Result<LaunchedBackend> {
+    match command.spawn() {
+        Ok(child) => Ok(LaunchedBackend::Child(child)),
+        Err(error) if spawn_should_escape_job(in_windows_job, &error) => {
+            spawn_outside_windows_job(command, launch_working_dir, startup_log_path)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// True when a failed spawn is the job object refusing a breakaway.
+#[cfg(windows)]
+fn spawn_should_escape_job(in_windows_job: bool, error: &io::Error) -> bool {
+    in_windows_job && error.raw_os_error() == Some(ERROR_ACCESS_DENIED)
+}
+
+#[cfg(not(windows))]
+fn spawn_should_escape_job(_in_windows_job: bool, _error: &io::Error) -> bool {
+    false
+}
+
+/// Windows: create the backend through the WMI provider.
+///
+/// `Win32_Process.Create` runs the child under `WmiPrvSE.exe`, which is outside
+/// the caller's job object, so the backend survives the job's teardown. The
+/// method accepts only a command line and a working directory: the console
+/// redirect the normal path gets from `Stdio` is not available, so the backend's
+/// own logs (`browser4-cli doctor log`) are the place to look, and the startup
+/// log records that this path ran. The child also inherits the WMI provider's
+/// environment rather than this CLI's — notably `BROWSER4_CLI_BIN` is lost and
+/// the backend falls back to its bundled CLI.
+#[cfg(windows)]
+fn spawn_outside_windows_job(
+    command: &mut Command,
+    launch_working_dir: &Path,
+    startup_log_path: &Path,
+) -> io::Result<LaunchedBackend> {
+    let command_line = windows_command_line(command);
+    append_startup_log_message(
+        startup_log_path,
+        "CREATE_BREAKAWAY_FROM_JOB was refused (the host job does not allow breakaway); \
+         creating the backend through Win32_Process.Create instead."
+            .to_string(),
+    );
+
+    // The script is passed as one `-Command` argument, so PowerShell's own
+    // parser (not a shell) reads it: single-quoted literals carry the command
+    // line and the working directory verbatim.
+    let script = format!(
+        "$ErrorActionPreference = 'Stop'; \
+         $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{ \
+         CommandLine = '{command_line}'; CurrentDirectory = '{working_dir}' }}; \
+         if ($created.ReturnValue -ne 0) {{ \
+         [Console]::Error.Write('Win32_Process.Create returned ' + $created.ReturnValue); exit 1 }}; \
+         [Console]::Out.Write($created.ProcessId)",
+        command_line = powershell_single_quote(&command_line),
+        working_dir = powershell_single_quote(&launch_working_dir.to_string_lossy()),
+    );
+
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script.as_str()])
+        .stdin(Stdio::null())
+        .output()?;
+    if !output.status.success() {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!(
+                "Win32_Process.Create failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ));
+    }
+
+    let pid_text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let pid = pid_text.parse::<u32>().map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("Win32_Process.Create returned no process id ({error}): '{pid_text}'"),
+        )
+    })?;
+    append_startup_log_message(
+        startup_log_path,
+        format!("Win32_Process.Create created the backend with pid {pid}."),
+    );
+    Ok(LaunchedBackend::Detached { pid })
+}
+
+#[cfg(not(windows))]
+fn spawn_outside_windows_job(
+    _command: &mut Command,
+    _launch_working_dir: &Path,
+    _startup_log_path: &Path,
+) -> io::Result<LaunchedBackend> {
+    Err(io::Error::new(
+        io::ErrorKind::Other,
+        "escaping a job object is a Windows-only operation",
+    ))
+}
+
 async fn start_server(
     launch_spec: &ServerLaunchSpec,
     base_url: &str,
@@ -9098,17 +9515,44 @@ async fn start_server(
         .stdout(startup_log.stdout)
         .stderr(startup_log.stderr);
 
+    // A host shell that runs every command inside a Windows job object kills the
+    // whole tree when the command ends, so a merely-console-detached backend
+    // still dies with the CLI that started it. Ask Windows to create the child
+    // outside the job; the spawn below falls back to the WMI provider when the
+    // host job refuses that.
+    #[cfg(windows)]
+    let in_windows_job = windows_job_membership() == WindowsJobMembership::InJob;
+    #[cfg(not(windows))]
+    let in_windows_job = false;
+    if in_windows_job {
+        append_startup_log_message(
+            &startup_log.path,
+            "The CLI is running inside a Windows job object; asking for a breakaway backend."
+                .to_string(),
+        );
+    }
+
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(BACKEND_CREATION_FLAGS);
+        let mut flags = BACKEND_CREATION_FLAGS;
+        if in_windows_job {
+            flags |= CREATE_BREAKAWAY_FROM_JOB;
+        }
+        command.creation_flags(flags);
     }
 
-    let mut child = {
+    let mut launched = {
         // The backend outlives this CLI process: make sure it cannot hold the
         // caller's stdout/stderr pipe open (see StdHandleInheritanceGuard).
         let _guard = StdHandleInheritanceGuard::drop_inheritance();
-        command.spawn().map_err(|e| {
+        spawn_backend_command(
+            &mut command,
+            in_windows_job,
+            &launch_working_dir,
+            &startup_log.path,
+        )
+        .map_err(|e| {
             let error = format_server_startup_failure_message(
                 base_url,
                 Some("Browser4 could not be launched."),
@@ -9122,7 +9566,7 @@ async fn start_server(
     };
     append_startup_log_message(
         &startup_log.path,
-        format!("Spawned launcher process with pid {}", child.id()),
+        format!("Spawned launcher process with pid {}", launched.pid()),
     );
 
     // Claim the port *before* waiting for readiness.  The backend is already a
@@ -9130,7 +9574,7 @@ async fn start_server(
     // Ctrl+C while Spring Boot is still booting, the server survives — and the
     // next command must recognise the port as this workspace's own instead of
     // treating the listener as a neighbour and escalating to the next port.
-    let provisional_pid = resolve_managed_server_pid(child.id(), port);
+    let provisional_pid = resolve_managed_server_pid(launched.pid(), port);
     register_managed_server_process(
         managed_server_entry(launch_spec, base_url, port, provisional_pid, None),
         None,
@@ -9175,7 +9619,7 @@ async fn start_server(
         // own backend.
         remove_managed_server_process(provisional_pid, None);
         let (preserve_cleanup_dir, exit_context, cleanup_context) =
-            readiness_failure_context(child.try_wait(), cleanup_dir.as_deref());
+            readiness_failure_context(launched.try_wait(), cleanup_dir.as_deref());
         if !preserve_cleanup_dir {
             cleanup_prepared_launch_dir(cleanup_dir.take());
         }
@@ -9186,7 +9630,7 @@ async fn start_server(
 
     cleanup_prepared_launch_dir(cleanup_dir.take());
 
-    let managed_pid = resolve_managed_server_pid(child.id(), port);
+    let managed_pid = resolve_managed_server_pid(launched.pid(), port);
     if managed_pid != provisional_pid {
         // The launcher handed off to the real JVM: replace the claim so the
         // registry points at the process that actually owns the port.
@@ -9213,9 +9657,10 @@ async fn start_server(
     // defaults to `plugins/` under its cwd).
     record_plugins_fingerprint(port, &launch_working_dir.join("plugins"));
 
-    // Detach: we drop the Child handle here. The spawned process continues
-    // running independently because we set all stdio to null and call drop().
-    drop(child);
+    // Detach: we drop the handle here. The spawned process continues running
+    // independently because we set all stdio to null and call drop(). A backend
+    // created through Win32_Process.Create has no handle to begin with.
+    drop(launched);
 
     append_startup_log_message(
         &startup_log.path,
@@ -10078,14 +10523,57 @@ mod tests {
         );
     }
 
+    /// A Windows job object tears down its whole tree when it closes, so a
+    /// "detached" backend that stays in the job still dies with the command
+    /// that started it. The flag that escapes it must be requested only for a
+    /// verified job membership, and a refused breakaway must route to the WMI
+    /// fallback.
+    #[cfg(windows)]
+    #[test]
+    fn backend_launch_requests_a_job_breakaway_when_the_cli_is_in_a_job() {
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+        // The flag is a Windows constant, not a guess: 0x01000000 is what
+        // winbase.h defines and what `CreateProcess` documents.
+        assert_eq!(CREATE_BREAKAWAY_FROM_JOB, 0x0100_0000);
+        // Membership detection must answer without panicking in either case.
+        let membership = windows_job_membership();
+        assert!(matches!(
+            membership,
+            WindowsJobMembership::InJob | WindowsJobMembership::NotInJob
+        ));
+        // ERROR_ACCESS_DENIED is the only error that means "the job refused".
+        let denied = io::Error::from_raw_os_error(ERROR_ACCESS_DENIED);
+        assert!(spawn_should_escape_job(true, &denied));
+        assert!(!spawn_should_escape_job(false, &denied));
+        let other = io::Error::from_raw_os_error(2);
+        assert!(!spawn_should_escape_job(true, &other));
+    }
+
+    #[test]
+    fn windows_quote_arg_matches_the_command_line_convention() {
+        // No whitespace or quotes: passed through untouched.
+        assert_eq!(windows_quote_arg("-DskipTests"), "-DskipTests");
+        // Empty argument must be a pair of quotes, not nothing.
+        assert_eq!(windows_quote_arg(""), "\"\"");
+        // A path with a space is quoted as a whole.
+        assert_eq!(
+            windows_quote_arg(r"C:\Program Files\Java\bin\java.exe"),
+            "\"C:\\Program Files\\Java\\bin\\java.exe\""
+        );
+        // A trailing backslash must be doubled so it cannot escape the closing
+        // quote (the classic `"C:\dir\"` mistake).
+        assert_eq!(windows_quote_arg("C:\\a b\\"), "\"C:\\a b\\\\\"");
+        // A literal quote is escaped with a backslash.
+        assert_eq!(windows_quote_arg(r#"say "hi""#), "\"say \\\"hi\\\"\"");
+    }
+
     /// The training run has the same console-lifetime problem as the backend,
     /// and it is the process the JVM dumps the AOT cache from — a console
     /// teardown mid-dump used to leave a truncated cache that the launch path
     /// attaches blindly (it only checks `is_file`).
     #[cfg(windows)]
     #[test]
-    fn aot_training_launch_detaches_from_the_callers_console() {
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
+    fn aot_training_launch_detaches_from_the_callers_console() {        const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         const CREATE_BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
         assert_eq!(

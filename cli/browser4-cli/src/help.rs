@@ -2129,6 +2129,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             4,
         ));
         lines.push(wrap_text(
+            "`--expect-url <glob>` (opt-in) warns on stderr when the page the launch landed on does not match the glob (`*` = any run, `?` = one character, case-insensitive). It never fails the command. Without it, `open` still prints a hint on stderr when a managed launch is redirected to a login/onboarding page — a managed session uses an isolated profile, so it has no cookie for the site; use `attach --list` then `attach --cdp <port>` to drive your already-logged-in browser instead.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
             "Use `--fresh` to close the current session and start a new one instead of reconnecting, so tabs, cookies, and location state from a prior run are not inherited.",
             "  - ",
             4,
@@ -2167,6 +2172,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli open --display-mode GUI https://browser4.io    # same axis, backend spelling".to_string());
         lines.push("  browser4-cli open --channel ego-lite https://browser4.io    # launch ego lite instead of Chrome".to_string());
         lines.push("  browser4-cli open --max-open-tabs 4 https://browser4.io    # cap the tab count".to_string());
+        lines.push("  browser4-cli open --expect-url \"https://x.com/home\" https://x.com/home   # warn on a redirect".to_string());
         lines.push("  browser4-cli open --fresh --headless https://browser4.io    # new session, not a reconnect".to_string());
         lines.push("  browser4-cli -s job-42 open https://browser4.io            # named session (global flag first)".to_string());
     }
@@ -5660,6 +5666,9 @@ mod tests {
             .contains("Open a browser session or reconnect to an existing one"));
         assert!(help.contains("backend still reports it as active"));
         assert!(help.contains("creates a new browser session"));
+        // The post-navigation landing check is part of open's contract.
+        assert!(help.contains("--expect-url"));
+        assert!(help.contains("login/onboarding page"));
     }
 
     #[test]
