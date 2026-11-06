@@ -80,10 +80,17 @@ const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
 /// outside the job object this process belongs to.
 ///
 /// Windows terminates every process in a job when that job goes away, so a
-/// host shell that runs each command inside a `KILL_ON_JOB_CLOSE` job (the Trae
-/// Shell tool does) kills the "detached" backend as soon as the command that
-/// started it returns. `DETACHED_PROCESS` does not help: it only detaches the
-/// console.
+/// host shell that puts each command in a `KILL_ON_JOB_CLOSE` job (which some
+/// environments do) would kill the "detached" backend as soon as the command
+/// that started it returns. `DETACHED_PROCESS` does not help: it only detaches
+/// the console.
+///
+/// In practice, modern host shells kill children by walking the
+/// `ParentProcessId` chain rather than a job object, and `IsProcessInJob`
+/// returns 0 under them. `CREATE_BREAKAWAY_FROM_JOB` was the old escape hatch;
+/// we now bypass `CreateProcess` entirely on Windows and spawn the backend
+/// through the WMI provider (`Win32_Process.Create`), which runs under
+/// `WmiPrvSE.exe` outside the caller's process tree. See `spawn_backend_command`.
 ///
 /// The flag is only honoured when the host job sets
 /// `JOB_OBJECT_LIMIT_BREAKAWAY_OK` (or `JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK`);
@@ -91,11 +98,13 @@ const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
 /// detected at the spawn and answered by `spawn_outside_windows_job`, which asks
 /// a process outside the job (the WMI provider) to create the backend.
 #[cfg(windows)]
+#[allow(dead_code)]
 const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
 
 /// Windows: `ERROR_ACCESS_DENIED`, the error `CreateProcess` reports when the
 /// calling job does not permit breakaway.
 #[cfg(windows)]
+#[allow(dead_code)]
 const ERROR_ACCESS_DENIED: i32 = 5;
 
 /// Windows: is this CLI process inside a job object?
@@ -9254,6 +9263,7 @@ async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
 }
 
 /// How the backend process was created.
+#[allow(dead_code)]
 enum LaunchedBackend {
     /// A child process spawned from this CLI, with a handle to wait on.
     Child(std::process::Child),
@@ -9347,33 +9357,51 @@ fn powershell_single_quote(value: &str) -> String {
 
 /// Spawn the prepared backend command.
 ///
-/// Outside a Windows job object this is a plain `spawn`. Inside one, the command
-/// carries `CREATE_BREAKAWAY_FROM_JOB`; Windows refuses that with
-/// `ERROR_ACCESS_DENIED` unless the host job sets
-/// `JOB_OBJECT_LIMIT_BREAKAWAY_OK`, in which case the backend is created by the
-/// WMI provider — a process that is not in the job — instead.
+/// On Windows, host shells kill children by walking the `ParentProcessId` chain
+/// when the command ends — `IsProcessInJob` returns 0 so a plain detached
+/// `spawn()` succeeds and then dies with the host. We therefore bypass
+/// `CreateProcess` entirely on Windows and always ask the WMI provider
+/// (`Win32_Process.Create`) to make the backend. It runs under `WmiPrvSE.exe`,
+/// outside the caller's process tree, and survives the host regardless of what
+/// that host does to its descendants.
+///
+/// Linux and other platforms use a plain `Command::spawn`.
 fn spawn_backend_command(
     command: &mut Command,
-    in_windows_job: bool,
+    #[allow(unused_variables)] in_windows_job: bool,
     launch_working_dir: &Path,
     startup_log_path: &Path,
 ) -> io::Result<LaunchedBackend> {
-    match command.spawn() {
-        Ok(child) => Ok(LaunchedBackend::Child(child)),
-        Err(error) if spawn_should_escape_job(in_windows_job, &error) => {
-            spawn_outside_windows_job(command, launch_working_dir, startup_log_path)
+    #[cfg(windows)]
+    {
+        spawn_outside_windows_job(command, launch_working_dir, startup_log_path)
+    }
+    #[cfg(not(windows))]
+    {
+        match command.spawn() {
+            Ok(child) => Ok(LaunchedBackend::Child(child)),
+            Err(error) if spawn_should_escape_job(in_windows_job, &error) => {
+                spawn_outside_windows_job(command, launch_working_dir, startup_log_path)
+            }
+            Err(error) => Err(error),
         }
-        Err(error) => Err(error),
     }
 }
 
 /// True when a failed spawn is the job object refusing a breakaway.
+///
+/// No longer exercised on Windows (we always spawn the backend through the
+/// WMI provider). Kept so we can fall back to the breakaway-on-failure path if
+/// a future host reintroduces job-object teardown behaviour that `IsProcessInJob`
+/// actually reports.
 #[cfg(windows)]
+#[allow(dead_code)]
 fn spawn_should_escape_job(in_windows_job: bool, error: &io::Error) -> bool {
     in_windows_job && error.raw_os_error() == Some(ERROR_ACCESS_DENIED)
 }
 
 #[cfg(not(windows))]
+#[allow(dead_code)]
 fn spawn_should_escape_job(_in_windows_job: bool, _error: &io::Error) -> bool {
     false
 }
@@ -9397,8 +9425,9 @@ fn spawn_outside_windows_job(
     let command_line = windows_command_line(command);
     append_startup_log_message(
         startup_log_path,
-        "CREATE_BREAKAWAY_FROM_JOB was refused (the host job does not allow breakaway); \
-         creating the backend through Win32_Process.Create instead."
+        "Windows host shells terminate descendants by ParentProcessId tree when a \
+         command ends; creating the backend through Win32_Process.Create so it \
+         runs under WmiPrvSE.exe and outlives the CLI."
             .to_string(),
     );
 
@@ -9515,24 +9544,14 @@ async fn start_server(
         .stdout(startup_log.stdout)
         .stderr(startup_log.stderr);
 
-    // A host shell that runs every command inside a Windows job object kills the
-    // whole tree when the command ends, so a merely-console-detached backend
-    // still dies with the CLI that started it. Ask Windows to create the child
-    // outside the job; the spawn below falls back to the WMI provider when the
-    // host job refuses that.
+    // On Windows we always create the backend through the WMI provider, so the
+    // plain `spawn` path (and its `CREATE_BREAKAWAY_FROM_JOB` flag) is never
+    // exercised here — see `spawn_backend_command`.
     #[cfg(windows)]
     let in_windows_job = windows_job_membership() == WindowsJobMembership::InJob;
     #[cfg(not(windows))]
     let in_windows_job = false;
-    if in_windows_job {
-        append_startup_log_message(
-            &startup_log.path,
-            "The CLI is running inside a Windows job object; asking for a breakaway backend."
-                .to_string(),
-        );
-    }
-
-    #[cfg(windows)]
+    #[cfg(not(windows))]
     {
         use std::os::windows::process::CommandExt;
         let mut flags = BACKEND_CREATION_FLAGS;
@@ -10614,6 +10633,120 @@ mod tests {
         );
         assert!(script.contains("move /y \"app.aot.tmp\" \"app.aot\""));
         assert!(script.contains("@training-args.txt"));
+    }
+
+    /// Hostile hosts (AI-agent shell tools, some CI wrappers) reap the whole
+    /// descendant tree by walking `ParentProcessId` when the command ends —
+    /// no job object involved, so `IsProcessInJob` reports 0 and the old
+    /// breakaway escape never fired. The backend must therefore be created by
+    /// `Win32_Process.Create` (parent = WmiPrvSE.exe, outside the caller's
+    /// tree) through `spawn_backend_command` itself — if anyone reverts it to
+    /// a plain `Command::spawn`, this test fails because the launch comes back
+    /// as [`LaunchedBackend::Child`].
+    ///
+    /// Real processes, no Java needed: a `ping` plays the backend, another
+    /// `ping` plays a plainly-spawned tree member, and `taskkill /T /F` plays
+    /// the hostile host. The plain member must die; the WMI-created surrogate
+    /// must survive it.
+    #[cfg(windows)]
+    #[test]
+    fn wmi_spawned_backend_survives_a_hostile_process_tree_kill() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let startup_log_path = temp.path().join("startup.log");
+        std::fs::write(&startup_log_path, "").expect("startup log");
+
+        // 1. The production entry point must take the WMI path on Windows.
+        let mut backend_command = Command::new("ping");
+        backend_command.args(["-n", "30", "127.0.0.1"]);
+        let launched = spawn_backend_command(
+            &mut backend_command,
+            /* in_windows_job = */ false,
+            temp.path(),
+            &startup_log_path,
+        )
+        .expect("WMI spawn must succeed");
+        let backend_pid = match launched {
+            LaunchedBackend::Detached { pid } => pid,
+            LaunchedBackend::Child(_) => panic!(
+                "spawn_backend_command must create the backend through \
+                 Win32_Process.Create on Windows (LaunchedBackend::Detached); \
+                 a plain Command::spawn dies with the host's process tree"
+            ),
+        };
+        assert!(
+            windows_pid_is_alive(backend_pid),
+            "the WMI-spawned backend surrogate (pid {backend_pid}) must be running"
+        );
+        let log = std::fs::read_to_string(&startup_log_path).expect("read startup log");
+        assert!(
+            log.contains(&format!(
+                "Win32_Process.Create created the backend with pid {backend_pid}"
+            )),
+            "the startup log must record the WMI creation, got: {log}"
+        );
+
+        // 2. The WMI-created process must sit outside this process tree: its
+        //    parent is WmiPrvSE.exe, not this test process.
+        assert_ne!(
+            windows_parent_pid(backend_pid),
+            std::process::id(),
+            "the backend surrogate's parent must be WmiPrvSE (outside the caller's tree)"
+        );
+
+        // 3. A plainly spawned process shares the caller's tree.
+        let mut tree_member = Command::new("ping")
+            .args(["-n", "30", "127.0.0.2"])
+            .spawn()
+            .expect("plain spawn");
+        let tree_member_pid = tree_member.id();
+
+        // 4. The hostile host reaps the caller's tree (taskkill /T walks the
+        //    same ParentProcessId chain it walks).
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &tree_member_pid.to_string()])
+            .output();
+        let _ = tree_member.wait();
+        assert!(
+            !windows_pid_is_alive(tree_member_pid),
+            "the plainly spawned tree member (pid {tree_member_pid}) must die with the tree kill"
+        );
+        assert!(
+            windows_pid_is_alive(backend_pid),
+            "the WMI-spawned backend surrogate (pid {backend_pid}) must survive \
+             the tree kill that claimed the plainly spawned process"
+        );
+
+        // 5. Cleanup. If an assert above panicked this never runs — every
+        //    surrogate is a 30-second ping that terminates itself.
+        let _ = Command::new("taskkill")
+            .args(["/F", "/PID", &backend_pid.to_string()])
+            .output();
+    }
+
+    /// `true` while the pid is a live process, via `tasklist` (fast, no WMI).
+    #[cfg(windows)]
+    fn windows_pid_is_alive(pid: u32) -> bool {
+        let output = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .output()
+            .expect("tasklist must be available on Windows");
+        String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))
+    }
+
+    /// The parent pid of a live process via WMI; `0` when it cannot be read.
+    #[cfg(windows)]
+    fn windows_parent_pid(pid: u32) -> u32 {
+        let script = format!(
+            "(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').ParentProcessId"
+        );
+        let output = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .output()
+            .expect("powershell must be available on Windows");
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .unwrap_or(0)
     }
 
     /// Acquire the shared environment lock, tolerating a poisoned lock from a
