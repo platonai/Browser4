@@ -9546,20 +9546,13 @@ async fn start_server(
 
     // On Windows we always create the backend through the WMI provider, so the
     // plain `spawn` path (and its `CREATE_BREAKAWAY_FROM_JOB` flag) is never
-    // exercised here — see `spawn_backend_command`.
+    // exercised here — see `spawn_backend_command`. `BACKEND_CREATION_FLAGS`
+    // and `creation_flags()` are Windows-only, so no console/flag setup is left
+    // to do on any platform: the WMI path sets the console itself.
     #[cfg(windows)]
     let in_windows_job = windows_job_membership() == WindowsJobMembership::InJob;
     #[cfg(not(windows))]
     let in_windows_job = false;
-    #[cfg(not(windows))]
-    {
-        use std::os::windows::process::CommandExt;
-        let mut flags = BACKEND_CREATION_FLAGS;
-        if in_windows_job {
-            flags |= CREATE_BREAKAWAY_FROM_JOB;
-        }
-        command.creation_flags(flags);
-    }
 
     let mut launched = {
         // The backend outlives this CLI process: make sure it cannot hold the
