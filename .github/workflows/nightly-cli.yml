@@ -242,13 +242,26 @@ jobs:
           # not cover it, and it is mock-only: ~1 s, no backend.
           cargo test --test e2e --manifest-path ${{ env.CLI_MANIFEST_PATH }} -- --nocapture --scenario=test_e2e_mock_click_is_stack_safe --max-failures=0
 
+      - name: Run Windows-only unit tests (daemon lifecycle)
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          # Every other workflow runs the Rust unit tests on Ubuntu, where
+          # `#[cfg(windows)]` tests are compiled out — so until this step they never
+          # executed anywhere in CI. The daemon module owns the backend spawn
+          # lifecycle: creation flags, the WMI escape (`Win32_Process.Create`), and
+          # the survival regression (a `taskkill /T /F` reaping of the caller's
+          # process tree must leave the WMI-created backend alive). No Java, no
+          # backend, no browser needed.
+          cargo test --bin browser4-cli --manifest-path ${{ env.CLI_MANIFEST_PATH }} -- --nocapture daemon
+
       - name: Pipeline Summary
         if: always()
         shell: pwsh
         run: |
           echo "::group::Nightly CLI smoke summary (Windows x64)"
           echo "Platform: Windows x64 (windows-latest)"
-          echo "Scope: SMOKE scenarios + the Windows click/dblclick stack-overflow regression"
+          echo "Scope: SMOKE scenarios + the Windows click/dblclick stack-overflow regression + Windows-only daemon unit tests"
           echo "No backend: every selected scenario declares requires_browser4: false"
           echo "Status: ${{ job.status }}"
           echo "Commit: ${{ github.sha }}"
