@@ -1005,13 +1005,18 @@ jobs:
             asset_name: browser4-bundle-runtime-linux-x64.tar.gz
             artifact_name: browser4-bundle-runtime-linux-x64
           # macOS x64 (disabled — macos-13 runner deprecated; re-enable when
-          # cross-compilation from macos-14 or macos-latest is available):
+          # cross-compilation from macos-latest is available):
           # - name: macOS x64
           #   os: macos-13
           #   asset_name: browser4-bundle-runtime-darwin-x64.tar.gz
           #   artifact_name: browser4-bundle-runtime-darwin-x64
           - name: macOS ARM64
-            os: macos-14
+            # `macos-14` was retired on 2026-11-02 and now fails in 1 s with
+            # "The configuration 'macos-14-arm64-us-default' is not supported".
+            # `macos-latest` is an arm64 image (the CLI build jobs above already
+            # cross-compile x86_64-apple-darwin on it), which is what this
+            # darwin-arm64 bundle needs.
+            os: macos-latest
             asset_name: browser4-bundle-runtime-darwin-arm64.tar.gz
             artifact_name: browser4-bundle-runtime-darwin-arm64
 
@@ -1101,7 +1106,8 @@ jobs:
             artifact_name: browser4-bundle-runtime-linux-x64
             target: x86_64-unknown-linux-gnu
           - name: macOS ARM64
-            os: macos-14
+            # See build-runtime-bundles: macos-14 was retired on 2026-11-02.
+            os: macos-latest
             asset_name: browser4-bundle-runtime-darwin-arm64.tar.gz
             artifact_name: browser4-bundle-runtime-darwin-arm64
             target: aarch64-apple-darwin
