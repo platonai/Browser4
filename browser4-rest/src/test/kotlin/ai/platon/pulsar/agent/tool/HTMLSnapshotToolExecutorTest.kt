@@ -940,50 +940,6 @@ class HTMLSnapshotToolExecutorTest {
         )
     }
 
-    @Test
-    @DisplayName("DOM_FIRST_IMG with an expr selector is detected")
-    fun domFirstImgWithExprIsDetected() {
-        assertTrue(
-            HTMLSnapshotToolExecutor.hasDomFirstImgExpr(
-                "SELECT DOM_ABS_SRC(DOM_FIRST_IMG(DOM, 'img:expr(src^=https://cdn)')) FROM " +
-                    "DOM_LOAD_AND_SELECT(@url, 'body')"
-            )
-        )
-    }
-
-    @Test
-    @DisplayName("DOM_NTH_IMG and DOM_ALL_IMGS with expr selectors are detected")
-    fun domNthImgAndAllImgsWithExprAreDetected() {
-        assertTrue(
-            HTMLSnapshotToolExecutor.hasDomFirstImgExpr(
-                "SELECT DOM_ABS_SRC(DOM_NTH_IMG(DOM, 'img:expr(data-price > 10)', 2)), " +
-                    "DOM_SRCS(DOM_ALL_IMGS(DOM, 'img:expr(alt)')) FROM DOM_LOAD_AND_SELECT(@url, 'body')"
-            )
-        )
-    }
-
-    @Test
-    @DisplayName("img selectors without expr are not flagged")
-    fun imgSelectorsWithoutExprAreNotFlagged() {
-        assertFalse(
-            HTMLSnapshotToolExecutor.hasDomFirstImgExpr(
-                "SELECT DOM_ABS_SRC(DOM_FIRST_IMG(DOM, 'img.hero')) FROM " +
-                    "DOM_LOAD_AND_SELECT(@url, 'body')"
-            )
-        )
-    }
-
-    @Test
-    @DisplayName("expr selectors on non-img functions are not flagged")
-    fun exprSelectorsOnNonImgFunctionsAreNotFlagged() {
-        assertFalse(
-            HTMLSnapshotToolExecutor.hasDomFirstImgExpr(
-                "SELECT DOM_FIRST_ATTR(DOM, 'img:expr(src^=https://cdn)', 'src') FROM " +
-                    "DOM_LOAD_AND_SELECT(@url, 'body')"
-            )
-        )
-    }
-
     // =========================================================================
     // summary algorithms (pluggable PageSummaryAlgorithm SPI)
     // =========================================================================

@@ -188,12 +188,11 @@ SQLEOF
 browser4-cli htmlsnapshot query "https://example.com/products" --sql @query.sql --format table
 ```
 
-> **PowerCSS `:expr(...)` and UDF selector args:** visual filters like
-> `img:expr(width > 250 && height > 250)` are **not reliably evaluated inside
-> `DOM_FIRST_*`/`DOM_ALL_*` selector arguments** — they silently match nothing.
-> Keep UDF selector args to plain CSS (as above) and put `:expr(...)` filters
-> where they are supported: the `DOM_LOAD_AND_SELECT` selector in the `FROM`
-> clause, or `htmlsnapshot get` / `inspect` selectors.
+> **PowerCSS `:expr(...)` works in UDF selector args too:** visual filters like
+> `img:expr(width > 250 && height > 250)` are evaluated both in the
+> `DOM_LOAD_AND_SELECT` selector (`FROM` clause) and in `DOM_FIRST_*` /
+> `DOM_ALL_*` selector arguments (including `DOM_*_IMG`), and in
+> `htmlsnapshot get` / `inspect` selectors.
 
 ### 9. PowerCSS (visual-feature selectors)
 

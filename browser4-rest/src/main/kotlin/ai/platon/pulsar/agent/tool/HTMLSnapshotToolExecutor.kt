@@ -801,22 +801,6 @@ class HTMLSnapshotToolExecutor(
         val processedSql = SQLTemplate(sql).createSQL(url)
         val response = scrapeService.executeQuery(ScrapeRequest(processedSql))
 
-        // DOM_FIRST_IMG (and the rest of the DOM_*_IMG family) evaluates its
-        // selector through an img-scanning path that does not parse PowerCSS
-        // :expr(...) pseudo-selectors — any :expr filter silently matches
-        // nothing (no error, no warning). DOM_FIRST_ATTR / DOM_SELECT_FIRST /
-        // FROM selectors do honor :expr. Log a warning so a silent no-match
-        // is not mistaken for a page without images. (Engine parity fix is
-        // tracked upstream and lands with the pulsar-ql dependency bump.)
-        if (hasDomFirstImgExpr(processedSql)) {
-            logger.warn(
-                "X-SQL query uses a DOM_*_IMG function with a PowerCSS :expr(...) selector, which " +
-                    "the engine does not evaluate (matches nothing, silently). Filter images with " +
-                    "DOM_FIRST_ATTR(DOM, sel, 'src') or DOM_SELECT_FIRST(DOM, sel) + DOM_ABS_SRC " +
-                    "instead.\nSQL: $processedSql"
-            )
-        }
-
         // H2 reports errors through the response body (statusCode 417) rather
         // than an exception.  H2 treats double quotes as identifier quotes, so
         // a CSS selector written as DOM_LOAD_AND_SELECT(@url, "a") fails with a
@@ -1107,16 +1091,6 @@ class HTMLSnapshotToolExecutor(
         internal fun shouldAppendDomFirstFloatCastHint(message: String, sql: String): Boolean =
             message.contains("Hexadecimal string contains non-hex character") &&
                 Regex("""DOM_FIRST_(FLOAT|INTEGER)\s*\(""", RegexOption.IGNORE_CASE).containsMatchIn(sql)
-
-        /**
-         * True when the SQL feeds a DOM_*_IMG function (DOM_FIRST_IMG /
-         * DOM_NTH_IMG / DOM_ALL_IMGS) with a PowerCSS :expr(...) pseudo-selector.
-         * The img-scanning selector path ignores :expr, so such a query matches
-         * nothing without an error.
-         */
-        internal fun hasDomFirstImgExpr(sql: String): Boolean =
-            Regex("""(?:DOM_FIRST_IMG|DOM_NTH_IMG|DOM_ALL_IMGS)\s*\([^)]*:expr\s*\(""", RegexOption.IGNORE_CASE)
-                .containsMatchIn(sql)
 
         private val STANDARD_HTML_ATTRIBUTES: Set<String> = setOf(
             "accesskey", "autocapitalize", "autofocus", "class", "contenteditable",

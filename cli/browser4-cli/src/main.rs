@@ -12163,63 +12163,6 @@ fn x_sql_envelope_is_failure(parsed: &Value) -> bool {
     false
 }
 
-/// True when an X-SQL statement passes a PowerCSS `:expr(...)` filter as a
-/// selector ARGUMENT to a DOM_*_IMG function (e.g. `DOM_FIRST_IMG(DOM,
-/// 'img:expr(width > 250)')`).
-///
-/// The X-SQL engine evaluates such selectors through an img-scanning path
-/// that does not parse `:expr(...)`, so the filter silently matches nothing.
-/// Used to print a corrective tip after the query succeeds.
-///
-/// Only the IMG call's own argument span is considered: `:expr` in the FROM
-/// clause (`DOM_LOAD_AND_SELECT(@url, 'img:expr(...)')`) IS evaluated and must
-/// not trigger the warning, and neither should an unrelated `:expr` elsewhere
-/// in the statement.
-fn sql_uses_dom_first_img_expr(sql: &str) -> bool {
-    let upper = sql.to_ascii_uppercase();
-    let func_names = ["DOM_FIRST_IMG", "DOM_NTH_IMG", "DOM_ALL_IMGS"];
-    let mut search_from = 0;
-    while let Some(func_start) = func_names.iter().find_map(|name| {
-        upper[search_from..].find(name).map(|idx| (search_from + idx, name.len()))
-    }) {
-        let (start, name_len) = func_start;
-        let after_name = start + name_len;
-        // The selector argument is the second argument of DOM_FIRST_IMG/
-        // DOM_NTH_IMG and the second of DOM_ALL_IMGS — scan the whole
-        // argument list for ':expr(' so any argument placement is caught.
-        let Some(open_paren) = upper[after_name..].find('(') else {
-            break;
-        };
-        let args_start = after_name + open_paren + 1;
-        // Find the matching close paren, tracking nesting (PowerCSS expr
-        // blocks contain nested parens of their own).
-        let mut depth = 1usize;
-        let mut cursor = args_start;
-        let mut close_paren = None;
-        while cursor < upper.len() {
-            match upper.as_bytes()[cursor] {
-                b'(' => depth += 1,
-                b')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        close_paren = Some(cursor);
-                        break;
-                    }
-                }
-                _ => {}
-            }
-            cursor += 1;
-        }
-        let Some(close) = close_paren else { break };
-        let args_span = &upper[args_start..close];
-        if args_span.contains(":EXPR(") {
-            return true;
-        }
-        search_from = close + 1;
-    }
-    false
-}
-
 /// Whether to nudge the user toward `--format table`/`csv`/`--result-only`
 /// after a successful query: only when the default JSON output is going to an
 /// interactive terminal (piped output must stay machine-clean) and the user
@@ -12313,7 +12256,6 @@ async fn handle_html_snapshot_query(
     // naive string substitution would break on URLs containing quotes or other
     // special characters. Note: @url must appear UNQUOTED in the SQL
     // (e.g. `load_and_select(@url, ':root')` not `load_and_select('@url', ':root')`).
-    let sql_has_img_expr = sql_uses_dom_first_img_expr(&sql);
     let processed_sql = sql;
 
     let mut params = json!({ "sql": processed_sql });
@@ -12565,14 +12507,6 @@ async fn handle_html_snapshot_query(
             .ok()
             .and_then(|p| p.get("statusCode").and_then(|v| v.as_i64()))
             .map_or(false, |code| code == 200);
-
-        if envelope_ok && sql_has_img_expr {
-            emit_tip(
-                "\n⚠️  DOM_FIRST_IMG does not evaluate PowerCSS :expr(...) filters — a filtered \
-                 selector silently matches nothing (no error). Filter images with \
-                 DOM_FIRST_ATTR(DOM, sel, 'src') or DOM_SELECT_FIRST(DOM, sel) + DOM_ABS_SRC instead."
-            );
-        }
 
         if envelope_ok
             && should_suggest_query_output_format(&format, result_only, std::io::stdout().is_terminal())
@@ -13830,19 +13764,6 @@ async fn handle_html_snapshot_inspect(
                     _ => "  ",
                 };
 
-                // PowerCSS :expr(...) scope warning: works inside
-                // DOM_LOAD_AND_SELECT's FROM-clause selector and with
-                // htmlsnapshot get (live page evaluation), but is silently
-                // NOT evaluated when embedded as a DOM_* function's selector
-                // argument in X-SQL — it matches nothing there and returns
-                // empty columns with exit code 0. Tag it so users don't
-                // copy a starred :expr() suggestion into DOM_FIRST_TEXT.
-                let expr_scope_note = if sel.contains(":expr(") {
-                    "  ⚠ :expr() — works in FROM clause & get, NOT inside DOM_* X-SQL args"
-                } else {
-                    ""
-                };
-
                 // Value samples from textSamples (new) or fall back to textPreview (old)
                 let text_hint =
                     if let Some(samples) = sug.get("textSamples").and_then(|v| v.as_array()) {
@@ -13878,9 +13799,6 @@ async fn handle_html_snapshot_inspect(
                     sel,
                     text_hint
                 );
-                if !expr_scope_note.is_empty() {
-                    cli_println!("      {}", expr_scope_note);
-                }
             };
 
             cli_println!("");
@@ -49787,62 +49705,6 @@ linkGroups:
             reason.chars().count()
         );
         assert!(reason.ends_with('…'));
-    }
-
-    #[test]
-    fn sql_uses_dom_first_img_expr_detects_the_broken_pattern() {
-        assert!(sql_uses_dom_first_img_expr(
-            "SELECT DOM_FIRST_IMG(DOM, 'img.product-img:expr(width > 100 && height > 100)') AS img FROM DOM_LOAD_AND_SELECT(@url, '.product-card')"
-        ));
-        // lowercase function names are normalized
-        assert!(sql_uses_dom_first_img_expr(
-            "select dom_first_img(dom, 'img:expr(width >= 0)') from dom_load_and_select(@url, ':root')"
-        ));
-        // other members of the img family share the limitation
-        assert!(sql_uses_dom_first_img_expr(
-            "SELECT DOM_ALL_IMGS(DOM, 'img:expr(width > 0)') FROM DOM_LOAD_AND_SELECT(@url, ':root')"
-        ));
-    }
-
-    #[test]
-    fn sql_uses_dom_first_img_expr_leaves_working_uses_alone() {
-        // plain DOM_FIRST_IMG without :expr is fine
-        assert!(!sql_uses_dom_first_img_expr(
-            "SELECT DOM_FIRST_IMG(DOM, 'img.product-img') AS img FROM DOM_LOAD_AND_SELECT(@url, '.product-card')"
-        ));
-        // :expr through DOM_FIRST_ATTR / DOM_SELECT_FIRST is honored by the engine
-        assert!(!sql_uses_dom_first_img_expr(
-            "SELECT DOM_FIRST_ATTR(DOM, 'img.product-img:expr(width > 100)', 'src') FROM DOM_LOAD_AND_SELECT(@url, '.product-card')"
-        ));
-        assert!(!sql_uses_dom_first_img_expr(
-            "SELECT DOM_ABS_SRC(DOM_SELECT_FIRST(DOM, 'img:expr(width > 100 && height > 100)')) FROM DOM_LOAD_AND_SELECT(@url, '.product-card')"
-        ));
-        // :expr in the FROM table selector is fine
-        assert!(!sql_uses_dom_first_img_expr(
-            "SELECT DOM_FIRST_TEXT(DOM, '.t') FROM DOM_LOAD_AND_SELECT(@url, 'img:expr(width > 100)')"
-        ));
-        // Mixed case: DOM_FIRST_IMG with a PLAIN selector while :expr lives in
-        // the FROM clause — the warning must not fire (the FROM :expr IS
-        // evaluated and image_url is correctly populated).
-        assert!(!sql_uses_dom_first_img_expr(
-            "SELECT DOM_FIRST_IMG(DOM, 'img.product-img') AS image_url \
-             FROM DOM_LOAD_AND_SELECT(@url, '.product-card:expr(width >= 150 && height >= 200)')"
-        ));
-        // Nested :expr inside the IMG argument itself still fires, including
-        // when another (non-IMG) function appears before it in the statement.
-        assert!(sql_uses_dom_first_img_expr(
-            "SELECT DOM_FIRST_TEXT(DOM, 'h1') AS t, DOM_FIRST_IMG(DOM, 'img:expr(width > 200)') AS img \
-             FROM DOM_LOAD_AND_SELECT(@url, ':root')"
-        ));
-        // Multiple IMG calls: only the one carrying :expr triggers.
-        assert!(sql_uses_dom_first_img_expr(
-            "SELECT DOM_FIRST_IMG(DOM, 'img.a') AS a, DOM_FIRST_IMG(DOM, 'img.b:expr(width > 9)') AS b \
-             FROM DOM_LOAD_AND_SELECT(@url, ':root')"
-        ));
-        assert!(!sql_uses_dom_first_img_expr(
-            "SELECT DOM_FIRST_IMG(DOM, 'img.a') AS a, DOM_FIRST_IMG(DOM, 'img.b') AS b \
-             FROM DOM_LOAD_AND_SELECT(@url, 'div:expr(width > 9)')"
-        ));
     }
 
     #[test]
