@@ -58,6 +58,25 @@ jobs:
           timeout_minutes: '15'
           maven_profiles: 'all-main-modules'
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli/browser4-cli
+
+      - name: Rust CLI compile check (Linux)
+        id: build-cli
+        timeout-minutes: 15
+        run: |
+          # The CLI is compiled on every platform at release time, but nothing in
+          # this gate used to touch the Rust sources — so a `#[cfg(not(windows))]`
+          # slip (a Windows-only symbol referenced from the non-Windows branch)
+          # merged green and only failed the release workflow. `cargo check` needs
+          # no backend, no Java and no browser, so it runs here cheaply.
+          cargo check --bin browser4-cli --manifest-path cli/browser4-cli/Cargo.toml
+
       - name: Validate PowerShell test scripts
         id: validate-ps1
         shell: pwsh

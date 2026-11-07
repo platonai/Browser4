@@ -45,7 +45,7 @@ jobs:
             os: ubuntu-latest
             run: ${{ inputs.platform == 'all' || inputs.platform == 'linux' }}
           - name: macOS ARM64
-            os: macos-14
+            os: macos-latest
             run: ${{ inputs.platform == 'all' || inputs.platform == 'macos-arm64' }}
 
     steps:

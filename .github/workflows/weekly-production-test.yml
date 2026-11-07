@@ -25,7 +25,7 @@ jobs:
           - name: Linux x64
             os: ubuntu-latest
           - name: macOS ARM64
-            os: macos-14
+            os: macos-latest
 
     steps:
       - name: Checkout repository

@@ -522,15 +522,21 @@ class EmulationHandlerTest {
             // The stateful path used by Browser4WebDriver.keyDown: holding a
             // modifier must populate Keyboard.pressedModifiers so that a
             // subsequent press() carries the modifier bitmask (Control=2).
-            // The Control keyDown itself is dispatched as RAW_KEY_DOWN; the
-            // "a" keyDown arrives as KEY_DOWN, which is what we pin here.
+            // Since the 4.11.30 input-emulation fix, printable keyDown events
+            // are dispatched without text and therefore as RAW_KEY_DOWN;
+            // character insertion goes through Input.insertText.
             keyboard.down("Control")
             keyboard.press("a", delayMillis = 0)
 
+            // Control's own keyDown also carries the Control bit, so match the
+            // "a" keyDown by its virtual key code and code to keep the check
+            // specific to the press() path.
             verify(bp).dispatchKeyEvent(
-                eq(DispatchKeyEventType.KEY_DOWN),
+                eq(DispatchKeyEventType.RAW_KEY_DOWN),
                 eq(2),
-                anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(),
+                eq(65),
+                eq("KeyA"),
+                anyOrNull(), anyOrNull(), anyOrNull(),
                 anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull()
             )
         }
@@ -544,7 +550,7 @@ class EmulationHandlerTest {
 
             // After Control is released, "a" must carry no modifiers.
             verify(bp).dispatchKeyEvent(
-                eq(DispatchKeyEventType.KEY_DOWN),
+                eq(DispatchKeyEventType.RAW_KEY_DOWN),
                 eq(0),
                 anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(),
                 anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull()
@@ -557,7 +563,7 @@ class EmulationHandlerTest {
             keyboard.press("a", delayMillis = 0)
 
             verify(bp).dispatchKeyEvent(
-                eq(DispatchKeyEventType.KEY_DOWN),
+                eq(DispatchKeyEventType.RAW_KEY_DOWN),
                 eq(0),
                 anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(),
                 anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull()
