@@ -291,7 +291,7 @@ open class ProfileImportService(
             "data" to requested.sorted(),
             "warnings" to warnings,
             "nextStep" to "Mount the copied Bookmarks file into a target profile while the browser is closed, " +
-                "or load cookies.json via state-load / cookies set --curl.",
+                "or convert cookies.json for state-load / cookie-set.",
         )
     }
 

@@ -5,20 +5,37 @@ Demo plugins demonstrating all **28 event hooks** defined in
 Each demo logs when its event fires and performs an idiomatic action for that
 lifecycle stage.
 
+The demos can be run standalone (every class has a `main()`) and double as a
+reference for packaging event handlers as a Browser4 plugin
+(`META-INF/browser4-plugin.json` + Spring auto-configuration).
+
+Only the `demos/` package is covered here; the other packages under
+`browser4-examples` hold the crawler, agent, LLM, skill, tool and site-specific
+example programs.
+
 ## File map
 
 ```
-demos/
-├── README.md                          ← this file
-├── CrawlEventDemos.kt                 ← 2 crawl-phase event handlers
-├── LoadEventDemos.kt                  ← 9 load-phase event handlers
-├── BrowseEventDemos.kt                ← 17 browse-phase event handlers
-└── config/
-    └── EventDemosAutoConfiguration.kt ← Spring beans (for PluginManager discovery)
-
-../resources/META-INF/
-└── browser4-plugin.json               ← plugin manifest
+examples/browser4-examples/
+├── pom.xml                                  ← filters ${project.version} into the manifest
+└── src/main/
+    ├── kotlin/ai/platon/pulsar/examples/demos/
+    │   ├── README.md                        ← this file
+    │   ├── CrawlEventDemos.kt               ← 2 crawl-phase event handlers
+    │   ├── LoadEventDemos.kt                ← 9 load-phase event handlers
+    │   ├── BrowseEventDemos.kt              ← 17 browse-phase event handlers
+    │   └── config/
+    │       └── EventDemosAutoConfiguration.kt ← Spring beans (for PluginManager discovery)
+    └── resources/META-INF/
+        └── browser4-plugin.json             ← plugin manifest
 ```
+
+The module does **not** ship
+`META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`,
+so the JAR it builds is not by itself a working plugin: Spring never registers
+`EventDemosAutoConfiguration`, an install reports `loaded: false`, and no
+handlers are wired (the manifest's `autoConfigurationClasses` entry does not
+drive Spring's import). Add that file when packaging — see **Option B** below.
 
 ## Event coverage
 
@@ -28,12 +45,10 @@ Wraps around the load/browse phases. Ideal for URL filtering and result handling
 
 | # | Event | Signature | Demo behaviour |
 |---|---|---|---|
-| 1 | `onWillLoad` | `(UrlAware) → UrlAware?` | Filters URLs containing `skip-this`; attaches remark metadata |
+| 1 | `onWillLoad` | `(UrlAware) → UrlAware?` | Logs the URL and warns when it contains `skip-this`; returns the URL unchanged |
 | 2 | `onLoaded` | `(UrlAware, WebPage?) → Any?` | Logs protocol status & content length, warns on failure |
 
 Execution: `crawl.onWillLoad → [Load] → [Browse] → crawl.onLoaded`
-
----
 
 ### LoadEventHandlers (9 hooks)
 
@@ -57,12 +72,10 @@ onNormalize → onWillLoad → onWillFetch → [Browse Phase] → onFetched →
 onWillParse → onWillParseHTMLDocument → onHTMLDocumentParsed → onParsed → onLoaded
 ```
 
----
-
 ### BrowseEventHandlers (17 hooks)
 
-Controls browser automation: navigation, scrolling, RPA actions. All handlers
-after `onWillLaunchBrowser` receive both `(WebPage, WebDriver)`.
+Controls browser automation: navigation, scrolling, RPA actions. Every handler
+except `onWillLaunchBrowser` receives both `(WebPage, WebDriver)`.
 
 | # | Event | Signature | Demo behaviour |
 |---|---|---|---|
@@ -94,6 +107,8 @@ onFeatureComputed → onDidInteract → onWillStopTab → onTabStopped → onFet
 
 ★ = recommended event for custom actions (document stable, all content loaded).
 
+2 crawl + 9 load + 17 browse = the 28 hooks in `PageEvents.kt`.
+
 ---
 
 ## Usage
@@ -103,8 +118,9 @@ onFeatureComputed → onDidInteract → onWillStopTab → onTabStopped → onFet
 Run any demo directly without PluginManager:
 
 ```kotlin
-// In IntelliJ or via Gradle — each class has a @JvmStatic companion main():
-CrawlEventDemos.main()    // 2 events
+// In IntelliJ IDEA (or any runner that puts the module on its classpath),
+// run each class's main():
+CrawlEventDemos.main()     // 2 events
 LoadEventDemos.main()      // 9 events
 BrowseEventDemos.main()    // 17 events
 ```
@@ -114,46 +130,118 @@ with `@JvmStatic suspend fun main()`. The `run()` method calls
 `session.open(url, eventHandlers)` with a local `DefaultPageEventHandlers` instance
 — fully self-contained, no Spring required.
 
+The demos open `TestUrls.PRODUCT_DETAIL_URL` (a live Amazon product page from
+`pulsar-tests-common`), so the module's classpath and network access are required.
+
 ### Option B — Install as a plugin (production)
 
-#### 1. Build the JAR
+The same handlers can be packaged as a Browser4 plugin. The plugin JAR must be a
+thin JAR (not a Spring Boot fat JAR): Browser4's plugin classloader reads classes
+from the JAR root, so classes hidden under `BOOT-INF/` are invisible and no
+`PluginMount` beans are created. For Spring Boot to register the
+auto-configuration, the JAR must also contain
+`META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`
+listing `ai.platon.pulsar.examples.demos.config.EventDemosAutoConfiguration`. The
+manifest's `autoConfigurationClasses` field is used by `PluginService` to report a
+plugin as `loaded`; it does not drive Spring's auto-configuration import.
+
+#### 1. Add the auto-configuration entry, then build the JAR
+
+The module ships without the import file (see [File map](#file-map)), so add it
+first:
 
 ```bash
-# From the repo root
-mvn package -pl examples/browser4-examples -am -DskipTests
-# → examples/browser4-examples/target/browser4-examples-4.12.0-SNAPSHOT.jar
+# From examples/browser4-examples
+mkdir -p src/main/resources/META-INF/spring
+printf '%s\n' ai.platon.pulsar.examples.demos.config.EventDemosAutoConfiguration \
+  > src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
 ```
 
+PowerShell equivalent:
+
+```powershell
+New-Item -ItemType Directory -Force src/main/resources/META-INF/spring | Out-Null
+Set-Content -NoNewline src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports `
+  ai.platon.pulsar.examples.demos.config.EventDemosAutoConfiguration
+```
+
+Then build. Skip the Spring Boot repackage so the JAR stays thin and loadable as
+a plugin:
+
+```bash
+# From the repo root (JDK 25+ required):
+./mvnw package -pl examples/browser4-examples -am -DskipTests \
+  -Dspring-boot.repackage.skip=true
+# → examples/browser4-examples/target/browser4-examples-4.16.1-SNAPSHOT.jar
+```
+
+The file name follows the reactor version — `4.16.1-SNAPSHOT` in this checkout;
+adjust the paths below if your version differs.
+
 The JAR contains:
-- `META-INF/browser4-plugin.json` — plugin manifest
+- `META-INF/browser4-plugin.json` — plugin manifest (`version` and `sdkVersion`
+  are filtered from `${project.version}` at build time)
+- `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`
+  — the single line added above
 - `ai/platon/pulsar/examples/demos/config/EventDemosAutoConfiguration.class`
 - All three `*EventDemos.class` files
+
+> **Packaging checklist** (see [`skills/browser4-plugin/SKILL.md`](../../../../../../../../../../skills/browser4-plugin/SKILL.md)):
+> 1. thin JAR — no `spring-boot-maven-plugin` `repackage`;
+> 2. `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`
+>    listing `ai.platon.pulsar.examples.demos.config.EventDemosAutoConfiguration`;
+> 3. Browser4/Spring dependencies `provided` by the host — this module declares
+>    them at `compile` scope, but the thin JAR does not embed them, so the host
+>    still supplies them at runtime;
+> 4. `sdkVersion` major must match the host's (a newer major is refused, an older
+>    same-major one loads with a warning).
+>
+> These demos also reference `TestUrls` from `pulsar-tests-common`, a test-support
+> artifact the runtime bundle does not ship — when installing into such a host,
+> inline the URL or bundle that class in the plugin JAR.
 
 #### 2. Install via REST API
 
 ```bash
-# Upload the plugin JAR
-curl -X POST http://localhost:8080/api/plugins/install \
+# The bundle/standalone server listens on 18182 by default (server.port).
+# Add -F "replace=true" to overwrite an existing JAR with the same file name
+# (without it you get HTTP 409 Conflict).
+curl -X POST http://localhost:18182/api/plugins/install \
   -H "Content-Type: multipart/form-data" \
-  -F "file=@examples/browser4-examples/target/browser4-examples-4.12.0-SNAPSHOT.jar"
+  -F "file=@examples/browser4-examples/target/browser4-examples-4.16.1-SNAPSHOT.jar"
 
 # Response (200 OK):
 # {
-#   "fileName": "browser4-examples-4.12.0-SNAPSHOT.jar",
+#   "fileName": "browser4-examples-4.16.1-SNAPSHOT.jar",
 #   "fileSize": 42000,
-#   "path": "/abs/path/to/plugins/browser4-examples-4.12.0-SNAPSHOT.jar",
+#   "path": "/abs/path/to/plugins/browser4-examples-4.16.1-SNAPSHOT.jar",
 #   "manifest": {
 #     "name": "browser4-event-demos",
-#     "version": "4.12.0-SNAPSHOT",
+#     "version": "4.16.1-SNAPSHOT",
 #     "description": "Demo plugins for all 28 events...",
+#     "sdkVersion": "4.16.1-SNAPSHOT",
 #     "dependsOn": ["browser4-skeleton", "browser4-browser"],
+#     "defaultEnabled": true,
 #     "autoConfigurationClasses": [
 #       "ai.platon.pulsar.examples.demos.config.EventDemosAutoConfiguration"
 #     ]
 #   },
-#   "loaded": false
+#   "loaded": false,
+#   "defaultEnabled": true,
+#   "enabled": true
 # }
 ```
+
+`loaded` is `false` until the application has restarted with the JAR on the
+plugin classpath.
+
+> **Loading policy.** `PluginLoadPolicy` decides whether an installed plugin is
+> activated. A manifest with `defaultEnabled: false` is opt-in and stays
+> inactive unless enabled through `browser4.plugins.enable=browser4-event-demos`,
+> `browser4.plugins.enable-all=true`, or their `BROWSER4_PLUGINS_ENABLE` /
+> `BROWSER4_PLUGINS_ENABLE_ALL` env vars. An explicit
+> `browser4.plugins.disable` always wins. This demo omits `defaultEnabled`, so
+> the manifest default (`true`) applies and it loads automatically.
 
 #### 3. Restart the application
 
@@ -163,27 +251,28 @@ On restart the `PluginManager` (an `ApplicationRunner`) fires:
 --- PluginManager: scanning for plugins ---
 Found 3 PluginMount bean(s)
   - crawlEventDemosMount : CrawlEventDemos
-  ✓ Configured crawl event handlers
   - loadEventDemosMount : LoadEventDemos
-  ✓ Configured load event handlers
   - browseEventDemosMount : BrowseEventDemos
-  ✓ Configured browse event handlers
+  + Configured crawl event handlers
+  + Configured load event handlers
+  + Configured browse event handlers
 Found 0 Browser4Plugin bean(s)
 --- PluginManager: scan complete ---
 ```
 
-All 28 handlers are now wired into `PulsarEventBus.pageEventHandlers` and
-fire on every page load.
+`PluginManager` calls `PulsarEventBus.ensurePageEventHandlers()` before wiring, so
+the global handler chains the browser emulator fires are the same ones the plugin
+mounts are added to. All 28 handlers are now active on every page load.
 
 #### 4. Verify
 
 ```bash
 # List installed plugins
-curl http://localhost:8080/api/plugins
-# → [{"fileName":"browser4-examples-4.12.0-SNAPSHOT.jar", "loaded":true, ...}]
+curl http://localhost:18182/api/plugins
+# → [{"fileName":"browser4-examples-4.16.1-SNAPSHOT.jar","loaded":true, ...}]
 
-# Inspect one
-curl http://localhost:8080/api/plugins/browser4-event-demos
+# Inspect one (by manifest name or JAR file name)
+curl http://localhost:18182/api/plugins/browser4-event-demos
 
 # Tail logs to see handlers firing
 # → [Crawl.onWillLoad] About to load: https://...
@@ -195,9 +284,13 @@ curl http://localhost:8080/api/plugins/browser4-event-demos
 #### 5. Uninstall
 
 ```bash
-curl -X DELETE http://localhost:8080/api/plugins/browser4-event-demos
+curl -X DELETE http://localhost:18182/api/plugins/browser4-event-demos
 # → 200 OK (JAR deleted from plugins/; beans remain until restart)
 ```
+
+The plugin is matched by manifest name or by JAR file name (with or without the
+`.jar` extension). On Windows a locked JAR returns HTTP 409 — stop the
+application, delete it, then restart.
 
 ---
 
@@ -206,8 +299,9 @@ curl -X DELETE http://localhost:8080/api/plugins/browser4-event-demos
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │ PluginController (REST)                                          │
-│ POST /api/plugins/install  ← upload JAR                         │
+│ POST /api/plugins/install  ← upload JAR (replace=true)           │
 │ GET  /api/plugins           ← list plugins                       │
+│ GET  /api/plugins/{name}    ← inspect one plugin                 │
 │ DELETE /api/plugins/{name}  ← remove                             │
 └──────────────────────┬───────────────────────────────────────────┘
                        │
@@ -215,6 +309,7 @@ curl -X DELETE http://localhost:8080/api/plugins/browser4-event-demos
 ┌──────────────────────────────────────────────────────────────────┐
 │ PluginService                                                    │
 │ • Validates META-INF/browser4-plugin.json                        │
+│ • Checks sdkVersion against the running host                     │
 │ • Copies JAR → plugins/ directory                                │
 └──────────────────────┬───────────────────────────────────────────┘
                        │ (after restart)
@@ -223,7 +318,7 @@ curl -X DELETE http://localhost:8080/api/plugins/browser4-event-demos
 │ PluginManager (ApplicationRunner)                                │
 │ • Scans Spring context for PluginMount beans                     │
 │ • Calls configure*Handlers() on each mount                       │
-│ • Wires handlers into PulsarEventBus.pageEventHandlers           │
+│ • Wires handlers into PulsarEventBus.ensurePageEventHandlers()   │
 └──────────────────────┬───────────────────────────────────────────┘
                        │
           ┌────────────┼────────────┐
@@ -245,15 +340,31 @@ curl -X DELETE http://localhost:8080/api/plugins/browser4-event-demos
 | `CrawlEventMount` | `configureCrawlHandlers(CrawlEventHandlers)` | same |
 | `LoadEventMount` | `configureLoadHandlers(LoadEventHandlers)` | same |
 | `BrowseEventMount` | `configureBrowseHandlers(BrowseEventHandlers)` | same |
+| `PageSummaryAlgorithmMount` | `getPageSummaryAlgorithms()` | same |
+| `PageFormatContributorMount` | `getPageFormatContributors()` | same |
+| `ToolMount` | `getToolExecutors()` | `browser4-agentic/.../tools/ToolMount.kt` |
+| `PageSnifferMount` | `getPageSniffers()` | `browser4-protocol/.../emulator/util/PageSnifferMount.kt` |
 | `Browser4Plugin` | `manifest`, `onStartup()`, `onShutdown()` | `browser4-skeleton/.../plugin/Browser4Plugin.kt` |
+| `PluginManifest` | `name`, `version`, `description`, `sdkVersion`, `dependsOn`, `defaultEnabled`, `autoConfigurationClasses` | `browser4-skeleton/.../plugin/PluginManifest.kt` |
+
+`PluginManifest.fromJar()` falls back to the JAR's `Browser4-Plugin-Version`
+manifest attribute when `sdkVersion` is absent, so older plugins still carry a
+version. `defaultEnabled` is read by `PluginLoadPolicy` (see the loading policy
+note above).
 
 ## Creating your own plugin
 
-1. Implement one or more `*EventMount` interfaces
-2. Create a Spring `@AutoConfiguration` that exposes your mount as a `@Bean`
+1. Implement one or more `PluginMount` sub-interfaces — the event mounts
+   (`CrawlEventMount`, `LoadEventMount`, `BrowseEventMount`), `ToolMount`,
+   `PageSnifferMount`, `PageSummaryAlgorithmMount`, or
+   `PageFormatContributorMount`
+2. Create a Spring `@AutoConfiguration` (annotate it `@Lazy`) that exposes your mount as a `@Bean`
 3. Add `META-INF/browser4-plugin.json` listing your auto-configuration class
-4. Build the JAR and install via `POST /api/plugins/install`
+4. Add `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` with the same class name
+5. Build a thin JAR (no `spring-boot-maven-plugin` `repackage`) and install via `POST /api/plugins/install`
 
 See `CaptchaAutoConfiguration` in `browser4-plugins/browser4-captcha/` for a
 production example that implements `BrowseEventMount`, `ToolMount`, and
-`PageSnifferMount`.
+`PageSnifferMount`. For the full walkthrough (archetype, mount points, manifest,
+testing, deployment), see
+[`skills/browser4-plugin/SKILL.md`](../../../../../../../../../../skills/browser4-plugin/SKILL.md).

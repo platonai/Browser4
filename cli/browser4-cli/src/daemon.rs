@@ -6007,9 +6007,6 @@ pub struct DiscoveredBrowser {
 
 impl DiscoveredBrowser {
     /// The `--cdp` value that attaches to this browser.
-    // Synced from 4.16.x with issue #632; its caller (`attach --list`) lands on
-    // main with the next feature merge.
-    #[allow(dead_code)]
     pub fn cdp_endpoint(&self) -> String {
         cdp_endpoint_url(self.port)
     }
@@ -6020,9 +6017,6 @@ impl DiscoveredBrowser {
 /// [browser_family_of_process_line] classifies the Chrome and Edge families;
 /// ego lite is Chromium-based but is not called Chrome, so its own executable
 /// stem settles it.
-// Synced from 4.16.x with issue #632; its caller lands on main with the next
-// feature merge.
-#[allow(dead_code)]
 fn discovered_browser_family(line: &str) -> &'static str {
     if let Some(family) = browser_family_of_process_line(line) {
         return family;
@@ -6049,9 +6043,6 @@ fn discovered_browser_family(line: &str) -> &'static str {
 /// `--remote-debugging-port=0` asks the browser for a random port and publishes
 /// the answer in `<user-data-dir>/DevToolsActivePort`; that file is read so a
 /// Browser4-managed browser is listed too.
-// Synced from 4.16.x with issue #632; its caller (`attach --list`) lands on
-// main with the next feature merge.
-#[allow(dead_code)]
 pub fn discover_debuggable_browsers() -> Vec<DiscoveredBrowser> {
     // Chrome/beta/dev/canary all run `chrome.exe`/`google-chrome*`, so the
     // family names cover every `--cdp <channel>` the CLI accepts.
@@ -9442,9 +9433,13 @@ fn spawn_should_escape_job(in_windows_job: bool, error: &io::Error) -> bool {
 /// method accepts only a command line and a working directory: the console
 /// redirect the normal path gets from `Stdio` is not available, so the backend's
 /// own logs (`browser4-cli doctor log`) are the place to look, and the startup
-/// log records that this path ran. The child also inherits the WMI provider's
-/// environment rather than this CLI's — notably `BROWSER4_CLI_BIN` is lost and
-/// the backend falls back to its bundled CLI.
+/// log records that this path ran. The console `Win32_Process.Create` allocates
+/// is created hidden (see `windows_wmi_create_script`) so no terminal window
+/// stays on the user's desktop for the backend's lifetime; if the provider
+/// rejects the startup info, the create is retried without it so the backend
+/// still starts (see `run_wmi_create_with_fallback`). The child also inherits
+/// the WMI provider's environment rather than this CLI's — notably
+/// `BROWSER4_CLI_BIN` is lost and the backend falls back to its bundled CLI.
 #[cfg(windows)]
 fn spawn_outside_windows_job(
     command: &mut Command,
@@ -9460,22 +9455,55 @@ fn spawn_outside_windows_job(
             .to_string(),
     );
 
-    // The script is passed as one `-Command` argument, so PowerShell's own
-    // parser (not a shell) reads it: single-quoted literals carry the command
-    // line and the working directory verbatim.
-    let script = format!(
-        "$ErrorActionPreference = 'Stop'; \
-         $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{ \
-         CommandLine = '{command_line}'; CurrentDirectory = '{working_dir}' }}; \
-         if ($created.ReturnValue -ne 0) {{ \
-         [Console]::Error.Write('Win32_Process.Create returned ' + $created.ReturnValue); exit 1 }}; \
-         [Console]::Out.Write($created.ProcessId)",
-        command_line = powershell_single_quote(&command_line),
-        working_dir = powershell_single_quote(&launch_working_dir.to_string_lossy()),
+    let hidden_script = windows_wmi_create_script(&command_line, launch_working_dir, true);
+    let plain_script = windows_wmi_create_script(&command_line, launch_working_dir, false);
+    let pid = run_wmi_create_with_fallback(&hidden_script, &plain_script, startup_log_path)?;
+    append_startup_log_message(
+        startup_log_path,
+        format!("Win32_Process.Create created the backend with pid {pid}."),
     );
+    Ok(LaunchedBackend::Detached { pid })
+}
 
+/// Create the backend with a hidden console, falling back to a visible one.
+///
+/// `ProcessStartupInformation` is a convenience, not a requirement: if the WMI
+/// provider rejects it (an older or restricted build), the backend must still
+/// start — a terminal window the user can see is a smaller problem than no
+/// backend at all. The fallback is safe to retry because a failed attempt never
+/// reports a pid: `ReturnValue != 0` means nothing was created, and a script
+/// error aborts before `Win32_Process.Create` runs.
+#[cfg(windows)]
+fn run_wmi_create_with_fallback(
+    hidden_script: &str,
+    plain_script: &str,
+    startup_log_path: &Path,
+) -> io::Result<u32> {
+    match run_wmi_create_script(hidden_script) {
+        Ok(pid) => Ok(pid),
+        Err(error) => {
+            let warning = format!(
+                "Creating the backend with a hidden console failed ({error}); retrying \
+                 without Win32_ProcessStartup — a terminal window may stay visible while \
+                 the backend runs."
+            );
+            append_startup_log_message(startup_log_path, warning.clone());
+            eprintln!("{warning}");
+            run_wmi_create_script(plain_script).map_err(|fallback_error| {
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("{fallback_error} (hidden-console attempt failed first: {error})"),
+                )
+            })
+        }
+    }
+}
+
+/// Run one `Win32_Process.Create` PowerShell script and return the created pid.
+#[cfg(windows)]
+fn run_wmi_create_script(script: &str) -> io::Result<u32> {
     let output = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script.as_str()])
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .stdin(Stdio::null())
         .output()?;
     if !output.status.success() {
@@ -9489,17 +9517,57 @@ fn spawn_outside_windows_job(
     }
 
     let pid_text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let pid = pid_text.parse::<u32>().map_err(|error| {
+    pid_text.parse::<u32>().map_err(|error| {
         io::Error::new(
             io::ErrorKind::Other,
             format!("Win32_Process.Create returned no process id ({error}): '{pid_text}'"),
         )
-    })?;
-    append_startup_log_message(
-        startup_log_path,
-        format!("Win32_Process.Create created the backend with pid {pid}."),
-    );
-    Ok(LaunchedBackend::Detached { pid })
+    })
+}
+
+/// PowerShell script that asks `Win32_Process.Create` to make the backend.
+///
+/// With `hide_console`, the script passes `Win32_ProcessStartup` with
+/// `ShowWindow = SW_HIDE` (0). `Win32_Process.Create` allocates a console for a
+/// console application, and the default terminal host (Windows Terminal on
+/// current Windows) displays it — which left a visible terminal tab titled with
+/// the backend's `java.exe` path for as long as the backend lived. `SW_HIDE`
+/// keeps the console, so the backend's std handles stay valid, but never shows
+/// it: the same "out of the user's way" outcome the plain spawn path gets from
+/// `DETACHED_PROCESS`. `DETACHED_PROCESS` is not used here because it would drop
+/// the console the backend's stdout/stderr still point at.
+///
+/// The script is passed as one `-Command` argument, so PowerShell's own parser
+/// (not a shell) reads it: single-quoted literals carry the command line and the
+/// working directory verbatim.
+#[cfg(windows)]
+fn windows_wmi_create_script(
+    command_line: &str,
+    launch_working_dir: &Path,
+    hide_console: bool,
+) -> String {
+    let startup_info = if hide_console {
+        "ProcessStartupInformation = $startup"
+    } else {
+        ""
+    };
+    let setup = if hide_console {
+        "$startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly \
+         -Property @{ ShowWindow = [uint16]0 }; "
+    } else {
+        ""
+    };
+    format!(
+        "$ErrorActionPreference = 'Stop'; {setup}\
+         $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{ \
+         CommandLine = '{command_line}'; CurrentDirectory = '{working_dir}'; \
+         {startup_info} }}; \
+         if ($created.ReturnValue -ne 0) {{ \
+         [Console]::Error.Write('Win32_Process.Create returned ' + $created.ReturnValue); exit 1 }}; \
+         [Console]::Out.Write($created.ProcessId)",
+        command_line = powershell_single_quote(command_line),
+        working_dir = powershell_single_quote(&launch_working_dir.to_string_lossy()),
+    )
 }
 
 #[cfg(not(windows))]
@@ -10666,6 +10734,111 @@ mod tests {
         );
         assert!(script.contains("move /y \"app.aot.tmp\" \"app.aot\""));
         assert!(script.contains("@training-args.txt"));
+    }
+
+    /// The WMI path must not leave a terminal window on the user's desktop.
+    /// `Win32_Process.Create` allocates a console for the console-application
+    /// backend and the default terminal host displays it, so the script has to
+    /// pass `Win32_ProcessStartup` with `ShowWindow = SW_HIDE`.
+    #[cfg(windows)]
+    #[test]
+    fn wmi_create_script_hides_the_backend_console_window() {
+        let script = windows_wmi_create_script(
+            r#""C:\Program Files\Java\bin\java.exe" -cp app.jar Main"#,
+            Path::new(r"C:\work"),
+            true,
+        );
+        assert!(
+            script.contains("ProcessStartupInformation = $startup"),
+            "the backend must be created with a startup-info block, got: {script}"
+        );
+        assert!(
+            script.contains("Win32_ProcessStartup") && script.contains("ShowWindow = [uint16]0"),
+            "the startup info must request a hidden window (SW_HIDE), got: {script}"
+        );
+        assert!(
+            script.contains(r#"CommandLine = '"C:\Program Files\Java\bin\java.exe" -cp app.jar Main'"#),
+            "the command line must still be carried verbatim, got: {script}"
+        );
+    }
+
+    /// The fallback script must be the pre-hiding behaviour: no startup info at
+    /// all, so a provider that rejects `ProcessStartupInformation` still creates
+    /// the backend.
+    #[cfg(windows)]
+    #[test]
+    fn wmi_create_script_fallback_omits_the_startup_info() {
+        let script = windows_wmi_create_script(
+            r#""C:\Program Files\Java\bin\java.exe" -cp app.jar Main"#,
+            Path::new(r"C:\work"),
+            false,
+        );
+        assert!(
+            !script.contains("ProcessStartupInformation") && !script.contains("Win32_ProcessStartup"),
+            "the fallback must not mention startup info, got: {script}"
+        );
+        assert!(
+            script.contains(r#"CommandLine = '"C:\Program Files\Java\bin\java.exe" -cp app.jar Main'"#),
+            "the fallback must create the same command line, got: {script}"
+        );
+        assert!(
+            script.contains("CurrentDirectory = 'C:\\work'"),
+            "the fallback must keep the working directory, got: {script}"
+        );
+    }
+
+    /// The fallback must actually run when the hidden attempt fails: a script
+    /// that always fails plays the hidden attempt, a real `ping` plays the
+    /// backend created by the plain attempt.
+    #[cfg(windows)]
+    #[test]
+    fn wmi_create_fallback_creates_the_backend_after_a_hidden_attempt_failure() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let startup_log_path = temp.path().join("startup.log");
+        std::fs::write(&startup_log_path, "").expect("startup log");
+
+        let failing_script =
+            "$ErrorActionPreference = 'Stop'; [Console]::Error.Write('simulated rejection'); exit 1";
+        let plain_script =
+            windows_wmi_create_script("ping -n 20 127.0.0.1", temp.path(), false);
+        let pid = run_wmi_create_with_fallback(failing_script, &plain_script, &startup_log_path)
+            .expect("the plain attempt must create the backend after the hidden one fails");
+
+        assert!(
+            windows_pid_is_alive(pid),
+            "the fallback-created backend surrogate (pid {pid}) must be running"
+        );
+        let log = std::fs::read_to_string(&startup_log_path).expect("read startup log");
+        assert!(
+            log.contains("retrying") && log.contains("simulated rejection"),
+            "the startup log must explain the fallback and its cause, got: {log}"
+        );
+
+        let _ = Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .output();
+    }
+
+    /// When both attempts fail, the error must surface the fallback's cause and
+    /// keep the hidden attempt's cause for diagnosis.
+    #[cfg(windows)]
+    #[test]
+    fn wmi_create_fallback_reports_both_causes_when_every_attempt_fails() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let startup_log_path = temp.path().join("startup.log");
+        std::fs::write(&startup_log_path, "").expect("startup log");
+
+        let hidden_script =
+            "$ErrorActionPreference = 'Stop'; [Console]::Error.Write('hidden rejected'); exit 1";
+        let plain_script =
+            "$ErrorActionPreference = 'Stop'; [Console]::Error.Write('plain rejected'); exit 1";
+        let error = run_wmi_create_with_fallback(hidden_script, plain_script, &startup_log_path)
+            .expect_err("both attempts failing must be an error");
+        let message = error.to_string();
+        assert!(
+            message.contains("plain rejected") && message.contains("hidden rejected"),
+            "the error must carry both causes, got: {message}"
+        );
     }
 
     /// Hostile hosts (AI-agent shell tools, some CI wrappers) reap the whole
