@@ -110,7 +110,14 @@ class B4CliToolExecutor(
                 "Default timeout 300s (max 600s); above 30s the CLI is also given a matching " +
                 "global --timeout, so the CLI's own HTTP deadline is longer than the MCP call " +
                 "and a long eval is not cut at the MCP default. Pass timeoutSeconds for longer " +
-                "commands, or split a long batch (20 pages in 4 batches of 5). " +
+                "commands. " +
+                "BATCH MODE: `b4.run` supports the CLI's `batch` command for chaining multiple " +
+                "DOM operations in one call — e.g. `b4.run(args=\"batch 'goto https://example.com' " +
+                "'eval --file .b4scratch/extract.js'\")`. " +
+                "Batch subcommands MUST NOT include --server, -s/--session, or nested batch. " +
+                "For multi-step workflows spanning many pages (e.g. scrape 20 product detail pages), " +
+                "prefer writing a short Python driver script in .b4scratch/ that calls browser4-cli " +
+                "via subprocess, rather than 20 separate b4.run invocations. " +
                 "Commands that finish quickly return their result directly; commands still " +
                 "running after ~10s return a '[job: <id>]' handle — poll with b4.status(id=...), " +
                 "wait with b4.wait(id=..., timeoutSeconds=...), or cancel with b4.kill(id=...). " +
@@ -420,7 +427,8 @@ internal fun classifyCliResult(result: CliResult, method: String, workingDir: Pa
         if (result.timedOut) {
             add(
                 "the command did not finish in ${result.durationMs}ms: raise timeoutSeconds " +
-                    "(max 600) or split it into batches (e.g. 20 pages as 4 batches of 5)"
+                    "(max 600), or use `batch` to chain DOM operations in fewer calls " +
+                    "(e.g. `batch 'goto ...' 'eval --file ...'`)"
             )
         }
         if (result.exitCode != null && result.exitCode != 0 && looksLikeMissingPath(text)) {

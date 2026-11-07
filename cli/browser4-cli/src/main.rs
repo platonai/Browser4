@@ -31604,6 +31604,40 @@ fn prepare_batch_eval_params(
     Ok(())
 }
 
+/// True when any of `flags` appears as an explicit argv token in `tokens`.
+///
+/// Matches three forms:
+///   `--server URL`   (bare flag followed by a value)
+///   `--server=URL`   (equals form)
+///   `-sURL`          (short flag glued to value)
+///
+/// Environment-variable defaults (BROWSER4_CLI_SERVER / BROWSER4_CLI_SESSION)
+/// are intentionally NOT detected here — those are injected by b4.run for
+/// routing and must not trigger the "cannot override" guard in batch subcommands.
+fn has_explicit_override_flag(tokens: &[String], flags: &str) -> bool {
+    let names: Vec<&str> = flags.split(',').map(str::trim).collect();
+    for tok in tokens {
+        for name in &names {
+            // `--server` or `-s` as a standalone token (value follows)
+            if tok == *name {
+                return true;
+            }
+            // `--server=URL` / `--server:<URL>` equals form
+            let eq = format!("{name}=");
+            let colon = format!("{name}:");
+            if tok.starts_with(&eq) || tok.starts_with(&colon) {
+                return true;
+            }
+            // Short flags glued to value: `-sURL` (single-char flags only)
+            if name.len() == 2 && name.starts_with('-') && tok.starts_with(name) && tok.len() > 2 {
+                // e.g. `-swork1` — not `-s` (already handled above)
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Compile one batch command into the client-side action that runs it.
 ///
 /// The compilation mirrors the standalone command path: the same argument
@@ -31615,13 +31649,16 @@ fn compile_batch_step(
     command_map: &HashMap<String, commands::CommandDef>,
     stdin_available: bool,
 ) -> Result<BatchStepPlan, String> {
-    let nested_global = parse_global_flags(&spec.tokens);
-    if nested_global.server_url.is_some() {
+    // Guard against explicit argv-level --server / -s overrides in subcommands.
+    // We inspect the raw tokens directly instead of parse_global_flags(), because
+    // parse_global_flags also fills server_url / session_name from environment
+    // variables (BROWSER4_CLI_SERVER / BROWSER4_CLI_SESSION) that b4.run sets for
+    // routing — those are NOT user overrides and must NOT block batch subcommands.
+    if has_explicit_override_flag(&spec.tokens, "--server,-s,--session") {
         return Err("Batch subcommands cannot override --server.".to_string());
     }
-    if nested_global.session_name.is_some() {
-        return Err("Batch subcommands cannot override -s/--session.".to_string());
-    }
+
+    let nested_global = parse_global_flags(&spec.tokens);
     let (nested_command, effective_nested_global, _) =
         normalize_command_invocation(&nested_global);
     if nested_command.is_empty() {
@@ -45085,6 +45122,44 @@ linkGroups:
             error.contains("Batch subcommands cannot override --server."),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn explicit_override_flags_are_detected_at_argv_level_only() {
+        // b4.run sets BROWSER4_CLI_SERVER / BROWSER4_CLI_SESSION for routing.
+        // Those env defaults never appear as tokens, so a subcommand without an
+        // explicit flag must not be treated as an override.
+        assert!(!has_explicit_override_flag(
+            &["click".to_string(), "#a".to_string()],
+            "--server,-s,--session"
+        ));
+        assert!(!has_explicit_override_flag(
+            &["eval".to_string(), "--json".to_string()],
+            "--server,-s,--session"
+        ));
+
+        // Explicit argv forms are still rejected.
+        assert!(has_explicit_override_flag(
+            &["--server".to_string(), "http://other:1234".to_string()],
+            "--server,-s,--session"
+        ));
+        assert!(has_explicit_override_flag(
+            &["--server=http://other:1234".to_string()],
+            "--server,-s,--session"
+        ));
+        assert!(has_explicit_override_flag(
+            &["-s".to_string(), "work".to_string()],
+            "--server,-s,--session"
+        ));
+        assert!(has_explicit_override_flag(
+            &["--session=work".to_string()],
+            "--server,-s,--session"
+        ));
+        // Short flag glued to its value: -swork
+        assert!(has_explicit_override_flag(
+            &["-swork".to_string()],
+            "--server,-s,--session"
+        ));
     }
 
     // -------------------------------------------------------------------

@@ -106,7 +106,7 @@ class B4CliToolExecutorTest {
 
         assertTrue(text.contains("[fail] timed out"), text)
         assertTrue(text.contains("timeoutSeconds"), "the hint must name the knob: $text")
-        assertTrue(text.contains("batches"), "the hint must suggest batching: $text")
+        assertTrue(text.contains("batch"), "the hint must suggest batching: $text")
     }
 
     @Test
