@@ -30,14 +30,14 @@ import org.springframework.context.annotation.Lazy
  *
  * ```bash
  * # Install
- * curl -X POST http://localhost:8080/api/plugins/install \
+ * curl -X POST http://localhost:18182/api/plugins/install \
  *   -F "file=@browser4-event-demos-1.0.0.jar"
  *
  * # List installed plugins
- * curl http://localhost:8080/api/plugins
+ * curl http://localhost:18182/api/plugins
  *
  * # Remove
- * curl -X DELETE http://localhost:8080/api/plugins/browser4-event-demos
+ * curl -X DELETE http://localhost:18182/api/plugins/browser4-event-demos
  * ```
  *
  * **Note:** Installed plugins take effect after an application restart.

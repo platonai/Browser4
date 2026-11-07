@@ -181,3 +181,6 @@ bin/maintenance/state/*.lock
 
 # Bulk run artifacts produced by agent sessions (HTML corpora, extracted tables)
 /output/
+
+# Coworker runtime state (fetched issue tracking state, not content)
+**/.fetch-state.json

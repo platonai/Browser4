@@ -2601,6 +2601,115 @@ fn validate_attach_flags(
     Ok(())
 }
 
+/// `attach --list`: enumerate the local browsers started with
+/// `--remote-debugging-port`.
+///
+/// Client-side only — no backend, no session, no browser launched — so the
+/// dispatcher runs it before the server gate. Without it the only way to learn
+/// which port the user's logged-in browser listens on was to grep process
+/// command lines by hand.
+fn handle_attach_list(parsed_args: &HashMap<String, Value>) -> Result<(), String> {
+    // `--list` describes the machine, not a connection: silently ignoring a
+    // transport flag next to it would be the very confusion this command fixes.
+    for flag in ["cdp", "endpoint", "extension"] {
+        if parsed_args.get(flag).is_some() {
+            return Err(format!(
+                "attach --list does not combine with --{flag}: it only enumerates the local \
+                 browsers started with --remote-debugging-port. Drop --{flag}, or run the attach \
+                 without --list."
+            ));
+        }
+    }
+
+    let browsers = daemon::discover_debuggable_browsers();
+
+    // Machine-readable form: the same rows the table prints, so a script never
+    // has to parse the table.
+    let rows: Vec<Value> = browsers
+        .iter()
+        .map(|browser| {
+            json!({
+                "port": browser.port,
+                "endpoint": browser.cdp_endpoint(),
+                "family": browser.family,
+                "reachable": browser.reachable,
+                "browser": browser.browser.as_deref(),
+                "page_targets": browser.page_targets,
+                "user_data_dir": browser.user_data_dir.as_deref(),
+            })
+        })
+        .collect();
+    json_field("browsers", Value::Array(rows));
+
+    let bin = cli_binary_name();
+    if browsers.is_empty() {
+        cli_println!("No local browser is running with --remote-debugging-port.");
+        cli_println!();
+        cli_println!("Start the browser you are logged in to with a debug port, then list again:");
+        cli_println!("  chrome --remote-debugging-port=9222");
+        cli_println!("  ego    --remote-debugging-port=9222");
+        cli_println!();
+        cli_println!(
+            "A browser started without the flag cannot be listed (and cannot be attached to)."
+        );
+        return Ok(());
+    }
+
+    cli_println!("Local browsers started with a remote debugging port:");
+    cli_println!();
+    cli_println!("  {:<6} {:<9} {:<6} {:<26} {}", "PORT", "BROWSER", "PAGES", "CDP IDENTITY", "PROFILE");
+    for browser in &browsers {
+        let pages = browser
+            .page_targets
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let identity = browser
+            .browser
+            .clone()
+            .unwrap_or_else(|| if browser.reachable { "CDP".to_string() } else { "not listening".to_string() });
+        cli_println!(
+            "  {:<6} {:<9} {:<6} {:<26} {}",
+            browser.port,
+            browser.family,
+            pages,
+            identity,
+            browser
+                .user_data_dir
+                .as_deref()
+                .unwrap_or("(default profile)")
+        );
+    }
+    cli_println!();
+    cli_println!("Attach to one of them:");
+    cli_println!("  {bin} attach --cdp <port>            # e.g. {bin} attach --cdp {}", browsers[0].port);
+    cli_println!("  {bin} -s <name> attach --cdp <port>  # keep the binding under a named session");
+    cli_println!();
+    cli_println!(
+        "A browser that is missing here was started without --remote-debugging-port; restart it \
+         with the flag to attach to the profile you are logged in to."
+    );
+    Ok(())
+}
+
+/// Emit the `--json` envelope for a command that returns before the dispatcher
+/// does (e.g. `attach --list`).
+///
+/// The dispatcher prints the envelope at the very end of `run`, so a handler
+/// that returns early would otherwise produce no machine-readable output at all
+/// even though its fields were recorded.
+fn emit_json_envelope_for_early_return(command: &str) {
+    if !json_active() {
+        return;
+    }
+    let Some(fields) = json_finish() else {
+        return;
+    };
+    println!(
+        "{}",
+        json_envelope("ok", command, Value::Object(fields), None)
+    );
+}
+
 async fn handle_attach(
     client: &Client,
     base_url: &str,
@@ -3349,6 +3458,11 @@ async fn handle_open(
                     cli_println!("{}", result);
                 }
                 warn_if_page_looks_blocked(client, base_url, &session_id, url).await;
+                // A managed (isolated-profile) launch can land on the site's
+                // auth wall while the navigation itself succeeds; the hint and
+                // the optional --expect-url check are the only signal the user
+                // gets, so they run here while the landed URL is known.
+                report_open_landing(client, base_url, &session_id, url, tool_params).await;
                 post_command_snapshot(client, base_url, &session_id).await;
 
                 // Window verification: ask the backend about *this session's*
@@ -3450,6 +3564,7 @@ async fn handle_open(
                     cli_println!("{}", retry_result);
                 }
                 warn_if_page_looks_blocked(client, base_url, &retry_id, url).await;
+                report_open_landing(client, base_url, &retry_id, url, tool_params).await;
                 post_command_snapshot(client, base_url, &retry_id).await;
             }
         }
@@ -3686,6 +3801,182 @@ fn format_navigation_failure_message(
 /// itself still succeeds.
 fn is_chrome_error_url(url: &str) -> bool {
     url.trim().to_ascii_lowercase().starts_with("chrome-error://")
+}
+
+/// Environment override for the login-wall pattern list: comma-separated,
+/// case-insensitive URL substrings.  Extends (never replaces) the built-in list.
+const LOGIN_WALL_PATTERNS_ENV: &str = "BROWSER4_CLI_LOGIN_WALL_PATTERNS";
+
+/// Fingerprints of the authentication/onboarding interstitials a managed
+/// (isolated-profile) launch commonly lands on.
+///
+/// Deliberately small and explicit: a generic "the origin changed" rule would
+/// fire on every routine redirect chain (x.com bounces `/home` through `/i/…`),
+/// which is noise rather than a hint.  [LOGIN_WALL_PATTERNS_ENV] adds
+/// site-specific entries without a rebuild.
+const DEFAULT_LOGIN_WALL_PATTERNS: &[&str] = &[
+    // X / Twitter: the login interstitial an unauthenticated profile lands on
+    // (observed as x.com/i/jf/onboarding/web?…&mode=login).
+    "/i/jf/onboarding",
+    "/i/flow/login",
+    // Google Sign-In and the Microsoft identity endpoints.
+    "accounts.google.com",
+    "login.microsoftonline.com",
+    "login.live.com",
+    // The common server-side auth paths.
+    "/accounts/login",
+    "/account/login",
+    // An explicit login mode in the query string.
+    "mode=login",
+];
+
+/// Login-wall patterns: the built-in list plus [LOGIN_WALL_PATTERNS_ENV]
+/// entries, lower-cased because matching is case-insensitive.
+fn login_wall_patterns() -> Vec<String> {
+    let mut patterns: Vec<String> = DEFAULT_LOGIN_WALL_PATTERNS
+        .iter()
+        .map(|pattern| pattern.to_ascii_lowercase())
+        .collect();
+    if let Ok(raw) = std::env::var(LOGIN_WALL_PATTERNS_ENV) {
+        for entry in raw.split(',') {
+            let entry = entry.trim();
+            if !entry.is_empty() {
+                patterns.push(entry.to_ascii_lowercase());
+            }
+        }
+    }
+    patterns
+}
+
+/// True when [final_url] is an authentication interstitial the requested URL did
+/// not ask for.
+///
+/// Landing on the URL that was requested (trailing slash aside) is never a login
+/// wall, so an explicit `open https://x.com/i/flow/login` stays silent.
+fn is_login_wall_redirect(requested_url: &str, final_url: &str) -> bool {
+    let final_url = final_url.trim();
+    if final_url.is_empty() || is_chrome_error_url(final_url) {
+        return false;
+    }
+    if urls_match_for_display(final_url, requested_url) {
+        return false;
+    }
+    let lower = final_url.to_ascii_lowercase();
+    login_wall_patterns()
+        .iter()
+        .any(|pattern| lower.contains(pattern.as_str()))
+}
+
+/// Wildcard match for `open --expect-url`: `*` matches any run (including empty),
+/// `?` matches exactly one character, everything else is literal, and the
+/// comparison is case-insensitive.
+fn url_matches_expected_pattern(pattern: &str, url: &str) -> bool {
+    let pattern: Vec<char> = pattern.trim().to_ascii_lowercase().chars().collect();
+    let text: Vec<char> = url.trim().to_ascii_lowercase().chars().collect();
+
+    let (mut p, mut t) = (0usize, 0usize);
+    // Position of the last `*` seen, and the text offset that `*` currently
+    // absorbs — the standard linear-time wildcard backtrack.
+    let mut star: Option<usize> = None;
+    let mut star_match = 0usize;
+
+    while t < text.len() {
+        if p < pattern.len() && (pattern[p] == '?' || pattern[p] == text[t]) {
+            p += 1;
+            t += 1;
+        } else if p < pattern.len() && pattern[p] == '*' {
+            star = Some(p);
+            star_match = t;
+            p += 1;
+        } else if let Some(star_index) = star {
+            p = star_index + 1;
+            star_match += 1;
+            t = star_match;
+        } else {
+            return false;
+        }
+    }
+    while p < pattern.len() && pattern[p] == '*' {
+        p += 1;
+    }
+    p == pattern.len()
+}
+
+/// Hint that a managed launch landed on a login wall instead of the requested
+/// page.
+///
+/// Hint-only by design: the navigation succeeded, so the command must not fail.
+/// The remedy names `attach --list` (which enumerates local browsers started
+/// with `--remote-debugging-port`) instead of leaving the user to dig through
+/// process command lines.
+fn warn_if_landed_on_login_wall(requested_url: &str, final_url: &str) {
+    if !is_login_wall_redirect(requested_url, final_url) {
+        return;
+    }
+    json_field("landed_on_login_wall", json!(true));
+    json_field("landed_url", json!(final_url));
+    // stderr, always: the hint is not part of the page payload, and `--json`
+    // consumers read stdout only.
+    let bin = cli_binary_name();
+    eprintln!(
+        "⚠  Landed on a login page instead of the requested page.\n\
+         \x20  requested: {requested_url}\n\
+         \x20  landed:    {final_url}\n\
+         💡 A managed launch uses an isolated browser profile, so it has no session for this site.\n\
+         \x20  To drive the browser you are already logged in to:\n\
+         \x20   1. `{bin} attach --list` — local browsers started with --remote-debugging-port\n\
+         \x20   2. `{bin} attach --cdp <port>` — attach to that browser, then re-run this command"
+    );
+}
+
+/// Warn when an explicit `open --expect-url <glob>` does not match where the
+/// launch actually landed.
+///
+/// Opt-in: a caller that did not ask for an expectation gets no extra noise, and
+/// routine redirect chains cannot produce a false warning.
+fn warn_if_expect_url_mismatch(expected: Option<&str>, final_url: &str) {
+    let Some(pattern) = expected.map(str::trim).filter(|p| !p.is_empty()) else {
+        return;
+    };
+    if url_matches_expected_pattern(pattern, final_url) {
+        return;
+    }
+    json_field("expected_url", json!(pattern));
+    json_field("expected_url_matched", json!(false));
+    json_field("landed_url", json!(final_url));
+    eprintln!(
+        "⚠  The page does not match --expect-url.\n\
+         \x20  expected: {pattern}\n\
+         \x20  landed:   {final_url}\n\
+         💡 Redirects and login walls both land somewhere else; pass the final URL, or drop \
+         --expect-url when the redirect is expected."
+    );
+}
+
+/// Post-navigation landing check for `open`: report a login wall and an
+/// `--expect-url` mismatch (both hint-only, both to stderr).
+///
+/// The landed URL is read from the backend by session id rather than from the
+/// saved CLI state, because the retry path replaces the session and the state
+/// file is not yet pointing at the new one.
+async fn report_open_landing(
+    client: &Client,
+    base_url: &str,
+    session_id: &str,
+    requested_url: &str,
+    tool_params: &Value,
+) {
+    let final_url = call_tool(client, base_url, "page_url", json!({ "sessionId": session_id }))
+        .await
+        .map(|url| url.trim().to_string())
+        .ok()
+        .filter(|url| !url.is_empty())
+        .unwrap_or_else(|| requested_url.to_string());
+    warn_if_landed_on_login_wall(requested_url, &final_url);
+    warn_if_expect_url_mismatch(
+        tool_params.get("expectUrl").and_then(Value::as_str),
+        &final_url,
+    );
 }
 
 /// JavaScript that reads a Chrome error interstitial: its title, its visible
@@ -31659,6 +31950,11 @@ fn compile_batch_step(
     // empty string and only surfaced there, long after the batch had started.
     validate_required_args(cmd_def, &parsed)?;
     validate_command_semantics(&nested_command, &parsed)?;
+    // Same eval argument contract as the standalone path: a single-dash long
+    // option or a surplus positional must not be mis-bound into `ref`.
+    if nested_command == "eval" {
+        args::validate_eval_arguments(&raw_parsed, cmd_def.options)?;
+    }
 
     let tool_name = (cmd_def.tool_name_fn)(&parsed);
     let mut tool_params = (cmd_def.tool_params_fn)(&parsed);
@@ -32873,6 +33169,13 @@ async fn run(
     // builder's "join into the last slot" behaviour can hide it.
     args::validate_positional_count(&raw_parsed, arg_names.len(), &command)
         .map_err(|message| CliError(ExitCode::Usage, message))?;
+    // `eval` used to bind a single-dash long option (`-file script.js`) and any
+    // surplus positional into its `ref` slot, so the mistake surfaced from the
+    // backend as "No element matches selector …".  Name the flag instead.
+    if command == "eval" {
+        args::validate_eval_arguments(&raw_parsed, cmd_def.options)
+            .map_err(|message| CliError(ExitCode::Usage, message))?;
+    }
 
     // Reject options the command does not declare: a misplaced or misspelled
     // flag used to be dropped silently (e.g. `htmlsnapshot get --bogus`, or
@@ -33067,6 +33370,16 @@ async fn run(
             attach_extension_value(&parsed).as_deref(),
         )
         .map_err(|message| CliError(ExitCode::Usage, message))?;
+
+        // `attach --list` is a client-side process scan: it must not start the
+        // backend, evict a session slot, or attach anything.  Handling it here —
+        // before the server gate — keeps the command instant and side-effect
+        // free on a machine where the backend is not running.
+        if parsed.get("list").and_then(Value::as_bool).unwrap_or(false) {
+            handle_attach_list(&parsed).map_err(|message| CliError(ExitCode::Usage, message))?;
+            emit_json_envelope_for_early_return(&command);
+            return Ok(());
+        }
     }
 
     // Ensure the Browser4 server is running (for relevant commands).
@@ -49814,6 +50127,88 @@ linkGroups:
         // Without MSYSTEM the guard is inert (PowerShell/cmd spawns).
         let _clear = clear_env("MSYSTEM");
         assert!(find_msys_mangled_arg(&args).is_none());
+    }
+
+    #[test]
+    fn attach_list_refuses_a_transport_flag_before_scanning() {
+        // `--list` describes the machine, not a connection: combining it with a
+        // transport flag must be a usage error rather than a silently ignored
+        // flag — and it must fail before any process scan runs.
+        let mut parsed = HashMap::new();
+        parsed.insert("cdp".to_string(), json!("9222"));
+        let error = handle_attach_list(&parsed).unwrap_err();
+        assert!(error.contains("--cdp"), "error must name the flag: {error}");
+    }
+
+    #[test]
+    fn login_wall_detection_matches_the_observed_x_onboarding_redirect() {
+        // The exact shape x.com produced for a managed (isolated-profile) launch.
+        assert!(is_login_wall_redirect(
+            "https://x.com/home",
+            "https://x.com/i/jf/onboarding/web?redirect_after_login=%2Fhome&mode=login"
+        ));
+    }
+
+    #[test]
+    fn login_wall_detection_ignores_an_explicit_login_url_and_non_login_redirects() {
+        // Asking for the login page is not a surprise redirect.
+        assert!(!is_login_wall_redirect(
+            "https://x.com/i/flow/login",
+            "https://x.com/i/flow/login"
+        ));
+        // A routine redirect that is not an auth wall stays silent.
+        assert!(!is_login_wall_redirect(
+            "https://example.com/home",
+            "https://example.com/"
+        ));
+        // The browser error page has its own, louder diagnosis.
+        assert!(!is_login_wall_redirect(
+            "https://example.com",
+            "chrome-error://chromewebdata/"
+        ));
+    }
+
+    #[test]
+    fn login_wall_patterns_from_the_environment_extend_the_builtin_list() {
+        let _env = set_env(LOGIN_WALL_PATTERNS_ENV, "example.test/auth,  /session/new ");
+        assert!(is_login_wall_redirect(
+            "https://example.test/home",
+            "https://example.test/auth?next=/home"
+        ));
+        assert!(is_login_wall_redirect(
+            "https://example.test/home",
+            "https://example.test/session/new"
+        ));
+        let _clear = clear_env(LOGIN_WALL_PATTERNS_ENV);
+        assert!(!is_login_wall_redirect(
+            "https://example.test/home",
+            "https://example.test/auth?next=/home"
+        ));
+    }
+
+    #[test]
+    fn expect_url_glob_matches_literal_and_wildcard_patterns() {
+        assert!(url_matches_expected_pattern(
+            "https://example.com/home",
+            "https://example.com/home"
+        ));
+        // Case-insensitive, and surrounding whitespace in the pattern is ignored.
+        assert!(url_matches_expected_pattern(
+            " HTTPS://EXAMPLE.COM/HOME ",
+            "https://example.com/home"
+        ));
+        assert!(url_matches_expected_pattern(
+            "https://*.example.com/*",
+            "https://app.example.com/dashboard?tab=1"
+        ));
+        assert!(url_matches_expected_pattern(
+            "https://example.com/?",
+            "https://example.com/a"
+        ));
+        assert!(!url_matches_expected_pattern(
+            "https://example.com/home",
+            "https://x.com/i/jf/onboarding/web?mode=login"
+        ));
     }
 }
 

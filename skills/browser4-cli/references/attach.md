@@ -240,6 +240,39 @@ Re-run the suggested attach command, then confirm with `list` that the connectio
 
 ## Patterns
 
+### 0. Discover a Browser That Already Accepts CDP (`attach --list`)
+
+The browser you are logged in to is often already running with a debug port, but its port number is
+only visible in the process command line. `attach --list` enumerates those browsers for you — no
+backend, no session, nothing attached:
+
+```bash
+browser4-cli attach --list
+# Local browsers started with a remote debugging port:
+#
+#   PORT   BROWSER  PAGES  CDP IDENTITY              PROFILE
+#   9222   chrome   3      Chrome/141.0.7390.55      /home/me/.config/google-chrome-debug
+#
+# Attach to one of them:
+#   browser4-cli attach --cdp <port>            # e.g. browser4-cli attach --cdp 9222
+#   browser4-cli -s <name> attach --cdp <port>  # keep the binding under a named session
+```
+
+The scan reads every `chrome`/`chromium`/`msedge`/`ego` process command line for
+`--remote-debugging-port` (and, for `--remote-debugging-port=0`, the port published in
+`<user-data-dir>/DevToolsActivePort`), then probes each distinct port so a stale flag cannot look
+usable. `--json` reports the same rows under `browsers` (`port`, `endpoint`, `family`, `reachable`,
+`browser`, `page_targets`, `user_data_dir`).
+
+`--list` is client-side only: it never starts the backend, creates a session, or attaches. It also
+cannot be combined with `--cdp`, `--endpoint` or `--extension` — combining them is refused rather
+than silently ignoring the transport flag.
+
+A browser that is **not** listed was started without the flag. Restart it with
+`--remote-debugging-port=<port>` (Chrome refuses the flag on its default profile, so add a separate
+`--user-data-dir`), and remember that a `--cdp` browser therefore has its own profile — use
+`attach --extension` when you need your everyday logins.
+
 ### 1. Attach by Channel Name (Simplest)
 
 ```bash
@@ -412,6 +445,7 @@ browser4-cli screenshot --filename remote-state.png
 
 | Flag | Description |
 |------|-------------|
+| `--list` | Enumerate local browsers started with `--remote-debugging-port` (family, port, CDP identity, page count, profile dir) and exit. Client-side only: no backend, no session. Use a printed port with `--cdp` |
 | `--cdp <channel\|url\|port>` | Channel name, CDP URL, WebSocket URL, bare port, or `host:port`. Channels include `chrome`, `msedge` and `ego-lite` (CDP-only, resolved from ego lite's own processes) |
 | `--endpoint <server-url>` | Browser4 server URL; when used alone, switches CLI to that server. Mutually exclusive with `--extension`; a channel name with a non-loopback `--endpoint` is refused |
 | `--extension [channel]` | Connect via Browser4 Chrome Extension; optionally specify channel (chrome, chrome-beta, chrome-dev, chrome-canary, msedge, msedge-beta, msedge-dev, msedge-canary). Mutually exclusive with `--cdp` and `--endpoint` |
@@ -421,7 +455,9 @@ browser4-cli screenshot --filename remote-state.png
 
 | Symptom | Recovery |
 |----------|---------|
-| Cannot find target browser | Verify remote debugging is enabled; check the browser is running |
+| Cannot find target browser | Verify remote debugging is enabled; check the browser is running. `attach --list` shows every local browser that does expose a debug port |
+| `attach --list does not combine with --cdp` | `--list` only enumerates local browsers; drop `--cdp`/`--endpoint`/`--extension`, then attach with a printed port |
+| `No local browser is running with --remote-debugging-port` | The browser was started without the flag (a running instance cannot gain one). Restart it with `--remote-debugging-port=<port>` — e.g. `chrome --remote-debugging-port=9222` or `ego --remote-debugging-port=9222` — then list again |
 | No matching channel found | Verify channel name spelling; try a CDP URL or port instead |
 | `Unknown browser channel for --extension: …` | The value must be one of the supported channels. A typo would otherwise behave like a default chrome request |
 | `ego lite is supported over CDP only: --extension ego-lite …` | Start ego lite with `--remote-debugging-port=<port>`, then run `attach --cdp ego-lite` — there is no extension transport for it |

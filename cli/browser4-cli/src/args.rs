@@ -799,9 +799,92 @@ pub fn build_command_args(
 /// global rule. `agent run` belongs here because its single slot is the WHOLE task
 /// text: an unquoted or duplicated argument silently became part of the
 /// instruction (a live run swallowed a stray `。` into the task) while the user
-/// believed the extra token was rejected.
+/// believed the extra token was rejected. `eval` has its own two-slot contract
+/// in [`validate_eval_arguments`], which also runs in batch mode.
 pub fn rejects_extra_positionals(command: &str) -> bool {
     matches!(command, "agent-run")
+}
+
+/// Reject `eval` argument shapes the generic parser mis-binds silently.
+///
+/// `eval` takes ONE JavaScript expression positional plus ONE optional `ref`
+/// positional. Two distinct mistakes used to travel to the backend and come back
+/// as an unrelated browser error:
+///
+/// * `eval -file scrape.js` — a single-dash spelling of the long option. The
+///   generic parser does not know `-file` (eval declares no short options), so it
+///   pushed the token into the positional list: `-file` became `expression` and
+///   `scrape.js` became `ref`. The user saw
+///   `TARGET_NOT_FOUND: No element matches selector "scrape.js"`, which names
+///   neither the real mistake nor the flag that was meant.
+/// * `eval "expr" e5 extra` — a surplus positional was joined into `ref`
+///   (`"e5 extra"`), producing a selector that can never match.
+///
+/// Only tokens that are exactly `-` + one of the command's OWN long option names
+/// are treated as misspelled options, so a legitimate expression that begins with
+/// `-` (`eval "-1 + 2"`) keeps working. Tokens after the POSIX `--` marker are
+/// intentional pass-through and are left alone.
+pub fn validate_eval_arguments(
+    raw: &HashMap<String, Value>,
+    options: &[crate::commands::OptionDef],
+) -> Result<(), String> {
+    let positionals = match raw.get("_") {
+        Some(Value::Array(values)) => values,
+        _ => return Ok(()),
+    };
+    // `_.dd` is the raw positional index at which post-`--` pass-through begins.
+    // The command name occupies index 0, so no shift is needed here.
+    let pass_through_from = raw
+        .get("_.dd")
+        .and_then(Value::as_i64)
+        .map(|value| value as usize)
+        .unwrap_or(usize::MAX);
+
+    for (index, token) in positionals.iter().enumerate().skip(1) {
+        if index >= pass_through_from {
+            break;
+        }
+        let Some(token) = token.as_str() else {
+            continue;
+        };
+        let Some(bare) = token.strip_prefix('-') else {
+            continue;
+        };
+        if bare.is_empty() || bare.starts_with('-') {
+            continue;
+        }
+        if !options.iter().any(|option| option.key() == bare) {
+            continue;
+        }
+        return Err(format!(
+            "error: unknown option '{token}' for 'eval'. Options are spelled with a double dash: \
+             did you mean '--{bare}'?\n\
+             eval takes one JavaScript expression positional, plus an optional ref positional:\n\
+             \x20 browser4-cli eval --file <script.js> [ref]\n\
+             \x20 browser4-cli eval \"<js>\" [ref]"
+        ));
+    }
+
+    // Index 0 is the command's own name; `expression` and `ref` are the only slots.
+    const MAX_SLOTS: usize = 2;
+    let supplied = positionals.len().saturating_sub(1);
+    if supplied > MAX_SLOTS {
+        let extras: Vec<String> = positionals
+            .iter()
+            .skip(1 + MAX_SLOTS)
+            .map(|value| value.as_str().unwrap_or_default().to_string())
+            .collect();
+        return Err(format!(
+            "error: unexpected positional arguments: {:?} (eval takes one JavaScript expression \
+             plus, optionally, one ref).\n\
+             Quote the expression as a single argument, or read it from a file:\n\
+             \x20 browser4-cli eval \"<js>\" [ref]\n\
+             \x20 browser4-cli eval --file <script.js> [ref]",
+            extras
+        ));
+    }
+
+    Ok(())
 }
 
 /// Reject positionals beyond [max_slots] for a [rejects_extra_positionals] command.
@@ -1745,6 +1828,71 @@ mod tests {
         let result = build_command_args(&raw, &["dx", "dy"], &[]).unwrap();
         assert_eq!(result.get("dx"), Some(&json!(1.5)));
         assert_eq!(result.get("dy"), Some(&json!(-2.25)));
+    }
+
+    /// The `eval` command's declared options, for the `validate_eval_arguments`
+    /// tests below.
+    fn eval_options() -> Vec<crate::commands::OptionDef> {
+        let map = crate::commands::commands_map();
+        map.get("eval")
+            .expect("eval command must exist")
+            .options
+            .to_vec()
+    }
+
+    #[test]
+    fn test_validate_eval_arguments_rejects_single_dash_file_option() {
+        // Repro: `eval -file .tmp-scrape.js` bound `-file` to `expression` and
+        // the path to `ref`, so the user saw "No element matches selector
+        // .tmp-scrape.js" instead of the flag mistake.
+        let raw = vec![
+            "eval".to_string(),
+            "-file".to_string(),
+            ".tmp-scrape.js".to_string(),
+        ];
+        let map = parse_raw_args(&raw, None, None);
+        let err = validate_eval_arguments(&map, &eval_options()).unwrap_err();
+        assert!(err.contains("'-file'"), "error must name the token: {err}");
+        assert!(err.contains("--file"), "error must name --file: {err}");
+    }
+
+    #[test]
+    fn test_validate_eval_arguments_accepts_double_dash_file_option() {
+        let raw = vec![
+            "eval".to_string(),
+            "--file".to_string(),
+            "scrape.js".to_string(),
+            "e5".to_string(),
+        ];
+        let map = parse_raw_args(&raw, None, None);
+        assert_eq!(map.get("file"), Some(&json!("scrape.js")));
+        validate_eval_arguments(&map, &eval_options()).unwrap();
+    }
+
+    #[test]
+    fn test_validate_eval_arguments_accepts_non_option_leading_dash_expression() {
+        // Only single-dash spellings of eval's OWN long options are rejected, so
+        // an expression that legitimately begins with `-` still evaluates.
+        let raw = vec!["eval".to_string(), "-1 + 2".to_string()];
+        let map = parse_raw_args(&raw, None, None);
+        validate_eval_arguments(&map, &eval_options()).unwrap();
+    }
+
+    #[test]
+    fn test_validate_eval_arguments_rejects_extra_positionals() {
+        let raw = vec![
+            "eval".to_string(),
+            "element => element.textContent".to_string(),
+            "e5".to_string(),
+            "extra".to_string(),
+        ];
+        let map = parse_raw_args(&raw, None, None);
+        let err = validate_eval_arguments(&map, &eval_options()).unwrap_err();
+        assert!(
+            err.contains("unexpected positional arguments"),
+            "error must name the extras: {err}"
+        );
+        assert!(err.contains("extra"), "error must name the extras: {err}");
     }
 
     #[test]
