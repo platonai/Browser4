@@ -2591,26 +2591,27 @@
     "domain" : "tab",
     "method" : "mouseWheel",
     "mcpNames" : [ "mouse_wheel", "browser_mouse_wheel" ],
-    "signature" : "tab.mouseWheel(selector: String, deltaX: Double = 0.0, deltaY: Double = 150.0)",
-    "description" : "Scrolls the mouse wheel on a specific element identified by [selector].",
+    "signature" : "tab.mouseWheel(selector: String? = null, deltaX: Double = 0.0, deltaY: Double = 150.0)",
+    "description" : "Scroll the mouse wheel at the current pointer, or over the element matched by selector. ",
     "returnType" : "Unit",
     "arguments" : [ {
       "name" : "selector",
-      "type" : "String",
-      "required" : true,
-      "description" : "The selector of the element to wheel on."
+      "type" : "String?",
+      "required" : false,
+      "default" : "null",
+      "description" : "selector: String? = null"
     }, {
       "name" : "deltaX",
       "type" : "Double",
       "required" : false,
       "default" : "0.0",
-      "description" : "The distance to wheel horizontally."
+      "description" : "deltaX: Double = 0.0"
     }, {
       "name" : "deltaY",
       "type" : "Double",
       "required" : false,
       "default" : "150.0",
-      "description" : "The distance to wheel vertically."
+      "description" : "deltaY: Double = 150.0"
     } ],
     "examples" : [ {
       "title" : "Wheel inside an element",
@@ -2621,7 +2622,7 @@
       "expectsError" : false,
       "executable" : true
     } ],
-    "help" : "Scrolls the mouse wheel on a specific element identified by [selector].\n\nThe element is scrolled into view if needed, the mouse is moved to a random position near the element's center, and then the wheel event is dispatched.\n\n```kotlin driver.mouseWheel(\".scrollable-panel\", 0.0, 200.0) ```"
+    "help" : "tab.mouseWheel(deltaX: Double = 0.0, deltaY: Double = 150.0)\ntab.mouseWheel(selector: String, deltaX: Double = 0.0, deltaY: Double = 150.0)\n\nWith no selector, wheels at wherever the pointer currently rests.\nWith a selector, scrolls into view first, glides the pointer to the\nelement, then dispatches the wheel event."
   }, {
     "domain" : "tab",
     "method" : "mouseWheelDown",

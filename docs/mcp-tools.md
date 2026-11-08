@@ -2632,16 +2632,16 @@ Releases a mouse button at the current mouse position.
 ### `mouse_wheel`, `browser_mouse_wheel`
 
 ```
-tab.mouseWheel(selector: String, deltaX: Double = 0.0, deltaY: Double = 150.0)
+tab.mouseWheel(selector: String? = null, deltaX: Double = 0.0, deltaY: Double = 150.0)
 ```
 
-Scrolls the mouse wheel on a specific element identified by [selector].
+Scroll the mouse wheel at the current pointer, or over the element matched by selector. 
 
 | Argument | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `selector` | String | yes |  | The selector of the element to wheel on. |
-| `deltaX` | Double | no | 0.0 | The distance to wheel horizontally. |
-| `deltaY` | Double | no | 150.0 | The distance to wheel vertically. |
+| `selector` | String? | no | null | selector: String? = null |
+| `deltaX` | Double | no | 0.0 | deltaX: Double = 0.0 |
+| `deltaY` | Double | no | 150.0 | deltaY: Double = 150.0 |
 
 Returns: `Unit`
 
@@ -2651,11 +2651,12 @@ Examples:
 
 <details><summary>Full documentation</summary>
 
-Scrolls the mouse wheel on a specific element identified by [selector].
+tab.mouseWheel(deltaX: Double = 0.0, deltaY: Double = 150.0)
+tab.mouseWheel(selector: String, deltaX: Double = 0.0, deltaY: Double = 150.0)
 
-The element is scrolled into view if needed, the mouse is moved to a random position near the element's center, and then the wheel event is dispatched.
-
-```kotlin driver.mouseWheel(".scrollable-panel", 0.0, 200.0) ```
+With no selector, wheels at wherever the pointer currently rests.
+With a selector, scrolls into view first, glides the pointer to the
+element, then dispatches the wheel event.
 
 </details>
 
