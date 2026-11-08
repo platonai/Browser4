@@ -90,7 +90,7 @@ a `crawl cancel`, or a task the server-side `--timeout` budget cut off.
 
 ```bash
 browser4-cli crawl resume <task-id>
-browser4-cli crawl resume <task-id> --bg
+browser4-cli crawl resume <task-id> --background
 browser4-cli crawl resume <task-id> --retry-failed
 browser4-cli crawl resume <task-id> --force
 ```
@@ -99,7 +99,7 @@ browser4-cli crawl resume <task-id> --force
 |---|---|---|
 | `--force` / `-f` | bool | Resume even when the task's record says it completed successfully (a no-op when nothing is left; combine with `--retry-failed` to fetch the URLs it lost) |
 | `--retry-failed` | bool | Re-submit the URLs that failed terminally before, instead of keeping them failed |
-| `--bg` / `--background` | bool | Start the resume and return immediately; poll with `crawl status` / `crawl result` |
+| `--background` / `-bg` | bool | Start the resume and return immediately; poll with `crawl status` / `crawl result`. The `--bg` spelling the older docs used is accepted too |
 | `--verbose` | bool | Mark each row as fetched-in-this-run or restored-from-checkpoint |
 
 The task keeps its id — `crawl resume` continues *that* task.  Already-fetched URLs are not

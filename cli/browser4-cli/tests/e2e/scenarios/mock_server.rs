@@ -4713,6 +4713,20 @@ pub(super) fn test_crawl_resume(ctx: &mut E2ECtx) {
         background.stdout
     );
 
+    // `--bg` is the spelling the reference docs shipped: it must bind the same
+    // flag (a two-dash key used to skip short-option resolution and leave the
+    // run in the foreground), and it must not swallow the task id.
+    let background_short = run_command(ctx, &["crawl", "resume", "--bg", "crawl-job-bg-short"]);
+    let background_short_output = format!("{}\n{}", background_short.stdout, background_short.stderr);
+    assert!(
+        background_short_output.contains("resumed (run 2)"),
+        "Expected `--bg` to resume in the background:\n{background_short_output}"
+    );
+    assert!(
+        background_short_output.contains("browser4-cli crawl status crawl-job-bg-short"),
+        "Expected the background pointer for the task the positional named:\n{background_short_output}"
+    );
+
     // A benign rejection (no checkpoint on disk) is still a failure to a
     // script: non-zero exit, and the server's reason is what the user reads.
     let rejected = run_command_expecting_failure(

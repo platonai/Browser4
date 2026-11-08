@@ -10347,6 +10347,30 @@ mod tests {
         assert!(cmd.options.iter().all(|o| o.is_bool));
     }
 
+    /// A two-dash spelling of a multi-character short (`--bg` = `--background`;
+    /// see `args::parse_raw_args`) resolves to that option's long name, so no
+    /// command may declare a long option whose key is also another of its
+    /// options' multi-character short name — the two spellings would collide.
+    #[test]
+    fn test_no_long_option_collides_with_a_multi_character_short() {
+        for cmd in all_commands() {
+            let long_keys: Vec<&str> = cmd.options.iter().map(|o| o.key()).collect();
+            for opt in cmd.options {
+                let Some(short) = opt.short else { continue };
+                if short.chars().count() < 2 || short == opt.key() {
+                    continue;
+                }
+                assert!(
+                    !long_keys.contains(&short),
+                    "'{}' declares --{short} and also uses -{short} for --{}; \
+                     `--{short}` would be ambiguous",
+                    cmd.name,
+                    opt.key()
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_crawl_resume_params_id_only() {
         let map = commands_map();

@@ -2666,8 +2666,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli crawl resume <task-id>".to_string());
         lines.push("  browser4-cli crawl resume <task-id> --retry-failed".to_string());
-        // `--background` (short form -bg), not `--bg`: `--bg` parses as an
-        // undeclared key and the run silently stayed in the foreground.
+        // `--background` is the canonical spelling (short form `-bg`). The
+        // reference docs used to show `--bg`, which is now accepted too: a
+        // two-dash key resolves through the short-option map for
+        // multi-character shorts (see `args::double_dash_short_alias`).
         lines.push("  browser4-cli crawl resume <task-id> --background".to_string());
         lines.push("  browser4-cli crawl resume <task-id> --force --retry-failed".to_string());
     }
