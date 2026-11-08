@@ -460,7 +460,11 @@ packaged runtime (never in dev checkouts or against remote servers); the latest
 tag is resolved at most once per 24 h, and a *failed* attempt counts toward
 that window, so an offline machine never pays a network timeout on every
 command; a major-version jump is only ever notified, never downloaded; a tag
-that fails to download 3 times is blacklisted for 7 days.  Inspect the current
+that fails to download 3 times is blacklisted for 7 days.  Only one background
+download runs at a time, and an updater that dies without reporting back
+(killed with the parent process tree, crashed) is counted as a failed attempt
+after 2 h — or adopted as pending when the bundle did finish downloading — so a
+silently killed updater can never retry forever.  Inspect the current
 state any time with `browser4-cli doctor` (the `-- Auto-Update --` section).
 Only the three most recent runtime versions are kept on disk — the active
 `current.tag` and any pending pre-downloaded version are always retained, and

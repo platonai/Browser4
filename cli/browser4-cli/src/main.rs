@@ -28240,6 +28240,24 @@ async fn maybe_auto_update(command: &str, base_url: &str, global: &GlobalFlags) 
     let mut state = load_state();
     let now = Utc::now().timestamp();
 
+    // Reap a prefetch whose agent never reported back (killed together with this
+    // process tree, crashed, offline).  An agent that dies silently must still
+    // consume one of the tag's attempts, otherwise the tag is retried once per
+    // hour forever and never reaches the blacklist.
+    match reap_stale_attempt(&mut state, now) {
+        ReapedPrefetch::Nothing => {}
+        ReapedPrefetch::Cleared => save_state(&state),
+        ReapedPrefetch::Failed(ref stale_tag) => {
+            save_state(&state);
+            if !global.quiet {
+                eprintln!(
+                    "⚠  The background updater for {stale_tag} never reported back \
+                     (it may have been terminated); counting the attempt as failed."
+                );
+            }
+        }
+    }
+
     // Resolve the latest tag at most once per TTL.  A failed attempt counts
     // too, so an offline machine does not pay the resolve timeout on every
     // command; the stale cache (if any) keeps being served meanwhile.
@@ -28294,18 +28312,30 @@ async fn maybe_auto_update(command: &str, base_url: &str, global: &GlobalFlags) 
         // failure (deleted/moved executable) neither disappears silently nor
         // burns the one-hour retry window.
         if spawn_update_agent(plan) {
-            state.last_prefetch_attempt = Some(PrefetchAttempt {
+            let attempt = PrefetchAttempt {
                 tag: plan.tag.clone(),
                 at: now,
-            });
+            };
+            state.last_prefetch_attempt = Some(attempt.clone());
+            // Park the attempt as outstanding: the agent refreshes it when it
+            // starts and clears it when it finishes, so an agent that dies is
+            // detectable instead of being retried silently.
+            state.outstanding_prefetch = Some(attempt);
             save_state(&state);
-        } else if !global.quiet {
-            eprintln!(
-                "⚠  Could not start the background updater for {}; \
-                 run '{bin} upgrade' to update manually.",
-                plan.tag,
-                bin = cli_binary_name(),
-            );
+        } else {
+            // A spawn failure is an attempt failure too — count it so repeated
+            // failures back off and blacklist instead of warning on every
+            // command.
+            record_prefetch_failure(&mut state, &plan.tag, now);
+            save_state(&state);
+            if !global.quiet {
+                eprintln!(
+                    "⚠  Could not start the background updater for {}; \
+                     run '{bin} upgrade' to update manually.",
+                    plan.tag,
+                    bin = cli_binary_name(),
+                );
+            }
         }
     }
 }
@@ -28371,6 +28401,18 @@ async fn handle_update_agent(global: &GlobalFlags) -> Result<(), CliError> {
 /// the tag in `pending_tag` — activation happens on the next backend launch
 /// via `update_check::commit_pending_tag_if_ready`.
 async fn run_update_agent(tag: &str, self_upgrade: bool) {
+    // Announce liveness before anything slow.  The spawning CLI parked an
+    // outstanding attempt; refreshing its timestamp here is what tells the
+    // reaper that a long download is still alive rather than a dead agent.
+    {
+        let mut state = update_check::load_state();
+        state.outstanding_prefetch = Some(update_check::PrefetchAttempt {
+            tag: tag.to_string(),
+            at: Utc::now().timestamp(),
+        });
+        update_check::save_state(&state);
+    }
+
     let result: Result<(), String> = async {
         // `full` policy: self-upgrade the CLI binary first (best-effort).
         if self_upgrade {
@@ -28395,6 +28437,7 @@ async fn run_update_agent(tag: &str, self_upgrade: bool) {
             eprintln!("Auto-update prefetch of {tag} failed: {err}");
         }
     }
+    state.outstanding_prefetch = None;
     update_check::save_state(&state);
 }
 

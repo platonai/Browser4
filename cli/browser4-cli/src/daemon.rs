@@ -4393,6 +4393,29 @@ impl Drop for RuntimeInstallLock {
     }
 }
 
+/// Reuse a fully installed runtime for `tag` instead of downloading it again.
+///
+/// Marks `tag` as current on the way.  Called twice by [`install_browser4_runtime`]:
+/// before the install lock (the fast path) and again after acquiring it — a
+/// concurrent CLI may have installed the very same version while this process
+/// was queued, and without the second check two racing auto-updaters each
+/// re-download the ~200 MB bundle.
+fn reuse_installed_runtime(tag: Option<&str>, force: bool) -> Option<InstalledBrowser4Runtime> {
+    if force {
+        return None;
+    }
+    let tag = tag?;
+    let versioned_dir = versioned_install_dir(tag);
+    if !install_dir_contains_runtime(&versioned_dir) {
+        return None;
+    }
+    let metadata = read_installed_browser4_runtime_metadata_for(&versioned_dir)?;
+    if read_current_tag().as_deref() != Some(tag) {
+        let _ = write_current_tag(tag);
+    }
+    Some(materialize_installed_runtime(metadata, true))
+}
+
 pub async fn install_browser4_runtime(
     tag: Option<&str>,
     force: bool,
@@ -4435,21 +4458,8 @@ pub async fn install_browser4_runtime(
         }
     }
 
-    if !force {
-        if let Some(requested_tag) = requested_tag.as_deref() {
-            let versioned_dir = versioned_install_dir(requested_tag);
-            if install_dir_contains_runtime(&versioned_dir) {
-                if let Some(existing_metadata) =
-                    read_installed_browser4_runtime_metadata_for(&versioned_dir)
-                {
-                    // Ensure this version is also marked as current.
-                    if read_current_tag().as_deref() != Some(requested_tag) {
-                        let _ = write_current_tag(requested_tag);
-                    }
-                    return Ok(materialize_installed_runtime(existing_metadata, true));
-                }
-            }
-        }
+    if let Some(runtime) = reuse_installed_runtime(requested_tag.as_deref(), force) {
+        return Ok(runtime);
     }
 
     let asset_name = platform.asset_name();
@@ -4457,6 +4467,13 @@ pub async fn install_browser4_runtime(
     // from corrupting the versioned install directory.
     let _install_lock =
         RuntimeInstallLock::acquire(Duration::from_secs(INSTALL_LOCK_TIMEOUT_SECS))?;
+
+    // Re-check under the lock: the fast path above ran before this process
+    // queued behind another install, which may have completed this exact
+    // version in the meantime.
+    if let Some(runtime) = reuse_installed_runtime(requested_tag.as_deref(), force) {
+        return Ok(runtime);
+    }
 
     // Check available disk space before downloading.  We need at least
     // ~2 GB free (200 MB download + 200 MB extraction + headroom).
