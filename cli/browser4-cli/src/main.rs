@@ -21493,7 +21493,7 @@ async fn handle_crawl(
             parts.push("X-SQL".to_string());
         }
         if crawl_background {
-            parts.push("--bg".to_string());
+            parts.push("--background".to_string());
         }
         if refresh {
             parts.push("--refresh".to_string());
@@ -35013,6 +35013,16 @@ fn classify_help_target(name: &str) -> HelpTarget {
             return HelpTarget::Category(canonical);
         }
     }
+    // A command whose public name differs from its registry key in more than
+    // `-`→space (`network har start` is registered as `har-start`): resolve it
+    // exactly, or `--help "network har start"` fell through to the prefix
+    // listing and printed a one-line list instead of the page.
+    if let Some(cmd) = cmd_map
+        .values()
+        .find(|cmd| public_command_name(cmd.name) == name)
+    {
+        return HelpTarget::Command(cmd.name.to_string());
+    }
     if cmd_map
         .values()
         .any(|c| public_command_name(c.name).starts_with(name))
@@ -39543,18 +39553,22 @@ mod tests {
 
     /// A command that ships no examples of its own still gets the one-line
     /// explanation — the built-in fallback must not invent content.
+    ///
+    /// `code read` is a hidden command with no bundled example block (issue
+    /// #634 filled in every visible page), and it does map to a tool, so the
+    /// backend request is made and its failure is the reason reported.
     #[test]
     fn examples_without_builtin_examples_prints_one_line_message() {
         let report = block_on(build_command_examples(
             &unreachable_base_url(),
-            "mousemove",
-            &example_args(&["100", "200", "--help", "--examples"]),
+            "code-read",
+            &example_args(&["--help", "--examples"]),
         ));
 
         // A failed request is the one case where "is the backend running?" is
         // the honest diagnosis; the failing endpoint must be named.
         assert!(
-            report.starts_with("No examples available for 'mousemove' — is the backend running? ("),
+            report.starts_with("No examples available for 'code read' — is the backend running? ("),
             "report: {report}"
         );
         assert!(report.contains("/mcp/tools/specs"), "report: {report}");
@@ -44634,13 +44648,13 @@ linkGroups:
             "crawl".to_string(),
             "resume".to_string(),
             "task-id-606".to_string(),
-            "--bg".to_string(),
+            "--background".to_string(),
         ])
         .unwrap();
 
         assert_eq!(rewritten[0], "crawl-resume");
         assert_eq!(rewritten[1], "task-id-606");
-        assert_eq!(rewritten[2], "--bg");
+        assert_eq!(rewritten[2], "--background");
     }
 
     #[test]
@@ -49012,6 +49026,19 @@ linkGroups:
         assert_eq!(classify_help_target("experience"), HelpTarget::Prefix);
         assert_eq!(classify_help_target("webdb"), HelpTarget::Prefix);
         assert_eq!(classify_help_target("no-such-thing"), HelpTarget::Unknown);
+
+        // A public name whose internal key is not just the space→dash form
+        // (`network har start` is `har-start`): without an exact public-name
+        // match this fell through to the prefix listing, which printed a
+        // one-line list instead of the command's page.
+        assert_eq!(
+            classify_help_target("network har start"),
+            HelpTarget::Command("har-start".into())
+        );
+        assert_eq!(
+            classify_help_target("network har stop"),
+            HelpTarget::Command("har-stop".into())
+        );
     }
 
     /// Every category name and alias the help advertises must list commands —

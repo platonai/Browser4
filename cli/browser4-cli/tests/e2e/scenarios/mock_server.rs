@@ -4705,8 +4705,8 @@ pub(super) fn test_crawl_resume(ctx: &mut E2ECtx) {
         snapshot.crawl_resume_calls
     );
 
-    // --bg returns immediately; the task is tracked with `crawl status`.
-    let background = run_command(ctx, &["crawl", "resume", "crawl-job-bg", "--bg"]);
+    // --background returns immediately; the task is tracked with `crawl status`.
+    let background = run_command(ctx, &["crawl", "resume", "crawl-job-bg", "--background"]);
     assert!(
         background.stdout.contains("resumed (run 2)"),
         "Expected the background resume report in:\n{}",

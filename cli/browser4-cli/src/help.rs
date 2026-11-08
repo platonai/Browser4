@@ -302,7 +302,7 @@ pub const GLOBAL_OPTIONS: &[GlobalOption] = &[
         flags: "--help --examples",
         json_key: "--help --examples",
         json_type: "bool",
-        description: "Print runnable usage examples of the tool the command maps to (needs the backend)",
+        description: "Print runnable usage examples: the examples bundled with the command, then the backend's tool-level examples when it advertises any",
     },
     GlobalOption {
         flags: "-v, --version",
@@ -638,6 +638,12 @@ pub fn generate_help() -> String {
     lines.push(String::new());
     lines.push(
         "Run `browser4-cli help <command>` or `<command> --help` for detailed options and examples."
+            .to_string(),
+    );
+    // The `--help --examples` surface is only discoverable from a command page
+    // otherwise, so the top-level help names it too.
+    lines.push(
+        "Add `--examples`: `browser4-cli --help <command> --examples` prints the command's runnable examples."
             .to_string(),
     );
     // Git Bash / MSYS users cannot discover the wrapper rule from anywhere else
@@ -1018,6 +1024,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     }
 
     if !cmd.options.is_empty() {
+        // One blank line between the two lists: without it the first option
+        // reads as another argument of the command.
+        if !cmd.args.is_empty() {
+            lines.push(String::new());
+        }
         lines.push("Options:".to_string());
         for opt in cmd.options {
             let label = match opt.short {
@@ -1036,7 +1047,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Every step runs on the client through the same path as the standalone".to_string(),
         );
         lines.push(
-            "    command it mirrors, so each step is its own backend call - the steps".to_string(),
+            "    command it mirrors, so each step is its own backend call — the steps".to_string(),
         );
         lines.push(
             "    are not packed into a single request, and a step behaves exactly like".to_string(),
@@ -1059,7 +1070,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(
             "    stdin is then consumed by the command list, so 'eval --stdin' is not".to_string(),
         );
-        lines.push("    available inside a --json batch - use an inline expression instead.".to_string());
+        lines.push("    available inside a --json batch — use an inline expression instead.".to_string());
         lines.push(
             "  - Batch mode only supports DOM operations (navigation, keyboard, mouse,".to_string(),
         );
@@ -1184,6 +1195,23 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    the complete set, and a malformed payload is refused instead of applied as `{}`.",
             "  - `set headers --json '{...}'` carries the header payload; put the global `--json`",
             "    before the command for the raw JSON envelope.",
+            "  - Windows: `cmd.exe` does not strip single quotes, so write the JSON payload with",
+            "    double quotes and escape the inner ones, e.g. --json \"{\\\"X-Api-Key\\\": \\\"abc\\\"}\".",
+            "    PowerShell, Git Bash and POSIX shells accept the single-quoted form above.",
+        ] {
+            lines.push(line.to_string());
+        }
+    }
+
+    if cmd.name == "tool-call" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        for line in [
+            "  - `--json` takes a JSON object. On `cmd.exe` single quotes are literal, so write it",
+            "    with double quotes and escape the inner ones: --json \"{\\\"siteKey\\\": \\\"...\\\"}\".",
+            "    Git Bash, PowerShell and POSIX shells accept the single-quoted form in the examples.",
+            "  - A tool name the backend does not advertise fails loudly; `tool list` shows what is",
+            "    callable on this backend, including plugin-contributed tools.",
         ] {
             lines.push(line.to_string());
         }
@@ -1246,11 +1274,12 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push(wrap_text(
-            "browser4-cli htmlsnapshot query --sql \"SELECT DOM_FIRST_TEXT(DOM, 'h1') AS title FROM DOM_LOAD_AND_SELECT(@url, ':root')\"",
-            "  ",
-            2,
-        ));
+        // Printed verbatim: wrapping a command mid-string breaks the quoted
+        // X-SQL payload, and a help example exists to be pasted as one line.
+        lines.push(
+            "  browser4-cli htmlsnapshot query --sql \"SELECT DOM_FIRST_TEXT(DOM, 'h1') AS title FROM DOM_LOAD_AND_SELECT(@url, ':root')\""
+                .to_string(),
+        );
         lines.push("  browser4-cli htmlsnapshot query --sql @query.sql".to_string());
         lines.push("  browser4-cli htmlsnapshot query --sql-stdin < query.sql".to_string());
         lines.push("  browser4-cli htmlsnapshot query --sql-base64 \"$(base64 -w0 query.sql)\"        # bash / macOS".to_string());
@@ -1333,56 +1362,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli htmlsnapshot inspect --stdin < selector.txt".to_string());
     }
 
-    if cmd.name == "loop" {
-        lines.push("Notes:".to_string());
-        lines.push(
-            "  - Three task modes: plain text (requires a configured LLM provider), --shell"
-                .to_string(),
-        );
-        lines.push(
-            "    (runs a shell command each iteration), and -- (browser4-cli subcommand, for"
-                .to_string(),
-        );
-        lines.push(
-            "    multi-token subcommands like batch)."
-                .to_string(),
-        );
-        lines.push(
-            "  - Progress is persisted to disk under a configurable --name (default: default)."
-                .to_string(),
-        );
-        lines.push(
-            "    Loops survive interruption and can be resumed."
-                .to_string(),
-        );
-        lines.push(
-            "  - Use --history to see recently completed loops (up to 200 most recent)."
-                .to_string(),
-        );
-        lines.push(
-            "  - Use --pause combined with a task to create a loop that starts in paused state."
-                .to_string(),
-        );
-        lines.push(String::new());
-        lines.push("Examples:".to_string());
-        lines.push("  # Plain-text task (requires LLM backend)".to_string());
-        lines.push("  browser4-cli loop \"check if the login page loads\" --interval 300".to_string());
-        lines.push("  # Shell command, run every 60 seconds".to_string());
-        lines.push("  browser4-cli loop --shell \"curl -s https://api.example.com/health\" --interval 60".to_string());
-        lines.push("  # Browser4 CLI subcommand (use -- separator for multi-token commands)".to_string());
-        lines.push("  browser4-cli loop --count 5 --interval 10 -- status".to_string());
-        lines.push("  # Multi-token subcommand: batch a sequence of browser operations".to_string());
-        lines.push("  browser4-cli loop --count 3 --interval 30 -- batch \"goto https://example.com\" snapshot status".to_string());
-        lines.push("  # Run 10 times then stop".to_string());
-        lines.push("  browser4-cli loop --count 10 --interval 3600 --shell \"backup.sh\"".to_string());
-        lines.push("  # Lifecycle: pause, resume, stop a named loop".to_string());
-        lines.push("  browser4-cli loop --pause --name my-loop".to_string());
-        lines.push("  browser4-cli loop --resume --name my-loop".to_string());
-        lines.push("  browser4-cli loop --stop --name my-loop".to_string());
-        lines.push("  # List all active loops and view history".to_string());
-        lines.push("  browser4-cli loop --list".to_string());
-        lines.push("  browser4-cli loop --history".to_string());
-    }
+    // `loop` gets its full page from the single block near the end of this
+    // function: it used to have TWO blocks (this one plus the richer one with
+    // Modes / Persistence & Control), so the page printed `Notes:` and
+    // `Examples:` twice with overlapping content.
 
     if cmd.name == "wait" {
         lines.push("Notes:".to_string());
@@ -1470,6 +1453,28 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - attr — returns an HTML attribute value (requires the name argument)."
                 .to_string(),
         );
+        // This warning used to sit *after* the examples, where it read as
+        // another example line (and `--examples` treated it as one).
+        lines.push(
+            "  - `<selector>` resolves against the LIVE page: snapshot refs (e5) always resolve;"
+                .to_string(),
+        );
+        lines.push(
+            "    CSS selectors are supported, but resolution can vary by mode and element type"
+                .to_string(),
+        );
+        lines.push(
+            "    (attr/property reads are the least reliable). A missing attribute/property reads"
+                .to_string(),
+        );
+        lines.push(
+            "    as null — re-run `snapshot` for fresh refs, or use `htmlsnapshot` +"
+                .to_string(),
+        );
+        lines.push(
+            "    `htmlsnapshot get` to extract from a fresh snapshot of the active page."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli get text \".price\"".to_string());
@@ -1478,27 +1483,6 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli get styles e9".to_string());
         lines.push("  browser4-cli get property \"input[name=email]\" value".to_string());
         lines.push("  browser4-cli get attr \"a.link\" href".to_string());
-        lines.push(String::new());
-        lines.push(
-            "  ⚠️  `<selector>` resolves against the LIVE page: snapshot refs (e5) always"
-                .to_string(),
-        );
-        lines.push(
-            "  resolve; CSS selectors are supported, but resolution can vary by mode and"
-                .to_string(),
-        );
-        lines.push(
-            "  element type (attr/property reads are the least reliable). A missing"
-                .to_string(),
-        );
-        lines.push(
-            "  attribute/property reads as null — re-run `snapshot` for fresh refs, or use"
-                .to_string(),
-        );
-        lines.push(
-            "  `htmlsnapshot` + `htmlsnapshot get` for extraction from a fresh snapshot of the active page."
-                .to_string(),
-        );
     }
 
     // Interaction core: click / fill / type / press / scroll / screenshot had a
@@ -2682,7 +2666,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli crawl resume <task-id>".to_string());
         lines.push("  browser4-cli crawl resume <task-id> --retry-failed".to_string());
-        lines.push("  browser4-cli crawl resume <task-id> --bg".to_string());
+        // `--background` (short form -bg), not `--bg`: `--bg` parses as an
+        // undeclared key and the run silently stayed in the foreground.
+        lines.push("  browser4-cli crawl resume <task-id> --background".to_string());
         lines.push("  browser4-cli crawl resume <task-id> --force --retry-failed".to_string());
     }
 
@@ -2805,6 +2791,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    peak number of units that actually overlapped."
                 .to_string(),
         );
+        lines.push(
+            "  - --depth N (N >= 1) only performs link discovery when --out-link-selector (-ol) is"
+                .to_string(),
+        );
+        lines.push(
+            "    given; without it only the seed URLs are processed, whatever the depth."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli crawl https://example.com".to_string());
@@ -2823,15 +2817,6 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         // is parsed as the splatting operator (see SKILL.md quoting warning).
         lines.push("  browser4-cli crawl --seed-file urls.txt --sql \"@extract.sql\" --format csv -o results.csv".to_string());
         lines.push("  browser4-cli crawl --seed-file urls.txt --sql-stdin --format table < query.sql".to_string());
-        lines.push(String::new());
-        lines.push(
-            "  Note: --depth N (N >= 1) only performs link discovery when --out-link-selector (-ol) is given;"
-                .to_string(),
-        );
-        lines.push(
-            "  without it only the seed URLs are processed, whatever the depth. See the Notes above."
-                .to_string(),
-        );
     }
 
     if cmd.name == "htmlsnapshot" {
@@ -2955,7 +2940,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             4,
         ));
         lines.push(wrap_text(
-            "Search a fresh snapshot of the active page's HTML with regex patterns using `htmlsnapshot grep <pattern>`. It searches the CAPTURED HTML text — an annotated serialization (vi=\"…\" boxes, synthetic <link rel=\"normalizedURI\">/<link rel=\"href\"> head elements), not the page's View-Source — so a pattern can match tool-generated markup as well. Supports standard grep flags: -e (repeatable), -i, -n (GNU grep compatibility - line numbers are printed by default, so -n is a no-op), -A, -B, -C, -v, -c, -o, -l, -F, -w, --no-line-number. Use --selector to scope to the first matching CSS element (querySelector), or --selector-all to search across ALL matching elements (querySelectorAll) with element-index annotations. Regex dialect is Rust regex: | is alternation (an escaped \\| is also accepted and converted), and ^/$ anchor the start/end of a line, so write a literal dollar as [$] (e.g. '[$][0-9]+') — it survives every shell layer; add -F to match plain text.",
+            "Search a fresh snapshot of the active page's HTML with regex patterns using `htmlsnapshot grep <pattern>`. It searches the CAPTURED HTML text — an annotated serialization (vi=\"…\" boxes, synthetic <link rel=\"normalizedURI\">/<link rel=\"href\"> head elements), not the page's View-Source — so a pattern can match tool-generated markup as well. Supports standard grep flags: -e (repeatable), -i, -n (GNU grep compatibility — line numbers are printed by default, so -n is a no-op), -A, -B, -C, -v, -c, -o, -l, -F, -w, --no-line-number. Use --selector to scope to the first matching CSS element (querySelector), or --selector-all to search across ALL matching elements (querySelectorAll) with element-index annotations. Regex dialect is Rust regex: | is alternation (an escaped \\| is also accepted and converted), and ^/$ anchor the start/end of a line, so write a literal dollar as [$] (e.g. '[$][0-9]+') — it survives every shell layer; add -F to match plain text.",
             "  - ",
             4,
         ));
@@ -2997,11 +2982,12 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli htmlsnapshot get all text \"h2 a\"".to_string());
         lines.push(String::new());
         lines.push("  # Correlated multi-field extraction: title, price, and link per product".to_string());
-        lines.push(wrap_text(
-            "browser4-cli htmlsnapshot query --sql \"SELECT DOM_FIRST_TEXT(DOM, '.title') AS title, DOM_FIRST_TEXT(DOM, '.price') AS price, DOM_FIRST_HREF(DOM, 'a') AS link FROM DOM_LOAD_AND_SELECT(@url, '.product')\"",
-            "  ",
-            2,
-        ));
+        // Verbatim (see the note in `htmlsnapshot-query`): wrapping it breaks
+        // the quoted SQL the example is meant to be pasted as.
+        lines.push(
+            "  browser4-cli htmlsnapshot query --sql \"SELECT DOM_FIRST_TEXT(DOM, '.title') AS title, DOM_FIRST_TEXT(DOM, '.price') AS price, DOM_FIRST_HREF(DOM, 'a') AS link FROM DOM_LOAD_AND_SELECT(@url, '.product')\""
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("  # Get all matching elements with element-level pagination".to_string());
         lines.push("  browser4-cli htmlsnapshot get all text \".result\" --limit 5 --offset 10".to_string());
@@ -3020,11 +3006,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli htmlsnapshot query --sql @query.sql --expires 30m".to_string());
         lines.push(String::new());
         lines.push("  # Run an X-SQL query against the current page URL".to_string());
-        lines.push(wrap_text(
-            "browser4-cli htmlsnapshot query --sql \"SELECT DOM_FIRST_TEXT(DOM, 'h1') AS title FROM DOM_LOAD_AND_SELECT(@url, ':root')\"",
-            "  ",
-            2,
-        ));
+        lines.push(
+            "  browser4-cli htmlsnapshot query --sql \"SELECT DOM_FIRST_TEXT(DOM, 'h1') AS title FROM DOM_LOAD_AND_SELECT(@url, ':root')\""
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("  # Run an X-SQL query from a file".to_string());
         lines.push("  browser4-cli htmlsnapshot query --sql @query.sql".to_string());
@@ -3493,6 +3478,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push("  - Use --stop-all to stop and clear all persisted loops.".to_string());
+        lines.push(
+            "  - Use --history to list recently completed loops (up to 200 most recent)."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Notes:".to_string());
         lines.push(
@@ -3517,29 +3506,40 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("    or --timeout to adjust.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
+        lines.push("  # Plain-text task (requires an LLM provider on the backend)".to_string());
         lines.push(
-            "  browser4-cli loop \"load https://example.com and extract the page title\""
-                .to_string(),
+            "  browser4-cli loop \"check if the login page loads\" --interval 300".to_string(),
         );
+        lines.push("  # Shell command every 60 s, stopping after 10 iterations".to_string());
         lines.push(
             "  browser4-cli loop --shell \"curl -s https://api.example.com/health\" -i 60 -n 10"
                 .to_string(),
         );
-        lines.push(
-            "  browser4-cli loop -- eval \"document.title\" -i 300"
-                .to_string(),
-        );
+        lines.push("  # X-SQL task (auto-detected by the server)".to_string());
         lines.push(
             "  browser4-cli loop \"select dom.title from DOM_LOAD_AND_SELECT('https://example.com')\" --count 5"
                 .to_string(),
         );
+        lines.push("  # Browser4 CLI subcommand: everything after -- is one CLI invocation".to_string());
+        lines.push("  browser4-cli loop -- eval \"document.title\" -i 300".to_string());
+        lines.push("  browser4-cli loop --count 5 --interval 10 -- status".to_string());
+        lines.push("  # Multi-token subcommand, e.g. batch a sequence of browser operations".to_string());
+        lines.push(
+            "  browser4-cli loop --count 3 --interval 30 -- batch \"goto https://example.com\" snapshot status"
+                .to_string(),
+        );
+        lines.push("  # Start a loop in paused state, then resume and stop it".to_string());
+        lines.push("  browser4-cli loop --pause --shell \"echo hi\" -i 60".to_string());
+        lines.push("  browser4-cli loop --resume".to_string());
+        lines.push("  browser4-cli loop --stop".to_string());
+        lines.push("  # Inspect loops, one named loop, and recent history".to_string());
         lines.push("  browser4-cli loop --list".to_string());
         lines.push("  browser4-cli loop --status".to_string());
         lines.push("  browser4-cli loop --status --name my-loop".to_string());
         lines.push("  browser4-cli loop --pause --name my-loop".to_string());
-        lines.push("  browser4-cli loop --pause --shell \"echo hi\" -i 60   (start paused)".to_string());
         lines.push("  browser4-cli loop --resume --name my-loop".to_string());
         lines.push("  browser4-cli loop --stop --name my-loop".to_string());
+        lines.push("  browser4-cli loop --history".to_string());
     }
 
     if cmd.name == "skills-get" {
@@ -3736,14 +3736,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - ",
             4,
         ));
-        lines.push(
-            "  - Use --json as a global flag (BEFORE the command) for machine-readable"
-                .to_string(),
-        );
-        lines.push(
-            "    output: `browser4-cli --json tab-list` returns { tabs: [...], count: N }."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "`--json` is accepted on either side of the command (`browser4-cli --json tab-list` or `browser4-cli tab-list --json`) and returns { tabs: [...], count: N }. Only `-s/--session` must come before the command.",
+            "  - ",
+            4,
+        ));
         lines.push(
             "  - GUIDs from extension sessions are prefixed with `chrome:` to distinguish"
                 .to_string(),
@@ -4171,16 +4168,85 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
     }
 
+    // Normalise the section spacing last, once every block (hand-written prose,
+    // generated subcommands, bundled examples, notes) is in place: headings
+    // used to butt directly against the previous block on most pages, so
+    // `Arguments:` ran straight into `Options:` and the first option read as an
+    // argument.
+    ensure_section_spacing(&mut lines);
+
     // Point every per-command help page at the runnable examples of the tool
     // the command maps to (requirement 2.3). The examples live in the backend
     // tool spec, so this is the only place the CLI can advertise them.
+    //
+    // Only when the page has some: the line used to be unconditional, so the
+    // 92 visible commands without an Examples section promised a runnable
+    // example block that `--help <cmd> --examples` answered with "No examples
+    // available". A page without bundled examples says so instead (issue #634).
     lines.push(String::new());
-    lines.push(format!(
-        "Runnable examples: `browser4-cli {} --help --examples`.",
-        public_command_name(cmd.name)
-    ));
+    if page_has_examples(&lines) {
+        lines.push(format!(
+            "Runnable examples: `browser4-cli {} --help --examples`.",
+            public_command_name(cmd.name)
+        ));
+    } else {
+        lines.extend(wrapped_lines(
+            "No examples are bundled with this command yet; `--help --examples` prints \
+             the backend's tool-level examples when it advertises them.",
+            "",
+            0,
+        ));
+    }
 
     lines.join("\n")
+}
+
+/// True when a rendered page carries an `Examples:` section with at least one
+/// example line (including a `  # …` group comment).
+///
+/// [`command_examples`] reads the same shape, so "the page advertises examples"
+/// and "`--examples` can answer from the binary" cannot drift apart.
+fn page_has_examples(lines: &[String]) -> bool {
+    let Some(start) = lines.iter().position(|line| line == "Examples:") else {
+        return false;
+    };
+    lines[start + 1..]
+        .iter()
+        .take_while(|line| line.trim().is_empty() || line.starts_with("  "))
+        .any(|line| line.starts_with("  "))
+}
+
+/// Section headings that must start a paragraph of their own.
+const HELP_SECTION_HEADINGS: &[&str] = &[
+    "Arguments:",
+    "Options:",
+    "Notes:",
+    "Examples:",
+    "Subcommands:",
+    "Modes:",
+    "Persistence & Control:",
+    "Workflow:",
+    "Troubleshooting:",
+];
+
+/// Insert the missing blank line above every section heading, and never more
+/// than one.
+///
+/// Idempotent, and only ever inserts — the hand-written prose blocks already
+/// start most sections with a blank line, so the normaliser just fills the gaps
+/// (79 pages had `Arguments:` immediately followed by `Options:`). Several
+/// blocks also start with their own blank line on a page that already ended
+/// with one, so runs of blank lines are collapsed first.
+fn ensure_section_spacing(lines: &mut Vec<String>) {
+    lines.dedup_by(|current, previous| current.is_empty() && previous.is_empty());
+    let mut index = 1;
+    while index < lines.len() {
+        if HELP_SECTION_HEADINGS.contains(&lines[index].as_str()) && !lines[index - 1].is_empty() {
+            lines.insert(index, String::new());
+            index += 1;
+        }
+        index += 1;
+    }
 }
 
 /// Section headers used by the hand-written per-command prose blocks. The
@@ -4287,7 +4353,7 @@ const CLI_EXAMPLES: &[(&str, &[&str])] = &[
         "focus",
         &[
             "browser4-cli focus \"#search\"",
-            "browser4-cli focus \"input[name=q]\" --no-snapshot",
+            "browser4-cli focus e5",
         ],
     ),
     (
@@ -4328,6 +4394,515 @@ const CLI_EXAMPLES: &[(&str, &[&str])] = &[
             "browser4-cli tool list --filter captcha",
             "browser4-cli tool list --json",
         ],
+    ),
+    // ------------------------------------------------------------------
+    // The rest of the visible surface. The issue-#634 review found 92
+    // visible commands whose help page carried an `Examples:`-less page
+    // while still promising `--help --examples`; these entries are their
+    // runnable starting points. `test_examples_only_use_real_commands_and_flags`
+    // keeps every command name and every flag below honest.
+    // ------------------------------------------------------------------
+    (
+        "upload",
+        &[
+            "browser4-cli upload e7 ./resume.pdf",
+            "browser4-cli upload e7 ./a.png ./b.png --no-snapshot",
+        ],
+    ),
+    (
+        "snapshot-list",
+        &[
+            "browser4-cli snapshot list",
+            "browser4-cli snapshot list --count 5",
+            "browser4-cli snapshot list --all",
+        ],
+    ),
+    (
+        "snapshot-clean",
+        &[
+            "browser4-cli snapshot clean --keep 20 --dry-run",
+            "browser4-cli snapshot clean --keep 20",
+        ],
+    ),
+    (
+        "diff-snapshot",
+        &[
+            "browser4-cli diff snapshot",
+            "browser4-cli diff snapshot ./before.txt ./after.txt",
+        ],
+    ),
+    (
+        "dialog-status",
+        &["browser4-cli dialog-status"],
+    ),
+    (
+        "dialog-accept",
+        &[
+            "browser4-cli dialog-accept",
+            "browser4-cli dialog-accept \"Ada\"",
+        ],
+    ),
+    (
+        "dialog-dismiss",
+        &["browser4-cli dialog-dismiss"],
+    ),
+    (
+        "resize",
+        &["browser4-cli resize 1280 720"],
+    ),
+    (
+        "delete-data",
+        &["browser4-cli delete-data"],
+    ),
+    (
+        "go-back",
+        &["browser4-cli go-back"],
+    ),
+    (
+        "go-forward",
+        &["browser4-cli go-forward"],
+    ),
+    (
+        "reload",
+        &["browser4-cli reload"],
+    ),
+    (
+        "htmlsnapshot-capture",
+        &["browser4-cli htmlsnapshot capture"],
+    ),
+    (
+        "htmlsnapshot-export",
+        &[
+            "browser4-cli htmlsnapshot export --file snapshot.html",
+            "browser4-cli htmlsnapshot export clean.html --clean",
+            "browser4-cli htmlsnapshot export --file stored.html --expires 1d",
+        ],
+    ),
+    (
+        "htmlsnapshot-summary",
+        &[
+            "browser4-cli htmlsnapshot summary",
+            "browser4-cli htmlsnapshot summary --stdout",
+            "browser4-cli htmlsnapshot summary --stdout --verbose",
+        ],
+    ),
+    (
+        "htmlsnapshot-algorithms",
+        &[
+            "browser4-cli htmlsnapshot algorithms",
+            "browser4-cli htmlsnapshot algorithms --json",
+        ],
+    ),
+    (
+        "htmlsnapshot-grep",
+        &[
+            "browser4-cli htmlsnapshot grep --ignore-case error",
+            "browser4-cli htmlsnapshot grep --selector \"#main-content\" --after-context 3 price",
+            "browser4-cli htmlsnapshot grep --count \"add to cart\"",
+        ],
+    ),
+    (
+        "htmlsnapshot-readability",
+        &[
+            "browser4-cli htmlsnapshot readability",
+            "browser4-cli htmlsnapshot readability \"https://example.com/article\" --text-only",
+        ],
+    ),
+    (
+        "key",
+        &[
+            "browser4-cli key Enter",
+            "browser4-cli key Escape e5",
+            "browser4-cli key Tab \"#email\" --verify",
+        ],
+    ),
+    (
+        "keyboard",
+        &[
+            "browser4-cli keyboard Enter",
+            "browser4-cli keyboard ArrowDown --no-snapshot",
+        ],
+    ),
+    (
+        "keydown",
+        &["browser4-cli keydown Shift"],
+    ),
+    (
+        "keyup",
+        &["browser4-cli keyup Shift"],
+    ),
+    (
+        "mousemove",
+        &["browser4-cli mousemove 100 200"],
+    ),
+    (
+        "mousedown",
+        &["browser4-cli mousedown left"],
+    ),
+    (
+        "mouseup",
+        &["browser4-cli mouseup left"],
+    ),
+    (
+        "mousewheel",
+        &["browser4-cli mousewheel 0 300"],
+    ),
+    (
+        "dblclick",
+        &[
+            "browser4-cli dblclick \"#row-1\"",
+            "browser4-cli dblclick e5 --modifiers \"Control\"",
+        ],
+    ),
+    (
+        "drag",
+        &[
+            "browser4-cli drag e5 \"#done\"",
+            "browser4-cli drag e5 e6 --at bottom",
+        ],
+    ),
+    (
+        "hover",
+        &[
+            "browser4-cli hover \"#menu\"",
+            "browser4-cli hover e3 --no-snapshot",
+        ],
+    ),
+    (
+        "scrape",
+        &[
+            "browser4-cli scrape --formats \"markdown,links\"",
+            "browser4-cli scrape --formats \"markdown,screenshot\" --output ./out",
+        ],
+    ),
+    (
+        "scrape-formats",
+        &["browser4-cli scrape formats"],
+    ),
+    (
+        "pdf",
+        &["browser4-cli pdf --filename page.pdf"],
+    ),
+    (
+        "window-new",
+        &["browser4-cli window new \"https://example.com\""],
+    ),
+    (
+        "frames",
+        &["browser4-cli frames"],
+    ),
+    (
+        "frame",
+        &[
+            "browser4-cli frame \"#pay-frame\"",
+            "browser4-cli frame main",
+        ],
+    ),
+    (
+        "webdb-export",
+        &["browser4-cli webdb export \"https://a.example,https://b.example\" ./pages"],
+    ),
+    (
+        "webdb-normalize",
+        &["browser4-cli webdb normalize \"https://Example.com/path?x=1\""],
+    ),
+    (
+        "console",
+        &[
+            "browser4-cli console",
+            "browser4-cli console error",
+            "browser4-cli console --clear",
+        ],
+    ),
+    (
+        "errors",
+        &[
+            "browser4-cli errors",
+            "browser4-cli errors --clear",
+        ],
+    ),
+    (
+        "cdp",
+        &[
+            "browser4-cli cdp Page.captureScreenshot",
+            "browser4-cli cdp Runtime.evaluate --json '{\"expression\": \"document.title\"}'",
+            "browser4-cli cdp Page.navigate --file params.json",
+        ],
+    ),
+    (
+        "profiler-start",
+        &["browser4-cli profiler start"],
+    ),
+    (
+        "profiler-stop",
+        &[
+            "browser4-cli profiler stop --file profile.cpuprofile",
+            "browser4-cli profiler stop",
+        ],
+    ),
+    (
+        "vitals",
+        &["browser4-cli vitals"],
+    ),
+    (
+        "web-vitals",
+        &["browser4-cli web-vitals"],
+    ),
+    (
+        "download",
+        &[
+            "browser4-cli download --dir ./downloads",
+            "browser4-cli download --behavior deny",
+        ],
+    ),
+    (
+        "network-requests",
+        &[
+            "browser4-cli network requests",
+            "browser4-cli network requests --type xhr,fetch --status 200",
+            "browser4-cli network requests --method POST --filter /api/",
+        ],
+    ),
+    (
+        "network-request",
+        &["browser4-cli network request 1234.5"],
+    ),
+    (
+        "network-route",
+        &[
+            "browser4-cli network route \"**/api/users\" --body '{\"users\": []}' --content-type application/json",
+            "browser4-cli network route \"**/analytics/**\" --abort",
+        ],
+    ),
+    (
+        "network-unroute",
+        &[
+            "browser4-cli network unroute \"**/api/users\"",
+            "browser4-cli network unroute",
+        ],
+    ),
+    (
+        "network-routes",
+        &["browser4-cli network routes"],
+    ),
+    (
+        "har-start",
+        &[
+            "browser4-cli network har start",
+            "browser4-cli network har start --content text",
+        ],
+    ),
+    (
+        "har-stop",
+        &[
+            "browser4-cli network har stop page.har",
+            "browser4-cli network har stop",
+        ],
+    ),
+    (
+        "chat",
+        &[
+            "browser4-cli chat \"summarize this page\"",
+            "browser4-cli chat \"summarize this page\" --async",
+        ],
+    ),
+    (
+        "chat-result",
+        &["browser4-cli chat result 3f9c2a1e"],
+    ),
+    (
+        "agent-cancel",
+        &["browser4-cli agent cancel 3f9c2a1e"],
+    ),
+    (
+        "experience-save",
+        &[
+            "browser4-cli experience save https://example.com/product/1 '{\"steps\":[]}' --intent \"extract product detail\"",
+        ],
+    ),
+    (
+        "experience-query",
+        &[
+            "browser4-cli experience query https://example.com/product/1",
+            "browser4-cli experience query https://example.com/product/1 --intent \"extract product detail\"",
+        ],
+    ),
+    (
+        "experience-list",
+        &[
+            "browser4-cli experience list",
+            "browser4-cli experience list --filter example.com",
+        ],
+    ),
+    (
+        "experience-deep-learn",
+        &[
+            "browser4-cli experience deep-learn https://example.com/product/1 \"extract product detail\"",
+            "browser4-cli experience deep-learn https://example.com/product/1 \"extract product detail\" --force",
+        ],
+    ),
+    (
+        "profile-import",
+        &[
+            "browser4-cli profile-import --list-sources",
+            "browser4-cli profile-import --source chrome --data bookmarks,history --into temp",
+        ],
+    ),
+    (
+        "close",
+        &["browser4-cli close"],
+    ),
+    (
+        "profiles-list",
+        &["browser4-cli profiles list"],
+    ),
+    (
+        "session-default",
+        &["browser4-cli session-default my-session"],
+    ),
+    (
+        "close-all",
+        &["browser4-cli close-all"],
+    ),
+    (
+        "kill-all",
+        &["browser4-cli kill-all"],
+    ),
+    (
+        "stop",
+        &["browser4-cli stop"],
+    ),
+    (
+        "status",
+        &[
+            "browser4-cli status",
+            "browser4-cli status --server http://127.0.0.1:18182",
+        ],
+    ),
+    (
+        "doctor",
+        &[
+            "browser4-cli doctor",
+            "browser4-cli doctor --verbose",
+        ],
+    ),
+    (
+        "doctor-log",
+        &[
+            "browser4-cli doctor log",
+            "browser4-cli doctor log pulsar --tail --lines 200",
+            "browser4-cli doctor log pulsar grep error",
+        ],
+    ),
+    (
+        "doctor-metrics",
+        &[
+            "browser4-cli doctor metrics",
+            "browser4-cli doctor metrics grep session",
+        ],
+    ),
+    (
+        "doctor-status",
+        &[
+            "browser4-cli doctor status",
+            "browser4-cli doctor status --section llm --verbose",
+        ],
+    ),
+    (
+        "config",
+        &["browser4-cli config"],
+    ),
+    (
+        "config-get",
+        &["browser4-cli config get server"],
+    ),
+    (
+        "config-set",
+        &[
+            "browser4-cli config set server http://127.0.0.1:18182",
+            "browser4-cli config set timeout 300",
+        ],
+    ),
+    (
+        "config-delete",
+        &["browser4-cli config delete server"],
+    ),
+    (
+        "webminer",
+        &[
+            "browser4-cli webminer install",
+            "browser4-cli webminer all ./html",
+        ],
+    ),
+    (
+        "webminer-install",
+        &[
+            "browser4-cli webminer install",
+            "browser4-cli webminer install v0.0.7 --force",
+        ],
+    ),
+    (
+        "webminer-update",
+        &["browser4-cli webminer update"],
+    ),
+    (
+        "webminer-version",
+        &["browser4-cli webminer version"],
+    ),
+    (
+        "webminer-uninstall",
+        &["browser4-cli webminer uninstall"],
+    ),
+    (
+        "webminer-run-example",
+        &["browser4-cli webminer run-example"],
+    ),
+    (
+        "webminer-all",
+        &[
+            "browser4-cli webminer all ./html",
+            "browser4-cli webminer all ./html --max-files 100 --output ./clusters",
+        ],
+    ),
+    (
+        "webminer-views",
+        &["browser4-cli webminer views ./html-ml-output/kmeans-result/p20260101"],
+    ),
+    (
+        "skill-list",
+        &["browser4-cli skill-list"],
+    ),
+    (
+        "skill-info",
+        &["browser4-cli skill-info browser4-cli"],
+    ),
+    (
+        "skill-install",
+        &["browser4-cli skill-install ./my-skill"],
+    ),
+    (
+        "skill-uninstall",
+        &["browser4-cli skill-uninstall my-skill"],
+    ),
+    (
+        "skill-reload",
+        &["browser4-cli skill-reload browser4-cli"],
+    ),
+    (
+        "plugin-list",
+        &["browser4-cli plugin list"],
+    ),
+    (
+        "plugin-info",
+        &["browser4-cli plugin info captcha"],
+    ),
+    (
+        "plugin-install",
+        &["browser4-cli plugin install browser4-plugins/browser4-captcha/target/*.jar"],
+    ),
+    (
+        "plugin-remove",
+        &["browser4-cli plugin remove captcha --yes"],
     ),
 ];
 
@@ -4464,6 +5039,14 @@ fn hidden_command_groups() -> Vec<HiddenGroup> {
 /// without a backend. The backend's tool-level examples (titles, notes,
 /// snippets) are richer and take precedence when the server is reachable; see
 /// `build_command_examples` in `main.rs`.
+///
+/// The whole section is collected, not just its first group: several pages use
+/// a blank line to separate example groups (`snapshot`, `htmlsnapshot`, `loop`,
+/// `swarm submit`), and stopping at the first blank line silently dropped every
+/// group after it — `snapshot --help` listed 12 groups while
+/// `snapshot --help --examples` printed 1. The section ends only where the page
+/// ends it: at the first non-empty line that is not an indented example
+/// (a section header or the trailing prose).
 pub fn command_examples(name: &str) -> Vec<String> {
     let Some(cmd) = all_commands().into_iter().find(|c| c.name == name) else {
         return Vec::new();
@@ -4480,9 +5063,10 @@ pub fn command_examples(name: &str) -> Vec<String> {
             continue;
         }
         if line.trim().is_empty() {
-            // A blank line closes the section once something was collected.
+            // A blank line separates groups *inside* the section. Keep it as a
+            // separator once something was collected, but never at the edges.
             if !collected.is_empty() {
-                break;
+                collected.push(String::new());
             }
             continue;
         }
@@ -4491,6 +5075,9 @@ pub fn command_examples(name: &str) -> Vec<String> {
             break;
         }
         collected.push(line.to_string());
+    }
+    while collected.last().is_some_and(|line| line.trim().is_empty()) {
+        collected.pop();
     }
     collected
 }
@@ -5509,30 +6096,75 @@ mod tests {
         );
         assert!(command_examples("no-such-command").is_empty());
         assert!(
-            command_examples("mousemove").is_empty(),
-            "a command without an Examples section must yield nothing"
+            command_examples("table").is_empty(),
+            "an unknown command must yield nothing"
         );
     }
 
-    /// Extraction and rendering must not drift: every page with an `Examples:`
-    /// section must hand the --examples path at least one line, and none of
-    /// those lines may be the section header or a wrapped continuation.
+    /// Example lines exactly as the rendered page prints them, group-separating
+    /// blank lines included.
+    ///
+    /// Independent of [`command_examples`] on purpose: the extractor used to
+    /// stop at the first blank line, so `snapshot --help` listed 12 example
+    /// groups while `snapshot --help --examples` printed 1. Comparing against a
+    /// fresh walk of the rendered page is what keeps those two in agreement.
+    fn rendered_examples(page: &str) -> Vec<String> {
+        let mut collected: Vec<String> = Vec::new();
+        let mut in_examples = false;
+        for line in page.lines() {
+            if line == "Examples:" {
+                in_examples = true;
+                collected.clear(); // the last section on a page wins
+                continue;
+            }
+            if !in_examples {
+                continue;
+            }
+            if line.trim().is_empty() {
+                if !collected.is_empty() {
+                    collected.push(String::new());
+                }
+                continue;
+            }
+            if !line.starts_with("  ") {
+                break;
+            }
+            collected.push(line.to_string());
+        }
+        while collected.last().is_some_and(|line| line.trim().is_empty()) {
+            collected.pop();
+        }
+        collected
+    }
+
+    /// Extraction and rendering must not drift: every example line the page
+    /// prints — all groups, not just the first — must come back from
+    /// `command_examples`.
     #[test]
     fn test_command_examples_agree_with_the_rendered_pages() {
         let mut offenders: Vec<String> = Vec::new();
         for cmd in all_commands() {
-            let has_section = generate_command_help(&cmd).contains("Examples:");
+            let page = generate_command_help(&cmd);
             let extracted = command_examples(cmd.name);
-            if has_section && extracted.is_empty() {
+            let expected = rendered_examples(&page);
+            if extracted != expected {
                 offenders.push(format!(
-                    "{}: page has an Examples section but none was extracted",
-                    public_command_name(cmd.name)
+                    "{}: extracted {} line(s), page renders {} ({extracted:?} vs {expected:?})",
+                    public_command_name(cmd.name),
+                    extracted.len(),
+                    expected.len()
                 ));
                 continue;
             }
             for line in &extracted {
+                if line.trim().is_empty() {
+                    continue;
+                }
                 if !line.starts_with("  ") || line.trim() == "Examples:" {
-                    offenders.push(format!("{}: bad example line {line:?}", cmd.name));
+                    offenders.push(format!(
+                        "{}: bad example line {line:?}",
+                        public_command_name(cmd.name)
+                    ));
                 }
             }
         }
@@ -5541,6 +6173,418 @@ mod tests {
             "examples extraction drifted from the rendered help:\n  {}",
             offenders.join("\n  ")
         );
+    }
+
+    /// Every visible command ships examples: the issue-#634 review counted 92
+    /// visible commands whose page had none while the page still promised
+    /// `--help --examples`.
+    #[test]
+    fn test_every_visible_command_ships_examples() {
+        let mut missing: Vec<String> = Vec::new();
+        for cmd in all_commands() {
+            if cmd.hidden {
+                continue;
+            }
+            if command_examples(cmd.name).is_empty() {
+                missing.push(public_command_name(cmd.name).to_string());
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "visible commands whose help page has no Examples section: {}",
+            missing.join(", ")
+        );
+    }
+
+    /// A page either has examples and points at `--help --examples`, or says
+    /// there are none. The pointer must never promise what the page lacks.
+    #[test]
+    fn test_examples_pointer_matches_the_page() {
+        let mut offenders: Vec<String> = Vec::new();
+        for cmd in all_commands() {
+            let page = generate_command_help(&cmd);
+            let has_examples = page_has_examples(&page.lines().map(str::to_string).collect::<Vec<_>>());
+            let advertises = page.contains("Runnable examples:");
+            let says_none = page.contains("No examples are bundled");
+            if has_examples != advertises {
+                offenders.push(format!(
+                    "{}: examples={has_examples} but advertises={advertises}",
+                    public_command_name(cmd.name)
+                ));
+            }
+            if !has_examples && !says_none {
+                offenders.push(format!(
+                    "{}: no examples and no explanation",
+                    public_command_name(cmd.name)
+                ));
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "help pages that misdescribe their examples:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
+    /// One section of each kind per page. `loop` used to print two `Notes:` and
+    /// two `Examples:` blocks with overlapping content.
+    #[test]
+    fn test_command_pages_do_not_repeat_prose_sections() {
+        let mut offenders: Vec<String> = Vec::new();
+        for cmd in all_commands() {
+            let page = generate_command_help(&cmd);
+            for header in ["Examples:", "Notes:", "Arguments:", "Options:"] {
+                let count = page.lines().filter(|line| *line == header).count();
+                if count > 1 {
+                    offenders.push(format!(
+                        "{}: {header} appears {count} times",
+                        public_command_name(cmd.name)
+                    ));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "help pages with a duplicated section:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
+    /// `Arguments:` and `Options:` are separate blocks; without the blank line
+    /// the first option reads as another argument (79 pages did this).
+    #[test]
+    fn test_arguments_and_options_are_separated_by_a_blank_line() {
+        let mut offenders: Vec<String> = Vec::new();
+        for cmd in all_commands() {
+            let page = generate_command_help(&cmd);
+            let lines: Vec<&str> = page.lines().collect();
+            let Some(options_at) = lines.iter().position(|line| *line == "Options:") else {
+                continue;
+            };
+            if !lines[..options_at].contains(&"Arguments:") {
+                continue;
+            }
+            if lines.get(options_at.wrapping_sub(1)) != Some(&"") {
+                offenders.push(public_command_name(cmd.name).to_string());
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "'Options:' is not separated from 'Arguments:' on: {}",
+            offenders.join(", ")
+        );
+    }
+
+    /// An example is a command a reader pastes as one line: it must start with
+    /// `browser4-cli`, carry balanced quotes, and never be a wrapped
+    /// continuation of the previous line.
+    #[test]
+    fn test_example_lines_are_complete_commands() {
+        let mut offenders: Vec<String> = Vec::new();
+        for cmd in all_commands() {
+            let page = generate_command_help(&cmd);
+            for line in example_command_lines(&page) {
+                if !line.contains("browser4-cli ") {
+                    offenders.push(format!(
+                        "{}: example is not a browser4-cli invocation: {line}",
+                        public_command_name(cmd.name)
+                    ));
+                }
+                if unescaped_quote_count(&line, '"') % 2 != 0 {
+                    offenders.push(format!(
+                        "{}: unbalanced double quote (wrapped example?): {line}",
+                        public_command_name(cmd.name)
+                    ));
+                }
+                if unescaped_quote_count(&line, '\'') % 2 != 0 {
+                    offenders.push(format!(
+                        "{}: unbalanced single quote (wrapped example?): {line}",
+                        public_command_name(cmd.name)
+                    ));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "example blocks that cannot be pasted:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
+    /// Every command name and flag used in a documented example must exist:
+    /// the issue-#634 review checked the 331 example lines by hand, this test
+    /// keeps them honest.
+    #[test]
+    fn test_examples_only_use_real_commands_and_flags() {
+        let mut offenders: Vec<String> = Vec::new();
+        for cmd in all_commands() {
+            for line in example_command_lines(&generate_command_help(&cmd)) {
+                match resolve_example_command(&line) {
+                    None => offenders.push(format!(
+                        "{}: example names no known command: {line}",
+                        public_command_name(cmd.name)
+                    )),
+                    Some(target) => {
+                        for flag in example_flags(&line) {
+                            if !example_flag_exists(&target, &flag) {
+                                offenders.push(format!(
+                                    "{}: example uses undeclared flag '{}': {line}",
+                                    public_command_name(cmd.name),
+                                    flag
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "documented examples that would fail if pasted:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
+    /// Every static example list belongs to a real command (a renamed command
+    /// would otherwise ship examples nobody can reach).
+    #[test]
+    fn test_static_examples_target_real_commands() {
+        let names: Vec<&str> = all_commands().iter().map(|cmd| cmd.name).collect();
+        for (name, _) in CLI_EXAMPLES {
+            assert!(
+                names.contains(name),
+                "CLI_EXAMPLES lists examples for unknown command '{name}'"
+            );
+        }
+    }
+
+    /// Split an example line into shell-like tokens: quoted values stay one
+    /// token, and quote characters are dropped.
+    fn example_tokens(line: &str) -> Vec<String> {
+        let mut tokens: Vec<String> = Vec::new();
+        let mut current = String::new();
+        let mut quote: Option<char> = None;
+        let mut escaped = false;
+        for ch in line.chars() {
+            if escaped {
+                current.push(ch);
+                escaped = false;
+                continue;
+            }
+            match quote {
+                Some(q) => {
+                    if ch == '\\' && q == '"' {
+                        escaped = true;
+                    } else if ch == q {
+                        quote = None;
+                    } else {
+                        current.push(ch);
+                    }
+                }
+                None => {
+                    if ch == '"' || ch == '\'' {
+                        quote = Some(ch);
+                    } else if ch.is_whitespace() {
+                        if !current.is_empty() {
+                            tokens.push(std::mem::take(&mut current));
+                        }
+                    } else {
+                        current.push(ch);
+                    }
+                }
+            }
+        }
+        if !current.is_empty() {
+            tokens.push(current);
+        }
+        tokens
+    }
+
+    /// Global flags accepted on either side of the command, and whether they
+    /// take a value (so resolution can skip the value too).
+    fn global_flag_takes_value(flag: &str) -> Option<bool> {
+        match flag {
+            "-s" | "--session" | "--server" | "--timeout" | "--proxy" | "--help-json" => Some(true),
+            "--json" | "-q" | "--quiet" | "--pretty" | "-tip" | "--show-tip" | "-h" | "--help"
+            | "-v" | "--version" | "--examples" => Some(false),
+            _ => None,
+        }
+    }
+
+    /// The command an example line invokes, resolved by longest public-name
+    /// match after any leading global flags.
+    fn resolve_example_command(line: &str) -> Option<CommandDef> {
+        let tokens = example_tokens(line);
+        let start = tokens.iter().position(|token| token == "browser4-cli")? + 1;
+        let mut rest = &tokens[start..];
+        while let Some(flag) = rest.first() {
+            match global_flag_takes_value(flag) {
+                Some(takes_value) => {
+                    rest = &rest[1..];
+                    if takes_value {
+                        rest = rest.get(1..).unwrap_or(&[]);
+                    }
+                }
+                None => break,
+            }
+        }
+        let words: Vec<&str> = rest.iter().map(String::as_str).collect();
+        all_commands()
+            .into_iter()
+            .filter_map(|cmd| {
+                let public = public_command_name(cmd.name);
+                let public_words: Vec<&str> = public.split(' ').collect();
+                if words.len() >= public_words.len() && words[..public_words.len()] == public_words[..] {
+                    Some((public_words.len(), cmd))
+                } else {
+                    None
+                }
+            })
+            .max_by_key(|(len, _)| *len)
+            .map(|(_, cmd)| cmd)
+    }
+
+    /// The example lines of a page that are actual commands: group comments
+    /// dropped, heredoc bodies skipped, trailing shell comments stripped.
+    fn example_command_lines(page: &str) -> Vec<String> {
+        let mut commands: Vec<String> = Vec::new();
+        let mut heredoc: Option<String> = None;
+        for line in rendered_examples(page) {
+            let trimmed = line.trim();
+            if let Some(delimiter) = &heredoc {
+                if trimmed == delimiter {
+                    heredoc = None;
+                }
+                continue;
+            }
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            if let Some(delimiter) = heredoc_delimiter(trimmed) {
+                heredoc = Some(delimiter);
+                commands.push(trimmed.to_string());
+                continue;
+            }
+            let command = strip_shell_comment(trimmed);
+            if !command.trim().is_empty() {
+                commands.push(command.trim().to_string());
+            }
+        }
+        commands
+    }
+
+    /// The delimiter of a heredoc opened on this line (`<< 'EOF'`, `<<EOF`).
+    fn heredoc_delimiter(line: &str) -> Option<String> {
+        let at = line.find("<<")?;
+        let rest = line[at + 2..].trim_start();
+        let rest = rest.strip_prefix('-').unwrap_or(rest).trim_start();
+        let rest = rest.trim_start_matches(['\'', '"']);
+        let end = rest
+            .find(|ch: char| ch.is_whitespace() || ch == '\'' || ch == '"')
+            .unwrap_or(rest.len());
+        (end > 0).then(|| rest[..end].to_string())
+    }
+
+    /// Drop a trailing shell comment (`# …`) that is not inside quotes, so a
+    /// flag explained in an example's comment is not validated as if the
+    /// command used it.
+    fn strip_shell_comment(line: &str) -> String {
+        let mut quote: Option<char> = None;
+        let mut escaped = false;
+        let mut previous_was_space = true;
+        for (index, ch) in line.char_indices() {
+            if escaped {
+                escaped = false;
+                previous_was_space = ch.is_whitespace();
+                continue;
+            }
+            match quote {
+                Some(q) => {
+                    if ch == '\\' && q == '"' {
+                        escaped = true;
+                    } else if ch == q {
+                        quote = None;
+                    }
+                }
+                None => {
+                    if ch == '"' || ch == '\'' {
+                        quote = Some(ch);
+                    } else if ch == '#' && previous_was_space {
+                        return line[..index].to_string();
+                    }
+                }
+            }
+            previous_was_space = ch.is_whitespace();
+        }
+        line.to_string()
+    }
+
+    /// Long and short flags passed to `browser4-cli` itself: shell separators
+    /// (a pipeline's `jq -c`) and the `--` separator excluded.
+    fn example_flags(line: &str) -> Vec<String> {
+        let tokens = example_tokens(line);
+        let Some(start) = tokens.iter().position(|token| token == "browser4-cli") else {
+            return Vec::new();
+        };
+        let mut flags: Vec<String> = Vec::new();
+        for token in &tokens[start + 1..] {
+            if matches!(
+                token.as_str(),
+                "|" | "||" | "&&" | ";" | ">" | ">>" | "<" | "&"
+            ) {
+                break;
+            }
+            // `--count=3` documents the `--count` option.
+            let token = token.split('=').next().unwrap_or(token);
+            let is_long = token.starts_with("--") && token != "--";
+            let is_short = token.starts_with('-')
+                && !token.starts_with("--")
+                && token.len() == 2
+                && token.as_bytes()[1].is_ascii_alphanumeric();
+            if is_long || is_short {
+                flags.push(token.to_string());
+            }
+        }
+        flags
+    }
+
+    /// True when `flag` is declared by the command or is a global flag.
+    fn example_flag_exists(cmd: &CommandDef, flag: &str) -> bool {
+        let declared = cmd.options.iter().any(|option| {
+            let name = option.name.split(' ').next().unwrap_or(option.name);
+            let long = format!("--{name}");
+            let short = option.short.map(|short| format!("-{short}"));
+            flag == long || short.as_deref() == Some(flag)
+        });
+        if declared {
+            return true;
+        }
+        GLOBAL_OPTIONS.iter().any(|option| {
+            option
+                .flags
+                .split(',')
+                .map(str::trim)
+                .map(|part| part.split(' ').next().unwrap_or(part))
+                .any(|declared| declared == flag)
+        }) || flag == "--examples"
+    }
+
+    /// Count `quote` characters that are not backslash-escaped.
+    fn unescaped_quote_count(text: &str, quote: char) -> usize {
+        let mut count = 0;
+        let mut escaped = false;
+        for ch in text.chars() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+            } else if ch == quote {
+                count += 1;
+            }
+        }
+        count
     }
 
     /// Every `See also:` document must actually ship inside the binary — a
@@ -5877,7 +6921,7 @@ mod tests {
         // Examples
         assert!(help.contains("browser4-cli crawl resume <task-id>"), "help:\n{help}");
         assert!(help.contains("browser4-cli crawl resume <task-id> --retry-failed"), "help:\n{help}");
-        assert!(help.contains("browser4-cli crawl resume <task-id> --bg"), "help:\n{help}");
+        assert!(help.contains("browser4-cli crawl resume <task-id> --background"), "help:\n{help}");
         assert!(!help.contains("browser4-cli crawl-resume"), "help:\n{help}");
     }
 
