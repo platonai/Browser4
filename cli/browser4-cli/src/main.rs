@@ -26039,8 +26039,9 @@ fn render_example_args(args: &serde_json::Map<String, Value>) -> String {
 
 /// Render the `examples` of a tool for `--help --examples`.
 ///
-/// Returns `None` when no example is renderable, so the caller prints its
-/// "no examples" line instead of a header with nothing under it.
+/// Returns the example bullets, or `None` when no example is renderable, so the
+/// caller prints its "no examples" line instead of a header with nothing under
+/// it.
 ///
 /// Executable examples render as `- <title>: <args>`; a runnable example that
 /// takes no arguments says so (`no arguments`) rather than rendering an empty
@@ -26048,8 +26049,8 @@ fn render_example_args(args: &serde_json::Map<String, Value>) -> String {
 /// indented fenced block. `notes` follow on an indented `- ` line, and an
 /// example flagged `expectsError` is marked as such — a failing call presented
 /// as a happy path would be a trap.
-fn render_tool_examples(label: &str, examples: &[ToolExampleSpec]) -> Option<String> {
-    let mut lines = vec![format!("Examples for {label}:")];
+fn render_tool_example_bullets(examples: &[ToolExampleSpec]) -> Option<Vec<String>> {
+    let mut lines: Vec<String> = Vec::new();
     let mut rendered = 0;
 
     for example in examples {
@@ -26091,7 +26092,7 @@ fn render_tool_examples(label: &str, examples: &[ToolExampleSpec]) -> Option<Str
         }
     }
 
-    (rendered > 0).then(|| lines.join("\n"))
+    (rendered > 0).then_some(lines)
 }
 
 /// Resolve the MCP tool a CLI command dispatches to.
@@ -26125,15 +26126,23 @@ fn resolve_command_tool(command: &str, args: &[String]) -> Option<String> {
 
 /// Build the `--help --examples` report for a CLI command.
 ///
-/// Sourcing, in order: the CLI's own `Examples:` block (shipped in the binary,
-/// so this works with no backend at all), then the richer tool-level examples
-/// read from `GET /mcp/tools/specs` — the same endpoint (and the same base URL /
-/// session-independent path) the CLI already uses to discover plugin-declared
-/// commands.
+/// Two sections, both printed when both exist:
 ///
-/// Never fails: an unreachable backend, an unknown command, a tool the backend
-/// does not advertise and a tool without examples each end in an explanatory
-/// line, and the command still exits 0.
+/// 1. `Runnable CLI examples` — the command's own `Examples:` block, shipped in
+///    the binary, so it works with no backend at all and is what a reader can
+///    paste into a shell;
+/// 2. `MCP tool arguments` — the examples the backend publishes for the tool
+///    the command maps to (the same `GET /mcp/tools/specs` the plugin-declared
+///    command discovery uses). These are wire-call arguments, not CLI commands
+///    (`sessionId` is injected by the CLI, values are JSON strings), but they
+///    are what `browser4-cli tool call <tool> --json` takes, they can carry
+///    parameters the CLI does not expose as flags, and they cannot drift from
+///    the tool they document.
+///
+/// A section that cannot be produced is replaced by one explanatory line — the
+/// report never invents examples, and never fails: an unreachable backend, an
+/// unknown command and a tool without examples all end in that line while the
+/// command still exits 0.
 async fn build_command_examples(base_url: &str, command: &str, args: &[String]) -> String {
     // A quoted spaced name (`--help "htmlsnapshot get" --examples`) arrives as
     // one argument; resolve it to the internal key its help page lives under
@@ -26156,9 +26165,35 @@ async fn build_command_examples(base_url: &str, command: &str, args: &[String]) 
     };
 
     match build_tool_examples(base_url, &tool).await {
-        Ok(report) => report,
+        Ok(examples) => cli_and_tool_examples(public, &local, &examples, &tool),
         Err(reason) => examples_or_reason(public, &local, &reason),
     }
+}
+
+/// Both example sections, CLI-runnable first.
+fn cli_and_tool_examples(
+    public: &str,
+    local: &[String],
+    examples: &ToolExamples,
+    tool: &str,
+) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    if !local.is_empty() {
+        lines.push(format!("Runnable CLI examples for browser4-cli {public}:"));
+        lines.extend(local.iter().cloned());
+        lines.push(String::new());
+    }
+    lines.push(format!("MCP tool arguments for {}:", examples.label));
+    lines.extend(examples.bullets.iter().cloned());
+    lines.push(String::new());
+    lines.push(format!(
+        "Pass them to `browser4-cli tool call {tool} --json`; the CLI fills in \
+         `sessionId` itself."
+    ));
+    lines.push(format!(
+        "Run `browser4-cli --help {public}` for arguments, options, and notes."
+    ));
+    lines.join("\n")
 }
 
 /// Render a command's built-in examples, or explain why there are none.
@@ -26166,12 +26201,10 @@ fn examples_or_reason(public: &str, local: &[String], reason: &str) -> String {
     if local.is_empty() {
         return format!("No examples available for '{public}' — {reason}");
     }
-    let mut lines = vec![format!(
-        "Examples for browser4-cli {public} (built into the CLI):"
-    )];
+    let mut lines = vec![format!("Runnable CLI examples for browser4-cli {public}:")];
     lines.extend(local.iter().cloned());
     lines.push(String::new());
-    lines.push(format!("Tool-level examples are unavailable: {reason}"));
+    lines.push(format!("MCP tool arguments are unavailable: {reason}"));
     lines.push(format!(
         "Run `browser4-cli --help {public}` for arguments, options, and notes."
     ));
@@ -26190,13 +26223,34 @@ fn no_tool_level_examples_reason() -> String {
         .to_string()
 }
 
+/// What a backend tool spec contributes to `--help --examples`: the heading
+/// label (`tab.click (browser_click)`) and the rendered argument bullets.
+///
+/// The CLI's own examples and the MCP tool arguments are printed as two
+/// sections — the first is runnable as a CLI command, the second documents the
+/// wire call the command maps to (and is what `tool call` takes), so neither
+/// audience is served by hiding the other.
+struct ToolExamples {
+    label: String,
+    bullets: Vec<String>,
+}
+
+impl ToolExamples {
+    /// Heading + bullets, the shape the plugin-declared command path prints.
+    fn rendered(&self) -> String {
+        let mut lines = vec![format!("Examples for {}:", self.label)];
+        lines.extend(self.bullets.iter().cloned());
+        lines.join("\n")
+    }
+}
+
 /// Like [build_command_examples] but for an already-resolved tool — used by
 /// plugin-declared commands (`ToolSpec.cliName`), whose tool name comes from the
 /// spec rather than from `CommandDef.tool_name_fn`.
 ///
 /// `Err` carries the reason as a phrase the caller drops into its own message,
 /// so both the one-line report and the built-in fallback can explain themselves.
-async fn build_tool_examples(base_url: &str, tool: &str) -> Result<String, String> {
+async fn build_tool_examples(base_url: &str, tool: &str) -> Result<ToolExamples, String> {
     let values = match probe_tool_specs_with_examples_within(base_url, std::time::Duration::from_secs(2)).await {
         // The request failed (unreachable, timeout, HTTP error, malformed body):
         // only here is "is the backend running?" the honest diagnosis.
@@ -26229,8 +26283,9 @@ async fn build_tool_examples(base_url: &str, tool: &str) -> Result<String, Strin
     };
 
     let label = format!("{}.{} ({})", spec.domain, spec.method, tool);
-    render_tool_examples(&label, &spec.examples)
-        .ok_or_else(|| format!("the tool '{tool}' declares no examples."))
+    let bullets = render_tool_example_bullets(&spec.examples)
+        .ok_or_else(|| format!("the tool '{tool}' declares no examples."))?;
+    Ok(ToolExamples { label, bullets })
 }
 
 /// `plugin commands` — list CLI commands declared by installed plugins via
@@ -32439,6 +32494,7 @@ fn main() {
                     let tool = format!("{}_{}", spec.domain, spec.method);
                     let report = build_tool_examples(&base_url, &tool)
                         .await
+                        .map(|examples| examples.rendered())
                         .unwrap_or_else(|reason| {
                             format!("No examples available for '{spaced}' — {reason}")
                         });
@@ -39366,9 +39422,24 @@ mod tests {
             &example_args(&["e5", "--help", "--examples"]),
         ));
 
+        // Both sections: the CLI's own (runnable) block first, then the MCP
+        // argument examples the backend publishes for the tool.
         assert!(
-            report.starts_with("Examples for tab.click (browser_click):"),
+            report.starts_with("Runnable CLI examples for browser4-cli click:"),
             "report: {report}"
+        );
+        assert!(
+            report.contains("MCP tool arguments for tab.click (browser_click)"),
+            "the MCP section must name the tool it documents: {report}"
+        );
+        assert!(
+            report.contains("Pass them to `browser4-cli tool call browser_click --json`"),
+            "the MCP section must say how to call the tool: {report}"
+        );
+        assert!(
+            report.find("browser4-cli click e5").unwrap_or(usize::MAX)
+                < report.find("MCP tool arguments").unwrap_or(0),
+            "the runnable CLI examples come first: {report}"
         );
         assert!(
             report.contains("  - Click a snapshot ref: `{\"selector\": \"#submit\"}`"),
@@ -39410,7 +39481,7 @@ mod tests {
         ));
 
         assert!(
-            report.contains("Examples for tab.tabs (browser_tabs):"),
+            report.contains("MCP tool arguments for tab.tabs (browser_tabs)"),
             "report: {report}"
         );
         assert!(
@@ -39438,7 +39509,7 @@ mod tests {
         ));
 
         assert!(
-            report.contains("Examples for crawl.submit (crawl_submit):"),
+            report.contains("MCP tool arguments for crawl.submit (crawl_submit)"),
             "report: {report}"
         );
         assert!(
@@ -39536,7 +39607,7 @@ mod tests {
         ));
 
         assert!(
-            report.starts_with("Examples for browser4-cli batch (built into the CLI):"),
+            report.starts_with("Runnable CLI examples for browser4-cli batch:"),
             "report: {report}"
         );
         assert!(
@@ -39545,7 +39616,7 @@ mod tests {
         );
         assert!(
             report.contains(
-                "Tool-level examples are unavailable: the command maps to no single tool."
+                "MCP tool arguments are unavailable: the command maps to no single tool."
             ),
             "report: {report}"
         );
@@ -39588,11 +39659,11 @@ mod tests {
         ));
 
         assert!(
-            report.starts_with("Examples for browser4-cli click (built into the CLI):"),
+            report.starts_with("Runnable CLI examples for browser4-cli click:"),
             "report: {report}"
         );
         assert!(
-            report.contains("Tool-level examples are unavailable: the backend is running"),
+            report.contains("MCP tool arguments are unavailable: the backend is running"),
             "report: {report}"
         );
         assert!(
@@ -39616,12 +39687,12 @@ mod tests {
         ));
 
         assert!(
-            report.starts_with("Examples for browser4-cli click (built into the CLI):"),
+            report.starts_with("Runnable CLI examples for browser4-cli click:"),
             "report: {report}"
         );
         assert!(report.contains("  browser4-cli click e5"), "report: {report}");
         assert!(
-            report.contains("Tool-level examples are unavailable: is the backend running?"),
+            report.contains("MCP tool arguments are unavailable: is the backend running?"),
             "report: {report}"
         );
         assert!(
@@ -39631,7 +39702,7 @@ mod tests {
     }
 
     #[test]
-    fn examples_report_missing_tool_and_missing_examples() {
+    fn examples_missing_tool_and_missing_examples() {
         // Reachable backend that does not advertise the tool at all: `click`
         // falls back to its built-in examples, and the reason is still stated.
         let without_click = spawn_status_mock_server(
@@ -39645,12 +39716,12 @@ mod tests {
             &example_args(&["e5", "--examples"]),
         ));
         assert!(
-            report.starts_with("Examples for browser4-cli click (built into the CLI):"),
+            report.starts_with("Runnable CLI examples for browser4-cli click:"),
             "report: {report}"
         );
         assert!(
             report.contains(
-                "Tool-level examples are unavailable: the backend does not advertise 'browser_click'."
+                "MCP tool arguments are unavailable: the backend does not advertise 'browser_click'."
             ),
             "report: {report}"
         );
@@ -39667,7 +39738,7 @@ mod tests {
         ));
         assert!(
             report.contains(
-                "Tool-level examples are unavailable: the tool 'browser_click' declares no examples."
+                "MCP tool arguments are unavailable: the tool 'browser_click' declares no examples."
             ),
             "report: {report}"
         );
@@ -39677,13 +39748,16 @@ mod tests {
     fn examples_resolve_a_plugin_declared_command_tool() {
         // `profile import` is not in commands_map: its tool name comes from the
         // declared spec (`profile_import` + `import`), which is why the declared
-        // path resolves the tool itself and calls build_tool_examples.
+        // path resolves the tool itself and calls build_tool_examples. Its
+        // examples are the arguments the declared command takes, so the block is
+        // rendered as `Examples for <label>:`.
         let base_url = spawn_status_mock_server("200 OK", TOOL_SPECS_FIXTURE);
         let report = block_on(build_tool_examples(&base_url, "profile_import_import"))
-            .expect("the fixture declares profile_import_import");
+            .expect("the fixture declares profile_import_import")
+            .rendered();
 
         assert!(
-            report.contains("Examples for profile_import.import (profile_import_import):"),
+            report.starts_with("Examples for profile_import.import (profile_import_import):"),
             "report: {report}"
         );
         assert!(
@@ -39692,18 +39766,42 @@ mod tests {
         );
     }
 
+    /// A command with no bundled example block (the hidden ones; #634 filled in
+    /// every visible page) still gets the MCP section when the backend
+    /// advertises the tool — without a dangling CLI heading or a leading blank
+    /// line.
     #[test]
-    fn render_tool_examples_returns_none_without_renderable_examples() {
+    fn cli_and_tool_examples_omits_the_cli_section_when_the_command_ships_none() {
+        let examples = ToolExamples {
+            label: "code.read (code_read)".to_string(),
+            bullets: vec!["  - Read a span: `{\"path\": \"a.kt\", \"start\": 1}`".to_string()],
+        };
+        let report = cli_and_tool_examples("code read", &[], &examples, "code_read");
+
+        assert_eq!(
+            report.lines().next(),
+            Some("MCP tool arguments for code.read (code_read):"),
+            "an empty CLI section must not leave a heading or a blank line: {report:?}"
+        );
+        assert!(
+            !report.contains("Runnable CLI examples"),
+            "there are no CLI examples to head: {report}"
+        );
+        assert!(
+            report.contains("browser4-cli tool call code_read --json"),
+            "the section must say how to call the tool: {report}"
+        );
+    }
+
+    #[test]
+    fn render_tool_example_bullets_returns_none_without_renderable_examples() {
         // Nothing callable and nothing to show → the caller prints its message
         // instead of a header with no bullets.
-        assert!(render_tool_examples("tab.click (click)", &[]).is_none());
-        assert!(render_tool_examples(
-            "tab.click (click)",
-            &[ToolExampleSpec {
-                title: Some("Not written yet".to_string()),
-                ..Default::default()
-            }]
-        )
+        assert!(render_tool_example_bullets(&[]).is_none());
+        assert!(render_tool_example_bullets(&[ToolExampleSpec {
+            title: Some("Not written yet".to_string()),
+            ..Default::default()
+        }])
         .is_none());
     }
 

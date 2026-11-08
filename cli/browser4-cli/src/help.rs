@@ -302,7 +302,7 @@ pub const GLOBAL_OPTIONS: &[GlobalOption] = &[
         flags: "--help --examples",
         json_key: "--help --examples",
         json_type: "bool",
-        description: "Print runnable usage examples: the examples bundled with the command, then the backend's tool-level examples when it advertises any",
+        description: "Print runnable usage examples: the command's bundled CLI examples, then the MCP argument examples the backend publishes for the tool it maps to",
     },
     GlobalOption {
         flags: "-v, --version",
@@ -5038,9 +5038,9 @@ fn hidden_command_groups() -> Vec<HiddenGroup> {
 /// prints under `Examples:`.
 ///
 /// They ship inside the binary, so `--help <command> --examples` can answer
-/// without a backend. The backend's tool-level examples (titles, notes,
-/// snippets) are richer and take precedence when the server is reachable; see
-/// `build_command_examples` in `main.rs`.
+/// without a backend. When the server is reachable the backend's MCP tool
+/// arguments (titles, notes, snippets) are printed as a **second** section
+/// instead of replacing these; see `build_command_examples` in `main.rs`.
 ///
 /// The whole section is collected, not just its first group: several pages use
 /// a blank line to separate example groups (`snapshot`, `htmlsnapshot`, `loop`,
@@ -5094,56 +5094,6 @@ pub fn help_hint(command: &str) -> String {
         "Run `browser4-cli --help {}` for the options and examples.",
         public_command_name(command)
     )
-}
-
-/// Reason printed when the backend answered but advertises no tool-level
-/// examples for the command.
-///
-/// This is *not* an outage: `GET /mcp/tools/specs` only lists plugin-declared
-/// CLI tools, so it is empty on a stock install while the backend is perfectly
-/// healthy. The old wording ("is the backend running?") turned a healthy
-/// backend into an apparent outage and contradicted the runnable examples the
-/// same help page had just advertised.
-#[allow(dead_code)] // adopted by the `--help --examples` handler in main.rs
-pub const NO_TOOL_EXAMPLES_REASON: &str =
-    "the backend advertises no tool-level examples for this command.";
-
-/// Reason printed only for a genuine request failure (unreachable, timed out,
-/// non-2xx, malformed body) — never for an empty spec list.
-#[allow(dead_code)] // adopted by the `--help --examples` handler in main.rs
-pub const BACKEND_UNREACHABLE_REASON: &str = "is the backend running?";
-
-/// Render the `--help <command> --examples` report.
-///
-/// `backend_failure` is `None` when the backend answered (even with an empty
-/// spec list) and `Some(reason)` only when the request itself failed — the
-/// phrase "is the backend running?" must never appear for a reachable backend.
-/// The CLI's own example block ships in the binary, so the report is useful
-/// with no backend at all.
-#[allow(dead_code)] // adopted by the `--help --examples` handler in main.rs
-pub fn examples_report(command: &str, backend_failure: Option<&str>) -> String {
-    let resolved = resolve_command_name(command).unwrap_or(command);
-    let public = public_command_name(resolved);
-    let local = command_examples(resolved);
-
-    if local.is_empty() {
-        let reason = backend_failure.unwrap_or(NO_TOOL_EXAMPLES_REASON);
-        return format!("No examples available for '{public}' — {reason}");
-    }
-
-    let mut lines = vec![format!(
-        "Examples for browser4-cli {public} (built into the CLI):"
-    )];
-    lines.extend(local);
-    lines.push(String::new());
-    match backend_failure {
-        Some(reason) => lines.push(format!("Tool-level examples are unavailable: {reason}")),
-        None => lines.push(format!("Tool-level examples: {NO_TOOL_EXAMPLES_REASON}")),
-    }
-    lines.push(format!(
-        "Run `browser4-cli --help {public}` for arguments, options, and notes."
-    ));
-    lines.join("\n")
 }
 
 /// Commands that are subcommands of `cmd`, in definition order.
@@ -5859,62 +5809,6 @@ mod tests {
             assert!(
                 help.contains("frame selected by `frame`"),
                 "`help {name}` never mentions frame scoping:\n{help}"
-            );
-        }
-    }
-
-    /// `--help set --examples` must never claim the backend is down: the
-    /// examples ship in the binary and the backend's empty spec list is a
-    /// normal, healthy state.
-    #[test]
-    fn test_help_examples_never_blame_a_healthy_backend() {
-        let report = examples_report("set", None);
-        assert!(
-            report.contains("Examples for browser4-cli set (built into the CLI):"),
-            "got: {report}"
-        );
-        assert!(
-            report.contains("browser4-cli set geo --lat"),
-            "the set examples must be listed: {report}"
-        );
-        assert!(
-            !report.contains(BACKEND_UNREACHABLE_REASON),
-            "--help set --examples blamed a healthy backend: {report}"
-        );
-        assert!(
-            report.contains(NO_TOOL_EXAMPLES_REASON),
-            "the empty spec list needs a truthful reason: {report}"
-        );
-
-        // A genuine request failure keeps the outage wording.
-        let failed = examples_report("set", Some(BACKEND_UNREACHABLE_REASON));
-        assert!(
-            failed.contains("Tool-level examples are unavailable: is the backend running?"),
-            "got: {failed}"
-        );
-
-        // The commands the issue named must all answer with real examples.
-        for command in [
-            "set",
-            "is-visible",
-            "is-enabled",
-            "is-checked",
-            "check",
-            "uncheck",
-            "focus",
-            "scrollintoview",
-            "highlight",
-            "pushstate",
-            "crawl",
-        ] {
-            let report = examples_report(command, None);
-            assert!(
-                report.starts_with("Examples for browser4-cli "),
-                "{command} has no static examples: {report}"
-            );
-            assert!(
-                !report.contains(BACKEND_UNREACHABLE_REASON),
-                "{command} blamed a healthy backend: {report}"
             );
         }
     }

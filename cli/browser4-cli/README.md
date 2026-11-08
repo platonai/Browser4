@@ -482,7 +482,7 @@ Keys: `server` (default Browser4 URL), `timeout` (seconds, positive integer), `p
 | Option | Description |
 |---|---|
 | `--help [command]` | Print help (all commands, or detailed help for a specific command) |
-| `--help --examples` | Print every runnable example bundled with a command (all of a page's `Examples:` groups, not just the first; every visible command ships one) and, when the backend advertises them, its richer tool-level examples |
+| `--help --examples` | Print both example sections: the command's bundled CLI examples (all of a page's `Examples:` groups, not just the first; every visible command ships one), then the MCP argument examples the backend publishes for the tool the command maps to — the latter are what `browser4-cli tool call <tool> --json` takes |
 | `--version` | Print version |
 | `--json` | Emit machine-parseable JSON to stdout |
 | `-q, --quiet` | Suppress normal output, only show errors |
