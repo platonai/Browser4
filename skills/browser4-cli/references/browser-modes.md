@@ -16,14 +16,12 @@ session (whose state container) × display (how it renders) × source (whose bro
 (concurrency and state isolation) → display (must a human participate?) → secondary knobs (§4).
 
 > **Two hard constraints** limit the combinations:
-> 1. **SWARM always launches its own browsers.** A swarm session cannot attach to
->    an existing browser — `swarm create` only accepts
->    `--profile-mode`/`--max-open-tabs`/`--max-browser-contexts`/`--display-mode`.
-> 2. **The display mode is fixed when the session is created.** Reconnecting with
->    `open --headed` on an existing session ignores the flag; the CLI warns only
->    when the requested mode differs from the active session's (re-running
->    `open --headed` on a headed session stays silent). Use `close` + `open`, or
->    `open --fresh` to change mode.
+> 1. **SWARM always launches its own browsers.** A swarm session cannot attach to an existing
+>    browser — `swarm create` only accepts `--profile-mode`/`--max-open-tabs`/`--max-browser-contexts`/`--display-mode`.
+> 2. **The display mode is fixed when the session is created.** Reconnecting with `open --headed` on
+>    an existing session ignores the flag (the CLI warns only when the requested mode differs from
+>    the active session's; re-running `open --headed` on a headed session stays silent). Use
+>    `close` + `open`, or `open --fresh`, to change mode.
 
 ---
 
@@ -88,10 +86,9 @@ session sees it. `open` accepts exactly one of them — combining `--display-mod
 caps how many tabs the session's context may keep open.
 
 **Resolution order:** (1) `browser.display.mode` in the server config (shipped default `HEADLESS`); (2) the
-session's own display preference wins over the server default — an explicit `displayMode` capability beats
-the `headed` boolean, and both beat the server default; (3) `open` always sends an explicit preference
-(`--headed`/`--display-mode` → that mode, otherwise HEADLESS), so the server default in practice only
-applies to sessions created by other clients.
+session's own display preference — an explicit `displayMode` capability beats the `headed` boolean, and both
+beat the server default; (3) `open` always sends an explicit preference (`--headed`/`--display-mode` → that
+mode, otherwise HEADLESS), so the server default in practice only applies to sessions created by other clients.
 
 **Environment overrides**
 
@@ -142,30 +139,23 @@ like GUI, and in Docker/headless environments the launch is forced headless anyw
 
 **Headed-mode reliability and anti-bot notes**
 
-- After `open --headed` (or `open` in a headed default mode), the CLI asks the backend
-  whether a visible window actually exists for **this session** and reports the answer.
-  A warning is printed only when the check concludes the window is *hidden* — the
-  session was launched headless even though a window was requested, or its window is
-  minimized. If you see that warning, `close` and retry `open --headed` once. The check
-  runs only for a **freshly created** session — reconnecting to an existing session
-  never runs it (the mode is already fixed), which also prevents false "display-mode
-  bug" alerts when a headless session is reopened with `--headed`.
-- **The check answers three states, not two.** It reports `VISIBLE`, `HIDDEN` or
-  `UNKNOWN`, and “could not check” is deliberately its own answer: it is never rendered
-  as success *and* never as a warning. `VISIBLE` requires two independent facts to
-  agree — the process was not launched headless **and** the browser reports a
-  non-minimized window (`Browser.getWindowForTarget`) — because a headless Chrome
-  answers that call with a synthetic window too. `UNKNOWN` covers a browser that has
-  not been launched yet (the driver is created lazily by the first navigation, so
-  checking before that is meaningless), a missing PID marker, or an unreadable window
-  state.
-- **The check is session-scoped, on every platform.** It observes only this session's
-  browser: the PID from that session's own `launcher.pid` marker, that process's live
-  command line (`--headless` or not) and the window state read through the session's
-  own CDP driver. Nothing is inferred from other processes on the machine, so a
-  concurrent headless session can no longer skew the answer — the machine-wide process
-  scan that used to produce exactly that false positive is gone. The same facts are
-  available to scripts as the JSON of the `browser_window_state` tool
+- After `open --headed` (or `open` in a headed default mode), the CLI asks the backend whether a
+  visible window actually exists for **this session**. A warning is printed only when the check
+  concludes the window is *hidden* (launched headless anyway, or minimized) — then `close` and retry
+  `open --headed` once. The check runs only for a **freshly created** session; reconnecting never runs
+  it (the mode is already fixed), which prevents false "display-mode bug" alerts on a reopened
+  `--headed` session.
+- **The check answers three states, not two.** `VISIBLE`, `HIDDEN` or `UNKNOWN`, and "could not check"
+  is deliberately its own answer — never rendered as success *and* never as a warning. `VISIBLE`
+  requires two independent facts to agree: the process was not launched headless **and** the browser
+  reports a non-minimized window (`Browser.getWindowForTarget`), because a headless Chrome answers that
+  call with a synthetic window too. `UNKNOWN` covers a browser not launched yet (the driver is created
+  lazily by the first navigation), a missing PID marker, or an unreadable window state.
+- **The check is session-scoped, on every platform**: this session's own `launcher.pid` marker, that
+  process's live command line (`--headless` or not) and the window state through the session's own CDP
+  driver. Nothing is inferred from other processes, so a concurrent headless session can no longer skew
+  the answer (the machine-wide process scan that produced exactly that false positive is gone). The
+  same facts are available to scripts as the JSON of the `browser_window_state` tool
   (`{visibility, verified, source, reason, observation{…}}`).
 - Browser4 passes plain `--headless` (never `--headless=new`), forces
   `--disable-blink-features=AutomationControlled`, and leaves user-agent rotation off by default because
@@ -197,12 +187,11 @@ like GUI, and in Docker/headless environments the launch is forced headless anyw
     `HeadlessChrome` token, and `Emulation.setFocusEmulationEnabled` for focus/visibility.
 
   Evidence and the reproducing probe live in `docs-dev/copilot/bot-stealth-probes/README.md`.
-- **The `HeadlessChrome` token is replaced at launch, in headless mode.** A
-  CDP-driven headless Chrome advertises `HeadlessChrome/<version>` by default; that
-  single token fails SannySoft `HEADCHR_UA`, Incolumitas `intoli.userAgent`, BrowserScan's
-  aggregate "Robot" badge and deviceandbrowserinfo's `hasBotUserAgent`, and it contradicts
-  the `Sec-CH-UA*` client hints the same browser sends. Browser4 therefore resolves the
-  installed Chrome's major version and passes an explicit `--user-agent`:
+- **The `HeadlessChrome` token is replaced at launch, in headless mode.** A CDP-driven headless
+  Chrome advertises `HeadlessChrome/<version>`, which alone fails SannySoft `HEADCHR_UA`,
+  Incolumitas `intoli.userAgent`, BrowserScan's "Robot" badge and deviceandbrowserinfo's
+  `hasBotUserAgent`, and contradicts the `Sec-CH-UA*` client hints the same browser sends. Browser4
+  resolves the installed Chrome's major version and passes an explicit `--user-agent`:
 
   | Display mode | `navigator.userAgent` |
   |---|---|
@@ -210,28 +199,22 @@ like GUI, and in Docker/headless environments the launch is forced headless anyw
   | `--headed` | identical, and it is Chrome's own native value |
   | `--supervised` | the same as whichever of the two the supervisor actually starts |
 
-  The platform prefix follows the host (`Macintosh; Intel Mac OS X 10_15_7` on macOS,
-  `X11; Linux x86_64` elsewhere) and the version is Chrome's reduced form
-  (`<major>.0.0.0`). A launch-time `--user-agent` is used deliberately: it is the only
-  mechanism that reaches every JavaScript scope of a session — page, iframes,
-  dedicated/shared/service workers.
+  The platform prefix follows the host (`Macintosh; Intel Mac OS X 10_15_7` on macOS, `X11; Linux
+  x86_64` elsewhere) and the version is Chrome's reduced form (`<major>.0.0.0`). A launch-time
+  `--user-agent` is deliberate: it is the only mechanism that reaches every JavaScript scope —
+  page, iframes, dedicated/shared/service workers.
 
-  The switch is added to **headless launches only**. A headed Chrome already reports the
-  reduced form natively, and the switch is not free: whenever `--user-agent` is on the
-  command line, Chrome empties
-  `navigator.userAgentData.getHighEntropyValues(['fullVersionList'])` (the low-entropy
-  `brands` list stays) — measured on Chrome 155, even with a string byte-identical to the
-  native one. rebrowser-bot-detector reads that list and rates an empty one "Cannot detect
-  Chrome version" (0.5), so the headed session keeps the metadata instead of a redundant
-  override. On headless the empty `fullVersionList` is the accepted cost of removing the
+  The switch is added to **headless launches only**: a headed Chrome already reports the reduced
+  form natively, and it is not free — with `--user-agent` on the command line Chrome empties
+  `navigator.userAgentData.getHighEntropyValues(['fullVersionList'])` (the low-entropy `brands` list
+  stays, measured on Chrome 155 even for a byte-identical string), which rebrowser-bot-detector
+  rates "Cannot detect Chrome version" (0.5). Headless accepts that as the cost of removing the
   one-line `HeadlessChrome` verdict.
 
   Tune it with `browser.launch.user.agent` (an explicit string; a `Headless` token in it is
-  repaired rather than trusted) or disable the replacement entirely with
-  `browser.launch.user.agent.stealth=false`. When the Chrome major version cannot be
-  determined the driver logs a warning and leaves Chrome's default user agent in place —
-  expect the `HeadlessChrome` token in that case, and set `browser.launch.user.agent` to
-  fix it.
+  repaired, not trusted) or disable it with `browser.launch.user.agent.stealth=false`; when the
+  Chrome major version cannot be determined the driver logs a warning and keeps Chrome's default
+  user agent — expect `HeadlessChrome` in that case.
 - **Master switch: `browser.stealth.enabled` (default `true`).** Setting it to `false`
   turns off **every** Browser4 stealth injection in one place: the page-world
   `js/stealth.js` payload is no longer registered on new documents, and the headless
@@ -244,61 +227,49 @@ like GUI, and in Docker/headless environments the launch is forced headless anyw
   or pass `-Dbrowser.stealth.enabled=false` when starting the backend.
   **The `ego-lite` channel skips Browser4's stealth layer automatically** (see the
   managed-channel section below) — no configuration is needed for that case.
-- `navigator.deviceMemory` and `navigator.maxTouchPoints` are **Chrome's own readings of the
-  host**, not Browser4 overrides — verify before reporting them as defects. Chrome derives
-  `deviceMemory` from the host RAM by rounding down to a power of two, and recent Chrome
-  builds no longer clamp it at 8, so a 32 GB host legitimately reports `32` (SannySoft's
-  `CHR_MEMORY` check predates that change). `maxTouchPoints` reflects the host's touch
-  digitizer and can be non-zero while `'ontouchstart' in window` stays false and
-  `(pointer: fine)` matches — that is what a desktop Chrome with a touch-capable display
-  reports, and `(any-pointer: coarse)` is true in that case. Compare against a plain
-  `chrome --headless` reading on the same host before filing either as a driver bug.
-- A driven tab reports itself **visible and focused** by default. A tab created over CDP is never
-  made the window's selected tab, so without help it reports `document.hasFocus() == false`, and one
-  that is not the selected tab additionally reports `document.visibilityState == "hidden"` /
-  `document.hidden == true` — readings a bot detector takes as a headless browser (ipfighter's
-  `windowFocus` rule checks `document.hasFocus()`), and not what a plainly launched headless Chrome
-  reports on the same host. Measure both: on Chrome 153.0.8010.53 a single driven tab reads
-  `visible / false / false` while two driven tabs in one browser give `hidden / true / false` for the
-  tab that is not selected. Each tab is therefore sent one
-  `Emulation.setFocusEmulationEnabled {enabled: true}` (the mechanism Playwright uses), which makes
-  it report a foreground document **without activating it** — `Target.activateTarget` /
-  `Page.bringToFront` are deliberately avoided because they would steal the focus of concurrent
-  sessions in the same browser. Set `browser.focus.emulation=false` to keep the real window state
-  instead: the only way to preserve background-tab throttling and lazy-loading exactly as an
-  inactive tab behaves, at the cost of the hidden/unfocused readings above.
-- `console` (list console messages) reads them from the DevTools protocol, so it does **not**
-  patch the page: `console.log` stays the native function and no driver-owned global appears on
-  `window`. Capture starts with the first `console` call of a session, so messages logged before it
-  are not listed — the same boundary the page-side buffer had. Enabling the CDP console domain is
-  the same family of side effect that made the base library stop sending `Runtime.enable` by
-  default, so it was measured rather than assumed: on Chrome 153.0.8010.52 the getter,
-  inherited-getter and prototype-Proxy probes on a logged object stay silent with the domain off
-  and on, while the page-side patch fails the same page's `String(console.log)` check.
-  `browser.console.capture=false` still opts out of the protocol entirely and takes that
-  page-visible patch instead.
-- Where the transport cannot enable the CDP console domain (an extension relay), the driver falls
-  back to the historical page-side buffer, which does replace `console.*` while it is active. The
-  fallback is decided once per driver and the warning names the underlying error, so it is neither
-  retried nor reported twice. A relay that accepts the command but never delivers console events
-  cannot be told apart from a page that logs nothing: `console` then prints an empty list with no
-  error, so treat an unexpectedly empty console on a relayed session as "capture unavailable",
-  not as "the page is quiet".
-- Pointer coordinates are humanised the same way the interaction delays are: the pointer move
-  that precedes a click lands within ±2 px of the element's center (clamped to the element box),
-  so repeated clicks on the same element do not hit the identical pixel. Explicit coordinates
-  passed to `mousemove` are **not** jittered — that command means "put the pointer exactly here".
-  A trusted click presses at that same hovered point instead of the element's center: Chrome moves
-  the pointer to the pressed coordinates before `mousedown`, so a press at the center would emit a
-  second `mousemove` back to the exact center and repeat the same pixel on every click. The hit
-  test is repeated at the pressed point, so the click still never lands on an overlay that covers
-  the element's edge.
-- Clicks are dispatched as **trusted** input (`Input.dispatchMouseEvent`, i.e. `event.isTrusted` is
-  true and the events carry their real coordinates) instead of synthetic DOM events. The driver
-  first verifies with a one-shot check that trusted input actually reaches the page on this
-  platform/session, and falls back to DOM dispatch when the element cannot be clicked at its own
-  coordinates (occluded by an overlay, `pointer-events: none`, inside a frame) — so the click always
-  lands on the requested element, never on whatever happens to be on top.
+- `navigator.deviceMemory` and `navigator.maxTouchPoints` are **Chrome's own readings of the host**,
+  not Browser4 overrides. `deviceMemory` is the host RAM rounded down to a power of two (recent
+  Chrome no longer clamps it at 8, so 32 GB legitimately reports `32`; SannySoft's `CHR_MEMORY`
+  predates that). `maxTouchPoints` follows the touch digitizer — non-zero while `'ontouchstart' in
+  window` is false and `(pointer: fine)` matches is a touch-capable desktop (`(any-pointer: coarse)`
+  is true). Compare with a plain `chrome --headless` reading before filing either as a driver bug.
+- A driven tab reports itself **visible and focused** by default. A tab created over CDP is never the
+  window's selected tab, so it reports `document.hasFocus() == false`, and an unselected one also
+  `document.visibilityState == "hidden"` / `document.hidden == true` — what a bot detector reads as a
+  headless browser (ipfighter's `windowFocus` rule checks `document.hasFocus()`), unlike a plainly
+  launched headless Chrome. Measured on Chrome 153.0.8010.53: one driven tab reads
+  `visible / false / false`, two driven tabs give `hidden / true / false` for the unselected one.
+  Each tab therefore gets one `Emulation.setFocusEmulationEnabled {enabled: true}` (Playwright's
+  mechanism), reporting a foreground document **without activating it** —
+  `Target.activateTarget`/`Page.bringToFront` would steal focus from concurrent sessions.
+  `browser.focus.emulation=false` keeps the real window state instead, preserving background-tab
+  throttling and lazy-loading exactly at the cost of the readings above.
+- `console` reads messages from the DevTools protocol, so it does **not** patch the page:
+  `console.log` stays native and no driver-owned global appears on `window`. Capture starts with the
+  first `console` call of a session, so earlier messages are not listed — the boundary the page-side
+  buffer had. The CDP console domain belongs to the same family of side effect that made the base
+  library stop sending `Runtime.enable` by default, so it was measured: on Chrome 153.0.8010.52 the
+  getter, inherited-getter and prototype-Proxy probes on a logged object stay silent with the domain
+  off and on, while the page-side patch fails the same page's `String(console.log)` check.
+  `browser.console.capture=false` opts out of the protocol entirely and takes that page-visible
+  patch instead.
+- Where the transport cannot enable the domain (an extension relay), the driver falls back to the
+  page-side buffer once per driver — it does replace `console.*` while active, and the warning names
+  the underlying error, so it is neither retried nor reported twice. A relay that accepts the command
+  but never delivers events cannot be told from a page that logs nothing: `console` prints an empty
+  list with no error, so treat that as "capture unavailable", not "the page is quiet".
+- Pointer coordinates are humanised like the interaction delays: the move before a click lands within
+  ±2 px of the element's center (clamped to the box), so repeated clicks do not hit the identical
+  pixel. Explicit coordinates
+  passed to `mousemove` are **not** jittered — that command means "put the pointer exactly here". A
+  trusted click presses at that hovered point rather than the center (Chrome would otherwise move the
+  pointer back and repeat the same pixel), and the hit test is repeated there, so the click still
+  never lands on an overlay covering the element's edge.
+- Clicks are dispatched as **trusted** input (`Input.dispatchMouseEvent` — `event.isTrusted` true,
+  real coordinates) instead of synthetic DOM events. A one-shot check first proves trusted input
+  reaches the page on this platform/session; when the element cannot be clicked at its own
+  coordinates (occluded, `pointer-events: none`, inside a frame) the driver falls back to DOM
+  dispatch, so the click lands on the requested element, never on whatever is on top.
 - Sites with strong bot protection may still block automated sessions. When the goal is "act as the logged-in
   user", prefer the attach paths (axis 3) over launching another browser, and consider raising
   `--interact-level` (§4).
@@ -350,42 +321,27 @@ to switch. Any other channel name (`msedge`, …) is attach-only — `open` reje
 
 **`attach --cdp` endpoint resolution**
 
-`--cdp` accepts a channel name (`chrome`, `chrome-canary`, `msedge`, `msedge-dev`, `ego-lite`, …), an HTTP endpoint
-(`http://localhost:9222`), a WebSocket URL, a bare port, or `host:port`. A **browser-level** WebSocket
-(`ws://…/devtools/browser/<uuid>`) is attached to over that socket; a **page-level** one is only a
-host:port hint, with pages resolved over `GET /json`.
-
-Channel-name resolution takes the first candidate that can host a page: the browser's
-`<user-data-dir>/DevToolsActivePort` (second line = its socket) and `--remote-debugging-port=N`, then the
-process's other listening ports, the channel default, and a 9222–9333 scan. Browsers started with
-`--remote-debugging-port=0` (Browser4-launched) resolve through `DevToolsActivePort` on every platform —
-the CLI reads the `--user-data-dir` from the running process; only the listening-port sweep is
-Windows-only, and only when that file cannot be located.
-
-Chrome's built-in `chrome://inspect/#remote-debugging` toggle is a supported `--cdp` endpoint: it publishes
-a browser-level WebSocket and 404s every `/json*` path, so `attach --cdp chrome` resolves it from
-`DevToolsActivePort`, an explicit `ws://127.0.0.1:<port>/devtools/browser/<uuid>` works too, and pages
-come from `Target.getTargets`. `attach --extension` stays available as an alternative.
-
-Attaching binds the session to a page tab of the target browser — an existing page when one is available,
-otherwise a newly created `about:blank` tab. Subsequent commands act on that bound tab, and `close` closes it
-(see [attach.md](attach.md#close-vs-disconnect)); tabs you opened yourself and never drove through the session
-are left alone.
+`--cdp` takes a channel name (`chrome`, `msedge`, `ego-lite`, …), an HTTP endpoint, a WebSocket URL, a
+bare port, or `host:port`; a channel resolves in tiers — the browser's own `DevToolsActivePort`/debug
+port first, then its other listeners, the channel default and a 9222–9333 scan — so a
+`--remote-debugging-port=0` browser (what Browser4 launches) is found on every platform, while Chrome's
+built-in `chrome://inspect/#remote-debugging` toggle is attachable over its browser-level socket. The
+endpoint is verified — page targets, and the browser family against the requested channel — **before**
+anything binds. Attaching binds a page tab: an existing one, else a new `about:blank`; `close` closes
+that tab and leaves the browser running ([attach.md](attach.md#endpoint-resolution-channel-name),
+[close semantics](attach.md#close-vs-disconnect)).
 
 **`attach --extension` constraints**
 
-- Non-debuggable pages (`chrome://`, `edge://`, `devtools://`, extension pages) are filtered out; navigating to
-  a `chrome://` page can drop the WebSocket.
-- Every attach creates a **new session and a new tab scope**: tabs from the previous connection are still open
-  in Chrome but are no longer tracked. Use `-s <name>` to preserve a named session across re-attach.
-- `BROWSER4_EXTENSION_TOKEN` only auto-approves the connect page; it is not a WebSocket credential — do not
-  treat it as a security boundary.
-- `--endpoint <server-url>` selects the Browser4 server to run against; it is not a CDP endpoint and cannot be
-  combined with `--extension`. `--cdp` is a different transport too, so it cannot be combined with
-  `--extension` either — one transport per invocation.
-- `--extension <channel>` opens the connect page **only in that channel's browser** and verifies the family that
-  actually answers; Chrome answering an `msedge` request fails the attach and undoes the session instead of
-  driving the wrong browser silently. See [attach.md](attach.md#verify-the-actual-browser-after-attach).
+- Non-debuggable pages (`chrome://`, `edge://`, `devtools://`, extension pages) are filtered out, and
+  navigating to a `chrome://` page can drop the relay.
+- Every attach creates a **new session and a new tab scope**; use `-s <name>` to keep one across re-attach.
+- One transport per invocation: `--extension` combines with neither `--cdp` (a different transport) nor
+  `--endpoint` (a server URL, not a CDP endpoint).
+- `BROWSER4_EXTENSION_TOKEN` only auto-approves the connect page — it is not a security boundary.
+- `--extension <channel>` opens the connect page **only in that channel's browser**; a wrong family fails
+  the attach instead of driving the wrong browser:
+  [attach.md](attach.md#verify-the-actual-browser-after-attach).
 
 **`SYSTEM_DEFAULT` profile mode is deprecated.** Pointing Browser4 at your everyday browser profile no longer
 works with Chrome ≥143. To act as the logged-in user, use one of the attach paths; to move authentication into
@@ -476,30 +432,28 @@ Both behaviours below are documented but not covered by an assertion. Each has a
 under `browser4-tests/tests-production/` (they print a verdict and never assert, so any measured outcome
 exits 0).
 
-**A. Named-session profile binding across a backend restart.** Named sessions get the dedicated profile
-directory `cx.<sessionUuid>`, and the CLI reuses a stored session id only while the backend still reports that
-session as active. The backend's name→UUID mapping is in memory, so after a backend/daemon restart a re-open
-by name may resolve to a *new* UUID and therefore a new (empty) profile directory.
+**A. Named-session profile binding across a backend restart.** Named sessions get the profile directory
+`cx.<sessionUuid>`, and the CLI reuses a stored session id only while the backend still reports that session
+as active. The backend's name→UUID mapping is in memory, so after a restart a re-open by name may resolve to
+a *new* UUID and therefore a new (empty) profile directory.
 
 ```powershell
 # automated (the restart phase is destructive → opt-in)
 pwsh browser4-tests/tests-production/verify-named-session-profile.ps1 -RestartBackend
 ```
 
-Manual equivalent: `browser4-cli -s repro open --headless https://example.com` → `-s repro cookie-set
-b4_repro_marker keepme --expires 7d` (persistent marker) → `-s repro cookie-list` (marker present) →
-`browser4-cli stop` (stops the backend) → `-s repro open --headless https://example.com` (auto-starts a fresh
-backend) → `-s repro cookie-list` (marker still present?). Also compare the directories under
-`~/.browser4/context/groups/named/PULSAR_CHROME/`: a **new** `cx.<uuid>` directory means a new, empty profile.
+Manual equivalent: `-s repro open` → `-s repro cookie-set b4_repro_marker keepme --expires 7d`
+(persistent) → `-s repro cookie-list` (present) → `browser4-cli stop` (stops the backend) → `-s repro
+open` (auto-starts a fresh backend) → `-s repro cookie-list` (still there?). Compare the directories under
+`~/.browser4/context/groups/named/PULSAR_CHROME/` too: a **new** `cx.<uuid>` means a new, empty profile.
 
 - **STABLE** — same session id and the marker cookie came back: reopening by name really restores the same profile.
-- **REBOUND** — the session identity was not preserved (new session id) and/or the marker cookie was lost:
-  login state is *not* guaranteed across a restart. Persist auth with `state-save` / `state-load` instead of
-  relying on the profile. A lost cookie alone does not prove a new profile directory — a non-persistent
-  (temporary/incognito-like) context drops it too — so the script reports the session id, the cookie, and the
-  profile directories as separate signals. The on-disk profile layout has differed between versions, so the
-  directory signal is best effort: both `context/groups/named/**` and `browser/chrome/**` are searched for
-  `cx.*` directories.
+- **REBOUND** — identity was not preserved (new session id) and/or the marker cookie was lost: login state is
+  *not* guaranteed across a restart — persist auth with `state-save`/`state-load` instead. A lost cookie alone
+  does not prove a new profile directory (a non-persistent context drops it too), so the script reports the
+  session id, the cookie and the profile directories as separate signals; the on-disk layout has differed
+  between versions, so the directory signal is best effort (`context/groups/named/**` and `browser/chrome/**`
+  are both searched for `cx.*`).
 
 > **Careful with the restart step:** `browser4-cli stop` also sweeps orphaned browser processes, so every
 > browser Browser4 launched is closed with it.
@@ -513,14 +467,13 @@ chrome --remote-debugging-port=9222 https://example.com
 pwsh browser4-tests/tests-production/verify-attach-close-tabs.ps1 -Cdp 9222
 ```
 
-It reports `PROCESS SURVIVED` / `PROCESS KILLED` plus `TABS CLOSED` (listing the tabs that disappeared) or
+It reports `PROCESS SURVIVED`/`PROCESS KILLED` plus `TABS CLOSED` (listing the tabs that disappeared) or
 `TABS UNTOUCHED`. Extension-attached sessions can be checked by hand: `attach --extension`, note the tabs with
-`tab-list`, `close`, then compare — the relay removes the tabs it drove via `chrome.tabs.remove`.
+`tab-list`, `close`, compare — the relay removes the tabs it drove via `chrome.tabs.remove`.
 
-**Measured results (reference machine, 2026-09-11)** — measured with CLI `4.13.17` and the local runtime
-bundle `4.13.14-SNAPSHOT`; the CLI warned that the served backend was **older than the checked-out sources**
-(`4.13.18-SNAPSHOT`), so re-run both scripts after a bundle rebuild before treating these as current
-behaviour.
+**Measured results (reference machine, 2026-09-11)** — CLI `4.13.17` against runtime bundle
+`4.13.14-SNAPSHOT`, with the CLI warning that the served backend was **older than the checked-out sources**
+(`4.13.18-SNAPSHOT`); re-run both scripts after a bundle rebuild before treating these as current.
 
 | Measurement | Observed |
 |---|---|
