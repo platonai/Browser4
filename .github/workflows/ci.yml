@@ -39,6 +39,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
+      - name: Verify version consistency
+        id: version-consistency
+        shell: bash
+        run: |
+          # Fails in seconds instead of failing the reactor 3 minutes later.
+          # A module added on main whose <parent><version> never received the
+          # version bump merged from the maintenance branch makes Maven build it
+          # under the old version, and every sibling that depends on
+          # ${project.version} then dies with
+          # "Could not find artifact ...:jar:<version>" (2026-11-08 nightly).
+          node bin/version.mjs check
+
       - name: Setup Environment
         id: setup
         uses: ./.github/actions/setup-environment

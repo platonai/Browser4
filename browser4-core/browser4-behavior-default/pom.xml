@@ -15,8 +15,9 @@
 
     <parent>
         <groupId>ai.platon.pulsar</groupId>
-        <artifactId>browser4-core</artifactId>
-        <version>4.16.1-SNAPSHOT</version>
+        <artifactId>browser4</artifactId>
+        <version>4.16.4-SNAPSHOT</version>
+        <relativePath>../../pom.xml</relativePath>
     </parent>
 
     <artifactId>browser4-behavior-default</artifactId>

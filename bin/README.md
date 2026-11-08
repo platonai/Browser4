@@ -192,6 +192,12 @@ Browser4 uses a single VERSION file as the source of truth across all modules.
 
 **Cross-cutting:**
 - `node bin/version.mjs check`: Full consistency check across all version files.
+  Also walks the Maven reactor (`<modules>` from the root pom, since template and
+  generated poms outside it carry unrelated versions) and compares both the project
+  `<version>` and every in-repo `<parent><version>` with `VERSION`. A module whose
+  parent version drifted builds under the old version and breaks any sibling that
+  depends on `${project.version}` — as the 2026-11-08 nightly did after a
+  maintenance-branch merge. Runs in `ci.yml` and `nightly.yml` before the build.
 
 Replaces the previous `version.sh`, `version.ps1`, `bump-version.ps1`,
 `bump-version-patch.ps1`, `update-versions.sh`, and `sync-version.js` scripts.
