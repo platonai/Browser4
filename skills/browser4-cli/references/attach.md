@@ -40,16 +40,9 @@ browser4-cli state-save auth.json
 > **Chrome's built-in remote debugging works too.** `chrome://inspect/#remote-debugging` →
 > *"Allow remote debugging for this browser instance"* (recent Chrome builds) publishes a
 > browser-level WebSocket and answers **every `/json*` path with HTTP 404**. Two ways in, in this
-> order:
->
-> 1. `browser4-cli attach --extension` — the supported path for this mode.
-> 2. Pass the browser-level socket explicitly:
->
-> ```bash
-> browser4-cli attach --cdp ws://127.0.0.1:9222/devtools/browser/<uuid>
-> ```
->
-> The path is the second line of the profile's `DevToolsActivePort` file.
+> order: `browser4-cli attach --extension` (the supported path for this mode), or the browser-level
+> socket passed explicitly — `browser4-cli attach --cdp ws://127.0.0.1:9222/devtools/browser/<uuid>`,
+> the second line of the profile's `DevToolsActivePort` file.
 >
 > `attach --cdp chrome` only finds this browser while the published port is **live** — the
 > `DevToolsActivePort` file survives the browser that wrote it, so a stale copy (often months old)
@@ -192,11 +185,10 @@ Browser4 Extension in Microsoft Edge, then re-run `browser4-cli attach --extensi
 ```
 
 Why a hard failure rather than a warning: Chrome and Edge share the conventional debug
-port 9222, and both run the same Web Store extension id, so a wrong-family bind looks
-exactly like a working one until the session starts reporting missing login state. After a
-refused attach no command can silently drive the wrong browser; the external browser keeps
-running, and re-running the same attach after installing the extension in the right browser
-(or naming the right channel) is the fix — no `close` needed.
+port 9222 and the same Web Store extension id, so a wrong-family bind looks exactly like a
+working one until the session reports missing login state. After a refused attach no command
+can drive the wrong browser; the external browser keeps running, and re-running the same
+attach in the right browser (or naming the right channel) is the fix — no `close` needed.
 
 With an explicit endpoint (`--cdp http://localhost:9222`, `--cdp 9222`, a WebSocket URL)
 there is no channel to compare against: `Attached to …` names the product that answered,
@@ -232,11 +224,9 @@ Re-attach to the same browser explicitly: `browser4-cli attach --extension msedg
 Then verify the connection shows the browser you expect (use `browser4-cli list`).
 ```
 
-Re-run the suggested attach command, then confirm with `list` that the connection shows the browser you expect.
-
 **The error says WHICH link died.** Two failures look alike and are not: the browser process is gone, or the browser is fine and only the tab/driver link died (the tab was closed, the page crashed, or another session detached it). The first reads *"… is no longer reachable — it was closed or crashed"* (`ENDPOINT_UNREACHABLE`); the second reads *"… is still running — only the tab this session was driving is gone"* (`ENDPOINT_NO_PAGE_TARGETS`). Never start hunting for a crashed browser on the second message: `curl http://localhost:<port>/json/version` answers 200 and the browser is untouched.
 
-**Re-attach IS the recovery.** `attach` rebuilds an unhealthy bound driver on the browser it binds, so re-running the same attach command restores a session whose driven tab was lost — no `close` needed first. If the post-attach page read still fails, the browser itself is gone (or the port now answers as a different browser) and the failure says so.
+**Re-attach IS the recovery.** `attach` rebuilds an unhealthy bound driver on the browser it binds, so re-running the same attach command restores a session whose driven tab was lost — no `close` needed first; confirm with `list`. If the post-attach page read still fails, the browser itself is gone (or the port now answers as a different browser) and the failure says so.
 
 ## Patterns
 
@@ -248,7 +238,6 @@ backend, no session, nothing attached:
 
 ```bash
 browser4-cli attach --list
-# Local browsers started with a remote debugging port:
 #
 #   PORT   BROWSER  PAGES  CDP IDENTITY              PROFILE
 #   9222   chrome   3      Chrome/141.0.7390.55      /home/me/.config/google-chrome-debug
@@ -262,11 +251,9 @@ The scan reads every `chrome`/`chromium`/`msedge`/`ego` process command line for
 `--remote-debugging-port` (and, for `--remote-debugging-port=0`, the port published in
 `<user-data-dir>/DevToolsActivePort`), then probes each distinct port so a stale flag cannot look
 usable. `--json` reports the same rows under `browsers` (`port`, `endpoint`, `family`, `reachable`,
-`browser`, `page_targets`, `user_data_dir`).
-
-`--list` is client-side only: it never starts the backend, creates a session, or attaches. It also
-cannot be combined with `--cdp`, `--endpoint` or `--extension` — combining them is refused rather
-than silently ignoring the transport flag.
+`browser`, `page_targets`, `user_data_dir`). `--list` is client-side only — it never starts the
+backend, creates a session, or attaches — and cannot be combined with `--cdp`, `--endpoint` or
+`--extension`; combining them is refused rather than silently ignoring the transport flag.
 
 A browser that is **not** listed was started without the flag. Restart it with
 `--remote-debugging-port=<port>` (Chrome refuses the flag on its default profile, so add a separate
@@ -357,18 +344,15 @@ browser4-cli -s debug-session screenshot --filename state.png
 >
 > The restriction is **not** extension-specific: `attach --cdp <channel|url>` and `attach --endpoint <url> --cdp …` are refused the same way while the unnamed slot drives a browser, because binding them would displace that session. The error names the pattern to use: `browser4-cli -s <name> attach --cdp chrome`.
 
-> **Session-slot semantics:** each distinct `-s <name>` (and the unnamed default slot)
-> resolves to its OWN backend session id; attaching the same browser under two names
-> creates two independent sessions rather than aliasing one. Re-attaching an EXISTING
-> name to an endpoint reuses that name's session (an idempotent re-attach to the same
-> port keeps the existing driver when it is healthy, and rebuilds it when it is not;
-> attaching to a different port rebinds it and logs a warning). Closing one name never
-> tears down a different name's session: when another session still drives the same
-> browser, `close` detaches only — it closes the tab that session drove, leaves the
-> shared browser object, the other session's tab and driver, and the browser process
-> exactly as they were. Closing the last session attached to that browser is the one
-> that tears the shared browser object down. `close --json` reports which case it was:
-> `detachedOnly` plus the `sharedWith` session ids.
+> **Session-slot semantics:** each distinct `-s <name>` (and the unnamed default slot) resolves to
+> its OWN backend session id, so attaching the same browser under two names creates two independent
+> sessions rather than aliasing one. Re-attaching an EXISTING name reuses that name's session (the
+> same port keeps a healthy driver and rebuilds an unhealthy one; a different port rebinds it and
+> logs a warning). Closing one name never tears down another name's session: while another session
+> still drives the same browser, `close` detaches only — it closes the tab that session drove and
+> leaves the shared browser, the other session's driver and the browser process as they were; the
+> last session attached is the one that tears the shared browser object down. `close --json` reports
+> which case it was: `detachedOnly` plus the `sharedWith` session ids.
 
 ### 5. Attach via Browser4 Extension
 
@@ -420,9 +404,8 @@ When the env var is set, the CLI appends `&token=...` to the connect page URL �
 - Navigating to `chrome://` internal pages (e.g., `chrome://version/`) may disconnect the extension WebSocket. If the session goes stale, run `close` first, then re-attach with `attach --extension`.
 - When the default (unnamed) session slot is already occupied by another session, `attach --extension` requires `-s <name>` to create a named session.
 - The extension creates a blank tab for the relay — "current page: about:blank" is normal for a freshly attached extension session.
-- A page-triggered `window.open` that the browser's popup blocker refuses (no user gesture) does not create a tab: the
-  relay drops the refused `Page.windowOpen` event, so loading a page with a popup test no longer leaves a stray
-  `about:blank` tab in the attached browser. Popups opened by a real user gesture are unaffected.
+- A `window.open` the popup blocker refuses (no user gesture) creates no tab: the relay drops the refused
+  `Page.windowOpen` event, so a popup test leaves no stray `about:blank`; real-gesture popups are unaffected.
 - `--extension` cannot be combined with `--endpoint`: the relay connects to the **local** Browser4 server. Switch servers with `attach --endpoint <url>` on its own, and run the extension attach against the local server.
 - "Timed out waiting for the extension to connect" names the browser the extension must be installed in; `--extension msedge` waiting means the Edge copy, not the Chrome one.
 
