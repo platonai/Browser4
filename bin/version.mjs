@@ -774,12 +774,31 @@ function readPomFacts(pomPath) {
 
   const modules = [...content.matchAll(/<module>([^<]+)<\/module>/g)].map((m) => m[1].trim());
 
+  // Explicit versions pinned on in-repo artifacts (a BOM, or a stray
+  // dependencyManagement entry). Property placeholders are resolved by Maven
+  // from the project version and cannot drift here.
+  const dependencyVersions = [...content.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)]
+    .map((m) => ({
+      groupId: first(m[1], "groupId"),
+      artifactId: first(m[1], "artifactId"),
+      version: first(m[1], "version"),
+    }))
+    .filter(
+      (d) =>
+        d.groupId &&
+        d.groupId.startsWith("ai.platon") &&
+        d.artifactId &&
+        d.version &&
+        !d.version.includes("${")
+    );
+
   return {
     relPath: relative(REPO_ROOT, pomPath),
     artifactId: first(header, "artifactId"),
     version: first(header, "version"),
     parent,
     modules,
+    dependencyVersions,
   };
 }
 
@@ -831,6 +850,11 @@ function collectReactorPoms() {
  *      under the *old* version, so a sibling depending on `${project.version}`
  *      fails with "Could not find artifact ...:jar:<expectedVersion>" even
  *      though the module is right there in the reactor.
+ *   3. an explicit <version> pinned on an in-repo artifact (the PDK BOM, a
+ *      leftover dependencyManagement entry) must equal expectedVersion.  The
+ *      same drift reached the Docker build this way: browser4-pdk-bom still
+ *      pinned the behavior artifacts at 4.16.1-SNAPSHOT, and every plugin
+ *      inheriting that BOM resolved the old version.
  *
  * External parents (e.g. the upstream pulsar parent) are not versioned here —
  * they follow the parent BOM.
@@ -857,6 +881,15 @@ function checkPomVersions(expectedVersion) {
       problems.push({
         relPath: f.relPath,
         message: `parent ${f.parent.artifactId} is ${f.parent.version} (expected ${expectedVersion})`,
+      });
+    }
+    const stalePins = (f.dependencyVersions || [])
+      .filter((d) => inRepoArtifacts.has(d.artifactId) && d.version !== expectedVersion)
+      .map((d) => `${d.artifactId}:${d.version}`);
+    if (stalePins.length > 0) {
+      problems.push({
+        relPath: f.relPath,
+        message: `in-repo dependency pinned to ${[...new Set(stalePins)].join(", ")} (expected ${expectedVersion})`,
       });
     }
   }

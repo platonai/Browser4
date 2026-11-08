@@ -78,7 +78,10 @@ function New-FixturePom {
         [string]$ParentVersion,
         [string]$OwnVersion,
         [string[]]$Modules = @(),
-        [string]$DependencyVersion
+        [string]$DependencyVersion,
+        # "artifactId@version" entries, emitted as dependencyManagement pins the
+        # way the PDK BOM pins in-repo artifacts.
+        [string[]]$PinnedInRepoDependency = @()
     )
 
     $parent = ''
@@ -113,6 +116,21 @@ function New-FixturePom {
 "@
     }
 
+    $pinnedBlock = ''
+    if ($PinnedInRepoDependency.Count -gt 0) {
+        $pins = ($PinnedInRepoDependency | ForEach-Object {
+            $artifact, $version = $_ -split '@', 2
+            @"
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>$artifact</artifactId>
+                <version>$version</version>
+            </dependency>
+"@
+        }) -join "`n"
+        $pinnedBlock = "    <dependencyManagement>`n        <dependencies>`n$pins`n        </dependencies>`n    </dependencyManagement>`n"
+    }
+
     $content = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0">
@@ -121,7 +139,7 @@ $parent
     <artifactId>$ArtifactId</artifactId>
 $ownVersionBlock
     <name>$ArtifactId</name>
-$modulesBlock$dependencyBlock
+$modulesBlock$pinnedBlock$dependencyBlock
 </project>
 "@
 
@@ -212,6 +230,40 @@ try {
 
     $result = Invoke-VersionCheck -FixtureRoot $fixtureRoot
     Write-Check -Name 'own <version> mismatch fails the check' -Ok ($result.ExitCode -ne 0) -Detail $result.Output
+
+    # The Docker-build flavor of the same drift: browser4-pdk-bom kept pinning
+    # the behavior artifacts at the old version, so every plugin inheriting the
+    # BOM resolved a 4.16.1 jar that does not exist.
+    New-FixturePom -Path (Join-Path $fixtureRoot 'core' 'pom.xml') `
+        -ArtifactId 'browser4-core' `
+        -ParentArtifactId 'browser4' `
+        -ParentVersion $ExpectedVersion `
+        -Modules @('leaf') `
+        -PinnedInRepoDependency @("browser4-leaf@$StaleVersion")
+
+    $result = Invoke-VersionCheck -FixtureRoot $fixtureRoot
+    Write-Check -Name 'stale in-repo dependency pin fails the check' -Ok ($result.ExitCode -ne 0) -Detail $result.Output
+    Write-Check -Name 'failure names the pinned artifact and version' `
+        -Ok ($result.Output -match "dependency pinned to browser4-leaf:$StaleVersion") `
+        -Detail $result.Output
+
+    # Reset the leaf to a consistent state, then pin its artifact at the right
+    # version: the same pom must pass.
+    New-FixturePom -Path (Join-Path $fixtureRoot 'core' 'leaf' 'pom.xml') `
+        -ArtifactId 'browser4-leaf' `
+        -ParentArtifactId 'browser4' `
+        -ParentVersion $ExpectedVersion `
+        -DependencyVersion '1.2.3'
+
+    New-FixturePom -Path (Join-Path $fixtureRoot 'core' 'pom.xml') `
+        -ArtifactId 'browser4-core' `
+        -ParentArtifactId 'browser4' `
+        -ParentVersion $ExpectedVersion `
+        -Modules @('leaf') `
+        -PinnedInRepoDependency @("browser4-leaf@$ExpectedVersion")
+
+    $result = Invoke-VersionCheck -FixtureRoot $fixtureRoot
+    Write-Check -Name 'in-repo pin at the project version passes' -Ok ($result.ExitCode -eq 0) -Detail $result.Output
 } finally {
     Remove-Item -Recurse -Force $fixtureRoot -ErrorAction SilentlyContinue
 }
