@@ -19,6 +19,7 @@ import ai.platon.pulsar.captcha.integration.CaptchaBrowseEventHandler
 import ai.platon.pulsar.captcha.integration.CaptchaPageCategorySniffer
 import ai.platon.pulsar.captcha.provider.AntiCaptchaProvider
 import ai.platon.pulsar.captcha.provider.CapSolverProvider
+import ai.platon.pulsar.captcha.provider.SolvechaProvider
 import ai.platon.pulsar.captcha.provider.TwoCaptchaProvider
 import ai.platon.pulsar.captcha.tools.CaptchaToolExecutor
 import ai.platon.pulsar.common.config.MutableConfig
@@ -40,7 +41,7 @@ import org.springframework.context.annotation.Lazy
  * Conditionally enabled when `captcha.auto.solve.enabled=true` (default).
  * Creates the full CAPTCHA solving pipeline:
  * - Detection chain (reCAPTCHA, hCaptcha, Turnstile, image)
- * - Solver chain (CapSolver, 2Captcha, Anti-Captcha)
+ * - Solver chain (CapSolver, 2Captcha, Anti-Captcha, Solvecha)
  * - Token injectors
  * - Browse event handler for auto-solve
  * - LLM agent tool executor (captcha domain)
@@ -156,6 +157,12 @@ open class CaptchaAutoConfiguration(
                     logger.info("Anti-Captcha registered as primary CAPTCHA solver")
                 }
             }
+            CaptchaServiceProvider.SOLVECHA -> {
+                captchaConfig.solvechaApiKey?.let { key ->
+                    chain.addLast(SolvechaProvider(key, captchaConfig.solveTimeout, captchaConfig.pollInterval))
+                    logger.info("Solvecha registered as primary CAPTCHA solver")
+                }
+            }
             CaptchaServiceProvider.NONE -> { /* No solver configured */ }
         }
 
@@ -176,6 +183,12 @@ open class CaptchaAutoConfiguration(
             if (primary != CaptchaServiceProvider.ANTI_CAPTCHA) {
                 chain.addLast(AntiCaptchaProvider(key, captchaConfig.solveTimeout, captchaConfig.pollInterval))
                 logger.info("Anti-Captcha registered as fallback CAPTCHA solver")
+            }
+        }
+        captchaConfig.solvechaApiKey?.let { key ->
+            if (primary != CaptchaServiceProvider.SOLVECHA) {
+                chain.addLast(SolvechaProvider(key, captchaConfig.solveTimeout, captchaConfig.pollInterval))
+                logger.info("Solvecha registered as fallback CAPTCHA solver")
             }
         }
 
