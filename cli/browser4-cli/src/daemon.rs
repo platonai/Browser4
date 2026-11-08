@@ -11360,18 +11360,41 @@ mod tests {
     fn test_expected_runtime_tag_prefers_local_bundle_in_checkout() {
         // Mirrors expected_runtime_tag(): inside a checkout with a bundle
         // module the expected tag is "local", otherwise the installed tag.
-        if std::env::var("BROWSER4_CLI_FORCE_REMOTE_BUNDLE").as_deref() == Ok("1") {
-            assert_eq!(expected_runtime_tag(), read_current_tag());
-            return;
+        //
+        // `find_browser4_root()` reads the process-wide root-search env first and
+        // the process-wide CWD second, and sibling tests move both: a temp root
+        // without a bundle module (a `create_browser4_root` fixture) can be the
+        // answer for the first read while the real checkout answers the second,
+        // which failed this test with `local` != `v4.x.y` for no product reason.
+        // Pin the search to this crate's directory — inside the checkout — while
+        // holding the env lock, and restore the previous value before asserting
+        // so an early return cannot leak the pin into another test.
+        let _env_guard = lock_env_mutex();
+        let prev_search_start = env::var(ROOT_SEARCH_START_DIR_ENV).ok();
+        unsafe {
+            env::set_var(ROOT_SEARCH_START_DIR_ENV, env!("CARGO_MANIFEST_DIR"));
         }
-        let root = find_browser4_root();
-        if let Some(root) = &root {
-            if root.join("browser4-apps").join("browser4-bundle").is_dir() {
-                assert_eq!(expected_runtime_tag().as_deref(), Some("local"));
-                return;
+
+        let has_bundle_module = find_browser4_root().is_some_and(|root| {
+            root.join("browser4-apps").join("browser4-bundle").is_dir()
+        });
+        let expected = expected_runtime_tag();
+        let installed = read_current_tag();
+
+        unsafe {
+            match prev_search_start {
+                Some(value) => env::set_var(ROOT_SEARCH_START_DIR_ENV, value),
+                None => env::remove_var(ROOT_SEARCH_START_DIR_ENV),
             }
         }
-        assert_eq!(expected_runtime_tag(), read_current_tag());
+
+        if std::env::var("BROWSER4_CLI_FORCE_REMOTE_BUNDLE").as_deref() == Ok("1") {
+            assert_eq!(expected, installed);
+        } else if has_bundle_module {
+            assert_eq!(expected.as_deref(), Some("local"));
+        } else {
+            assert_eq!(expected, installed);
+        }
     }
 
     #[test]
