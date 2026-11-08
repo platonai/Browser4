@@ -4,7 +4,9 @@ import ai.platon.browser4.behavior.BrowserBehavior
 import ai.platon.browser4.behavior.humanization.ClickPointRequest
 import ai.platon.browser4.behavior.humanization.DelaySource
 import ai.platon.browser4.behavior.humanization.DragRequest
+import ai.platon.browser4.behavior.humanization.IdleMoveRequest
 import ai.platon.browser4.behavior.humanization.InteractionHumanizer
+import ai.platon.browser4.behavior.humanization.PointerMovePlan
 import ai.platon.browser4.behavior.humanization.PointerMoveRequest
 import ai.platon.browser4.behavior.stealth.BrowserStealthProvider
 import ai.platon.browser4.behavior.stealth.StealthSessionContext
@@ -52,12 +54,15 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToLong
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Browser4-specific extension of [PulsarWebDriver].
@@ -218,6 +223,8 @@ open class Browser4WebDriver(
     )
 
     companion object {
+        private const val IDLE_WANDER_POLL_MILLIS = 500L
+
         private val logger = getLogger(Browser4WebDriver::class)
 
         /** DOM-ready budget for the post-navigation body wait (see [waitForNavigationSettled]). */
@@ -915,6 +922,7 @@ internal enum class DragDropPosition(val key: String) {
      */
     @Throws(WebDriverException::class)
     override suspend fun mouseWheel(deltaX: Double, deltaY: Double) {
+        noteInteraction()
         val m = page.mouse.takeIf { isActive }
             ?: throw IllegalWebDriverStateException("Mouse not available", driver = this)
         rpc.invokeOnPage("mouseWheel") {
@@ -942,6 +950,7 @@ internal enum class DragDropPosition(val key: String) {
      */
     @Throws(WebDriverException::class)
     override suspend fun mouseWheel(selector: String, deltaX: Double, deltaY: Double) {
+        noteInteraction()
         try {
             rpc.invokeOnElement(selector, "mouseWheel", scrollIntoView = true) {
                 gap("mouseWheel")
@@ -999,29 +1008,74 @@ internal enum class DragDropPosition(val key: String) {
      */
     @Throws(WebDriverException::class)
     override suspend fun mouseMove(x: Double, y: Double) {
+        movePointerTo(x, y)
+    }
+
+    /**
+     * Move the pointer to ([x], [y]) as a user-driven interaction: this resets the idle clock
+     * the wanderer watches.
+     *
+     * @param targetWidth the element width when the move is aimed at an element, so a humanizer
+     *   can widen the Fitts-law pacing for a small target; `0` for an explicit coordinate.
+     */
+    private suspend fun movePointerTo(x: Double, y: Double, targetWidth: Double = 0.0) {
+        noteInteraction()
+        dispatchPointerMove(x, y, targetWidth)
+    }
+
+    /**
+     * Dispatch a pointer move without resetting the idle clock.
+     *
+     * Split out of [movePointerTo] so the idle wander can reuse the exact same trajectory and
+     * dispatch path: a wander that reset the clock would keep its own threshold from ever
+     * firing, and it is not user-driven activity.
+     */
+    private suspend fun dispatchPointerMove(x: Double, y: Double, targetWidth: Double = 0.0) {
         rpc.invokeOnPage("mouseMove") {
             val m = page.mouse.takeIf { isActive } ?: return@invokeOnPage
-            glidePointerTo(m, x, y)
+            glidePointerTo(m, x, y, targetWidth)
         }
     }
 
     /**
      * Glide [m] to ([x], [y]) in short steps rather than teleporting, the single
-     * pointer-movement policy shared by [mouseMove] and the wheel-over-element
-     * path.
+     * pointer-movement policy shared by [mouseMove], the wheel-over-element path and the idle
+     * wander.
      *
-     * The selected [InteractionHumanizer] decides both the step count and the
-     * per-step wait (the default edition: roughly one step per 20 px, clamped to
-     * 3..30, 8-16 ms each). The base library bends the path itself into a
-     * distance-dependent Bézier curve from 4.11.30 on, so the trajectory is
-     * curved whenever it is long enough to matter.
+     * The selected [InteractionHumanizer] decides the trajectory. Two shapes are supported:
+     *
+     * - an explicit [PointerMovePlan.waypoints] list (the `ghostcursor` provider plans a bent
+     *   Bézier with overshoot and variable speed): each point is dispatched as a single-step
+     *   move after its own wait, so the page sees exactly that path;
+     * - an empty list (the community default): the step count and the per-step wait are handed
+     *   to `Mouse.moveTo`, whose base library bends the path itself from 4.11.30 on.
+     *
+     * @param targetWidth the element width when the move is aimed at an element, so a
+     *   humanizer can widen the Fitts-law pacing for a small target; `0` when the move has no
+     *   element target.
      */
-    private suspend fun glidePointerTo(m: Mouse, x: Double, y: Double) {
+    private suspend fun glidePointerTo(m: Mouse, x: Double, y: Double, targetWidth: Double = 0.0) {
         val plan = humanizer.pointerMove(
-            PointerMoveRequest(fromX = m.currentX, fromY = m.currentY, toX = x, toY = y),
+            PointerMoveRequest(
+                fromX = m.currentX,
+                fromY = m.currentY,
+                toX = x,
+                toY = y,
+                targetWidth = targetWidth,
+            ),
             delaySource,
         )
-        m.moveTo(x, y, steps = plan.steps, delayMillis = plan.delayMillis)
+        when (val dispatch = pointerDispatchFor(x, y, plan)) {
+            is PointerDispatch.Interpolate ->
+                m.moveTo(dispatch.x, dispatch.y, steps = dispatch.steps, delayMillis = dispatch.delayMillis)
+
+            is PointerDispatch.Waypoints -> dispatch.points.forEach { waypoint ->
+                if (waypoint.delayBeforeMillis > 0) {
+                    delay(waypoint.delayBeforeMillis)
+                }
+                m.moveTo(waypoint.x, waypoint.y, steps = 1, delayMillis = 0)
+            }
+        }
     }
 
     /**
@@ -1132,7 +1186,9 @@ internal enum class DragDropPosition(val key: String) {
         val pointer = humanizer.clickPoint(
             ClickPointRequest(point.x, point.y, point.width, point.height)
         )
-        mouseMove(pointer.x, pointer.y)
+        // The element width is handed to the humanizer so a Fitts-law trajectory can spend more
+        // events on a small target than on a large one.
+        movePointerTo(pointer.x, pointer.y, point.width)
 
         // `hit` describes the element's centre, which is not the point just hovered any more: the
         // caller re-tests the hit where the pointer actually is before pressing (see
@@ -1626,6 +1682,7 @@ internal enum class DragDropPosition(val key: String) {
      */
     @Throws(WebDriverException::class)
     suspend fun typeSafe(text: String, selector: String) {
+        noteInteraction()
         // Focus the element without repositioning the cursor.
         // The parent type(text, selector) always clicks the right edge +
         // setSelectionRange(99999,99999), which breaks chained operations
@@ -2322,6 +2379,110 @@ internal enum class DragDropPosition(val key: String) {
      */
     private val delaySource: DelaySource by lazy {
         DelaySource { bucket -> randomDelayMillis(bucket) }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Idle pointer wander (`browser.behavior.humanization.idle.enabled`, off by default).
+    //
+    // A session parked on a page presents a cursor frozen at one coordinate for minutes,
+    // which is itself a behavioural signal. When the operator enables it and the active
+    // humanizer plans idles (`InteractionHumanizer.idleMove`; the `ghostcursor` provider does,
+    // the community default returns null), a driver-scoped coroutine moves the pointer to a
+    // point of the page every so often. It reuses the normal trajectory, never runs while a
+    // real interaction is in flight (the idle clock is reset by every input entry point) and
+    // never touches the page once the driver is no longer active.
+    // ---------------------------------------------------------------------------
+
+    /** Wall-clock time of the last user-driven interaction, in milliseconds. */
+    private val lastInteractionAt = AtomicLong(System.currentTimeMillis())
+
+    /** Guards the one-time start of [idleWanderLoop]. */
+    private val idleWanderStarted = AtomicBoolean(false)
+
+    /** Driver-scoped scope for the idle wander; it exits on its own when the driver stops. */
+    private val idleWanderScope: CoroutineScope by lazy {
+        CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    }
+
+    /** Reset the idle clock; every input entry point calls this. */
+    private fun noteInteraction() {
+        lastInteractionAt.set(System.currentTimeMillis())
+        ensureIdleWanderer()
+    }
+
+    private val idleWanderEnabled: Boolean
+        get() = settings.config.getBoolean(
+            B4Constants.BEHAVIOR_HUMANIZATION_IDLE_ENABLED,
+            B4Constants.BEHAVIOR_HUMANIZATION_IDLE_ENABLED_DEFAULT,
+        )
+
+    private val idleThresholdMillis: Int
+        get() = settings.config.getInt(
+            B4Constants.BEHAVIOR_HUMANIZATION_IDLE_THRESHOLD_MS,
+            B4Constants.BEHAVIOR_HUMANIZATION_IDLE_THRESHOLD_MS_DEFAULT,
+        )
+
+    /** Start the wander loop once, when enabled. */
+    private fun ensureIdleWanderer() {
+        if (!idleWanderEnabled) {
+            return
+        }
+        if (!idleWanderStarted.compareAndSet(false, true)) {
+            return
+        }
+        idleWanderScope.launch { idleWanderLoop() }
+    }
+
+    /** Poll the idle clock and wander while the session stays idle. */
+    private suspend fun idleWanderLoop() {
+        while (currentCoroutineContext().isActive) {
+            try {
+                if (!this@Browser4WebDriver.isActive) {
+                    return
+                }
+                delay(IDLE_WANDER_POLL_MILLIS)
+                val idleFor = System.currentTimeMillis() - lastInteractionAt.get()
+                if (idleFor < idleThresholdMillis) {
+                    continue
+                }
+                if (!wanderOnce()) {
+                    // The active humanizer has no idle behaviour: stop polling entirely rather
+                    // than wake up every poll just to be told the same thing.
+                    return
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // A wander is cosmetic: a closed page or a failed RPC ends the loop quietly and
+                // must never surface as an interaction error.
+                logger.debug("Idle pointer wander stopped: {}", e.message)
+                return
+            }
+        }
+    }
+
+    /**
+     * Ask the humanizer where to wander and move there.
+     *
+     * @return `false` when the humanizer plans no idle movement, so the caller can stop.
+     */
+    private suspend fun wanderOnce(): Boolean {
+        val width = evaluateValue("window.innerWidth")?.toString()?.toDoubleOrNull() ?: 0.0
+        val height = evaluateValue("window.innerHeight")?.toString()?.toDoubleOrNull() ?: 0.0
+        val mouse = page.mouse
+        val plan = humanizer.idleMove(
+            IdleMoveRequest(
+                viewportWidth = width,
+                viewportHeight = height,
+                fromX = mouse.currentX,
+                fromY = mouse.currentY,
+            )
+        ) ?: return false
+        dispatchPointerMove(plan.x, plan.y)
+        if (plan.restMillis > 0) {
+            delay(plan.restMillis)
+        }
+        return true
     }
 
     /** Guards the one-time stealth setup below; see [ensureStealthApplied]. */
@@ -3232,6 +3393,7 @@ internal enum class DragDropPosition(val key: String) {
         targetSelector: String,
         position: String,
     ): String {
+        noteInteraction()
         // Phase 1 — resolve (retryable pieces are covered by their own RPC
         // layers; deterministic failures like a missing element must surface
         // directly instead of being wrapped by the outer retry machinery).

@@ -1,5 +1,6 @@
 package ai.platon.pulsar.boot.plugin
 
+import ai.platon.browser4.behavior.BrowserBehavior
 import ai.platon.pulsar.skeleton.plugin.Browser4Version
 import ai.platon.pulsar.skeleton.plugin.PluginManifest
 import org.slf4j.LoggerFactory
@@ -20,6 +21,12 @@ import java.util.jar.JarFile
  * Only plugins that are enabled by the [PluginLoadPolicy] are added —
  * `defaultEnabled: false` (opt-in) plugins are skipped unless explicitly
  * enabled via `browser4.plugins.enable` / `browser4.plugins.enable-all`.
+ *
+ * Hosts that install jars after startup use [enhance] to wrap the classpath. Besides Spring
+ * auto-configuration, plugins may contribute behavior SPI providers
+ * (`InteractionHumanizer`, `BrowserStealthProvider`); [enhance] therefore registers the loader
+ * with [BrowserBehavior] so discovery does not depend on which thread resolves the first driver,
+ * and [close] unregisters it so the providers disappear with the jars.
  *
  * Usage:
  * ```
@@ -79,6 +86,7 @@ object PluginClasspathEnhancer {
         val loader = URLClassLoader(jarUrls.toTypedArray(), currentLoader)
         enhancedLoader = loader
         Thread.currentThread().contextClassLoader = loader
+        BrowserBehavior.registerProviderClassLoader(loader)
 
         logger.info("Plugin classpath enhanced ({} JARs)", jarUrls.size)
     }
@@ -153,6 +161,7 @@ object PluginClasspathEnhancer {
     fun close(): Boolean {
         val loader = enhancedLoader
         if (loader != null) {
+            BrowserBehavior.unregisterProviderClassLoader(loader)
             try {
                 loader.close()
                 logger.info("Plugin classloader closed; file handles released")

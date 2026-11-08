@@ -33,6 +33,7 @@
              implementation at runtime, so a professional/custom edition can swap it. -->
         <module>browser4-behavior-api</module>
         <module>browser4-behavior-default</module>
+        <module>browser4-behavior-ghostcursor</module>
         <module>browser4-resources</module>
         <module>browser4-skeleton</module>
         <module>browser4-browser</module>

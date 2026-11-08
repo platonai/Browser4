@@ -24,7 +24,11 @@ browser4-core/
     DefaultBrowserStealthProvider + Browser4UserAgent + Browser4Extensions
     DefaultInteractionHumanizer
     META-INF/services/...                                  # ServiceLoader registration
-  browser4-browser/             # driver: API (compile) + default (runtime) + js/stealth.js
+  browser4-behavior-ghostcursor/ # alternative humanizer: ghost-cursor trajectory model
+    GhostCursorInteractionHumanizer (id `ghostcursor`, priority 0)
+    GhostCursorTrajectory + GhostCursorMath + GhostCursorIdlePlanner
+    META-INF/services/...                                  # ServiceLoader registration
+  browser4-browser/             # driver: API (compile) + both behaviors (runtime) + js/stealth.js
   browser4-protocol/            # launch funnel: calls the stealth provider
 ```
 
@@ -48,6 +52,7 @@ after the baseline, so it wins), or shadows the resource itself when it is a dir
 | `documentStartScripts(context)` | `Browser4WebDriver.ensureStealthApplied()`, before the first navigation | return scripts registered with `Page.addScriptToEvaluateOnNewDocument`; they run before any page script and *after* the base library's page-world payload, so they can override it |
 | `onDriverReady(driver)` | same hook, once per driver with the tab attached | CDP emulation a page script cannot provide: `Emulation.setUserAgentOverride`, `setLocaleOverride`, `setTimezoneOverride`, `setDeviceMetricsOverride`, permission/WebRTC policy, … |
 | `pointerMove`, `clickPoint`, `pressHoldMillis`, `multiClickGapMillis`, `keyPressDelayMillis`, `typeCharDelayMillis`, `dragPlan` | the click/type/press/drag overrides in `Browser4WebDriver` | pacing and pointer geometry. The driver still decides *which* CDP call to use and keeps the trusted-input verification, dialog handling, frame checks and DOM fallbacks |
+| `idleMove(request)` | `Browser4WebDriver.wanderOnce()`, from the driver-scoped idle coroutine that starts on the first input when `browser.behavior.humanization.idle.enabled=true` | where the pointer drifts after an idle period, and how long it rests there. Returning `null` (the SPI default) means "this provider has no idle behaviour", and the driver stops the coroutine instead of polling forever |
 
 Deliberately **not** in the SPI (they are correctness, not styling): trusted CDP input and its
 fallbacks, dialog handling, frame resolution, focus emulation, and the base library's
@@ -121,6 +126,31 @@ class ProHumanizer : InteractionHumanizer {
 }
 ```
 
+## Shipping the edition as an external jar
+
+An edition does not have to be a compile-time dependency of the product: drop its jar into the
+host's `plugins/` directory and `PluginClasspathEnhancer` (called from every product `main()`
+before Spring starts) wraps the classpath in a `URLClassLoader`, installs it as the
+thread-context loader and registers it with
+`BrowserBehavior.registerProviderClassLoader(...)`.
+
+That registration is what makes the SPI file inside the jar reachable: the registry asks its own
+defining loader **and** the thread-context loader **and** every registered loader, then merges
+the results by provider id (a wrapping loader also sees its parent's modules, so the same
+implementation is found twice). `PluginClasspathEnhancer.close()` unregisters the loader, so the
+providers it contributed disappear with the jars.
+
+- A jar **without** `META-INF/browser4-plugin.json` is loaded as-is; a jar **with** one is
+  subject to `PluginLoadPolicy` (`defaultEnabled: false` = opt-in) and `PluginCompatibility`
+  (`sdkVersion` major check).
+- Version alignment matters: the jar must be built against a `browser4-behavior-api` that is the
+  same major as the host's and not newer (an edition that calls `PointerMovePlan.waypoints` or
+  `InteractionHumanizer.idleMove` fails with `NoSuchMethodError` on an older host). The manifest
+  `sdkVersion` is checked for exactly this reason.
+- Tests: `BehaviorPluginDiscoveryTest` (loader registration / TCCL / dedupe) in
+  `browser4-browser`, and `PluginBehaviorDiscoveryTest` (`plugins/` → `enhance` → discovery →
+  `close`) in `browser4-boot`.
+
 ## Behavior contract of the default edition
 
 The default module is the historical behavior, moved — not retuned:
@@ -152,12 +182,66 @@ The defaults are pinned by unit tests in each module:
 ```bash
 mvn test -pl browser4-core/browser4-behavior-api
 mvn test -pl browser4-core/browser4-behavior-default
+mvn test -pl browser4-core/browser4-behavior-ghostcursor
 mvn test -pl browser4-core/browser4-browser -Dtest='Browser4WebDriverTest,PageWorldStealthPayloadTest'
+# real browser (Chrome required): trusted pointer trail, press hold, idle drift
+mvn test -pl browser4-core/browser4-browser -Dtest=GhostCursorPointerE2ETest -D"surefire.excludedGroups="
 ```
 
 `PageWorldStealthPayloadTest` (in `browser4-browser`) pins the baseline payload: it reads
 `/js/stealth.js` back from the classpath and fails if the guard, the vendored bundle or the
 provenance disappears.
+
+## The `ghostcursor` provider
+
+`browser4-behavior-ghostcursor` is a second `InteractionHumanizer`, ported from
+[Xetera/ghost-cursor](https://github.com/Xetera/ghost-cursor). It is shaped like an edition
+(`edition = CUSTOM`, ServiceLoader-registered), but it ships **next to** the default module with
+`priority = 0`. Selection is by `priority` then `id`, so `default` still wins; installing the
+module changes nothing until a deployment pins it:
+
+```properties
+browser.behavior.humanization.provider=ghostcursor
+```
+
+`browser4-browser` carries it as a `runtime` dependency, so pinning it is a configuration change,
+not a build change.
+
+### What it changes
+
+| Seam | Default edition | `ghostcursor` |
+|---|---|---|
+| `pointerMove` | `<20` px per step, 3–30 steps, uniform 8–16 ms per step | cubic Bézier with random normal-line anchors (spread 2–200 px), Fitts-law step count (`2·log2(distance/width+1)`), arc-length timing warped by smoothstep (`f²(3-2f)`), ~1.8 px/ms; above 500 px the path first overshoots to a random point on a 120 px disc around the target, then converges with spread shrunk to 10 px. Emitted as `PointerMovePlan.waypoints`, one `Input.dispatchMouseEvent` per point |
+| `clickPoint` | ±2 px around the box centre, clamped inside the box | uniform random point anywhere in the box, inset 1 px from the edges. The 1 px inset is a deliberate deviation: ghost-cursor's raw `[x, x+width]` range can land on the 1-px border, which hits a different element than the box interior |
+| `idleMove` | not implemented (`null`) | a uniform random point in the viewport plus a 0–2000 ms rest, gated by `browser.behavior.humanization.idle.enabled` (see below) |
+| `pressHoldMillis`, `multiClickGapMillis`, `keyPressDelayMillis`, `typeCharDelayMillis` | `click` / `press` / `type` buckets | the same buckets. This is a deliberate deviation: ghost-cursor presses for 0 ms, which produces `mousedown`/`mouseup` in the same millisecond and is a strong automation signal |
+| `dragPlan` | ±2 px jitter on center drops, 4 / 6 delays | identical, reusing the module's own random source |
+
+### Idle pointer wander
+
+The driver, not the humanizer, owns the coroutine — the humanizer only answers "where to". It is
+**off by default** because a pointer that moves without a command is observable behaviour, and it
+only runs when the active humanizer returns a plan from `idleMove`:
+
+```properties
+# off by default; also requires a humanizer that implements idleMove (ghostcursor does)
+browser.behavior.humanization.idle.enabled=false
+# no input for this long before the first wander; re-checked every 500 ms
+browser.behavior.humanization.idle.threshold.ms=3000
+```
+
+The clock is reset by every input entry point (`click`, `type`, `press`, `wheel`, `drag`,
+`mouseMove`), the wander uses the same trajectory as a real move, and a closed page or a failed
+RPC stops the loop quietly — a cosmetic drift must never surface as an interaction error.
+
+### Trajectory representation
+
+`PointerMovePlan` keeps `steps`/`delayMillis` for the uniform case and gains
+`waypoints: List<MoveWaypoint> = emptyList()`. When the list is non-empty the driver dispatches
+one `moveTo` per waypoint with the per-point delay, which is what makes variable speed and
+overshoot expressible at all. An empty list is the old behaviour, so existing providers are
+unaffected. `PointerMoveRequest.targetWidth` carries the element width for Fitts; `0.0` means
+"unknown" and the planner substitutes 100 px.
 
 ## Migration note
 

@@ -25,6 +25,14 @@
             <artifactId>browser4-behavior-default</artifactId>
             <scope>runtime</scope>
         </dependency>
+        <!-- An alternative humanizer, shipped but never selected by default: its priority ties
+             with the community default, which wins the id tie-break. Pinning
+             `browser.behavior.humanization.provider=ghostcursor` activates it. -->
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-behavior-ghostcursor</artifactId>
+            <scope>runtime</scope>
+        </dependency>
 
         <!-- pulsar-browser: extracted core browser automation library -->
         <dependency>

@@ -1,5 +1,7 @@
 package ai.platon.pulsar.chrome
 
+import ai.platon.browser4.behavior.humanization.MoveWaypoint
+import ai.platon.browser4.behavior.humanization.PointerMovePlan
 import ai.platon.pulsar.api.BrowserProtocol
 import ai.platon.pulsar.api.model.BrowserSettings
 import ai.platon.pulsar.api.model.BrowserTab
@@ -1182,6 +1184,31 @@ class Browser4WebDriverTest {
 
         assertEquals(4, statuses.size, "the statuses must be distinguishable")
         assertTrue(statuses.none { it.isBlank() }, "statuses must not be blank: $statuses")
+    }
+
+    @Test
+    @DisplayName("pointerDispatchFor interpolates when the plan has no waypoints")
+    fun pointerDispatchForInterpolatesWithoutWaypoints() {
+        val dispatch = pointerDispatchFor(120.0, 80.0, PointerMovePlan(steps = 7, delayMillis = 9))
+        assertEquals(PointerDispatch.Interpolate(120.0, 80.0, 7, 9), dispatch)
+    }
+
+    @Test
+    @DisplayName("pointerDispatchFor walks the waypoints verbatim")
+    fun pointerDispatchForWalksWaypointsVerbatim() {
+        val waypoints = listOf(
+            MoveWaypoint(10.0, 20.0, 3),
+            MoveWaypoint(40.0, 60.0, 5),
+            MoveWaypoint(90.0, 100.0, 0),
+        )
+        // `steps`/`delayMillis` are ignored once waypoints exist: the planned trajectory, with
+        // its overshoot and variable pacing, has to reach the page unchanged and in order.
+        val dispatch = pointerDispatchFor(
+            90.0,
+            100.0,
+            PointerMovePlan(steps = 2, delayMillis = 50, waypoints = waypoints),
+        )
+        assertEquals(PointerDispatch.Waypoints(waypoints), dispatch)
     }
 
     private fun dialogDriver(protocol: BrowserProtocol = mock()): Browser4WebDriver {

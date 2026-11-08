@@ -89,6 +89,10 @@ interface InteractionHumanizer {
      * long the browser waits between them. A single step (the upstream behaviour) teleports
      * the pointer, which a mouse-tracking detector reads as non-human input.
      *
+     * A humanizer that wants full control of the path returns an explicit
+     * [PointerMovePlan.waypoints] trajectory (overshoot, variable speed) instead of a step
+     * count; the driver then dispatches exactly those points.
+     *
      * @param delays the configured delay source, for implementations that want to reuse the
      *   operator's own pacing policy instead of hard-coding it.
      */
@@ -153,23 +157,73 @@ interface InteractionHumanizer {
      * rejects a list of any other length.
      */
     fun dragPlan(request: DragRequest, delays: DelaySource): DragPlan
+
+    /**
+     * Plan the next idle pointer wander, or `null` when this humanizer has no idle behaviour.
+     *
+     * A session that sits idle presents a cursor frozen at one coordinate forever, which a
+     * behavioural detector reads as a signal. A humanizer that models this returns a new point
+     * (and how long to rest there) once the driver decides the session is idle; the driver owns
+     * the coroutine that applies it and stops it as soon as a real interaction starts, so this
+     * method stays a pure decision like every other one.
+     *
+     * The default returns `null`: no pointer movement happens unless a provider asks for it.
+     * The driver only starts the wander when the operator enables it
+     * (`browser.behavior.humanization.idle.enabled`), so an installed provider still changes
+     * nothing by default.
+     */
+    fun idleMove(request: IdleMoveRequest): IdleMovePlan? = null
 }
 
-/** @param fromX the pointer's current x, in CSS pixels. @param fromY the pointer's current y. */
+/**
+ * @param fromX the pointer's current x, in CSS pixels.
+ * @param fromY the pointer's current y.
+ * @param toX the destination x.
+ * @param toY the destination y.
+ * @param targetWidth the width of the element the pointer is travelling to, in CSS pixels;
+ *   `0` when the move has no element target (an explicit `mouse-move`, an idle wander). It lets
+ *   a humanizer apply a Fitts-law-style pacing that depends on how small the target is rather
+ *   than on distance alone.
+ */
 data class PointerMoveRequest(
     val fromX: Double,
     val fromY: Double,
     val toX: Double,
     val toY: Double,
+    val targetWidth: Double = 0.0,
+)
+
+/**
+ * One intermediate pointer position of a planned trajectory.
+ *
+ * @param x the viewport x, in CSS pixels.
+ * @param y the viewport y.
+ * @param delayBeforeMillis the wait before this point is dispatched; must not be negative.
+ */
+data class MoveWaypoint(
+    val x: Double,
+    val y: Double,
+    val delayBeforeMillis: Long,
 )
 
 /**
  * @param steps the number of intermediate `mousemove` dispatches; must be at least 1.
  * @param delayMillis the wait between two dispatches, in milliseconds; must not be negative.
+ * @param waypoints an explicit trajectory, in dispatch order.
+ *
+ * When [waypoints] is non-empty the driver walks it point by point instead of letting the
+ * browser library interpolate [steps] even segments: it waits [MoveWaypoint.delayBeforeMillis]
+ * and then dispatches a single-step move to the point, so the page observes exactly this path
+ * and exactly this pacing. [steps] and [delayMillis] are then ignored.
+ *
+ * An empty list (the default) keeps the historical contract — [steps] interpolated by
+ * `Mouse.moveTo` with [delayMillis] between segments — so an implementation that does not plan
+ * a trajectory is unaffected.
  */
 data class PointerMovePlan(
     val steps: Int,
     val delayMillis: Long,
+    val waypoints: List<MoveWaypoint> = emptyList(),
 )
 
 /**
@@ -219,6 +273,30 @@ data class DragPlan(
     val targetX: Double,
     val targetY: Double,
     val delays: List<Long>,
+)
+
+/**
+ * @param viewportWidth the viewport width, in CSS pixels.
+ * @param viewportHeight the viewport height, in CSS pixels.
+ * @param fromX the pointer's current x, so a plan can avoid a no-op move.
+ * @param fromY the pointer's current y.
+ */
+data class IdleMoveRequest(
+    val viewportWidth: Double,
+    val viewportHeight: Double,
+    val fromX: Double,
+    val fromY: Double,
+)
+
+/**
+ * @param x the point the idle wander should move to, in CSS pixels.
+ * @param y the point the idle wander should move to.
+ * @param restMillis how long to rest at that point before asking for the next wander.
+ */
+data class IdleMovePlan(
+    val x: Double,
+    val y: Double,
+    val restMillis: Long,
 )
 
 /**

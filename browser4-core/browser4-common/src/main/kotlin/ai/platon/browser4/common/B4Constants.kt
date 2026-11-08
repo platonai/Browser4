@@ -158,6 +158,30 @@ object B4Constants {
      */
     const val BEHAVIOR_HUMANIZATION_PROVIDER = "browser.behavior.humanization.provider"
 
+    /**
+     * Enables the idle pointer wander: when a session has seen no interaction for
+     * [BEHAVIOR_HUMANIZATION_IDLE_THRESHOLD_MS], the driver periodically moves the pointer to a
+     * point chosen by the active humanizer's
+     * [ai.platon.browser4.behavior.humanization.InteractionHumanizer.idleMove].
+     *
+     * Off by default. Enabled only in combination with a humanizer that plans idles (the
+     * `ghostcursor` provider does; the community default returns `null`), so turning it on with
+     * the default provider still changes nothing.
+     */
+    const val BEHAVIOR_HUMANIZATION_IDLE_ENABLED = "browser.behavior.humanization.idle.enabled"
+
+    /** Default for [BEHAVIOR_HUMANIZATION_IDLE_ENABLED]: idle behaviour is opt-in. */
+    const val BEHAVIOR_HUMANIZATION_IDLE_ENABLED_DEFAULT = false
+
+    /**
+     * How long, in milliseconds, a session must see no interaction before the idle pointer
+     * wander starts (see [BEHAVIOR_HUMANIZATION_IDLE_ENABLED]).
+     */
+    const val BEHAVIOR_HUMANIZATION_IDLE_THRESHOLD_MS = "browser.behavior.humanization.idle.threshold.ms"
+
+    /** Default for [BEHAVIOR_HUMANIZATION_IDLE_THRESHOLD_MS]. */
+    const val BEHAVIOR_HUMANIZATION_IDLE_THRESHOLD_MS_DEFAULT = 3_000
+
     const val SESSION_ID_CAPABILITY = "sessionId"
     const val PROFILE_MODE_CAPABILITY = "profileMode"
     const val PROFILE_PATH_CAPABILITY = "profilePath"

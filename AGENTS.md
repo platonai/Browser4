@@ -96,6 +96,7 @@ sufficient; each gate below has burned this project before.
 | `browser4-core` | Core engine: sessions, scheduling, DOM, browser control |
 | `browser4-core/browser4-behavior-api` | Replaceable browser stealth / interaction-humanization SPI (contracts + provider registry, no implementation) |
 | `browser4-core/browser4-behavior-default` | Default (community) stealth and interaction-humanization implementation |
+| `browser4-core/browser4-behavior-ghostcursor` | Optional `ghostcursor` humanizer (ghost-cursor Bézier trajectory / overshoot / idle drift); `priority = 0`, so it runs only when `browser.behavior.humanization.provider=ghostcursor` |
 | `browser4-dependencies` | BOM and dependency alignment |
 | `browser4-tools` | Operational tools and launch helpers |
 | `browser4-agentic` | AI agents, MCP, skill registration |

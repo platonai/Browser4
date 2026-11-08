@@ -479,7 +479,9 @@ docker run -d -p 18182:18182 `
   Browser4 ships the current behavior as the default (community) implementation in
   `browser4-behavior-default` (ids: `default`). A professional or custom edition is a separate
   module that implements the same SPI with its own id and a higher `priority`; installing it as
-  the only behavior module (excluding the default one) needs no configuration at all.
+  the only behavior module (excluding the default one) needs no configuration at all. The
+  optional `browser4-behavior-ghostcursor` module adds the id `ghostcursor` (ghost-cursor
+  trajectory model) at `priority = 0`, so it is only selected when pinned here.
 
   ```properties
   browser.behavior.stealth.provider=
@@ -490,6 +492,21 @@ docker run -d -p 18182:18182 `
   names the configured and the effective id. The active implementation is logged once at first
   use (`Browser behavior: stealth=default [default], humanization=default [default]`).
   See [Browser behavior modules](browser-behavior-modules.md).
+
+* **`browser.behavior.humanization.idle.enabled`** *(default: `false`)*
+  Whether the driver may drift the pointer on its own after a period without input. Only has an
+  effect when the active humanizer plans idles (`InteractionHumanizer.idleMove`; the `ghostcursor`
+  provider does, the community default returns `null`). Off by default: a pointer that moves
+  without a command is observable behaviour.
+
+* **`browser.behavior.humanization.idle.threshold.ms`** *(default: `3000`)*
+  How long the session must go without any input before the first idle drift. The idle clock is
+  reset by every pointer, wheel, key and drag entry point, and the driver re-checks it every 500 ms.
+
+  ```properties
+  browser.behavior.humanization.idle.enabled=false
+  browser.behavior.humanization.idle.threshold.ms=3000
+  ```
 
 * **`crawl.autoResume`** *(default: `false`)*
   Whether a crawl that was **running when the backend process died** is resumed
