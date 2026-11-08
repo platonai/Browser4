@@ -252,6 +252,8 @@ const CLI_TEMP_DIR_COMPONENTS: [&str; 2] = ["tmp", "cli"];
 const RUNTIME_VERSIONS_DIR_NAME: &str = "runtime";
 /// Symlink (or tag file on Windows) that points to the currently active version.
 const CURRENT_TAG_FILE_NAME: &str = "current.tag";
+/// How many versioned runtime installs to keep on disk after an update.
+const RETAINED_RUNTIME_VERSIONS: usize = 3;
 /// Name of the directory inside each versioned install that holds dependency JARs.
 const BROWSER4_LIB_DIR_NAME: &str = "lib";
 /// Name of the directory inside each versioned install that holds the bundled JRE.
@@ -2497,6 +2499,84 @@ pub(crate) fn write_current_tag(tag: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether a directory name looks like a runtime version tag (`v4.16.3`,
+/// `4.16.3`, `v4.16.3-rc.1`).  Guards the pruner against deleting unrelated
+/// entries such as `current`, `current.tag` or `.staging-*` directories.
+fn looks_like_version_tag(name: &str) -> bool {
+    let trimmed = name.trim_start_matches('v');
+    let mut parts = trimmed.split('.');
+    let major = parts.next().unwrap_or_default();
+    let minor = parts.next().unwrap_or_default();
+    !major.is_empty()
+        && !minor.is_empty()
+        && major.bytes().all(|b| b.is_ascii_digit())
+        && minor.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Delete superseded versioned runtime installs so repeated updates do not
+/// grow the user's disk usage without bound.
+///
+/// Keeps the newest `retain` versions plus the active `current.tag` and any
+/// pending tag (a pre-downloaded runtime waiting for activation), so updating
+/// can never delete the version that is about to be used.
+///
+/// Best-effort by design: on Windows a running backend keeps its JVM files
+/// open, so deleting that version fails and is silently retried on a later
+/// launch (see the call in `start_server`); a failed delete never fails an
+/// install.
+pub(crate) fn prune_old_runtime_versions(retain: usize) {
+    let versions_dir = runtime_versions_dir();
+    let Ok(entries) = fs::read_dir(&versions_dir) else {
+        return;
+    };
+
+    let active = fs::read_to_string(current_tag_file_path())
+        .ok()
+        .map(|raw| raw.trim().to_string())
+        .filter(|tag| !tag.is_empty());
+    let pending = crate::update_check::load_state().pending_tag;
+
+    let mut tags: Vec<String> = entries
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+        .filter(|name| looks_like_version_tag(name))
+        .collect();
+    // Newest first, so the first `retain` entries form the keep set.
+    tags.sort_by(|a, b| compare_semver_tags(b, a));
+
+    let mut keep: Vec<&str> = tags.iter().take(retain).map(String::as_str).collect();
+    if let Some(tag) = active.as_deref() {
+        keep.push(tag);
+    }
+    if let Some(tag) = pending.as_deref() {
+        keep.push(tag);
+    }
+
+    for tag in &tags {
+        if keep.contains(&tag.as_str()) {
+            continue;
+        }
+        if remove_path_if_exists(&versioned_install_dir(tag)).is_ok() {
+            eprintln!("Removed old Browser4 runtime {tag} to free disk space.");
+        }
+    }
+
+    // Cached archives for pruned versions are dead weight too: the runtime is
+    // already unpacked, so keeping the zip of a deleted version buys nothing.
+    if let Ok(entries) = fs::read_dir(browser4_download_cache_dir()) {
+        for entry in entries.flatten() {
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            if !looks_like_version_tag(&name) || keep.contains(&name.as_str()) {
+                continue;
+            }
+            let _ = remove_path_if_exists(&entry.path());
+        }
+    }
+}
+
 /// Resolve the currently active runtime install directory.
 ///
 /// Reads `current.tag`, validates the versioned directory exists, and returns
@@ -3892,6 +3972,10 @@ fn commit_installed_browser4_runtime(
     // a crash between the rename and this write leaves current.tag pointing
     // to a complete (though not yet current) version rather than nothing.
     write_current_tag(&metadata.tag)?;
+
+    // Drop superseded installs now that the new version is active; anything
+    // still locked by a running backend is retried on the next launch.
+    prune_old_runtime_versions(RETAINED_RUNTIME_VERSIONS);
 
     Ok(materialize_installed_runtime(metadata, false))
 }
@@ -9795,6 +9879,9 @@ async fn start_server(
         eprint!("\r\x1b[K");
     }
     eprintln!("Server ready in {:.1}s", elapsed);
+    // The backend that used an older runtime is gone now, so versions that
+    // were locked during the install can finally be reclaimed.
+    prune_old_runtime_versions(RETAINED_RUNTIME_VERSIONS);
     Ok(())
 }
 
@@ -13782,6 +13869,71 @@ mod tests {
         // may add \\?\ prefix on Windows — compare file names instead).
         assert!(resolved.ends_with(Path::new("runtime").join("v4.10.0")));
         assert!(resolved.join("lib").join("browser4.jar").exists());
+    }
+
+    #[test]
+    fn test_prune_old_runtime_versions_keeps_newest_three_and_active() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let _env = TestEnvGuard::lock(&tmp.path());
+
+        let versions = runtime_versions_dir();
+        create_dir_all(&versions).unwrap();
+        for tag in ["v4.10.0", "v4.11.0", "v4.12.0", "v4.13.0", "v4.14.0"] {
+            create_dir_all(versions.join(tag)).unwrap();
+        }
+        // Unrelated entries the pruner must never touch.
+        create_dir_all(versions.join(".staging-v4.15.0-123")).unwrap();
+        create_dir_all(versions.join("not-a-version")).unwrap();
+        write(current_tag_file_path(), "v4.10.0\n").unwrap();
+        // Download-cache entries for the same versions.
+        let cache = browser4_download_cache_dir();
+        for tag in ["v4.10.0", "v4.11.0", "v4.14.0"] {
+            create_dir_all(cache.join(tag)).unwrap();
+        }
+
+        prune_old_runtime_versions(3);
+
+        // The newest three survive ...
+        assert!(versions.join("v4.14.0").is_dir());
+        assert!(versions.join("v4.13.0").is_dir());
+        assert!(versions.join("v4.12.0").is_dir());
+        // ... plus the active tag, even though it is older than the cut-off.
+        assert!(versions.join("v4.10.0").is_dir());
+        // Everything older than the cut-off is gone.
+        assert!(!versions.join("v4.11.0").exists());
+        // Non-version entries are left alone.
+        assert!(versions.join(".staging-v4.15.0-123").is_dir());
+        assert!(versions.join("not-a-version").is_dir());
+        // Cached archives follow the same keep set.
+        assert!(cache.join("v4.14.0").is_dir());
+        assert!(cache.join("v4.10.0").is_dir(), "active version's cache stays");
+        assert!(!cache.join("v4.11.0").exists());
+    }
+
+    #[test]
+    fn test_prune_old_runtime_versions_keeps_pending_tag() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let _env = TestEnvGuard::lock(&tmp.path());
+
+        let versions = runtime_versions_dir();
+        create_dir_all(&versions).unwrap();
+        for tag in ["v4.10.0", "v4.11.0", "v4.12.0", "v4.13.0", "v4.14.0"] {
+            create_dir_all(versions.join(tag)).unwrap();
+        }
+        write(current_tag_file_path(), "v4.14.0\n").unwrap();
+        // A pre-downloaded runtime waiting for activation must never be pruned.
+        let mut state = crate::update_check::load_state();
+        state.pending_tag = Some("v4.10.0".to_string());
+        crate::update_check::save_state(&state);
+
+        prune_old_runtime_versions(3);
+
+        assert!(versions.join("v4.10.0").is_dir(), "pending tag must survive");
+        assert!(versions.join("v4.14.0").is_dir());
+        assert!(versions.join("v4.12.0").is_dir(), "newest three stay");
+        assert!(!versions.join("v4.11.0").exists());
     }
 
     #[test]

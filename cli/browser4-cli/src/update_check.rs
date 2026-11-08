@@ -4,13 +4,13 @@
 //! `BROWSER4_AUTO_UPGRADE` environment variable:
 //!
 //! - `off` — never check, never notify.
-//! - `notify` (default) — once per TTL, resolve the latest release tag and
-//!   print a one-line hint on stderr when a newer version exists.
+//! - `notify` — once per TTL, resolve the latest release tag and print a
+//!   one-line hint on stderr when a newer version exists.
 //! - `runtime` — additionally pre-download the newer runtime bundle in a
 //!   detached background process; the download is activated the next time the
 //!   backend starts.
-//! - `full` — additionally self-upgrade the CLI binary in the same background
-//!   pass.
+//! - `full` (default) — additionally self-upgrade the CLI binary in the same
+//!   background pass.
 //!
 //! State lives in `<runtime-data-dir>/update-check.json`.  All network and
 //! process-spawning side effects stay in `main.rs`; this module is pure
@@ -47,11 +47,11 @@ pub const RESOLVE_TIMEOUT_SECS: u64 = 3;
 pub enum AutoUpgradePolicy {
     /// Never check, never notify.
     Off,
-    /// Check and print a hint (default).
+    /// Check and print a hint.
     Notify,
     /// Notify + background runtime pre-download, activated on next launch.
     Runtime,
-    /// Runtime + background CLI self-upgrade.
+    /// Runtime + background CLI self-upgrade (default).
     Full,
 }
 
@@ -67,13 +67,13 @@ impl AutoUpgradePolicy {
         }
     }
 
-    /// Resolve the effective policy: the env var wins; default is `notify`.
-    /// Unrecognised values fall back to `notify` (never silently to `off`).
+    /// Resolve the effective policy: the env var wins; default is `full`.
+    /// Unrecognised values fall back to `full` (never silently to `off`).
     pub fn from_env() -> Self {
         std::env::var(AUTO_UPGRADE_ENV)
             .ok()
             .and_then(|v| Self::parse(&v))
-            .unwrap_or(Self::Notify)
+            .unwrap_or(Self::Full)
     }
 
     pub fn as_str(&self) -> &'static str {
@@ -336,21 +336,21 @@ mod tests {
     }
 
     #[test]
-    fn policy_from_env_defaults_to_notify_and_ignores_garbage() {
+    fn policy_from_env_defaults_to_full_and_ignores_garbage() {
         let _lock = crate::test_env::lock();
         unsafe {
             std::env::remove_var(AUTO_UPGRADE_ENV);
         }
-        assert_eq!(AutoUpgradePolicy::from_env(), AutoUpgradePolicy::Notify);
-        unsafe {
-            std::env::set_var(AUTO_UPGRADE_ENV, "full");
-        }
         assert_eq!(AutoUpgradePolicy::from_env(), AutoUpgradePolicy::Full);
+        unsafe {
+            std::env::set_var(AUTO_UPGRADE_ENV, "notify");
+        }
+        assert_eq!(AutoUpgradePolicy::from_env(), AutoUpgradePolicy::Notify);
         unsafe {
             std::env::set_var(AUTO_UPGRADE_ENV, "not-a-policy");
         }
-        // Unknown values fall back to notify — never silently to off.
-        assert_eq!(AutoUpgradePolicy::from_env(), AutoUpgradePolicy::Notify);
+        // Unknown values fall back to full — never silently to off.
+        assert_eq!(AutoUpgradePolicy::from_env(), AutoUpgradePolicy::Full);
         unsafe {
             std::env::remove_var(AUTO_UPGRADE_ENV);
         }

@@ -450,10 +450,10 @@ The CLI checks for newer releases in the background, controlled by `BROWSER4_AUT
 
 | Value | Behavior |
 |---|---|
-| `notify` (default) | Once per 24 h, print a one-line hint on stderr when a newer release exists (deduplicated per tag). |
+| `full` (default) | `runtime` plus a self-upgrade of the CLI binary in the same background pass. |
+| `notify` | Once per 24 h, print a one-line hint on stderr when a newer release exists (deduplicated per tag). |
 | `off` | Never check. |
 | `runtime` | Also pre-download the newer runtime bundle in a detached background process; the download is activated automatically on the next backend start. |
-| `full` | `runtime` plus a self-upgrade of the CLI binary in the same background pass. |
 
 Safety rails: checks run only against the local backend with an installed
 packaged runtime (never in dev checkouts or against remote servers); the latest
@@ -462,6 +462,10 @@ that window, so an offline machine never pays a network timeout on every
 command; a major-version jump is only ever notified, never downloaded; a tag
 that fails to download 3 times is blacklisted for 7 days.  Inspect the current
 state any time with `browser4-cli doctor` (the `-- Auto-Update --` section).
+Only the three most recent runtime versions are kept on disk — the active
+`current.tag` and any pending pre-downloaded version are always retained, and
+superseded versions still locked by a running backend are removed on the next
+launch.
 
 ### Prerequisites
 
