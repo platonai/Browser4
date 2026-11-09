@@ -9,10 +9,12 @@ import ai.platon.pulsar.coding.AccessState
 import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.coding.Effect
 import ai.platon.pulsar.coding.PermissionAudit
+import ai.platon.pulsar.coding.ReadablePaths
 import ai.platon.pulsar.coding.Target
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNotSame
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -241,6 +243,14 @@ class CodingAccessEnforcementTest {
         assertTrue(plain.contains("project build (mvn/verify): NO"), plain)
         assertTrue(plain.contains("shell + arbitrary code    : NO"), plain)
         assertTrue(plain.contains(".browser4"), "the report must list the protections: $plain")
+        // Reads are not limited by the preset: the readable roots (Browser4's own data/checkout
+        // folders, read-only) and the credential stores that stay refused are part of the answer the
+        // model needs after a refusal.
+        assertTrue(plain.contains("Readable roots (read-only, outside the workspace)"), plain)
+        val readableRoot = ReadablePaths.roots().firstOrNull()
+        assertNotNull(readableRoot, "the test environment must resolve at least the Browser4 data root")
+        assertTrue(plain.contains(readableRoot.toString()), "the readable roots must be listed: $plain")
+        assertTrue(plain.contains("always refused    :"), plain)
         // No approval channel is attached here, and the report must say so rather than imply that
         // `coding.requestAccess` will reach an operator.
         assertTrue(plain.contains("Operator approval:"), plain)

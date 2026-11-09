@@ -120,6 +120,12 @@ plus the operator endpoints. The preset table, the `PERMISSION_DENIED | code=...
 catalogue, the approval/rail rules, the unattended default and the task-scoped reset
 are in [agent-access.md](agent-access.md).
 
+**Reads are wider than writes.** Browser4's own data root (`~/.browser4`: logs, task data,
+per-task workspaces, its `tmp/`), the source checkout, and any folder added with
+`-Dbrowser4.agent.readPaths=…` are readable from every task — read-only, whatever the
+preset. `coding.permissions` lists them; see
+[agent-access.md](agent-access.md#readable-roots--browser4s-own-folders).
+
 **Two layers, one boundary.** The preset and the string checks (`pathGuard`,
 `workspaceBoundary`, `allowExternalAccess`) decide what the model may *spell* — they are
 fast-fail and advisory, not enforcement. The boundary is the **execution sandbox**:

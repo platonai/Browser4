@@ -24,6 +24,16 @@ enum class ScopeKind {
 
     /** A toolchain location outside the workspace (JDK, package caches, temp, OS dir). */
     TOOLCHAIN,
+
+    /**
+     * An operator-readable root outside the workspace ([ReadablePaths]): Browser4's data root, the
+     * source checkout, or a `browser4.agent.readPaths` entry.
+     *
+     * Carries [Effect.FS_READ] only — these roots are in the grants' read scope, never their write
+     * scope — and is not a narrowing candidate: it comes from the environment, not from a derived
+     * boundary ([ScopeNarrowing]).
+     */
+    READABLE,
 }
 
 /**
@@ -79,8 +89,10 @@ object ScopeNarrowing {
         consecutiveUnusedTasks: Map<String, Int>,
         threshold: Int = DEFAULT_UNUSED_TASKS,
     ): List<ScopeNarrowingSuggestion> = manifest
-        // The workspace root is what the boundary is *for*; dropping it is not a narrowing.
-        .filter { it.kind != ScopeKind.WORKSPACE }
+        // The workspace root is what the boundary is *for*; dropping it is not a narrowing. A
+        // readable root is operator/environment configuration too — "it went unused" says nothing
+        // about whether reading it is legitimate, so it is never a narrowing candidate either.
+        .filter { it.kind != ScopeKind.WORKSPACE && it.kind != ScopeKind.READABLE }
         .mapNotNull { entry ->
             val unused = consecutiveUnusedTasks[entry.id] ?: return@mapNotNull null
             if (unused < threshold) return@mapNotNull null

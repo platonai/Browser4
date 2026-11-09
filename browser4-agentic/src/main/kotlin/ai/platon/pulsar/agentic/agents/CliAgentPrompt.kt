@@ -218,9 +218,13 @@ internal object CliAgentPrompt {
      * path) until the step budget runs out.
      *
      * The workspace boundary is *independent of the preset*: with `allowExternalAccess=false`
-     * (the default) every path outside the workspace is refused even under `full`. A live browsing
-     * run retried the same denied repo path four times because the block was suppressed by the
-     * preset check while the boundary was still active, so that case gets its own short block.
+     * (the default) writes stay inside the workspace even under `full`. Reads are deliberately
+     * wider — the readable roots ([ai.platon.pulsar.coding.ReadablePaths]) cover Browser4's own
+     * data/temp/code folders — so the block names them instead of claiming every outside path is
+     * refused: a model that believed the old text would report "cannot inspect the logs" as a
+     * problem instead of reading them. A live browsing run retried the same denied repo path four
+     * times because the block was suppressed by the preset check while the boundary was still
+     * active, so that case keeps its own short block.
      */
     private fun permissionsBlock(policy: AgentAccessPolicy): String {
         if (policy.preset == AccessPreset.FULL && policy.denyTools.isEmpty()) {
@@ -228,9 +232,13 @@ internal object CliAgentPrompt {
             return """
 
         ### Workspace boundary
-        - The coding file tools only resolve paths INSIDE the workspace: absolute paths, `..`
-          traversal and repo-relative paths outside it are refused with
+        - Writes and shell work stay INSIDE the workspace: absolute paths, `..` traversal and
+          repo-relative paths outside it are refused with
           `PERMISSION_DENIED | code=PATH_DENIED` (allowExternalAccess=false).
+        - Reading is wider on purpose: Browser4's own data, temp and code folders are readable
+          even outside the workspace, and they are READ-ONLY. Run coding.permissions for the exact
+          roots; the operator adds more with -Dbrowser4.agent.readPaths=…. A write there is refused
+          — do not retry it against a readable root.
         - A refusal is structural: do NOT retry it with different quoting, a `..` prefix, or an
           interpreter. Keep task inputs under the workspace; an input that is blocked belongs in
           `problems` at system.taskComplete.
@@ -250,8 +258,10 @@ internal object CliAgentPrompt {
             "call later. Guardrails (denied tools, protected/credential paths, the workspace " +
             "boundary) can never be approved away — never route around them."
         val boundary = if (policy.allowExternalAccess) "" else
-            "Paths outside the workspace are refused (`PERMISSION_DENIED | code=PATH_DENIED`); " +
-                "absolute paths, `..` traversal and interpreters do not get around it."
+            "Paths outside the workspace are refused for writes (`PERMISSION_DENIED | code=PATH_DENIED`); " +
+                "absolute paths, `..` traversal and interpreters do not get around it. Browser4's own " +
+                "data/temp/code folders are the exception, and are READ-ONLY — coding.permissions " +
+                "lists them."
         return """
 
         ### Permissions

@@ -151,6 +151,17 @@ class CodingAgentShell(
      * [setEnv] overrides a seed of the same name.
      */
     initialSessionEnv: Map<String, String> = emptyMap(),
+    /**
+     * Roots outside the workspace that may be named by a command argument for **reading**
+     * ([ReadablePaths]).
+     *
+     * Empty for direct construction (historical workspace-only scope); the production wiring
+     * ([CodingComponents.shell]) passes `ReadablePaths.roots()`, so `type <app data>/logs/...`
+     * works while a credential location in the same tree stays refused. The boundary decision
+     * asks for `fs.read` only: a path argument is where a command *reaches*, and the write side is
+     * governed by the command tier and `allowDestructive`.
+     */
+    private val readableRoots: Set<Path> = emptySet(),
 ) {
     /**
      * The workspace this shell is bound to.
@@ -970,6 +981,11 @@ class CodingAgentShell(
     /** Home-expanded credential roots, shared with [CodingAgentFileSystem]. */
     private val sensitiveRoots: List<Path> by lazy { SensitivePaths.roots(sensitivePaths) }
 
+    /** [readableRoots] as absolute normalised paths; resolved once per instance. */
+    private val resolvedReadableRoots: List<Path> by lazy {
+        readableRoots.map { it.toAbsolutePath().normalize() }
+    }
+
     /** Absolute roots of [protectedDirs] under the workspace base. */
     private val protectedRoots: List<Path> by lazy {
         protectedDirs.map { canonicalBaseDir.resolve(it).normalize() }
@@ -1008,13 +1024,15 @@ class CodingAgentShell(
                 // The lexical path is inside the workspace, but a link inside it may still resolve
                 // into a credential location (module junctions are links too, so only the sensitive
                 // roots are checked here, not "outside the workspace").
-                if (!isWorkspaceOwned(resolved) && SensitivePaths.isSensitive(resolved, sensitiveRoots)) {
+                if (!isWorkspaceOwned(resolved) &&
+                    SensitivePaths.isRefused(resolved, sensitiveRoots, resolvedReadableRoots)
+                ) {
                     return PATH_GUARD_PREFIX + "'$token' links to a credential location ($resolved); " +
                         ADVISORY_NOTE + "pass a workspace-relative path instead"
                 }
                 continue
             }
-            if (SensitivePaths.isSensitive(resolved, sensitiveRoots)) {
+            if (SensitivePaths.isRefused(resolved, sensitiveRoots, resolvedReadableRoots)) {
                 return PATH_GUARD_PREFIX + "'$token' resolves to a credential location ($resolved); " +
                     ADVISORY_NOTE + "pass a workspace-relative path instead"
             }
@@ -1033,9 +1051,16 @@ class CodingAgentShell(
      * working:
      * - standard toolchain locations (JDK, `~/.m2`, `~/.gradle`, `~/.cache`, temp,
      *   `%SystemRoot%`) stay readable;
+     * - the readable roots ([ReadablePaths] — Browser4's data/checkout folders and any
+     *   `browser4.agent.readPaths` entry) stay readable, because that is where the
+     *   agent's own logs and data live;
      * - a token whose variables cannot be expanded is left alone (it is not a path we
      *   can judge);
      * - Windows `/s`, `/b` … switches are not paths.
+     *
+     * The decision asks for `fs.read`: an argument is where a command *reaches*, and only the
+     * readable roots are in the read scope. A command that writes is still governed by its tier
+     * (`allowDestructive`) and by the OS sandbox.
      *
      * Inline scripts (`python -c "…"`) are not parsed — this guard is about the shell's
      * own arguments, and a script is free to compute whatever it likes.
@@ -1063,15 +1088,18 @@ class CodingAgentShell(
             // must still name the location it means (see [portableSeparators]).
             val resolved = if (path.isAbsolute) path.normalize() else canonicalBaseDir.resolve(ported).normalize()
             // Credential locations stay the credential guard's business (so its switch
-            // still governs them); this guard is about ordinary paths.
-            if (SensitivePaths.isSensitive(resolved, sensitiveRoots)) continue
+            // still governs them); this guard is about ordinary paths. The readable-root
+            // relaxation is therefore applied here too: a path the credential guard allows to be
+            // read must not be refused by the boundary.
+            if (SensitivePaths.isRefused(resolved, sensitiveRoots, resolvedReadableRoots)) continue
             // The boundary decision is made by the shared Authorizer: workspace + mirrored
-            // module roots + toolchain locations are in scope, and launchers are exempt (B3/B4).
+            // module roots + toolchain locations (and, for reads, the readable roots) are in
+            // scope, and launchers are exempt (B3/B4).
             val authorizer = boundaryAuthorizer ?: fallbackBoundaryAuthorizer
             val decision = authorizer.decide(
                 Request(
                     tool = SHELL_TOOL,
-                    effects = setOf(Effect.FS_READ, Effect.FS_WRITE),
+                    effects = setOf(Effect.FS_READ),
                     targets = listOf(Target.PathTarget(resolved)),
                     capabilityId = CodingComponents.CAP_SHELL_BOUNDARY,
                 ),
@@ -1138,8 +1166,9 @@ class CodingAgentShell(
     /**
      * Fallback boundary [Authorizer] used when none was injected. Holds a single lexical-scope
      * grant over the workspace, its mirrored module roots ([MirrorRoots]) and the toolchain
-     * locations (B4), with launchers exempt (B3). The credential and protected-dir rails stay
-     * separate ([argumentPathViolation], [protectedPathViolation]) — they are orthogonal guardrails,
+     * locations (B4), with launchers exempt (B3) — plus the readable roots ([ReadablePaths]) for
+     * reads only. The credential and protected-dir rails stay separate
+     * ([argumentPathViolation], [protectedPathViolation]) — they are orthogonal guardrails,
      * not capability scope.
      *
      * Built lazily so the mirror scan runs once and only when a command is actually validated.
@@ -1152,7 +1181,7 @@ class CodingAgentShell(
                     id = CodingComponents.CAP_SHELL_BOUNDARY,
                     effects = setOf(Effect.FS_READ, Effect.FS_WRITE),
                     scope = Scope(
-                        readPaths = roots,
+                        readPaths = roots + resolvedReadableRoots,
                         writePaths = roots,
                         launcherBasenames = LAUNCHER_BASENAMES,
                         executableExtensions = EXECUTABLE_EXTENSIONS,

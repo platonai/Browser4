@@ -97,6 +97,15 @@ class CodingAgentFileSystem(
      * builds its own boundary authorizer — kept so tests and direct construction still work.
      */
     private val boundaryAuthorizer: Authorizer? = null,
+    /**
+     * Roots outside the workspace that may be **read** but never written ([ReadablePaths]).
+     *
+     * Empty for direct construction: a holder that names no roots gets the historical
+     * workspace-only scope. The production wiring ([CodingComponents.fs]) passes
+     * `ReadablePaths.roots()`, so the agent can read Browser4's own data/checkout folders while
+     * writes stay in the workspace.
+     */
+    private val readableRoots: Set<Path> = emptySet(),
 ) {
     /**
      * The boundary [Authorizer] actually in effect — the injected shared instance, or the
@@ -1424,21 +1433,30 @@ class CodingAgentFileSystem(
         val p = Path.of(path)
         val resolved = if (p.isAbsolute) p.normalize() else canonicalRoot.resolve(path).normalize()
 
-        // Boundary: the real path must live inside the workspace or one of its mirrored module
-        // roots. The decision runs on canonical (real) paths through [boundaryAuthorizer], so a
-        // junction inside the workspace that points at the source checkout is still allowed — its
-        // real target is in the scope — while a path that genuinely escapes is refused.
-        // `allowExternalAccess` short-circuits the boundary exactly as before; the credential
-        // guard below still runs regardless.
-        if (!allowExternalAccess && !withinBoundary(resolved)) {
-            logger.warn("Path outside workspace boundary denied: $path resolves to $resolved")
-            PermissionAudit.record("coding.fs", PermissionAudit.CODE_PATH_OUTSIDE_WORKSPACE)
+        // Boundary: the real path must be readable — inside the workspace or one of its mirrored
+        // module roots, or inside a readable root ([ReadablePaths]) — and, for a mutation, writable,
+        // which only the workspace and its mirrors are. The decision runs on canonical (real) paths
+        // through [boundaryAuthorizer], so a junction inside the workspace that points at the source
+        // checkout is still allowed — its real target is in the scope — while a path that genuinely
+        // escapes is refused. `allowExternalAccess` short-circuits the boundary exactly as before;
+        // the credential guard below still runs regardless.
+        if (!allowExternalAccess && !withinBoundary(resolved, write)) {
+            if (write && ReadablePaths.isReadable(resolved, resolvedReadableRoots)) {
+                // Reading this root is allowed on purpose; writing it is not. Say which one it was:
+                // the shared "outside the workspace" line made a read-only refusal look like a
+                // missing path, and the model retried the write.
+                logger.warn("Write into read-only root denied: $path resolves to $resolved")
+                PermissionAudit.record("coding.fs", PermissionAudit.CODE_READ_ONLY)
+            } else {
+                logger.warn("Path outside workspace boundary denied: $path resolves to $resolved")
+                PermissionAudit.record("coding.fs", PermissionAudit.CODE_PATH_OUTSIDE_WORKSPACE)
+            }
             return null
         }
 
         // B5: the override is a documented escape hatch, not a silent widening. Record every write
         // that it lets through so `coding.permissions` can show how far the run actually went.
-        if (write && allowExternalAccess && !withinBoundary(resolved)) {
+        if (write && allowExternalAccess && !withinBoundary(resolved, true)) {
             PermissionAudit.writeEvent(
                 tool = "coding.fs",
                 code = PermissionAudit.CODE_OUT_OF_SCOPE_WRITE,
@@ -1463,18 +1481,20 @@ class CodingAgentFileSystem(
 
     /**
      * Whether [path]'s real location is reachable: inside the workspace, or inside one of the
-     * mirrored module roots the workspace links to.
+     * mirrored module roots the workspace links to, or — for a read — inside a readable root
+     * ([ReadablePaths]).
      *
      * The check is a single [Authorizer] decision, the same one the shell and the build runner will
-     * eventually use. The capability here grants both read and write on the same scope, because
-     * [resolvePath] does not know yet whether the caller wants to read or write — the [readOnly]
-     * flag enforces the write side separately.
+     * eventually use. The effect matters: a readable root is in the grant's `readPaths` only, so a
+     * mutation there is refused. This is why the method takes [write] instead of asking for both
+     * effects at once (which is what it did before readable roots existed, and which would have
+     * made every readable root unwritable *and* unreadable).
      */
-    private fun withinBoundary(path: Path): Boolean {
+    private fun withinBoundary(path: Path, write: Boolean = false): Boolean {
         val decision = activeBoundaryAuthorizer.decide(
             Request(
                 tool = "coding.fs",
-                effects = setOf(Effect.FS_READ, Effect.FS_WRITE),
+                effects = if (write) setOf(Effect.FS_WRITE) else setOf(Effect.FS_READ),
                 targets = listOf(Target.PathTarget(path)),
                 capabilityId = CodingComponents.CAP_FS_BOUNDARY,
             ),
@@ -1484,8 +1504,9 @@ class CodingAgentFileSystem(
 
     /**
      * Fallback boundary [Authorizer] used when none was injected. Holds a single canonical-scope
-     * grant over the workspace real root and every mirrored module root [MirrorRoots] finds. Built
-     * lazily so the mirror scan runs once per instance and only when a path is actually resolved.
+     * grant over the workspace real root and every mirrored module root [MirrorRoots] finds, plus
+     * the readable roots for reads only ([ReadablePaths]). Built lazily so the mirror scan runs once
+     * per instance and only when a path is actually resolved.
      */
     private val fallbackBoundaryAuthorizer: Authorizer by lazy {
         val roots = (setOf(canonicalRoot) + MirrorRoots.derive(workspaceRoot)).toSet()
@@ -1494,11 +1515,19 @@ class CodingAgentFileSystem(
                 Capability(
                     id = CodingComponents.CAP_FS_BOUNDARY,
                     effects = setOf(Effect.FS_READ, Effect.FS_WRITE),
-                    scope = Scope(readPaths = roots, writePaths = roots),
+                    scope = Scope(
+                        readPaths = roots + resolvedReadableRoots,
+                        writePaths = roots,
+                    ),
                     source = CapabilitySource.PRESET,
                 ),
             ),
         )
+    }
+
+    /** [readableRoots] as absolute normalised paths; resolved once per instance. */
+    private val resolvedReadableRoots: List<Path> by lazy {
+        readableRoots.map { it.toAbsolutePath().normalize() }
     }
 
     /** Home-expanded [sensitivePaths], resolved once per instance. */
@@ -1511,13 +1540,18 @@ class CodingAgentFileSystem(
      * own tree and therefore exempt — a `--fresh-workspace` workspace lives under `~/.browser4`, so
      * treating the whole tree as sensitive would make every file tool call fail. A path that is
      * inside the workspace only lexically, while the link resolves elsewhere, is *not* exempt.
+     *
+     * Everything else goes through [SensitivePaths.isRefused], which lets a readable root
+     * ([ReadablePaths]) relax the sensitive list — the Browser4 data root is on that list, and
+     * reading the agent's own logs/data is the point of the readable roots — while the OS
+     * credential stores ([ReadablePaths.ALWAYS_REFUSED]) stay refused.
      */
     private fun isSensitiveLocation(candidate: Path): Boolean {
         val real = runCatching { if (Files.exists(candidate)) candidate.toRealPath() else null }.getOrNull()
         if (candidate.startsWith(canonicalRoot) && (real == null || real.startsWith(canonicalRoot))) {
             return false
         }
-        return SensitivePaths.isSensitive(candidate, sensitiveRoots)
+        return SensitivePaths.isRefused(candidate, sensitiveRoots, resolvedReadableRoots)
     }
 
     private fun snapshotFile(path: Path) {
@@ -1761,10 +1795,12 @@ class CodingAgentFileSystem(
     private fun unresolvedPath(path: String): String = PermissionAudit.format(
         tool = "coding.fs",
         code = PermissionAudit.CODE_PATH_DENIED,
-        detail = "path '$path' is outside the workspace, in a sensitive location, or protected",
-        hint = "use a workspace-relative path; the deprecated allowExternalAccess opt-in relaxes " +
-            "this check only — the OS sandbox still enforces the boundary, and credential " +
-            "locations stay refused either way",
+        detail = "path '$path' is outside the workspace (readable roots are read-only), lies in a " +
+            "sensitive location, or is protected",
+        hint = "writes go under the workspace; reading is allowed for the readable roots listed by " +
+            "coding.permissions (add your own with -Dbrowser4.agent.readPaths=...), and the " +
+            "deprecated allowExternalAccess opt-in still relaxes the boundary check only — the OS " +
+            "sandbox still enforces the boundary, and credential locations stay refused either way",
     )
 
     /**

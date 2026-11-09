@@ -36,7 +36,14 @@ object PermissionAudit {
     /** The access preset does not grant this method at all. */
     const val CODE_TOOL_DENIED = "TOOL_DENIED"
 
-    /** The workspace is read-only under the active preset. */
+    /**
+     * A write into a read-only location.
+     *
+     * Two cases share the code because the answer to both is the same: the workspace under a
+     * non-mutating preset (`read`/`read-build`), and a readable root outside the workspace
+     * ([ReadablePaths]) — those roots exist to be *read*, so a mutation there is refused while the
+     * same path stays readable.
+     */
     const val CODE_READ_ONLY = "READ_ONLY"
 
     /** The path resolves outside the workspace while external access is off. */

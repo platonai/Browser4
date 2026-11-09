@@ -59,20 +59,25 @@ object CodingComponents {
     val CAP_SHELL_BOUNDARY: CapabilityId = CapabilityId("cap-shell-boundary")
 
     /**
-     * Boundary authorizers cached by canonical workspace root, so the file system and the shell
-     * built for the same workspace share one instance (A5: single construction point, no drift).
-     * The boundary scope depends only on the root, not on the policy, so caching is safe.
+     * Boundary authorizers cached by canonical workspace root **and** the readable roots in effect,
+     * so the file system and the shell built for the same workspace share one instance (A5: single
+     * construction point, no drift).
      *
-     * The cache is bounded: every task gets a fresh `baseDir/workspace.<taskId>`, so without a
-     * bound it would grow for the life of the backend. The [LinkedHashMap] is access-ordered, so
-     * the least recently used workspace is evicted once [MAX_BOUNDARY_AUTHORIZERS] is reached.
+     * The scope depends on the workspace and on [ReadablePaths] (an operator-set `browser4.agent.readPaths`
+     * changes it at runtime, and tests flip it), so both are in the key. The cache is bounded: every
+     * task gets a fresh `baseDir/workspace.<taskId>`, so without a bound it would grow for the life
+     * of the backend. The [LinkedHashMap] is access-ordered, so the least recently used workspace is
+     * evicted once [MAX_BOUNDARY_AUTHORIZERS] is reached.
      */
     internal const val MAX_BOUNDARY_AUTHORIZERS = 64
 
     private val boundaryAuthorizerLock = Any()
 
-    private val boundaryAuthorizers = object : LinkedHashMap<Path, Authorizer>(16, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Path, Authorizer>?): Boolean =
+    /** Cache key: the canonical workspace root plus the readable roots it was built with. */
+    private data class BoundaryKey(val root: Path, val readableRoots: List<Path>)
+
+    private val boundaryAuthorizers = object : LinkedHashMap<BoundaryKey, Authorizer>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<BoundaryKey, Authorizer>?): Boolean =
             size > MAX_BOUNDARY_AUTHORIZERS
     }
 
@@ -137,20 +142,46 @@ object CodingComponents {
      *
      * The workspace and its mirrored module roots are in both grants (the file system canonicalises
      * and the shell judges spelling); toolchain roots are shell-only, which is why the two grants
-     * have different scopes at all. This is the list observation data attaches to and the list
+     * have different scopes at all; the readable roots ([ReadablePaths]) are in both grants for
+     * **reads only**. This is the list observation data attaches to and the list
      * [ScopeNarrowing] advises on — it is derived, not yet declared, so P0-1 output can turn the
      * toolchain entries into explicit declared roots without moving anything else.
      *
      * @param root the workspace root
+     * @param readableRoots the readable roots in effect; defaults to [ReadablePaths.roots]
      */
-    internal fun scopeManifest(root: Path): List<ScopeEntry> {
+    internal fun scopeManifest(
+        root: Path,
+        readableRoots: List<Path> = ReadablePaths.roots(),
+    ): List<ScopeEntry> {
         val realRoot = runCatching { root.toRealPath() }.getOrDefault(root.toAbsolutePath().normalize())
         val boundaryGrants = setOf(CAP_FS_BOUNDARY, CAP_SHELL_BOUNDARY)
         val workspace = ScopeEntry("workspace", realRoot, ScopeKind.WORKSPACE, BOUNDARY_EFFECTS, boundaryGrants)
         val mirrors = MirrorRoots.derive(realRoot).sortedBy { it.toString() }.map {
             ScopeEntry("mirror:$it", it, ScopeKind.MIRROR, BOUNDARY_EFFECTS, boundaryGrants)
         }
-        return listOf(workspace) + mirrors + toolchainEntries()
+        val toolchain = toolchainEntries()
+        // A readable root that is already an exact workspace/mirror/toolchain entry adds nothing;
+        // the entry would only duplicate the id space. Ancestors are kept: the data root that
+        // contains the workspace grants reads *beyond* it, which is the whole point.
+        val known = (listOf(workspace) + mirrors + toolchain)
+            .map { runCatching { it.path.toRealPath() }.getOrDefault(it.path) }
+            .toSet()
+        val readable = readableRoots
+            .map { runCatching { it.toRealPath() }.getOrDefault(it.toAbsolutePath().normalize()) }
+            .distinct()
+            .filterNot { it in known }
+            .sortedBy { it.toString() }
+            .map {
+                ScopeEntry(
+                    id = "readable:$it",
+                    path = it,
+                    kind = ScopeKind.READABLE,
+                    effects = setOf(Effect.FS_READ),
+                    grants = boundaryGrants,
+                )
+            }
+        return listOf(workspace) + mirrors + toolchain + readable
     }
 
     /**
@@ -166,13 +197,16 @@ object CodingComponents {
      *   usable wherever they live.
      *
      * Both scopes are read from [scopeManifest], so the manifest and the grants cannot drift apart.
-     * Each caller pins its grant via [Request.capabilityId], so the shell's wider scope cannot
-     * accidentally cover a file-system request.
+     * The readable roots ([ReadablePaths]) are in the read scope of both grants and in neither write
+     * scope: Browser4's own data and checkout folders are there to be read. Each caller pins its
+     * grant via [Request.capabilityId], so the shell's wider scope cannot accidentally cover a
+     * file-system request.
      *
      * @param root the workspace root
      */
     fun boundaryAuthorizer(root: Path): Authorizer {
-        val key = runCatching { root.toRealPath() }.getOrDefault(root.toAbsolutePath().normalize())
+        val realRoot = runCatching { root.toRealPath() }.getOrDefault(root.toAbsolutePath().normalize())
+        val key = BoundaryKey(realRoot, ReadablePaths.roots())
         synchronized(boundaryAuthorizerLock) {
             boundaryAuthorizers[key]?.let { return it }
             val built = buildBoundaryAuthorizer(key)
@@ -181,26 +215,31 @@ object CodingComponents {
         }
     }
 
-    private fun buildBoundaryAuthorizer(workspaceRoot: Path): Authorizer {
-        val manifest = scopeManifest(workspaceRoot)
-        fun rootsOf(grant: CapabilityId): Set<Path> =
-            manifest.filter { grant in it.grants }.map { it.path }.toSet()
-        val fsRoots = rootsOf(CAP_FS_BOUNDARY)
-        val shellRoots = rootsOf(CAP_SHELL_BOUNDARY)
+    private fun buildBoundaryAuthorizer(key: BoundaryKey): Authorizer {
+        val manifest = scopeManifest(key.root, key.readableRoots)
+        // The manifest is the single source of truth: an entry's `effects` say whether its path is
+        // read-only (the readable roots) or read+write (workspace, mirrors, shell toolchain roots).
+        fun rootsOf(grant: CapabilityId, effect: Effect): Set<Path> =
+            manifest.filter { grant in it.grants && effect in it.effects }.map { it.path }.toSet()
+        fun readRoots(grant: CapabilityId) = rootsOf(grant, Effect.FS_READ)
+        fun writeRoots(grant: CapabilityId) = rootsOf(grant, Effect.FS_WRITE)
         return Authorizer(
             listOf(
                 Capability(
                     id = CAP_FS_BOUNDARY,
                     effects = setOf(Effect.FS_READ, Effect.FS_WRITE),
-                    scope = Scope(readPaths = fsRoots, writePaths = fsRoots),
+                    scope = Scope(
+                        readPaths = readRoots(CAP_FS_BOUNDARY),
+                        writePaths = writeRoots(CAP_FS_BOUNDARY),
+                    ),
                     source = CapabilitySource.PRESET,
                 ),
                 Capability(
                     id = CAP_SHELL_BOUNDARY,
                     effects = setOf(Effect.FS_READ, Effect.FS_WRITE),
                     scope = Scope(
-                        readPaths = shellRoots,
-                        writePaths = shellRoots,
+                        readPaths = readRoots(CAP_SHELL_BOUNDARY),
+                        writePaths = writeRoots(CAP_SHELL_BOUNDARY),
                         launcherBasenames = CodingAgentShell.LAUNCHER_BASENAMES,
                         executableExtensions = CodingAgentShell.EXECUTABLE_EXTENSIONS,
                         canonicalize = false,
@@ -243,6 +282,7 @@ object CodingComponents {
             protectedDirs = policy.protectedDirs,
             boundaryAuthorizer = boundary,
             initialSessionEnv = sessionEnv,
+            readableRoots = ReadablePaths.roots().toSet(),
         )
     }
 
@@ -285,6 +325,7 @@ object CodingComponents {
             sensitivePaths = policy.sensitivePaths,
             protectedDirs = policy.protectedDirs,
             boundaryAuthorizer = boundary,
+            readableRoots = ReadablePaths.roots().toSet(),
         )
     }
 
@@ -294,6 +335,10 @@ object CodingComponents {
      * `readOnly` is a projection of [AgentAccessPolicy.allowsFileMutation]: `read` and `read-build`
      * get a file system whose mutators refuse, so a mutating call that reaches the file system does
      * not depend on the tool gate having run first.
+     *
+     * The readable roots ([ReadablePaths]) are passed explicitly as well as through the boundary
+     * authorizer: the file system needs them for the credential relaxation (a readable root that is
+     * also on the sensitive list) and for the read-only-root refusal message.
      *
      * @param root the workspace root
      * @param policy the policy to read `allowExternalAccess` / `allowDestructive` / `protectedFiles` from
@@ -317,6 +362,7 @@ object CodingComponents {
             sensitivePaths = policy.sensitivePaths,
             persistSnapshots = persistSnapshots,
             boundaryAuthorizer = boundary,
+            readableRoots = ReadablePaths.roots().toSet(),
         )
     }
 }

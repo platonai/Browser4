@@ -1778,6 +1778,19 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    backend-wide browser4.agent.access applies; the preset is reset when the task ends.".to_string(),
         );
         lines.push(
+            "  - Reads are wider than writes: Browser4's own folders (the data root, e.g. ~/.browser4".to_string(),
+        );
+        lines.push(
+            "    with its logs, task data and tmp; the source checkout; any -Dbrowser4.agent.readPaths".to_string(),
+        );
+        lines.push(
+            "    folder) are readable from every task but stay read-only. OS credential stores".to_string(),
+        );
+        lines.push(
+            "    (~/.ssh, ~/.aws, ~/.gnupg, ~/.config/gcloud) stay refused; coding.permissions lists".to_string(),
+        );
+        lines.push("    the roots in effect.".to_string());
+        lines.push(
             "  - A refused step is not a dead end: the agent calls coding.requestAccess(effect, target),".to_string(),
         );
         lines.push(
