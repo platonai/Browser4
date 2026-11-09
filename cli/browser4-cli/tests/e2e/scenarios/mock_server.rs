@@ -7054,6 +7054,50 @@ pub(super) fn test_htmlsnapshot_query(ctx: &mut E2ECtx) {
         "expected expires=1d in html_snapshot_query arguments, got: {:?}",
         flagged_call.arguments
     );
+
+    // `-o` is the documented short form of `--output-file`, and the spelling the
+    // agent-facing `b4.run` guard already treats as a write destination. It used
+    // to be rejected with "unknown option -o … Did you mean --output-file?",
+    // which broke the documented CSV-to-file pipeline.
+    mock_server.set_html_snapshot_query_response(
+        r#"{"statusCode":200,"status":"OK","resultSet":[{"title":"Alpha","price":"$19.99"}]}"#,
+    );
+    let out_csv = ctx.workspace_dir.join("_e2e_query_out.csv");
+    let _ = fs::remove_file(&out_csv);
+    let out_arg = out_csv.to_string_lossy().into_owned();
+    let written = run_command(
+        ctx,
+        &[
+            "htmlsnapshot",
+            "query",
+            "--sql",
+            "SELECT * FROM page",
+            "--format",
+            "csv",
+            "-o",
+            &out_arg,
+        ],
+    );
+    assert_eq!(
+        written.exit_code, 0,
+        "`-o` must be accepted as --output-file:\n{}",
+        written.stderr
+    );
+    assert!(
+        !written.stderr.contains("unknown option"),
+        "`-o` must not be reported as an unknown option, got:\n{}",
+        written.stderr
+    );
+    let csv = fs::read_to_string(&out_csv)
+        .unwrap_or_else(|e| panic!("`-o {}` must write the payload: {e}", out_csv.display()));
+    assert!(
+        csv.contains("Alpha") && csv.contains("$19.99"),
+        "expected the CSV rows in the file, got:\n{csv}"
+    );
+    assert!(
+        !csv.contains("Tip:") && !csv.contains("rows returned"),
+        "the machine-readable file must stay parseable, got:\n{csv}"
+    );
 }
 
 /// `htmlsnapshot query --format table` renders rows from the response

@@ -226,6 +226,7 @@ browser4-cli htmlsnapshot query "https://example.com" --sql @query.sql --format 
 browser4-cli htmlsnapshot query "https://example.com" --sql @query.sql --format csv    # CSV rows
 browser4-cli htmlsnapshot query "https://example.com" --sql @query.sql --result-only   # just the resultSet (JSON)
 browser4-cli htmlsnapshot query "https://example.com" --sql @query.sql --format json   # explicit raw envelope (default)
+browser4-cli htmlsnapshot query "https://example.com" --sql @query.sql --format csv -o rows.csv  # same CSV, written to a file
 ```
 
 | Flag | What prints to stdout |
@@ -234,6 +235,7 @@ browser4-cli htmlsnapshot query "https://example.com" --sql @query.sql --format 
 | `--format table` | Aligned column table + a `N rows returned.` summary line (human-readable) |
 | `--format csv` | CSV rows (pipe to a file: `browser4-cli htmlsnapshot query … --format csv > rows.csv`) |
 | `--result-only` | Just the JSON `resultSet` array (drop the envelope; combine with `--format table` for table output) |
+| `-o <file>` / `--output-file <file>` | Nothing but `Output written to: <file>` — the payload (in the chosen `--format`) goes to the file. `-o` is the short form |
 
 Exit codes (for scripts — don't parse stdout to detect errors):
 

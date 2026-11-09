@@ -4871,7 +4871,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     name: "output-file <file>",
                     description: "Write output to a file instead of stdout",
                     is_bool: false,
-                    short: None,
+                    short: Some("o"),
                 },
                 OptionDef {
                     name: "format <fmt>",
@@ -9085,6 +9085,80 @@ mod tests {
     }
 
     #[test]
+    fn test_html_snapshot_query_output_file_has_a_short_alias() {
+        // `-o` is the spelling the agent-facing `b4.run` workspace guard already
+        // treats as a write destination (`B4CliToolExecutor`), and every other
+        // command whose job is "put the payload somewhere" spells that alias `-o`
+        // (crawl/scrape `--output`, screenshot/pdf `--filename`). The command
+        // declares no other `-o`, so there is no ambiguity to resolve.
+        let map = commands_map();
+        let cmd = map.get("htmlsnapshot-query").unwrap();
+        let output_file = cmd
+            .options
+            .iter()
+            .find(|o| o.key() == "output-file")
+            .expect("htmlsnapshot query should declare --output-file");
+
+        assert_eq!(output_file.short, Some("o"));
+    }
+
+    /// `-o out.csv` must reach `outputFile`, not land in the positional `url`
+    /// slot: `b4.run` was answering `unknown option -o for 'htmlsnapshot query'
+    /// (the command takes 1 positional argument)` because the short was unknown.
+    #[test]
+    fn test_html_snapshot_query_binds_o_to_output_file() {
+        let map = commands_map();
+        let cmd = map.get("htmlsnapshot-query").unwrap();
+        let (short_to_long, bool_opts) = crate::args::build_short_option_map(cmd.options);
+        assert_eq!(
+            short_to_long.get("o").map(String::as_str),
+            Some("output-file"),
+            "-o must resolve to --output-file on `htmlsnapshot query`"
+        );
+        let arg_names: Vec<&str> = cmd.args.iter().map(|arg| arg.name).collect();
+
+        for argv in [
+            vec![
+                "htmlsnapshot-query",
+                "--sql",
+                "@q.sql",
+                "--format",
+                "csv",
+                "-o",
+                "out.csv",
+            ],
+            vec!["htmlsnapshot-query", "--sql", "@q.sql", "--format", "csv", "-o=out.csv"],
+            vec![
+                "htmlsnapshot-query",
+                "--sql",
+                "@q.sql",
+                "--format",
+                "csv",
+                "--output-file",
+                "out.csv",
+            ],
+        ] {
+            let raw: Vec<String> = argv.iter().map(|token| token.to_string()).collect();
+            let parsed = crate::args::parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
+            let args = crate::args::build_command_args(
+                &parsed,
+                &arg_names,
+                crate::args::COMMAND_ARG_ALIASES,
+            )
+            .unwrap_or_else(|err| panic!("{argv:?} must parse: {err}"));
+            let params = (cmd.tool_params_fn)(&args);
+
+            assert_eq!(
+                params["outputFile"],
+                json!("out.csv"),
+                "{argv:?} must bind the output file, with no stray positional"
+            );
+            assert_eq!(params["format"], json!("csv"), "{argv:?}");
+            assert_eq!(params["url"], json!(""), "{argv:?} must not swallow the path");
+        }
+    }
+
+    #[test]
     fn test_html_snapshot_export_params() {
         let map = commands_map();
         let cmd = map.get("htmlsnapshot-export").unwrap();
@@ -10345,6 +10419,32 @@ mod tests {
             "--force/-f and --background/-bg are the shortcuts; --retry-failed has no short form"
         );
         assert!(cmd.options.iter().all(|o| o.is_bool));
+    }
+
+    /// A short name must identify exactly one option *within a command*: the
+    /// short→long map is keyed by the short alone, so a second declaration would
+    /// silently resolve `-x` to whichever option the map inserted last.
+    ///
+    /// Reuse across commands is fine and intentional — shorts are resolved from
+    /// the invoked command's own option table: `-o` is `--output` on
+    /// crawl/scrape, `--filename` on screenshot/pdf, `--output-file` on
+    /// `htmlsnapshot query`, and `--only-matching` on the grep commands.
+    #[test]
+    fn test_a_short_option_names_one_option_per_command() {
+        for cmd in all_commands() {
+            let mut seen: HashMap<&str, &str> = HashMap::new();
+            for opt in cmd.options {
+                let Some(short) = opt.short else { continue };
+                if let Some(previous) = seen.insert(short, opt.key()) {
+                    panic!(
+                        "'{}' uses -{short} for both --{previous} and --{}; \
+                         the short form would be ambiguous",
+                        cmd.name,
+                        opt.key()
+                    );
+                }
+            }
+        }
     }
 
     /// A two-dash spelling of a multi-character short (`--bg` = `--background`;
