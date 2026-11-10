@@ -1825,6 +1825,49 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
+            "  - A finished task's payload is rendered as sections (Summary / Key findings / Files".to_string(),
+        );
+        lines.push(
+            "    written / Problems / Data) instead of one line of raw JSON; /result --json prints".to_string(),
+        );
+        lines.push(
+            "    the raw envelope. --ndjson stays machine-only and is unaffected.".to_string(),
+        );
+        lines.push(
+            "  - -i, --follow and --wait end with the same line: `✔ Agent completed in 41.3s ·".to_string(),
+        );
+        lines.push(
+            "    <id> · 3 round(s) · 39 tool(s) · 54.4k tokens` (a cost part is omitted when the".to_string(),
+        );
+        lines.push(
+            "    backend does not answer the stats call within 2s).".to_string(),
+        );
+        lines.push(
+            "  - A run silent for 30s prints `⋯ still running · N step(s) · 30s since the last".to_string(),
+        );
+        lines.push(
+            "    step`(at most every 30s). Terminal only: a pipe, --quiet, --json and --ndjson".to_string(),
+        );
+        lines.push(
+            "    carry steps and nothing else.".to_string(),
+        );
+        lines.push(
+            "  - `-i --json` keeps task_id / raw / stats describing the LAST task and adds".to_string(),
+        );
+        lines.push(
+            "    `tasks[]` (taskId/status/isDone/elapsedMs/steps) for every task of the session."
+                .to_string(),
+        );
+        lines.push(
+            "  - `NO_COLOR` (any non-empty value) turns ANSI off even on a terminal.".to_string(),
+        );
+        lines.push(
+            "  - In the session, /quiet [on|off] silences the human lines (like -q) and".to_string(),
+        );
+        lines.push(
+            "    /verbose [on|off] adds round markers and fast successful tools.".to_string(),
+        );
+        lines.push(
             "  - In the session, /stats reports the run's LLM rounds and requests, token usage"
                 .to_string(),
         );
@@ -1915,6 +1958,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "agent-result" {
         lines.push("Notes:".to_string());
         lines.push("  - Accepts the task ID returned by `agent run`.".to_string());
+        lines.push(
+            "  - Human output renders the completion report as sections (Summary / Key findings /"
+                .to_string(),
+        );
+        lines.push(
+            "    Files written / Problems / Data); --json prints the raw command_result envelope."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli agent result agent-task-1".to_string());

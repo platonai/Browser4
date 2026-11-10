@@ -324,7 +324,7 @@ const TIPS_AGENT: &[Tip] = &[
         text: "A run without a TTY cannot be watched, so it starts from `full` (network on) instead of the server-wide preset — `browser4.agent.access.unattended` (`deny`/`read`/`read-build`/`write`/`full`) overrides that; a watched `-i` session on a TTY keeps `browser4.agent.access`",
     },
     Tip {
-        text: "`agent run -i` keeps a session open — type a line while a task runs to steer it, /status and /cancel to inspect or stop it, /stats for the run's LLM rounds, token usage and tool calls",
+        text: "`agent run -i` keeps a session open — type a line while a task runs to steer it, /status and /cancel to inspect or stop it, /stats for the run's LLM rounds, token usage and tool calls, /result [--json] to re-print the finished task's payload as sections (or the raw envelope)",
     },
     Tip {
         text: "Every task runs in its own workspace — artifacts of an earlier run never show up in this run's `filesChanged`. `--resume <id>` reuses the interrupted task's workspace; `--shared-workspace` opts into the old shared directory",

@@ -3562,8 +3562,8 @@ pub(super) fn test_agent_result_not_null_for_failed_task(ctx: &mut E2ECtx) {
         result_output
     );
     assert!(
-        result_output.contains("summary"),
-        "Expected result to contain 'summary' field:\n{}",
+        result_output.contains("Summary"),
+        "Expected the rendered Summary section:\n{}",
         result_output
     );
 
@@ -3789,8 +3789,8 @@ pub(super) fn test_agent_full_lifecycle_with_mock(ctx: &mut E2ECtx) {
         result_output
     );
     assert!(
-        result_output.contains("summary"),
-        "Result should be a CommandResult JSON with 'summary' field:\n{}",
+        result_output.contains("Summary"),
+        "Result should be the rendered completion report with a Summary section:\n{}",
         result_output
     );
 
@@ -3922,8 +3922,8 @@ pub(super) fn test_agent_run_100th_prime(ctx: &mut E2ECtx) {
         result_output
     );
     assert!(
-        result_output.contains("summary"),
-        "agent result should be a CommandResult JSON with 'summary' field. Got:\n{}",
+        result_output.contains("Summary"),
+        "agent result should render the completion report with a Summary section. Got:\n{}",
         result_output
     );
     assert!(

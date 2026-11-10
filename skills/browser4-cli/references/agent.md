@@ -73,13 +73,15 @@ Two consequences matter in practice:
 
 ```bash
 browser4-cli agent result <task-id>
-# ...
-# Key findings:
-#   - Born 31 January 1956 in The Hague
-# Files the agent reported changing:
+# Summary
+#   Extract the subject's biography and save it as markdown.
+# Key findings (1)
+#   • Born 31 January 1956 in The Hague
+# Files written (1) · workspace: C:\Users\me\.browser4\...\agent\2026\10\15\<uuid>\workspace
 #   guido_van_rossum.md
-# Task workspace: C:\Users\me\.browser4\...\agent\2026\10\15\<uuid>\workspace
 ```
+
+`--json` prints the same data as one machine envelope instead.
 
 The workspace lives on the backend machine (copy the artifacts when it is remote). Each
 task gets its **own** directory (`<agent data dir>/workspace.<task-id>`), so another run's
@@ -224,8 +226,9 @@ The payload is the agent's **completion report**, not just a summary:
 
 `result.summary` is what the agent reported; `keyFindings` and `filesChanged` carry the
 deliverable itself, and `workspace` is the directory its tools wrote into. Human output
-prints all three below the raw JSON, so a task whose answer is a file is usable without
-filesystem archaeology.
+renders all three as sections (see [Result rendering](#result-rendering)) — a task whose
+answer is a file is usable without filesystem archaeology; `--json` keeps the envelope
+above for machines.
 
 ### 5. Composing with Standard Commands
 
@@ -297,18 +300,38 @@ browser4-cli agent run "Collect the top 5 products and their prices" --follow
 ```
 Task submitted: 3b27930e-48bc-4460-aae7-be521f0a9194
 [00:00] ▶ Collect the top 5 products and their prices
-[00:03] #1 b4.run({"args":"goto https://example.com/products"})
+[00:03] #1 b4.run(args="goto https://example.com/products")
 [00:04] #2 browser_snapshot
-[00:09]   ↳ b4.run ok in 6.2s
-[00:12]   💭 The grid shows prices in a second column; I will extract both.
-[00:15] #3 htmlsnapshot_query({"sql":"..."})
-✔ Agent completed in 41.3s:
-{"summary":"Top 5 products extracted", ...}
+[00:09]   ↳ #1 b4.run ok in 6.2s
+[00:12]   ⋯ The grid shows prices in a second column; I will extract both.
+[00:15] #3 htmlsnapshot_query(sql="...")
+✔ Agent completed in 41.3s · 3b27930e-48bc-4460-aae7-be521f0a9194 · 3 round(s) · 39 tool(s) · 54.4k tokens
+
+Summary
+  Top 5 products extracted, with both the name and the price column.
+
+Files written (1) · workspace: ~/.browser4/agent/workspace.3b27…
+  products.csv
 ```
 
 - One line per tool **call**; a completion line only for a **slow** (>2 s) or
   **failed** tool, so a 100-tool run stays readable. Failures always print the
   first ~240 characters of the tool output.
+- The result line repeats the call's index (`↳ #2 browser_click failed after 120ms: …`),
+  so two calls of the same tool are tellable apart.
+- Arguments are shown as `key="value"` for the keys a reader can act on
+  (`selector`, `ref`, `url`, `path`, `file`, `args`, `text`, `query`, `sql`,
+  `command`) — at most three, then `+N` for the rest. A shape with none of those
+  keys falls back to the compact JSON, so nothing is hidden.
+- Prose lines (the model's own text, steering) are marked `⋯` / `↪` and wrap to
+  `COLUMNS` (clamped 40–400, default 100), the continuation indented under the
+  marker instead of running back to column 0. Structured lines (calls and
+  results) deliberately stay one line — they are what people grep and copy.
+- **Long silences are not a hang.** After 30 s without a step the live view prints
+  `[00:39]   ⋯ still running · 5 step(s) · 30s since the last step`, then at most
+  one more every 30 s. A single slow tool (three minutes inside one `b4.run`) used
+  to print nothing at all in between. Terminal only — a piped log, `--quiet`,
+  `--json` and `--ndjson` carry steps and nothing else. `-i` behaves the same.
 - `--follow` has **no default timeout** (unlike `--wait`); pass
   `--wait-timeout <secs>` to bound it. On timeout the CLI exits non-zero and the
   task keeps running server-side.
@@ -348,6 +371,76 @@ The visible detail is deliberately bounded: tool arguments and results are trunc
 `apiKey`, …) are redacted to `***`, as is typed text whose selector names a credential
 field (`input[type=password]`).
 
+### Result rendering
+
+When a task finishes, the CLI renders the `command_result` payload as sections
+instead of printing the envelope as one JSON line. One renderer serves every
+human path — `agent result <id>`, `agent run --wait`, `agent run --follow` and
+`agent run -i`:
+
+```
+✔ Agent completed in 18.4s · 5b0c3f2a · 3 round(s) · 39 tool(s) · 54.4k tokens
+
+Summary
+  The pricing page lists four plans; enterprise pricing is quote-only, so the
+  three published tiers were collected.
+
+Key findings (2)
+  • Starter is $19/mo, billed yearly
+  • Team is $49/mo per seat, 10-seat minimum
+
+Files written (1) · workspace: ~/.browser4/agent/workspace.5b0c3f2a
+  pricing.csv
+
+Problems (1)
+  ⚠ Enterprise pricing is not published anywhere on the page
+
+Data (3 rows × 3 columns)
+  plan     | price | seats
+  ---------+-------+------
+  Starter  | 19    | 1
+  Team     | 49    | 10
+  Business | 89    | 25
+```
+
+- A section appears only when the payload carries it, and every list states its
+  total (`Key findings (7)`) — a capped list ends with `… and N more`.
+- `fields` and `xsqlResultSet` become aligned tables; a string payload is printed
+  as text, without JSON quotes.
+- The envelope's transport fields (`taskId`, `status`, `statusTool`, `resultTool`,
+  `cancelTool`, `processed`, `statusCode`) are never printed.
+- A payload field this renderer does not know yet stays visible under
+  `Other (N field(s))`, so a backend addition is never silently dropped.
+- Lines wrap to `COLUMNS` (default 100); a payload longer than 40 lines is folded
+  with `… N more line(s) — /result --json prints the whole envelope`. The hint names
+  the command that exists where you are: `/result --json` inside `-i`,
+  `agent result <id> --json` for `agent result`, `--wait` and `--follow`. `--pretty`
+  turns the fold off for the whole payload.
+- Machines are unaffected: `--ndjson` is byte-identical, `-i` ignores `--ndjson`
+  (it says so on stderr), and the raw envelope is available through
+  `agent result <id> --json`, `/result --json`, or the `--json` envelope's `raw`
+  field.
+
+### The completion line
+
+`agent run -i`, `--follow` and `--wait` all end a task with the same line —
+verdict word, elapsed time, task id, and the run's cost:
+
+```
+✔ Agent completed in 41.3s · 3b27930e-48bc-4460-aae7-be521f0a9194 · 3 round(s) · 39 tool(s) · 54.4k tokens
+✖ failed · 3b27930e-48bc-4460-aae7-be521f0a9194 · 12.1s — the page was blocked by a captcha
+⏹ cancelled · 3b27930e-48bc-4460-aae7-be521f0a9194 · 41.3s · 39 tool(s)
+```
+
+- Each cost part appears only when it is known: a coding task that never called the
+  model prints no `0 round(s)`, and a provider that sends no usage block prints no
+  token count (unknown is not zero).
+- The counters come from the same `GET /api/commands/{id}/stats` that `/stats` reads,
+  with a **2 s budget**. A slow or missing endpoint costs the line nothing — the part
+  is omitted rather than delaying the end of the run — and `--json` / `-q` never ask
+  at all (they do not print the line).
+- Elapsed time is compact and scales: `18.4s`, `3m12s`, `1h04m`.
+
 ### `agent run -i`: the interactive session
 
 ```bash
@@ -356,12 +449,54 @@ browser4-cli agent run -i
 
 ```
 agent> Summarize the pricing page
-[00:02] #1 b4.run({"args":"goto https://example.com/pricing"})
+[00:02] #1 b4.run(args="goto https://example.com/pricing")
 ...
-✔ done in 18.4s · 5b0c… 
-{"summary":"…"}
+✔ Agent completed in 18.4s · 5b0c… · 3 round(s) · 39 tool(s) · 54.4k tokens
+
+Summary
+  The pricing page lists four plans; enterprise pricing is quote-only.
+
+Key findings (2)
+  • Starter is $19/mo, billed yearly
+  • Team is $49/mo per seat, 10-seat minimum
+
+Files written (1) · workspace: ~/.browser4/agent/workspace.5b0c…
+  pricing.csv
 
 agent> now compare it with the enterprise page
+```
+
+The payload is rendered as sections (see [Result rendering](#result-rendering)), and
+`/result` re-prints it at any time without re-running the task — `/result --json`
+prints the raw `command_result` envelope instead.
+
+What the session's own chrome says:
+
+- **The banner lists only what you changed.** `Browser4 agent · session=abc · engine=cli`
+  plus `· coding=on`, `· access=read-build`, `· budget=5.00M`, `· quiet` when they apply —
+  then `  type a task · /help for commands · Ctrl+C cancels the running task`. A default
+  session prints no knob at all, so the line that does appear is the one that matters.
+- **Each task starts on a blank line**, headed `▶ task 5b0c3f2a — Summarize the pricing page`
+  (the task text is collapsed to one line and capped at 60 characters).
+- **`/status` is one line**: `task 5b0c3f2a · running · 12 step(s) — collecting product details`
+  (no message → no tail, never a trailing space).
+- **A failure names its cause and the way out**:
+  `✖ failed · 5b0c3f2a · 3.2s — page_blocked: the page was blocked` followed, when the
+  backend says the run can continue, by
+  `    resume: agent run --resume 5b0c3f2a · /status for the envelope`.
+- **Quitting does not silently orphan a run.** `/quit` (or stdin EOF) while a task is
+  still running prints `⚠ task 5b0c3f2a keeps running — agent status 5b0c3f2a · agent cancel 5b0c3f2a`.
+- **ANSI follows `NO_COLOR`**: any non-empty value disables colour even on a terminal
+  (`--quiet` and `--json` already do).
+
+`-i --json` keeps the scalars `task_id` / `raw` / `stats` describing the **last** task
+(unchanged, so existing readers keep working) and adds `tasks[]`, one entry per task of
+the session in order:
+
+```json
+{"task_id":"…","raw":{…},"stats":{…},
+ "tasks":[{"taskId":"5b0c3f2a","status":"done","isDone":true,"elapsedMs":18400,"steps":39},
+          {"taskId":"7f21ab9c","status":"cancelled","isDone":true,"elapsedMs":2100,"steps":4}]}
 ```
 
 A line typed while a task is running is **steering**, not a new task: it is sent to the running task and injected into the agent as a user message at its next model round-trip. A backend hiccup does not end the session either — the live view keeps following a task that is still running (see [When the step stream fails](#when-the-step-stream-fails)).
@@ -377,11 +512,13 @@ Session commands:
 | `/help` | List the commands |
 | `/status` | Status of the running (or last) task |
 | `/stats [task-id]` | Run statistics: LLM rounds and requests, token usage, tool calls |
-| `/result` | Print the last finished task's result |
+| `/result [--json]` | Print the last finished task's result as sections (`--json`: the raw envelope) |
 | `/cancel` | Cancel the running task (same as Ctrl+C) |
 | `/new` | Start a new session — the next task gets a fresh agent context |
 | `/session` | Print the current session id |
 | `/coding [on\|off]` | Treat following tasks as coding tasks |
+| `/quiet [on\|off]` | Silence the session's human lines — the same effect as the global `-q`, for the rest of this session (bare `/quiet` flips it) |
+| `/verbose [on\|off]` | Also print round markers (`· round 2`) and fast successful tools (`↳ #1 b4.run ok in 40ms`) — the troubleshooting view, off by default |
 | `/noop-limit <n>` | Consecutive no-op abort threshold (blank resets) |
 | `/events [n]` | Raw JSON of the last n steps (default 20) |
 | `/quit` | Leave the session |
@@ -410,6 +547,10 @@ The numbers come from `GET /api/commands/{id}/stats`, which counts every step as
 appended — exact even for steps the step log no longer retains. `/stats <task-id>` reports
 another task of this session; against a backend without that endpoint the report is
 labelled `counted by this session` and can only undercount.
+
+The completion line already carries a compact version of these numbers
+(`· 3 round(s) · 39 tool(s) · 54.4k tokens`), so `/stats` is for the breakdown — rounds vs
+individual requests, input/output tokens, failures and the per-tool counts.
 
 An optional task runs immediately: `agent run -i "Summarize this page"`. With piped stdin
 the banner and prompt are omitted, so a harness can drive the session:

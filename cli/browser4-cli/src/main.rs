@@ -34,6 +34,7 @@ mod state;
 mod tips;
 mod update_check;
 mod agent_interactive;
+mod agent_result;
 
 use std::collections::{HashMap, HashSet};
 use std::io::{IsTerminal, Read};
@@ -16092,8 +16093,39 @@ async fn handle_agent_run(
                         return Err(format!("Agent task failed: {message}"));
                     }
                     let result_text = get_command_result(client, base_url, &task_id).await?;
-                    cli_println!("Agent completed in {:.1}s:", start.elapsed().as_secs_f64());
-                    cli_println!("{}", result_text);
+                    // The same terminal line `-i` and `--follow` print: verdict word,
+                    // elapsed time, task id and (when the backend answers in time) the
+                    // run's cost chain.
+                    let cost =
+                        crate::agent_interactive::terminal_cost_chain(client, base_url, &task_id)
+                            .await;
+                    cli_println!(
+                        "{}",
+                        crate::agent_interactive::terminal_status_line(
+                            crate::agent_interactive::TerminalStatus::Completed,
+                            start.elapsed(),
+                            &task_id,
+                            &cost,
+                            None,
+                        )
+                    );
+                    // Same renderer as `agent run -i` / `--follow`: the payload is
+                    // the task envelope plus the agent's completion report, so a
+                    // human gets sections instead of one multi-KB JSON line.
+                    let lines = crate::agent_result::render_result_text(
+                        &task_id,
+                        &result_text,
+                        &crate::agent_result::RenderOptions::default()
+                            .with_color(crate::agent_interactive::color_enabled())
+                            .with_full(pretty_active())
+                            .with_json_hint(format!("agent result {task_id} --json")),
+                    );
+                    if !lines.is_empty() {
+                        cli_println!();
+                        for line in &lines {
+                            cli_println!("{}", line);
+                        }
+                    }
                     json_field(
                         "raw",
                         json!(serde_json::from_str::<Value>(&result_text)
@@ -16345,69 +16377,9 @@ fn agent_envelope_not_found_reason(parsed: &Value) -> Option<String> {
     )
 }
 
-/// Print where an agent task's deliverables live, when the payload names them.
-///
-/// `agent result` printed only the completion summary for a task whose whole point
-/// was returning data, and the artifact itself was reachable only by searching the
-/// backend's app-data tree by hand (issue 111443#1). The payload now carries the
-/// agent's own completion report (`keyFindings`, `filesChanged`, `problems`) and the
-/// workspace its tools wrote into.
-fn print_agent_deliverables(payload: &Value) {
-    let strings = |key: &str| -> Vec<String> {
-        payload
-            .get(key)
-            .and_then(|v| v.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|v| v.as_str())
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    let findings = strings("keyFindings");
-    let files = strings("filesChanged");
-    let problems = strings("problems");
-    let workspace = payload
-        .get("workspace")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty());
-
-    if findings.is_empty() && files.is_empty() && problems.is_empty() && workspace.is_none() {
-        return;
-    }
-
-    cli_println!("");
-    if !findings.is_empty() {
-        cli_println!("Key findings:");
-        for finding in findings.iter().take(20) {
-            cli_println!("  - {}", finding);
-        }
-        if findings.len() > 20 {
-            cli_println!("  ... and {} more", findings.len() - 20);
-        }
-    }
-    if !files.is_empty() {
-        cli_println!("Files the agent reported changing:");
-        for file in files.iter().take(20) {
-            cli_println!("  {}", file);
-        }
-        if files.len() > 20 {
-            cli_println!("  ... and {} more", files.len() - 20);
-        }
-    }
-    if !problems.is_empty() {
-        cli_println!("Unresolved problems reported by the agent:");
-        for problem in problems.iter().take(10) {
-            cli_println!("  - {}", problem);
-        }
-    }
-    if let Some(workspace) = workspace {
-        cli_println!("Task workspace: {}", workspace);
-        cli_println!("  (the agent's deliverables live here; `agent result --json` prints the same path in `workspace`)");
-    }
-}
+// `agent result`'s old `print_agent_deliverables` helper is gone: the completion
+// report (`keyFindings`, `filesChanged`, `problems`, `workspace`) is rendered by
+// `crate::agent_result`, shared with `agent run -i`, `--follow` and `--wait`.
 
 /// The status word a `command_result` payload reports (`failed`, `cancelled`, …).
 ///
@@ -16646,11 +16618,25 @@ async fn handle_agent_result(
         cli_println!("task workspace it wrote into.");
     }
 
-    cli_println!("{}", result);
     json_field("task_id", json!(id));
     json_field("raw", json!(&result));
     if !json_active() {
-        print_agent_deliverables(payload);
+        // The payload is the shared envelope plus the agent's completion report:
+        // render its sections (Summary / Key findings / Files written / Problems /
+        // Data) instead of dumping one multi-KB JSON line. The failed/cancelled
+        // verdict line stays — it carries reason, budget and `resume:` — and the
+        // sections name findings, files and problems exactly once.
+        let lines = crate::agent_result::render_result_text(
+            id,
+            &result,
+            &crate::agent_result::RenderOptions::default()
+                .with_color(crate::agent_interactive::color_enabled())
+                .with_full(pretty_active())
+                .with_json_hint(format!("agent result {id} --json")),
+        );
+        for line in &lines {
+            cli_println!("{}", line);
+        }
         if let Some(verdict) = format_agent_result_verdict(id, parsed_payload.as_ref().unwrap_or(&Value::Null)) {
             cli_println!("");
             cli_println!("{}", verdict);
@@ -22253,7 +22239,10 @@ fn format_csv(rows: &[Value]) -> String {
 }
 
 /// Format extracted data as a human-readable aligned table.
-fn format_table(rows: &[Value]) -> String {
+///
+/// Shared with [`agent_result`], which renders a finished task's extracted rows
+/// with it instead of dumping the payload as JSON.
+pub(crate) fn format_table(rows: &[Value]) -> String {
     if rows.is_empty() {
         return "No data.".to_string();
     }

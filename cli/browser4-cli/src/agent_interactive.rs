@@ -60,6 +60,15 @@ const RESULT_PREVIEW: usize = 240;
 /// A tool slower than this gets a completion line even when it succeeded.
 const SLOW_TOOL_MS: i64 = 2_000;
 
+/// Silence before a liveness line.
+///
+/// One slow tool (a `b4.run` that takes three minutes) used to look exactly like
+/// a hang: the live view printed nothing at all in between (format plan P1-3).
+const HEARTBEAT_SILENCE: Duration = Duration::from_secs(30);
+
+/// Minimum spacing between two liveness lines.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+
 /// How many per-tool call counts `/stats` lists.
 const TOP_TOOLS: usize = 5;
 
@@ -534,7 +543,17 @@ struct Renderer {
     started: Instant,
     color: bool,
     quiet: bool,
+    /// Columns a prose line may occupy — `COLUMNS`, clamped like the result
+    /// renderer (40–400, default 100). Not a terminal probe: the same width in a
+    /// pipe, in CI and in a test (format plan P1-2).
+    width: usize,
     tool_index: u64,
+    /// Calls whose result has not arrived yet: `(tool name, line index)`.
+    ///
+    /// A result line must name the same `#n` as its call, and a fast success
+    /// prints no line at all — so the queue is drained for **every** result,
+    /// rendered or not, or the numbering drifts (format plan P0-2).
+    pending_calls: Vec<(String, u64)>,
     /// Successful model requests seen (`run.usage` steps), for the usage cadence.
     usage_requests: u64,
     /// When the last usage line was printed (time-based cadence).
@@ -543,6 +562,10 @@ struct Renderer {
     warned_80: bool,
     /// Whether the budget-exhausted line has been printed.
     exhausted_printed: bool,
+    /// Also print the events that are quiet by default — round markers and fast
+    /// successful tools. `/verbose on` in the session; off otherwise (format plan
+    /// P2-2).
+    verbose: bool,
 }
 
 /// How many model requests between two progress usage lines.
@@ -557,11 +580,16 @@ impl Renderer {
             started,
             color,
             quiet,
+            width: crate::agent_result::width_from_columns(
+                std::env::var("COLUMNS").ok().as_deref(),
+            ),
             tool_index: 0,
+            pending_calls: Vec::new(),
             usage_requests: 0,
             last_usage_at: None,
             warned_80: false,
             exhausted_printed: false,
+            verbose: false,
         }
     }
 
@@ -585,9 +613,27 @@ impl Renderer {
                 let text = event.text.as_deref().unwrap_or("task started");
                 Some(format!("{} ▶ {}", self.time_prefix(), truncate(text, 120)))
             }
+            "round.start" => {
+                // Quiet by default: a long run has hundreds of rounds, and the
+                // tool lines already show the work. `/verbose on` asks for them
+                // (format plan P2-2).
+                if !self.verbose {
+                    return None;
+                }
+                let round = event
+                    .turn
+                    .map(|turn| format!("round {turn}"))
+                    .unwrap_or_else(|| "round".to_string());
+                Some(format!("{}   · {round}", self.time_prefix()))
+            }
             "tool.call" => {
                 self.tool_index += 1;
                 let tool = event.tool.as_deref().unwrap_or("tool");
+                let index = self.tool_index;
+                // Keep the call until its result arrives: the result line names
+                // the same `#n`, which is the only way to tell two calls of the
+                // same tool apart.
+                self.pending_calls.push((tool.to_string(), index));
                 let args = event
                     .arguments
                     .as_deref()
@@ -596,22 +642,31 @@ impl Renderer {
                 Some(format!(
                     "{} {} {}{}",
                     self.time_prefix(),
-                    self.paint(&format!("#{}", self.tool_index), Style::Dim),
+                    self.paint(&format!("#{index}"), Style::Dim),
                     self.paint(tool, Style::Tool),
                     args
                 ))
             }
             "tool.result" => {
+                let tool = event.tool.as_deref().unwrap_or("tool");
+                // Drains even when the line below is skipped: a fast success
+                // renders nothing, but it still frees its call.
+                let call = self.take_pending_call(tool);
                 let failed = event.ok == Some(false);
                 let slow = event.duration_ms.unwrap_or(0) >= SLOW_TOOL_MS;
-                if !failed && !slow {
+                // `/verbose` also shows the fast successes — the ones that are
+                // normally silent because a line each would bury the steps.
+                if !failed && !slow && !self.verbose {
                     return None;
                 }
                 let duration = event
                     .duration_ms
                     .map(format_duration_ms)
                     .unwrap_or_else(|| "?".to_string());
-                let tool = event.tool.as_deref().unwrap_or("tool");
+                let call = match call {
+                    Some(index) => format!("{} ", self.paint(&format!("#{index}"), Style::Dim)),
+                    None => String::new(),
+                };
                 if failed {
                     let detail = event
                         .text
@@ -619,16 +674,18 @@ impl Renderer {
                         .map(|text| truncate(text, RESULT_PREVIEW))
                         .unwrap_or_default();
                     Some(format!(
-                        "{}   ↳ {} failed after {}: {}",
+                        "{}   ↳ {}{} failed after {}: {}",
                         self.time_prefix(),
+                        call,
                         tool,
                         duration,
                         self.paint(&detail, Style::Error)
                     ))
                 } else {
                     Some(format!(
-                        "{}   ↳ {} ok in {}",
+                        "{}   ↳ {}{} ok in {}",
                         self.time_prefix(),
+                        call,
                         tool,
                         duration
                     ))
@@ -639,23 +696,46 @@ impl Renderer {
                 if text.is_empty() {
                     return None;
                 }
-                Some(format!(
-                    "{}   💭 {}",
-                    self.time_prefix(),
-                    truncate(text, MODEL_TEXT_PREVIEW)
-                ))
+                // `⋯` rather than `💭`: the emoji is a tofu box on conhost and in
+                // any terminal without a colour-emoji font, and its width is not 1
+                // (format plan P1-1).
+                let gutter = format!("{}   ⋯ ", self.time_prefix());
+                Some(
+                    wrap_with_gutter(&truncate(text, MODEL_TEXT_PREVIEW), &gutter, self.width)
+                        .join("\n"),
+                )
             }
             "steer" => {
                 let text = event.text.as_deref().unwrap_or_default();
-                Some(format!(
-                    "{}   ↪ steering delivered: {}",
-                    self.time_prefix(),
-                    truncate(text, MODEL_TEXT_PREVIEW)
-                ))
+                let gutter = format!("{}   ↪ steering delivered: ", self.time_prefix());
+                Some(
+                    wrap_with_gutter(&truncate(text, MODEL_TEXT_PREVIEW), &gutter, self.width)
+                        .join("\n"),
+                )
             }
             "run.usage" => self.format_usage(event),
             _ => None,
         }
+    }
+
+    /// Pair a result with the call it answers, and free that call.
+    ///
+    /// Matched by tool name first; a result that names no pending call takes the
+    /// oldest one, because the CLI runs one tool per round so call order and
+    /// result order agree. `None` when this session started following mid-run
+    /// (a result whose call was never seen) — the line then carries no `#n`
+    /// rather than a made-up one. Exact pairing needs the backend's `callId`
+    /// (plan P2-1); this is the documented heuristic until then.
+    fn take_pending_call(&mut self, tool: &str) -> Option<u64> {
+        if self.pending_calls.is_empty() {
+            return None;
+        }
+        let position = self
+            .pending_calls
+            .iter()
+            .position(|(name, _)| name == tool)
+            .unwrap_or(0);
+        Some(self.pending_calls.remove(position).1)
     }
 
     /// The cost line: cumulative tokens against the run's effective budget.
@@ -826,6 +906,209 @@ fn format_token_amount(value: u64) -> String {
     }
 }
 
+/// The budget a terminal line gives the `stats` endpoint.
+///
+/// The counters are a convenience: the line must appear at once even when the
+/// backend is slow about them.
+const TERMINAL_STATS_BUDGET: Duration = Duration::from_secs(2);
+
+/// How a task ended — the verdict word of its terminal line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TerminalStatus {
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+/// Whether the current silence warrants a liveness line.
+///
+/// Two time-based knobs, so a 400 ms tick can ask freely: the run must have been
+/// silent for [HEARTBEAT_SILENCE], and two lines never come closer than
+/// [HEARTBEAT_INTERVAL].
+fn heartbeat_due(silent_for: Duration, since_last_heartbeat: Option<Duration>) -> bool {
+    if silent_for < HEARTBEAT_SILENCE {
+        return false;
+    }
+    since_last_heartbeat.map_or(true, |since| since >= HEARTBEAT_INTERVAL)
+}
+
+/// `[02:39]   ⋯ still running · 5 step(s) · 30s since the last step`.
+fn heartbeat_line(time_prefix: &str, steps: u64, silent_for: Duration) -> String {
+    format!(
+        "{time_prefix}   ⋯ still running · {steps} step(s) · {} since the last step",
+        format_silence(silent_for)
+    )
+}
+
+/// A silence duration short enough to read at a glance: `30s`, then `2m35s`.
+fn format_silence(duration: Duration) -> String {
+    let secs = duration.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format_run_duration(duration.as_millis() as u64)
+    }
+}
+
+/// The one line every mode ends a task with.
+///
+/// The same event used to be worded three ways: `-i` printed
+/// `✔ done in 18.4s · <id>` (time and id, but no verdict word), `--follow`
+/// printed `✔ Agent completed in 18.4s` (no id), and `--wait` printed
+/// `Agent completed in 18.4s:` (neither mark nor id). A log line could not say
+/// which mode produced it or which task it belonged to.
+///
+/// `suffix` is the run's cost chain (`3 round(s) · 39 tool(s) · 54.4k tokens`)
+/// for a completed task, the tool count for a cancelled one, and unused for a
+/// failure; `reason` is the backend's failure reason.
+pub(crate) fn terminal_status_line(
+    status: TerminalStatus,
+    elapsed: Duration,
+    task_id: &str,
+    suffix: &str,
+    reason: Option<&str>,
+) -> String {
+    let duration = format_run_duration(elapsed.as_millis() as u64);
+    let mut line = match status {
+        TerminalStatus::Completed => format!("✔ Agent completed in {duration} · {task_id}"),
+        TerminalStatus::Failed => format!("✖ failed · {task_id} · {duration}"),
+        TerminalStatus::Cancelled => format!("⏹ cancelled · {task_id} · {duration}"),
+    };
+    if !suffix.is_empty() {
+        line.push_str(" · ");
+        line.push_str(suffix);
+    }
+    if let Some(reason) = reason.map(str::trim).filter(|reason| !reason.is_empty()) {
+        line.push_str(" — ");
+        line.push_str(reason);
+    }
+    line
+}
+
+/// `access_denied: editing /etc/hosts is refused` — the tail of a failure line.
+///
+/// The machine code is what makes a failure actionable (`TOKEN_BUDGET` and
+/// `ACCESS_DENIED` want different next steps), so it leads; it is lowercased for
+/// the human line the same way `agent result`'s verdict does.
+fn failure_detail(progress: Option<&StatusProgress>) -> Option<String> {
+    let reason = progress
+        .and_then(|progress| progress.message.as_deref())
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty());
+    let code = progress
+        .and_then(|progress| progress.error_code.as_deref())
+        .map(str::trim)
+        .filter(|code| !code.is_empty())
+        .map(str::to_lowercase);
+    match (code.as_deref(), reason) {
+        (Some(code), Some(reason)) => Some(format!("{code}: {reason}")),
+        (Some(code), None) => Some(code.to_string()),
+        (None, Some(reason)) => Some(reason.to_string()),
+        (None, None) => None,
+    }
+}
+
+/// `    resume: agent run --resume <id> · /status for the envelope`, or `None`
+/// when the backend does not say the task can be continued.
+fn resume_hint_line(task_id: &str, progress: Option<&StatusProgress>) -> Option<String> {
+    if !progress.and_then(|progress| progress.resumable).unwrap_or(false) {
+        return None;
+    }
+    Some(format!(
+        "    resume: agent run --resume {task_id} · /status for the envelope"
+    ))
+}
+
+/// The `/status` line: `task <id> · <status> · N step(s) — <message>`.
+///
+/// The old line glued the message on with a space, so an absent message left a
+/// trailing space and the task id had no label. Both made the line awkward to
+/// read and to copy (format plan P1-9).
+fn status_line(task_id: &str, progress: &StatusProgress) -> String {
+    let mut line = format!("task {task_id} · {}", progress.word);
+    if progress.tools > 0 {
+        line.push_str(&format!(" · {} step(s)", progress.tools));
+    }
+    if let Some(message) = progress
+        .message
+        .as_deref()
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+    {
+        line.push_str(&format!(" — {message}"));
+    }
+    line
+}
+
+/// The task text as the submit line shows it: one line, at most 60 characters.
+///
+/// A task pasted with newlines would otherwise turn `▶ task <id> — …` into a
+/// multi-line block that breaks the one-task-one-header rhythm (format plan P1-6).
+fn task_label(task: &str) -> String {
+    let single = task.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate(&single, 60)
+}
+
+/// Parse the argument of a session toggle (`/coding`, `/quiet`, `/verbose`).
+///
+/// `Some(None)` is a bare command — "flip it"; `None` is unusable input, which the
+/// caller answers with a usage line.
+fn parse_toggle(argument: &str) -> Option<Option<bool>> {
+    match argument.trim().to_lowercase().as_str() {
+        "" => Some(None),
+        "on" | "true" | "1" | "yes" => Some(Some(true)),
+        "off" | "false" | "0" | "no" => Some(Some(false)),
+        _ => None,
+    }
+}
+
+/// `3 round(s) · 39 tool(s) · 54.4k tokens`, or `""` when nothing is known.
+///
+/// Each part appears only when it carries information: a run with no LLM round
+/// (a coding task that never called the model) must not print `0 round(s)`.
+fn format_run_cost(stats: &RunStats) -> String {
+    let mut parts = Vec::new();
+    if stats.rounds > 0 {
+        parts.push(format!("{} round(s)", stats.rounds));
+    }
+    if stats.tool_calls > 0 {
+        parts.push(format!("{} tool(s)", stats.tool_calls));
+    }
+    if stats.tokens_reported() {
+        parts.push(format!("{} tokens", format_token_amount(stats.total_tokens)));
+    }
+    parts.join(" · ")
+}
+
+/// The cost chain of a finished task, or `""` when it cannot be had in time.
+///
+/// Only the human path asks: `--json` / `--quiet` never spend a request on a
+/// line they do not print. Every failure — the 2s budget, a 404 from a backend
+/// that predates the endpoint, an unparseable body — degrades to "no suffix"
+/// instead of delaying or failing the completion (plan §四.7).
+pub(crate) async fn terminal_cost_chain(client: &Client, base_url: &str, task_id: &str) -> String {
+    if crate::quiet_active() || crate::json_active() {
+        return String::new();
+    }
+    let Ok(response) = crate::http::get_command_stats_with_timeout(
+        client,
+        base_url,
+        task_id,
+        TERMINAL_STATS_BUDGET,
+    )
+    .await
+    else {
+        return String::new();
+    };
+    if !response.is_success() {
+        return String::new();
+    }
+    match parse_task_stats(&response.body) {
+        Ok(report) => format_run_cost(&report.stats),
+        Err(_) => String::new(),
+    }
+}
+
 /// The human-readable `/stats` block.
 ///
 /// A few aligned lines rather than one long sentence: the point of the command is
@@ -901,13 +1184,67 @@ fn format_stats_report(report: &TaskStatsReport) -> Vec<String> {
     lines
 }
 
-/// `(arguments)` for a tool-call line; empty for `{}` so plumbing stays short.
+/// Keys worth showing on a tool-call line, in the order they are tried.
+///
+/// The line used to be one truncated JSON blob, so the selector or the URL — the
+/// only parts a reader can act on — were buried under names and ids. Unknown
+/// keys fall back to the compact blob: a call is never hidden because its shape
+/// changed (format plan P0-3).
+const TOOL_ARGUMENT_KEYS: &[&str] = &[
+    "selector", "ref", "url", "path", "file", "args", "text", "query", "sql", "command",
+];
+
+/// Argument pairs shown before the rest is folded into `+N`.
+const TOOL_ARGUMENT_PAIRS: usize = 3;
+
+/// Cap on one rendered argument value.
+const TOOL_ARGUMENT_VALUE: usize = 60;
+
+/// `(selector="#accept", +2)` for a tool-call line; empty for `{}`.
 fn format_tool_arguments(arguments: &str) -> String {
     let trimmed = arguments.trim();
     if trimmed.is_empty() || trimmed == "{}" {
         return String::new();
     }
-    format!("({})", truncate(trimmed, TOOL_ARGS_PREVIEW))
+    let compact = || format!("({})", truncate(trimmed, TOOL_ARGS_PREVIEW));
+    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(trimmed) else {
+        return compact();
+    };
+    if map.is_empty() {
+        return String::new();
+    }
+
+    let mut pairs: Vec<String> = Vec::new();
+    for key in TOOL_ARGUMENT_KEYS {
+        let Some(value) = map.get(*key) else {
+            continue;
+        };
+        pairs.push(format!("{key}={}", quote_argument(value)));
+    }
+    if pairs.is_empty() {
+        // Nothing recognisable: keep the compact JSON so the call stays visible.
+        return compact();
+    }
+
+    let hidden = map.len().saturating_sub(TOOL_ARGUMENT_PAIRS.min(pairs.len()));
+    pairs.truncate(TOOL_ARGUMENT_PAIRS);
+    let mut joined = pairs.join(", ");
+    if hidden > 0 {
+        joined.push_str(&format!(", +{hidden}"));
+    }
+    format!("({joined})")
+}
+
+/// One argument value: a JSON string in double quotes (an inner quote would end
+/// the value early, so those become apostrophes), anything else as compact JSON.
+fn quote_argument(value: &Value) -> String {
+    match value {
+        Value::String(text) => {
+            let text = text.replace('"', "'");
+            format!("\"{}\"", truncate(&text, TOOL_ARGUMENT_VALUE))
+        }
+        other => truncate(&other.to_string(), TOOL_ARGUMENT_VALUE),
+    }
 }
 
 /// Truncate on a char boundary, appending an ellipsis when anything was cut.
@@ -921,6 +1258,55 @@ pub(crate) fn truncate(text: &str, max_chars: usize) -> String {
         out.push(ch);
     }
     out
+}
+
+/// Columns [text] occupies, ignoring ANSI escapes.
+///
+/// The time prefix is painted dim on a terminal, and the escape bytes take no
+/// column: counting them would indent every continuation line too far.
+fn display_width(text: &str) -> usize {
+    let mut width = 0;
+    let mut chars = text.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            for next in chars.by_ref() {
+                if next == 'm' {
+                    break;
+                }
+            }
+            continue;
+        }
+        width += 1;
+    }
+    width
+}
+
+/// Wrap a prose step line: the first line after [gutter], the rest indented to
+/// the gutter's width.
+///
+/// A step line used to be whatever the model wrote, hard-wrapped by the
+/// terminal — the continuation ran back to column 0 and read as a new step
+/// (format plan P1-2).
+fn wrap_with_gutter(text: &str, gutter: &str, width: usize) -> Vec<String> {
+    let indent = display_width(gutter);
+    let available = width.saturating_sub(indent).max(20);
+    let mut lines = Vec::new();
+    for (index, line) in crate::agent_result::wrap(text, available)
+        .into_iter()
+        .enumerate()
+    {
+        if index == 0 {
+            lines.push(format!("{gutter}{line}"));
+        } else if line.is_empty() {
+            lines.push(String::new());
+        } else {
+            lines.push(format!("{}{line}", " ".repeat(indent)));
+        }
+    }
+    if lines.is_empty() {
+        lines.push(gutter.trim_end().to_string());
+    }
+    lines
 }
 
 // ---------------------------------------------------------------------------
@@ -964,6 +1350,12 @@ struct TaskFollower {
     /// the only one available. It can undercount — steps evicted before this
     /// follower reached them are lost — which the report says out loud.
     observed: RunStats,
+    /// When the last step arrived, rendered or not: the silence a heartbeat
+    /// line reports.
+    last_step_at: Instant,
+    /// When the last heartbeat was printed, cleared by every new step so the
+    /// next silence starts its own window.
+    last_heartbeat_at: Option<Instant>,
 }
 
 impl TaskFollower {
@@ -983,6 +1375,8 @@ impl TaskFollower {
             page_limit: EVENTS_PAGE_LIMIT,
             skipped_steps: 0,
             observed: RunStats::default(),
+            last_step_at: started,
+            last_heartbeat_at: None,
         }
     }
 
@@ -1202,6 +1596,9 @@ impl TaskFollower {
     }
 
     fn emit(&mut self, event: &TaskEvent) {
+        // Any step — rendered or not — ends the current silence window.
+        self.last_step_at = Instant::now();
+        self.last_heartbeat_at = None;
         // Local tally for `/stats` against a backend that serves no counters.
         // Counted in both output modes: `/stats` must answer the same whether
         // the steps were rendered or streamed as NDJSON.
@@ -1212,6 +1609,34 @@ impl TaskFollower {
         } else {
             self.renderer.render(event);
         }
+    }
+
+    /// Print a liveness line when the run has been silent long enough.
+    ///
+    /// A single slow tool (three minutes inside one `b4.run`) used to look
+    /// exactly like a hang: nothing was printed in between. Called from both
+    /// polling loops — the time-based constants make a 400 ms tick cheap.
+    fn emit_heartbeat(&mut self) {
+        if !self.heartbeats_enabled() {
+            return;
+        }
+        let now = Instant::now();
+        let silent_for = now.saturating_duration_since(self.last_step_at);
+        let since_last = self
+            .last_heartbeat_at
+            .map(|at| now.saturating_duration_since(at));
+        if !heartbeat_due(silent_for, since_last) {
+            return;
+        }
+        self.last_heartbeat_at = Some(now);
+        let line = heartbeat_line(&self.renderer.time_prefix(), self.observed.events, silent_for);
+        self.renderer.print(&line);
+    }
+
+    /// Heartbeats need a human watching: a terminal, not `--quiet` (nor a session
+    /// `/quiet`), and not `--ndjson`.
+    fn heartbeats_enabled(&self) -> bool {
+        self.renderer.color && !self.renderer.quiet && !self.ndjson
     }
 
     fn note_fallback(&self) {
@@ -1314,6 +1739,7 @@ pub async fn follow_task(
                     .await;
             }
         }
+        follower.emit_heartbeat();
 
         tokio::select! {
             _ = tokio::time::sleep(follower.poll_interval()) => {}
@@ -1388,19 +1814,53 @@ async fn print_completion(
                     .to_string(),
                 );
             } else {
-                follower.renderer.print(&format!(
-                    "✔ Agent completed in {:.1}s:",
-                    elapsed.as_secs_f64()
+                let cost =
+                    terminal_cost_chain(client, base_url, &follower.task_id).await;
+                follower.renderer.print(&terminal_status_line(
+                    TerminalStatus::Completed,
+                    elapsed,
+                    &follower.task_id,
+                    &cost,
+                    None,
                 ));
-                follower.renderer.print(&result);
+                // The payload is an envelope with a `result` object: print its
+                // sections, not the raw JSON (see `agent_result`).
+                let lines = crate::agent_result::render_result_text(
+                    &follower.task_id,
+                    &result,
+                    &crate::agent_result::RenderOptions::default()
+                        .with_color(follower.renderer.color)
+                        .with_full(crate::pretty_active())
+                        // `--follow` is a one-shot run: there is no `/result`
+                        // prompt to type at, so name the command that works.
+                        .with_json_hint(format!(
+                            "agent result {} --json",
+                            follower.task_id
+                        )),
+                );
+                if !lines.is_empty() {
+                    follower.renderer.print("");
+                    for line in &lines {
+                        follower.renderer.print(line);
+                    }
+                }
             }
             Ok(())
         }
         "cancelled" => {
             if !ndjson {
-                follower
-                    .renderer
-                    .print(&format!("{} ⏹ cancelled", follower.renderer.time_prefix()));
+                let suffix = if follower.observed.tool_calls > 0 {
+                    format!("{} tool(s)", follower.observed.tool_calls)
+                } else {
+                    String::new()
+                };
+                follower.renderer.print(&terminal_status_line(
+                    TerminalStatus::Cancelled,
+                    elapsed,
+                    &follower.task_id,
+                    &suffix,
+                    None,
+                ));
             }
             Err(format!(
                 "Agent task {} was cancelled. Use 'agent status {}' to see its final state.",
@@ -1419,12 +1879,19 @@ async fn print_completion(
                         .to_string(),
                 );
             } else {
-                follower.renderer.print(&format!(
-                    "{} ✖ failed after {:.1}s: {}",
-                    follower.renderer.time_prefix(),
-                    elapsed.as_secs_f64(),
-                    truncate(&reason, RESULT_PREVIEW)
+                // The human line names the machine code too: `TOKEN_BUDGET` tells a
+                // reader more than the sentence, and it is what `--resume` needs.
+                let detail = failure_detail(progress.as_ref()).unwrap_or_else(|| reason.clone());
+                follower.renderer.print(&terminal_status_line(
+                    TerminalStatus::Failed,
+                    elapsed,
+                    &follower.task_id,
+                    "",
+                    Some(&truncate(&detail, RESULT_PREVIEW)),
                 ));
+                if let Some(hint) = resume_hint_line(&follower.task_id, progress.as_ref()) {
+                    follower.renderer.print(&hint);
+                }
             }
             Err(format!("Agent task failed: {reason}"))
         }
@@ -1439,13 +1906,6 @@ async fn status_failure_progress(
 ) -> Option<StatusProgress> {
     let body = get_command_status(client, base_url, task_id).await.ok()?;
     Some(parse_status_progress(&body))
-}
-
-/// The human-readable failure reason of a task, from its status envelope.
-async fn status_failure_reason(client: &Client, base_url: &str, task_id: &str) -> Option<String> {
-    status_failure_progress(client, base_url, task_id)
-        .await?
-        .message
 }
 
 /// The synthesized last line of an `--ndjson` run that failed.
@@ -1502,8 +1962,33 @@ async fn cancel_task(client: &Client, base_url: &str, task_id: &str) -> String {
     }
 }
 
-fn color_enabled() -> bool {
-    io::stdout().is_terminal() && !crate::quiet_active() && !crate::json_active()
+/// Whether human output may carry ANSI: a terminal, and neither `--quiet` nor
+/// `--json`, and `NO_COLOR` unset. Shared with `main.rs`'s `agent result` /
+/// `agent run --wait` payload rendering so the entry points colour identically.
+pub(crate) fn color_enabled() -> bool {
+    color_enabled_for(
+        io::stdout().is_terminal(),
+        crate::quiet_active(),
+        crate::json_active(),
+        no_color_requested(),
+    )
+}
+
+/// The predicate behind [`color_enabled`], pure so it needs no terminal and no
+/// environment to test (format plan P1-10).
+///
+/// `NO_COLOR` is the cross-tool convention (<https://no-color.org>): any
+/// non-empty value disables ANSI even on a terminal, because "I can see colour"
+/// and "I want colour" are different questions.
+fn color_enabled_for(is_tty: bool, quiet: bool, json: bool, no_color: bool) -> bool {
+    is_tty && !quiet && !json && !no_color
+}
+
+/// Whether the environment asks for no ANSI at all.
+fn no_color_requested() -> bool {
+    std::env::var_os("NO_COLOR")
+        .map(|value| !value.is_empty())
+        .unwrap_or(false)
 }
 
 fn quiet_enabled() -> bool {
@@ -1561,6 +2046,9 @@ struct Repl {
     access: Option<String>,
     tty: bool,
     quiet: bool,
+    /// `/verbose on`: the step renderer also shows round markers and fast
+    /// successful tools.
+    verbose: bool,
     current: Option<TaskFollower>,
     last_task: Option<String>,
     /// Session generation [Self::last_task] was started in.
@@ -1576,6 +2064,10 @@ struct Repl {
     /// can answer after its follower is gone (the fallback for a backend without
     /// the stats endpoint).
     last_local_stats: Option<TaskStatsReport>,
+    /// Every task this session released, in order — the `tasks` array of the
+    /// `-i --json` envelope. The scalar `task_id` / `raw` / `stats` fields keep
+    /// describing only the last task, as they always did (format plan P0-5).
+    tasks_json: Vec<Value>,
     prompt_pending: bool,
 }
 
@@ -1625,11 +2117,13 @@ impl Repl {
             access,
             tty: io::stdin().is_terminal(),
             quiet: quiet_enabled(),
+            verbose: false,
             current: None,
             last_task: None,
             last_task_generation: 0,
             last_task_seq: 0,
             last_local_stats: None,
+            tasks_json: Vec::new(),
             prompt_pending: true,
         }
     }
@@ -1659,15 +2153,42 @@ impl Repl {
         }
     }
 
+    /// The opening banner: the session, the engine, and only the knobs this
+    /// session actually changed.
+    ///
+    /// It used to list one fixed sentence, so a session started with `--coding`,
+    /// `--access read-build` or a token budget looked exactly like a default one —
+    /// the reader had to remember the command line. A banner that lists every
+    /// default says nothing, so only deviations appear (format plan P1-8).
     fn banner(&self) {
         if !self.tty || !human_output_enabled(self.quiet) {
             return;
         }
+        for line in self.banner_lines() {
+            crate::print_stdout_line(&line);
+        }
+    }
+
+    /// The banner's two lines, pure so the knobs can be tested without a terminal.
+    fn banner_lines(&self) -> Vec<String> {
         let session = self.session_id().unwrap_or_else(|| "default".to_string());
-        crate::print_stdout_line(&format!(
-            "Browser4 agent · session={session} · engine={} · type /help for commands",
-            self.engine
-        ));
+        let mut line = format!("Browser4 agent · session={session} · engine={}", self.engine);
+        if self.coding {
+            line.push_str(" · coding=on");
+        }
+        if let Some(access) = self.access.as_deref().filter(|access| !access.is_empty()) {
+            line.push_str(&format!(" · access={access}"));
+        }
+        if let Some(budget) = self.token_budget.filter(|budget| *budget > 0) {
+            line.push_str(&format!(" · budget={}", format_token_amount(budget as u64)));
+        }
+        if self.quiet {
+            line.push_str(" · quiet");
+        }
+        vec![
+            line,
+            "  type a task · /help for commands · Ctrl+C cancels the running task".to_string(),
+        ]
     }
 
     fn prompt(&mut self) {
@@ -1722,15 +2243,9 @@ impl Repl {
                     }
                 }
                 _ = ticker.tick() => {
-                    if self.current.is_some() {
-                        if let Err(error) = self.poll_current().await {
-                            // The follower gave up (transport failures for the whole
-                            // window, unknown task id, …): report it, then decide
-                            // whether the task is worth following still. Never go
-                            // silent while it is.
-                            self.out(&format!("⚠ {error}"));
-                            self.recover_current().await;
-                        }
+                    self.poll_and_recover().await;
+                    if let Some(follower) = self.current.as_mut() {
+                        follower.emit_heartbeat();
                     }
                 }
                 _ = ctrl_c.as_mut() => {
@@ -1746,6 +2261,17 @@ impl Repl {
                     ctrl_c = Box::pin(tokio::signal::ctrl_c());
                 }
             }
+        }
+
+        // `/quit` (or stdin reaching EOF) used to end the session silently even
+        // though the task kept running server-side: the next `agent list` showed a
+        // `processing` row the user had no explanation for. Say it, and name the
+        // commands that still apply once the prompt is gone (format plan P1-7).
+        if let Some(follower) = self.current.as_ref() {
+            self.out(&format!(
+                "⚠ task {} keeps running — agent status {} · agent cancel {}",
+                follower.task_id, follower.task_id, follower.task_id
+            ));
         }
 
         self.print_pending_summary_if_any().await;
@@ -1892,7 +2418,11 @@ impl Repl {
     async fn start_task(&mut self, task: String) -> Result<(), String> {
         let extra = self.payload();
         let task_id = crate::submit_agent_task(&self.client, &self.base_url, &task, extra).await?;
-        self.out(&format!("▶ task {task_id}"));
+        // A blank line separates two tasks, and the line names the task: a session
+        // that runs several tasks used to be one undifferentiated stream of steps
+        // (format plan P1-6). `▶ task <id>` stays as the leading substring.
+        self.out("");
+        self.out(&format!("▶ task {task_id} — {}", task_label(&task)));
         crate::json_field("task_id", json!(&task_id));
         let _ = crate::state::track_async_task(&task_id, "agent", &task, None);
         self.current = Some(TaskFollower::new(
@@ -1901,7 +2431,18 @@ impl Repl {
             color_enabled(),
             self.quiet,
         ));
+        // A follower created after `/verbose on` starts verbose; `/quiet on`
+        // already arrived through the constructor's `quiet` argument.
+        if let Some(follower) = self.current.as_mut() {
+            follower.renderer.verbose = self.verbose;
+        }
         self.prompt_pending = false;
+        // Pull the first page now instead of waiting for the next tick: the
+        // opening steps show up immediately, and a task that already finished
+        // renders its result before the next line of input is read. With piped
+        // stdin the session used to exit before it ever polled, dropping the
+        // result silently.
+        self.poll_and_recover().await;
         Ok(())
     }
 
@@ -1937,6 +2478,21 @@ impl Repl {
         match follower.poll(&self.client, &self.base_url).await? {
             PollOutcome::Running => Ok(()),
             PollOutcome::Done { status } => self.complete_current(status).await,
+        }
+    }
+
+    /// Poll the live follower, and keep it alive when the poll fails.
+    ///
+    /// The follower gives up on a whole failure window (transport failures, an
+    /// unknown task id, …): report it instead of going silent, then decide
+    /// whether the task is still worth following ([`Self::recover_current`]).
+    async fn poll_and_recover(&mut self) {
+        if self.current.is_none() {
+            return;
+        }
+        if let Err(error) = self.poll_current().await {
+            self.out(&format!("⚠ {error}"));
+            self.recover_current().await;
         }
     }
 
@@ -1998,17 +2554,31 @@ impl Repl {
     fn release_current(&mut self, follower: TaskFollower, status: &str, is_done: bool) {
         let elapsed_ms = follower.elapsed().as_millis() as u64;
         let observed = follower.observed.clone();
-        self.last_task = Some(follower.task_id.clone());
+        let steps = observed.events;
+        let task_id = follower.task_id.clone();
+        self.last_task = Some(task_id.clone());
         self.last_task_generation = self.generation;
         self.last_task_seq = follower.after;
         self.last_local_stats = Some(TaskStatsReport {
-            task_id: follower.task_id,
+            task_id: task_id.clone(),
             status: status.to_string(),
             is_done,
             elapsed_ms: Some(elapsed_ms),
             stats: observed,
             local: true,
         });
+        // `-i --json` used to overwrite `task_id`/`raw`/`stats` on every task, so a
+        // harness that ran two tasks could only see the last one. The scalars stay
+        // (they are documented as "the last task"); `tasks` accumulates the whole
+        // session in order (format plan P0-5).
+        self.tasks_json.push(json!({
+            "taskId": task_id,
+            "status": status,
+            "isDone": is_done,
+            "elapsedMs": elapsed_ms,
+            "steps": steps,
+        }));
+        crate::json_field("tasks", json!(&self.tasks_json));
     }
 
     async fn complete_current(&mut self, status: String) -> Result<(), String> {
@@ -2018,30 +2588,54 @@ impl Repl {
         let task_id = follower.task_id.clone();
         let elapsed = follower.elapsed();
         let skipped = follower.skipped_steps;
+        let tool_calls = follower.observed.tool_calls;
         self.release_current(follower, &status, true);
         self.prompt_pending = true;
 
         match status.as_str() {
             "done" => {
                 let result = get_command_result(&self.client, &self.base_url, &task_id).await?;
-                self.out(&format!(
-                    "✔ done in {:.1}s · {}",
-                    elapsed.as_secs_f64(),
-                    task_id
+                let cost = terminal_cost_chain(&self.client, &self.base_url, &task_id).await;
+                self.out(&terminal_status_line(
+                    TerminalStatus::Completed,
+                    elapsed,
+                    &task_id,
+                    &cost,
+                    None,
                 ));
-                self.out(&result);
+                self.print_payload(&task_id, &result);
                 crate::json_field("raw", crate::json_text_or_value(&result));
                 let _ = crate::state::update_async_task_status(&task_id, "completed", None);
             }
             "cancelled" => {
-                self.out(&format!("⏹ cancelled · {task_id}"));
+                let suffix = if tool_calls > 0 {
+                    format!("{tool_calls} tool(s)")
+                } else {
+                    String::new()
+                };
+                self.out(&terminal_status_line(
+                    TerminalStatus::Cancelled,
+                    elapsed,
+                    &task_id,
+                    &suffix,
+                    None,
+                ));
                 let _ = crate::state::update_async_task_status(&task_id, "cancelled", None);
             }
             _ => {
-                let reason = status_failure_reason(&self.client, &self.base_url, &task_id)
-                    .await
+                let progress = status_failure_progress(&self.client, &self.base_url, &task_id).await;
+                let detail = failure_detail(progress.as_ref())
                     .unwrap_or_else(|| "the task reported failure".to_string());
-                self.out(&format!("✖ failed · {task_id} — {reason}"));
+                self.out(&terminal_status_line(
+                    TerminalStatus::Failed,
+                    elapsed,
+                    &task_id,
+                    "",
+                    Some(&detail),
+                ));
+                if let Some(hint) = resume_hint_line(&task_id, progress.as_ref()) {
+                    self.out(&hint);
+                }
                 let _ = crate::state::update_async_task_status(&task_id, "failed", None);
             }
         }
@@ -2066,10 +2660,12 @@ impl Repl {
             "quit" | "exit" | "q" => return Ok(false),
             "help" | "h" | "?" => self.print_help(),
             "status" => self.print_status().await,
-            "result" => self.print_result().await,
+            "result" => self.print_result(argument).await,
             "cancel" | "stop" => self.cancel_current().await,
             "new" => self.new_session(),
             "coding" => self.set_coding(argument),
+            "quiet" => self.set_quiet(argument),
+            "verbose" => self.set_verbose(argument),
             "noop-limit" => self.set_noop_limit(argument),
             "session" => {
                 let session = self.session_id().unwrap_or_else(|| "default".to_string());
@@ -2265,11 +2861,13 @@ impl Repl {
         self.out("Commands:");
         self.out("  /help              this list");
         self.out("  /status            status of the running (or last) task");
-        self.out("  /result            print the last finished task's result");
+        self.out("  /result [--json]   print the last finished task's result (--json: raw envelope)");
         self.out("  /cancel            cancel the running task (same as Ctrl+C)");
         self.out("  /new               start a new session (fresh agent context)");
         self.out("  /session           print the current session id");
         self.out("  /coding [on|off]   treat following tasks as coding tasks");
+        self.out("  /quiet [on|off]    silence the session's human lines (like -q)");
+        self.out("  /verbose [on|off]  also print round markers and fast successful tools");
         self.out("  /noop-limit <n>    consecutive no-op abort threshold (blank resets)");
         self.out("  /events [n]        raw JSON of the last n steps (default 20)");
         self.out("  /stats [task-id]   run statistics: LLM rounds/requests, tokens, tool calls");
@@ -2296,16 +2894,7 @@ impl Repl {
         match get_command_status(&self.client, &self.base_url, &task_id).await {
             Ok(body) => {
                 let progress = parse_status_progress(&body);
-                let steps = if progress.tools > 0 {
-                    format!(" · {} step(s)", progress.tools)
-                } else {
-                    String::new()
-                };
-                let message = progress.message.unwrap_or_default();
-                self.out(&format!(
-                    "{task_id} · {}{steps} {message}",
-                    progress.word
-                ));
+                self.out(&status_line(&task_id, &progress));
             }
             Err(error) => self.out(&format!("could not read status of {task_id}: {error}")),
         }
@@ -2401,14 +2990,52 @@ impl Repl {
         crate::json_field("stats", payload);
     }
 
-    async fn print_result(&mut self) {
+    /// `/result [--json]`: the last finished task's payload.
+    ///
+    /// Human sections by default (`agent_result`), or the raw `command_result`
+    /// envelope with `--json` — the escape hatch for a consumer that wants the
+    /// machine form without re-running the task.
+    async fn print_result(&mut self, argument: &str) {
+        let raw = match argument.trim() {
+            "" => false,
+            "--json" => true,
+            other => {
+                self.out(&format!("usage: /result [--json] (got '{other}')"));
+                return;
+            }
+        };
         let Some(task_id) = self.last_task.clone() else {
             self.out("no finished task yet");
             return;
         };
         match get_command_result(&self.client, &self.base_url, &task_id).await {
-            Ok(result) => self.out(&result),
+            Ok(result) if raw => self.out(&result),
+            Ok(result) => self.print_payload(&task_id, &result),
             Err(error) => self.out(&format!("could not read result of {task_id}: {error}")),
+        }
+    }
+
+    /// Print a finished task's payload as human sections.
+    ///
+    /// `command_result` answers with the task envelope plus a `result` object;
+    /// printed verbatim it is one multi-KB line of JSON. [`crate::agent_result`]
+    /// renders the same data as Summary / Key findings / Files / Data sections,
+    /// keeping the envelope's plumbing out of the human path. `/result --json`
+    /// still hands a caller the raw text.
+    fn print_payload(&self, task_id: &str, body: &str) {
+        let lines = crate::agent_result::render_result_text(
+            task_id,
+            body,
+            &crate::agent_result::RenderOptions::default()
+                .with_color(color_enabled())
+                .with_full(crate::pretty_active()),
+        );
+        if lines.is_empty() {
+            return;
+        }
+        self.out("");
+        for line in &lines {
+            self.out(line);
         }
     }
 
@@ -2434,18 +3061,70 @@ impl Repl {
     }
 
     fn set_coding(&mut self, argument: &str) {
-        match argument {
-            "on" | "true" | "1" => self.coding = true,
-            "off" | "false" | "0" => self.coding = false,
-            "" => self.coding = !self.coding,
-            other => {
-                self.out(&format!("usage: /coding [on|off] (got '{other}')"));
-                return;
-            }
-        }
+        let Some(value) = parse_toggle(argument) else {
+            self.out(&format!(
+                "usage: /coding [on|off] (got '{}')",
+                argument.trim()
+            ));
+            return;
+        };
+        self.coding = value.unwrap_or(!self.coding);
         self.out(&format!(
             "coding mode {}",
             if self.coding { "on" } else { "off" }
+        ));
+    }
+
+    /// `/quiet [on|off]`: silence the session's human lines without restarting it.
+    ///
+    /// The same effect as the global `-q` — the step renderer included — but
+    /// scoped to the rest of this session. A bare `/quiet` toggles (format plan
+    /// P2-4).
+    fn set_quiet(&mut self, argument: &str) {
+        let Some(value) = parse_toggle(argument) else {
+            self.out(&format!(
+                "usage: /quiet [on|off] (got '{}')",
+                argument.trim()
+            ));
+            return;
+        };
+        self.quiet = value.unwrap_or(!self.quiet);
+        if let Some(follower) = self.current.as_mut() {
+            follower.renderer.quiet = self.quiet;
+        }
+        // `out` is gated by the flag just changed: the confirmation goes to the
+        // raw printer so `/quiet on` still says what happened, once.
+        crate::print_stdout_line(if self.quiet {
+            "quiet on — steps and human lines stop"
+        } else {
+            "quiet off — steps and human lines resume"
+        });
+    }
+
+    /// `/verbose [on|off]`: also print round markers and fast successful tools.
+    ///
+    /// Off by default: a long run has hundreds of rounds, and the tool lines that
+    /// already print show the work. This is the troubleshooting view (format plan
+    /// P2-2).
+    fn set_verbose(&mut self, argument: &str) {
+        let Some(value) = parse_toggle(argument) else {
+            self.out(&format!(
+                "usage: /verbose [on|off] (got '{}')",
+                argument.trim()
+            ));
+            return;
+        };
+        self.verbose = value.unwrap_or(!self.verbose);
+        if let Some(follower) = self.current.as_mut() {
+            follower.renderer.verbose = self.verbose;
+        }
+        self.out(&format!(
+            "verbose {}",
+            if self.verbose {
+                "on — round markers and every tool result"
+            } else {
+                "off"
+            }
         ));
     }
 
@@ -2724,7 +3403,59 @@ mod tests {
         let line = renderer.format(&call).expect("tool.call renders");
         assert!(line.contains("#1"), "{line}");
         assert!(line.contains("coding.read"), "{line}");
-        assert!(line.contains(r#"({"file":"a.kt"})"#), "{line}");
+        assert!(line.contains(r#"(file="a.kt")"#), "{line}");
+    }
+
+    /// Two calls of the same tool must be distinguishable by their results, and a
+    /// fast success that prints nothing must not shift the numbering (P0-2).
+    #[test]
+    fn renderer_pairs_results_with_the_call_index() {
+        let mut renderer = Renderer::new(Instant::now(), false, false);
+
+        let mut first = event("tool.call");
+        first.tool = Some("b4.run".to_string());
+        first.arguments = Some(r#"{"args":"goto https://example.com"}"#.to_string());
+        let call_line = renderer.format(&first).expect("tool.call renders");
+        assert!(call_line.contains("#1 b4.run(args=\"goto https://example.com\")"), "{call_line}");
+
+        // Fast success: no line, but it still frees call #1.
+        let mut fast = event("tool.result");
+        fast.tool = Some("b4.run".to_string());
+        fast.ok = Some(true);
+        fast.duration_ms = Some(40);
+        assert!(renderer.format(&fast).is_none());
+
+        let mut second = event("tool.call");
+        second.tool = Some("b4.run".to_string());
+        second.arguments = Some(r##"{"selector":"#accept"}"##.to_string());
+        assert!(renderer.format(&second).is_some());
+
+        let mut failed = event("tool.result");
+        failed.tool = Some("b4.run".to_string());
+        failed.ok = Some(false);
+        failed.duration_ms = Some(120);
+        failed.text = Some("no element matched selector '#accept'".to_string());
+        let line = renderer.format(&failed).expect("failure renders");
+        assert!(
+            line.contains("↳ #2 b4.run failed after 120ms"),
+            "the second call's failure must be #2, not #1: {line}"
+        );
+        assert!(renderer.pending_calls.is_empty(), "queue drained");
+    }
+
+    /// A result whose call this session never saw (following from the middle of a
+    /// run) renders without a made-up index.
+    #[test]
+    fn renderer_result_without_a_recorded_call_has_no_index() {
+        let mut renderer = Renderer::new(Instant::now(), false, false);
+        let mut slow = event("tool.result");
+        slow.tool = Some("b4.run".to_string());
+        slow.ok = Some(true);
+        slow.duration_ms = Some(3_500);
+
+        let line = renderer.format(&slow).expect("slow tool renders");
+        assert!(line.contains("↳ b4.run ok in 3.5s"), "{line}");
+        assert!(!line.contains('#'), "no invented call index: {line}");
     }
 
     #[test]
@@ -2737,6 +3468,79 @@ mod tests {
         result.ok = Some(true);
         result.duration_ms = Some(50);
         assert!(renderer.format(&result).is_none());
+    }
+
+    /// P1-1/P1-2: prose wraps under its marker, and the emoji that is a tofu box
+    /// on conhost is gone.
+    #[test]
+    fn renderer_wraps_model_text_under_its_marker() {
+        let mut renderer = Renderer::new(Instant::now(), false, false);
+        renderer.width = 60;
+        let mut text = event("model.text");
+        text.text = Some(
+            "The page has a cookie banner; I'll dismiss it first so the pricing grid is readable."
+                .to_string(),
+        );
+
+        let line = renderer.format(&text).expect("model text renders");
+        assert!(!line.contains('💭'), "no tofu-box emoji: {line:?}");
+        let lines: Vec<&str> = line.split('\n').collect();
+        assert!(lines.len() > 1, "long prose must wrap: {line:?}");
+        assert!(lines[0].contains("⋯"), "{lines:?}");
+        for line in &lines {
+            assert!(line.chars().count() <= 60, "line too wide: {line:?}");
+        }
+        // Continuation starts under the text, not back at column 0.
+        assert!(lines[1].starts_with(&" ".repeat(12)), "{lines:?}");
+    }
+
+    /// The painted time prefix carries ANSI bytes that occupy no column; the
+    /// indent must not count them.
+    #[test]
+    fn a_painted_time_prefix_does_not_indent_the_continuation() {
+        let mut renderer = Renderer::new(Instant::now(), true, false);
+        renderer.width = 60;
+        let mut text = event("model.text");
+        text.text = Some("word ".repeat(40));
+
+        let line = renderer.format(&text).expect("model text renders");
+        let continuation = line.split('\n').nth(1).expect("prose wraps");
+        assert!(
+            continuation.starts_with(&" ".repeat(12)),
+            "continuation must start under the marker: {continuation:?}"
+        );
+    }
+
+    #[test]
+    fn wrap_with_gutter_keeps_multibyte_text_intact() {
+        let text = "这是一段很长的中文摘要，用来验证换行不会破坏多字节字符。".repeat(3);
+        let lines = wrap_with_gutter(&text, "[00:01]   ⋯ ", 40);
+
+        assert!(lines.len() > 1, "{lines:?}");
+        for line in &lines {
+            assert!(line.chars().count() <= 40, "line too wide: {line:?}");
+        }
+        assert!(lines.iter().any(|line| line.contains("多字节")), "{lines:?}");
+    }
+
+    /// A structured line stays one line: it is what people grep and copy.
+    #[test]
+    fn renderer_keeps_structured_lines_on_one_line() {
+        let mut renderer = Renderer::new(Instant::now(), false, false);
+        renderer.width = 40;
+        let mut call = event("tool.call");
+        call.tool = Some("b4.run".to_string());
+        call.arguments =
+            Some(r#"{"args":"goto https://example.com/a/very/long/path"}"#.to_string());
+
+        let line = renderer.format(&call).expect("tool.call renders");
+        assert!(!line.contains('\n'), "a tool line stays greppable: {line:?}");
+    }
+
+    #[test]
+    fn display_width_ignores_ansi_painting() {
+        assert_eq!(display_width("[00:05]   ⋯ "), 12);
+        assert_eq!(display_width("\x1b[2m[00:05]\x1b[0m   ⋯ "), 12);
     }
 
     #[test]
@@ -2889,6 +3693,38 @@ mod tests {
         assert_eq!(format_tool_arguments(r#"{"a":1}"#), r#"({"a":1})"#);
     }
 
+    /// P0-3: the selector/url/args out of the JSON, so a call line can be read
+    /// without parsing it.
+    #[test]
+    fn format_tool_arguments_shows_the_keys_a_reader_can_act_on() {
+        assert_eq!(
+            format_tool_arguments(r#"{"args":"goto https://example.com/pricing"}"#),
+            r#"(args="goto https://example.com/pricing")"#
+        );
+        assert_eq!(
+            format_tool_arguments(r##"{"selector":"#accept","index":0}"##),
+            r##"(selector="#accept", +1)"##
+        );
+        // Whitelist order, not JSON order: the selector leads even when it comes last.
+        assert_eq!(
+            format_tool_arguments(r##"{"index":0,"text":"hi","selector":"#email"}"##),
+            r##"(selector="#email", text="hi", +1)"##
+        );
+        // At most three pairs, then a count of everything that was not shown.
+        assert_eq!(
+            format_tool_arguments(r#"{"selector":"s","url":"u","text":"t","path":"p","sql":"q"}"#),
+            r#"(selector="s", url="u", path="p", +2)"#
+        );
+        // A long value is clipped; an inner quote becomes an apostrophe so the
+        // value cannot appear to end early.
+        let long = format_tool_arguments(&format!(
+            r#"{{"text":"oh \"no\" {}"}}"#,
+            "x".repeat(200)
+        ));
+        assert!(long.len() < 100, "{long}");
+        assert!(long.contains("oh 'no'"), "{long}");
+    }
+
     // ---- run statistics (`/stats`) -----------------------------------------
 
     fn stats_event(kind: &str, tool: Option<&str>, ok: Option<bool>) -> TaskEvent {
@@ -2925,6 +3761,411 @@ mod tests {
             },
             local: false,
         }
+    }
+
+    // ---- the terminal line (`-i` / `--follow` / `--wait`) -------------------
+
+    #[test]
+    fn the_terminal_line_is_the_same_in_every_mode() {
+        let elapsed = Duration::from_millis(18_400);
+
+        assert_eq!(
+            terminal_status_line(TerminalStatus::Completed, elapsed, "task-1", "", None),
+            "✔ Agent completed in 18.4s · task-1"
+        );
+        assert_eq!(
+            terminal_status_line(TerminalStatus::Failed, elapsed, "task-1", "", Some("boom")),
+            "✖ failed · task-1 · 18.4s — boom"
+        );
+        assert_eq!(
+            terminal_status_line(
+                TerminalStatus::Cancelled,
+                elapsed,
+                "task-1",
+                "39 tool(s)",
+                None
+            ),
+            "⏹ cancelled · task-1 · 18.4s · 39 tool(s)"
+        );
+    }
+
+    #[test]
+    fn the_terminal_line_carries_the_cost_chain_when_it_is_known() {
+        let cost = format_run_cost(&a_served_stats_report().stats);
+        assert_eq!(cost, "3 round(s) · 39 tool(s) · 54.4k tokens");
+
+        // Long runs read as `3m12s`, not `192.0s`.
+        assert_eq!(
+            terminal_status_line(
+                TerminalStatus::Completed,
+                Duration::from_millis(192_000),
+                "task-1",
+                &cost,
+                None
+            ),
+            "✔ Agent completed in 3m12s · task-1 · 3 round(s) · 39 tool(s) · 54.4k tokens"
+        );
+    }
+
+    #[test]
+    fn the_cost_chain_omits_parts_it_does_not_know() {
+        assert_eq!(
+            format_run_cost(&RunStats::default()),
+            "",
+            "an unobserved run must not claim 0 rounds and 0 tokens"
+        );
+        assert_eq!(
+            format_run_cost(&RunStats {
+                tool_calls: 7,
+                ..Default::default()
+            }),
+            "7 tool(s)"
+        );
+        // A provider that sends no usage block: the calls happened, the tokens are
+        // unknown — not zero.
+        assert_eq!(
+            format_run_cost(&RunStats {
+                model_requests: 2,
+                tool_calls: 1,
+                ..Default::default()
+            }),
+            "1 tool(s)"
+        );
+
+        let bare = terminal_status_line(
+            TerminalStatus::Completed,
+            Duration::from_millis(850),
+            "t",
+            "",
+            None,
+        );
+        assert_eq!(bare, "✔ Agent completed in 0.8s · t");
+        assert!(!bare.ends_with('·'), "no dangling separator: {bare}");
+    }
+
+    #[test]
+    fn a_terminal_line_without_a_reason_has_no_dangling_dash() {
+        let line = terminal_status_line(
+            TerminalStatus::Failed,
+            Duration::from_millis(3_200),
+            "task-1",
+            "",
+            Some("   "),
+        );
+        assert_eq!(line, "✖ failed · task-1 · 3.2s");
+        assert!(!line.contains('—'), "{line}");
+    }
+
+    // ---- liveness heartbeat (P1-3) ------------------------------------------
+
+    #[test]
+    fn heartbeat_waits_for_silence_then_throttles() {
+        // Nothing while steps keep coming.
+        assert!(!heartbeat_due(Duration::from_secs(5), None));
+        assert!(!heartbeat_due(Duration::from_secs(29), None));
+        // First silence: one line.
+        assert!(heartbeat_due(Duration::from_secs(30), None));
+        // The next one waits for the interval, not for every tick.
+        assert!(!heartbeat_due(
+            Duration::from_secs(45),
+            Some(Duration::from_secs(15))
+        ));
+        assert!(heartbeat_due(
+            Duration::from_secs(61),
+            Some(Duration::from_secs(31))
+        ));
+    }
+
+    #[test]
+    fn the_heartbeat_line_names_the_steps_and_the_silence() {
+        assert_eq!(
+            heartbeat_line("[02:39]", 5, Duration::from_secs(30)),
+            "[02:39]   ⋯ still running · 5 step(s) · 30s since the last step"
+        );
+        // Long silences read as durations, not as a large count of seconds.
+        assert_eq!(format_silence(Duration::from_secs(30)), "30s");
+        assert_eq!(format_silence(Duration::from_secs(155)), "2m35s");
+    }
+
+    #[test]
+    fn heartbeats_are_off_in_machine_and_piped_modes() {
+        // Piped output: no terminal, no heartbeat (tests and CI stay quiet).
+        assert!(!TaskFollower::new("t", false, false, false).heartbeats_enabled());
+        // `--ndjson` is a machine stream even on a terminal.
+        assert!(!TaskFollower::new("t", true, true, false).heartbeats_enabled());
+        // A watched session on a terminal.
+        assert!(TaskFollower::new("t", false, true, false).heartbeats_enabled());
+    }
+
+    /// A new step ends the silence window, so the next heartbeat starts over.
+    #[test]
+    fn a_step_resets_the_heartbeat_window() {
+        let mut follower = TaskFollower::new("t", false, true, false);
+        follower.last_heartbeat_at = Some(Instant::now());
+        follower.emit(&event("run.usage"));
+        assert!(
+            follower.last_heartbeat_at.is_none(),
+            "a step must clear the window"
+        );
+    }
+
+    // ---- failure and status lines (P1-5 / P1-9) -----------------------------
+
+    #[test]
+    fn failure_detail_leads_with_the_machine_code() {
+        let both = StatusProgress {
+            word: "failed".to_string(),
+            message: Some("editing /etc/hosts is refused".to_string()),
+            error_code: Some("ACCESS_DENIED".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            failure_detail(Some(&both)).as_deref(),
+            Some("access_denied: editing /etc/hosts is refused")
+        );
+
+        let code_only = StatusProgress {
+            word: "failed".to_string(),
+            error_code: Some("TOKEN_BUDGET".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            failure_detail(Some(&code_only)).as_deref(),
+            Some("token_budget")
+        );
+
+        let reason_only = StatusProgress {
+            word: "failed".to_string(),
+            message: Some("the page was blocked".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            failure_detail(Some(&reason_only)).as_deref(),
+            Some("the page was blocked")
+        );
+
+        assert_eq!(failure_detail(None), None);
+        let blank = StatusProgress {
+            word: "failed".to_string(),
+            message: Some("   ".to_string()),
+            error_code: Some("  ".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(failure_detail(Some(&blank)), None);
+    }
+
+    #[test]
+    fn the_resume_hint_waits_for_the_backend_to_say_it_can_continue() {
+        let resumable = StatusProgress {
+            word: "failed".to_string(),
+            resumable: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(
+            resume_hint_line("5b0c3f2a", Some(&resumable)).as_deref(),
+            Some("    resume: agent run --resume 5b0c3f2a · /status for the envelope")
+        );
+
+        let not_resumable = StatusProgress {
+            word: "failed".to_string(),
+            resumable: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(resume_hint_line("5b0c3f2a", Some(&not_resumable)), None);
+        assert_eq!(resume_hint_line("5b0c3f2a", None), None);
+    }
+
+    #[test]
+    fn the_status_line_has_no_trailing_space_and_tails_the_message() {
+        let running = StatusProgress {
+            word: "running".to_string(),
+            tools: 12,
+            message: Some("collecting product details".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            status_line("5b0c3f2a", &running),
+            "task 5b0c3f2a · running · 12 step(s) — collecting product details"
+        );
+
+        // No steps, no message: no dangling separator, no trailing space.
+        let idle = StatusProgress {
+            word: "running".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(status_line("5b0c3f2a", &idle), "task 5b0c3f2a · running");
+        assert!(!status_line("5b0c3f2a", &idle).ends_with(' '));
+
+        // A blank message is the same as no message.
+        let blank = StatusProgress {
+            word: "done".to_string(),
+            tools: 3,
+            message: Some("  ".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(status_line("5b0c3f2a", &blank), "task 5b0c3f2a · done · 3 step(s)");
+    }
+
+    // ---- session chrome (P1-6 / P1-7 / P1-8 / P1-10) and the JSON array ------
+
+    #[test]
+    fn the_banner_lists_only_non_default_knobs() {
+        let client = Client::builder().build().expect("client");
+
+        let default_repl = Repl::new(&client, "http://localhost:1", &json!({}), None);
+        let lines = default_repl.banner_lines();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].contains("session=default"), "{lines:?}");
+        for knob in ["coding=", "access=", "budget=", "quiet"] {
+            assert!(!lines[0].contains(knob), "default shows no {knob}: {lines:?}");
+        }
+        assert!(
+            lines[1].contains("type a task") && lines[1].contains("Ctrl+C cancels"),
+            "{lines:?}"
+        );
+
+        let tuned = Repl::new(
+            &client,
+            "http://localhost:1",
+            &json!({"coding": true, "access": "read-build", "tokenBudget": 5_000_000}),
+            None,
+        );
+        let first = &tuned.banner_lines()[0];
+        assert!(first.contains("coding=on"), "{first}");
+        assert!(first.contains("access=read-build"), "{first}");
+        assert!(first.contains("budget=5.00M"), "{first}");
+    }
+
+    #[test]
+    fn the_submit_label_is_one_line_and_bounded() {
+        assert_eq!(
+            task_label("Summarize the  pricing\npage"),
+            "Summarize the pricing page"
+        );
+        let long = "x".repeat(120);
+        assert_eq!(task_label(&long).chars().count(), 61, "60 chars + ellipsis");
+        assert!(task_label(&long).ends_with('…'));
+    }
+
+    #[test]
+    fn color_enabled_for_follows_the_four_inputs() {
+        assert!(color_enabled_for(true, false, false, false));
+        assert!(
+            !color_enabled_for(false, false, false, false),
+            "a pipe is not a terminal"
+        );
+        assert!(!color_enabled_for(true, true, false, false), "--quiet");
+        assert!(!color_enabled_for(true, false, true, false), "--json");
+        assert!(!color_enabled_for(true, false, false, true), "NO_COLOR");
+    }
+
+    /// P0-5: the scalars keep describing the last task, but the array keeps every
+    /// task of the session — a harness that runs two tasks can see both.
+    #[test]
+    fn every_released_task_lands_in_the_tasks_array() {
+        let client = Client::builder().build().expect("client");
+        let mut repl = Repl::new(&client, "http://localhost:1", &json!({}), None);
+
+        repl.release_current(
+            TaskFollower::new("t1", false, false, true),
+            "done",
+            true,
+        );
+        repl.release_current(
+            TaskFollower::new("t2", false, false, true),
+            "cancelled",
+            true,
+        );
+
+        assert_eq!(repl.tasks_json.len(), 2, "{:?}", repl.tasks_json);
+        assert_eq!(repl.tasks_json[0]["taskId"], json!("t1"));
+        assert_eq!(repl.tasks_json[0]["status"], json!("done"));
+        assert_eq!(repl.tasks_json[0]["isDone"], json!(true));
+        assert!(repl.tasks_json[0]["elapsedMs"].is_u64());
+        assert_eq!(repl.tasks_json[1]["taskId"], json!("t2"));
+        assert_eq!(repl.tasks_json[1]["status"], json!("cancelled"));
+        // The documented compatibility promise: scalars name the last task.
+        assert_eq!(repl.last_task.as_deref(), Some("t2"));
+    }
+
+    #[test]
+    fn parse_toggle_accepts_on_off_and_a_bare_flip() {
+        assert_eq!(parse_toggle(""), Some(None));
+        assert_eq!(parse_toggle("  "), Some(None));
+        assert_eq!(parse_toggle("on"), Some(Some(true)));
+        assert_eq!(parse_toggle("ON"), Some(Some(true)));
+        assert_eq!(parse_toggle("true"), Some(Some(true)));
+        assert_eq!(parse_toggle("1"), Some(Some(true)));
+        assert_eq!(parse_toggle("off"), Some(Some(false)));
+        assert_eq!(parse_toggle("0"), Some(Some(false)));
+        assert_eq!(parse_toggle("nonsense"), None);
+    }
+
+    /// `/verbose`: round markers and fast successes are silent by default and
+    /// appear on demand (P2-2).
+    #[test]
+    fn verbose_shows_round_markers_and_fast_successes() {
+        let mut renderer = Renderer::new(Instant::now(), false, false);
+
+        assert!(
+            renderer.format(&event("round.start")).is_none(),
+            "rounds are quiet by default"
+        );
+        let mut fast = event("tool.result");
+        fast.tool = Some("b4.run".to_string());
+        fast.ok = Some(true);
+        fast.duration_ms = Some(40);
+        assert!(
+            renderer.format(&fast).is_none(),
+            "a fast success prints nothing by default"
+        );
+
+        renderer.verbose = true;
+        let mut round = event("round.start");
+        round.turn = Some(2);
+        let line = renderer.format(&round).expect("verbose shows round markers");
+        assert!(line.contains("round 2"), "{line}");
+        let line = renderer.format(&fast).expect("verbose shows fast successes");
+        assert!(line.contains("ok in 40ms"), "{line}");
+    }
+
+    /// `/quiet` and `/verbose` must reach the follower that is already running —
+    /// a toggle that only applies to the next task is a bug waiting to be filed.
+    #[test]
+    fn the_session_toggles_reach_the_live_follower() {
+        let client = Client::builder().build().expect("client");
+        let mut repl = Repl::new(&client, "http://localhost:1", &json!({}), None);
+        repl.current = Some(TaskFollower::new("t1", false, true, false));
+        assert!(
+            repl.current.as_ref().expect("follower").heartbeats_enabled(),
+            "a watched session starts with heartbeats"
+        );
+
+        repl.set_verbose("on");
+        assert!(repl.verbose);
+        assert!(
+            repl.current.as_ref().expect("follower").renderer.verbose,
+            "verbose must reach the running follower"
+        );
+
+        repl.set_quiet("on");
+        assert!(repl.quiet);
+        assert!(
+            repl.current.as_ref().expect("follower").renderer.quiet,
+            "quiet must reach the running follower"
+        );
+        assert!(
+            !repl.current.as_ref().expect("follower").heartbeats_enabled(),
+            "a silenced session must not keep printing heartbeats"
+        );
+
+        // A bare command flips, garbage changes nothing.
+        repl.set_verbose("");
+        assert!(!repl.verbose);
+        repl.set_verbose("nonsense");
+        assert!(!repl.verbose);
+        repl.set_quiet("off");
+        assert!(!repl.quiet);
     }
 
     #[test]
