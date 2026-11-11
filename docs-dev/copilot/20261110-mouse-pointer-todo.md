@@ -3,7 +3,7 @@
 - **来源**：`20261109-mouse-pointer-issues-and-pitfalls.md`（§0.1 状态表、§2 M1–M15、§3 D1–D5、§4 T1–T3、§5、§9.7、§10.4、§11.7、§12.5–§12.7）
 - **生成**：2026-11-10（与兄弟项目 `browser4base` 复查后）
 - **约定**：`[x]` 已完成（附证据位置）· `[ ]` 待办 · 行尾括号内为**依赖**
-- **进度（2026-11-11）**：**28/28 待办全部完成**（§0 的 12 项此前已完成）。基线库 `4.11.31-SNAPSHOT` 已 install、Browser4 已升版并重建 bundle，真实浏览器三组 e2e + 基库 e2e 通过；两侧改动已提交。
+- **进度（2026-11-11）**：**28/28 待办全部完成**（§0 的 12 项此前已完成）。基线库 `4.11.31-SNAPSHOT` 已 install、Browser4 已升版并重建 bundle，真实浏览器三组 e2e + 基库 e2e 通过；两侧改动已提交（Browser4 `2810db4ecc` · 基库 `6cc3ea31e`）。
 
 > 本清单现在是这批改动的**唯一待办出处**：源文档的 §5 / §9.7 / §10.4 / §11.7 / §12.6 只保留"问题 → 待办项"映射（P4-2）。
 > 运行时证据（bundle 脚本、CLI 实测、inspect 阈值分布）集中在源文档 §12.8。
@@ -179,7 +179,7 @@
 | 基库 e2e | `mvnw.cmd -o -f pulsar-tests/pulsar-e2e-tests/pom.xml test -Dtest=PulsarWebDriverInjectedJSTests#testViBoxesAreDocumentAbsoluteAndRefreshOnLayoutChange` | 1/1 通过（真 Chrome，15.6s） |
 | Browser4 单测 | `mvnw.cmd -o -pl browser4-core/browser4-browser test -Dtest=RuntimeScriptContractTest`；`-pl browser4-agentic -Dtest=AgenticCliRunnerTest`；`-pl browser4-rest -Dtest=HTMLSnapshotToolExecutorTest,InspectDocumentTest,HTMLSnapshotInspectHintsTest,HTMLSnapshotResultSchemaTest` | 7/7、97/97、100/100 |
 | 文档漂移 | `mvnw.cmd -o -pl browser4-rest test -Dtest=ToolDocGeneratorTest,McpToolAliasParityTest` | 8/8（`docs/mcp-tools.*` 147 工具，无漂移） |
-| Rust CLI 单测 | `cargo test --bin browser4-cli` | 2129 通过（`wmi_…process_tree_kill` 需宿主环境变量 `BROWSER4_WINDOWS_BACKEND_SPAWN=wmi`，为既有的环境敏感用例） |
+| Rust CLI 单测 | `cargo test --bin browser4-cli` | **2129 passed / 0 failed**（4 ignored）。其中 `daemon::tests::wmi_spawned_backend_survives_a_hostile_process_tree_kill` 依赖 agent-shell 标记或 `BROWSER4_WINDOWS_BACKEND_SPAWN=wmi`；普通桌面 shell 下设该变量后复跑，全量 2129/2129 |
 | CLI e2e | `cargo test --test e2e -- --level=EXTENDED --scenario=… --max-failures=0`（三个新场景） | 3/3 通过（30.4s / 32.0s / 35.8s） |
 | 运行时取证 | 读 `isolated-world.gen.js` + bundle jar 内脚本 | 见源文档 §12.8-A |
 
