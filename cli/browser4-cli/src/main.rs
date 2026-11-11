@@ -14981,6 +14981,7 @@ fn invalidates_mouse_position(command: &str) -> bool {
             | "go-back"
             | "go-forward"
             | "tab-select"
+            | "tab-new"
             | "tab-close"
             | "window-new"
             | "open"
@@ -45611,6 +45612,7 @@ linkGroups:
             "go-back",
             "go-forward",
             "tab-select",
+            "tab-new",
             "tab-close",
             "window-new",
             "open",
@@ -45649,14 +45651,16 @@ linkGroups:
 
     #[test]
     fn batch_step_plan_records_the_resolved_command_name() {
-        let spec = BatchCommandSpec {
-            display: "reload".to_string(),
-            tokens: vec!["reload".to_string()],
-        };
+        for command in ["reload", "tab-new"] {
+            let spec = BatchCommandSpec {
+                display: command.to_string(),
+                tokens: vec![command.to_string()],
+            };
 
-        let plan = compile_batch_step(&spec, &commands_map(), true).unwrap();
-        assert_eq!(plan.command, "reload");
-        assert!(invalidates_mouse_position(&plan.command));
+            let plan = compile_batch_step(&spec, &commands_map(), true).unwrap();
+            assert_eq!(plan.command, command);
+            assert!(invalidates_mouse_position(&plan.command));
+        }
     }
 
     #[test]

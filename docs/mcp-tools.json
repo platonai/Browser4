@@ -1296,7 +1296,7 @@
     "domain" : "tab",
     "method" : "ariaSnapshot",
     "mcpNames" : [ "aria_snapshot", "browser_snapshot" ],
-    "signature" : "tab.ariaSnapshot(viewports: String? = null, interactive: Boolean? = false, urls: Boolean? = false, compact: Boolean? = true, depth: Int? = -1, selector: String? = null, boxes: Boolean? = true, limit: Int? = -1)",
+    "signature" : "tab.ariaSnapshot(viewports: String? = null, interactive: Boolean? = false, urls: Boolean? = false, compact: Boolean? = true, depth: Int? = -1, selector: String? = null, boxes: Boolean? = true, viewportBoxes: Boolean? = false, limit: Int? = -1)",
     "description" : "Build an ARIA accessibility snapshot of the current page.",
     "returnType" : "String",
     "arguments" : [ {
@@ -1341,6 +1341,12 @@
       "required" : false,
       "default" : "true",
       "description" : "Include element bounding boxes."
+    }, {
+      "name" : "viewportBoxes",
+      "type" : "Boolean?",
+      "required" : false,
+      "default" : "false",
+      "description" : "Render [box=...] in viewport coordinates (subtract scrollX and scrollY) instead of document-absolute ones."
     }, {
       "name" : "limit",
       "type" : "Int?",
@@ -2593,6 +2599,26 @@
       "required" : false,
       "default" : "0",
       "description" : "Total movement duration in ms, or `0` for the driver default (spread over [steps])."
+    } ],
+    "examples" : [ {
+      "title" : "Move to a document-space box from a snapshot",
+      "args" : {
+        "x" : "320",
+        "y" : "2400",
+        "space" : "document"
+      },
+      "expectsError" : false,
+      "executable" : true
+    }, {
+      "title" : "Flick the pointer over in three steps",
+      "args" : {
+        "x" : "10",
+        "y" : "10",
+        "steps" : "3",
+        "durationMillis" : "60"
+      },
+      "expectsError" : false,
+      "executable" : true
     } ],
     "help" : "Moves the mouse to ([x], [y]) interpreted in the given coordinate [space].\n\nThis is the coordinate-space-aware form of [mouseMove]: a caller holding a box from `snapshot --boxes` or `htmlsnapshot` (document-absolute) can pass it in directly instead of subtracting `scrollY` itself — a subtraction the caller can only do against a scroll position that may already be stale.\n\nThe driver converts `document` coordinates to viewport pixels itself, immediately before dispatching the move, so the conversion and the input it describes stay together. Prefer a selector/ref-based action when one is available: a coordinate is always a snapshot of a layout that can change.\n\n`steps` and `durationMillis` give explicit control over the movement pace for callers that need a \"flick\" (a few large steps) or a slow glide; both default to `0`, which means \"the driver's own human-like pacing\".  Usage: `driver.mouseMoveAt(120.0, 2400.0, \"document\")`."
   }, {

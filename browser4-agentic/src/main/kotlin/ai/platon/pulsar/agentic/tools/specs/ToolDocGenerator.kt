@@ -107,22 +107,26 @@ object ToolDocGenerator {
      * parse there but are not valid JSON).
      */
     private val JSON_NUMBER = Regex("""-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?""")
+    private val NUMERIC_ARGUMENT_TYPES = setOf(
+        "byte", "short", "int", "integer", "long", "float", "double", "number", "bigdecimal", "biginteger"
+    )
 
     /**
      * Render one example argument as the JSON literal a caller should send.
      *
      * [ToolExample.args] stores every value as a `String` (KDoc has no types to
-     * harvest), so quoting blindly turned numeric examples into strings:
-     * `{"x": "320"}` for a `Double` parameter. Copying that into `--json` sends
-     * the wrong type — the CLI's number parser rejects it, and the MCP schema
-     * coerces it at best. Emit a bare number/boolean when the text is exactly
-     * that literal and a properly escaped JSON string otherwise.
+     * harvest), so the declared argument type decides whether the value is a
+     * JSON string or a bare number/boolean. Literal text alone is insufficient:
+     * `"1"` and `"false"` are valid values for String parameters too.
      */
-    private fun exampleArgumentValue(value: String): String {
+    private fun exampleArgumentValue(value: String, declaredType: String?): String {
         val trimmed = value.trim()
+        val type = declaredType?.substringAfterLast('.')?.removeSuffix("?")?.lowercase()
         if (trimmed == value) {
-            if (trimmed == "true" || trimmed == "false") return trimmed
-            if (JSON_NUMBER.matches(trimmed)) return trimmed
+            when (type) {
+                "boolean" -> if (trimmed == "true" || trimmed == "false") return trimmed
+                in NUMERIC_ARGUMENT_TYPES -> if (JSON_NUMBER.matches(trimmed)) return trimmed
+            }
         }
         return prettyPulsarObjectMapper().writeValueAsString(value)
     }
@@ -234,14 +238,15 @@ object ToolDocGenerator {
         if (examples.isNotEmpty()) {
             out.appendLine("Examples:")
             out.appendLine()
+            val argumentTypes = args.associate { it["name"].toString() to it["type"]?.toString() }
             for (example in examples) {
                 val title = example["title"]?.toString()?.takeIf { it.isNotBlank() } ?: "example"
                 @Suppress("UNCHECKED_CAST")
-                val args = example["args"] as Map<String, String>? ?: emptyMap()
+                val exampleArgs = example["args"] as Map<String, String>? ?: emptyMap()
                 when {
-                    args.isNotEmpty() -> {
-                        val json = args.entries.joinToString(", ") {
-                            "\"${it.key}\": ${exampleArgumentValue(it.value)}"
+                    exampleArgs.isNotEmpty() -> {
+                        val json = exampleArgs.entries.joinToString(", ") {
+                            "\"${it.key}\": ${exampleArgumentValue(it.value, argumentTypes[it.key])}"
                         }
                         out.appendLine("- $title: `{$json}`")
                     }

@@ -30,6 +30,16 @@ import java.util.concurrent.TimeoutException
 
 class BrowserTabToolExecutorTest {
     private val executor = BrowserTabToolExecutor()
+    private val defaultAriaSnapshotOptions = AriaSnapshotOptions(
+        interactive = false,
+        urls = false,
+        compact = true,
+        maxDepth = -1,
+        selector = null,
+        viewports = null,
+        boxes = true,
+        maxNodes = -1,
+    )
 
     @Test
     fun `selectOption delegates to the driver`() = runBlocking {
@@ -1521,9 +1531,15 @@ class BrowserTabToolExecutorTest {
             )
 
             // A RectD reaches the MCP client as {type, description}; the
-            // documented contract is {x, y, width, height}.
+            // documented contract is {x, y, width, height, boxSpace}.
             assertEquals(
-                mapOf("x" to 24.0, "y" to 2159.0, "width" to 1857.0, "height" to 24.0),
+                mapOf(
+                    "x" to 24.0,
+                    "y" to 2159.0,
+                    "width" to 1857.0,
+                    "height" to 24.0,
+                    "boxSpace" to "viewport",
+                ),
                 result.value
             )
         }
@@ -1760,6 +1776,57 @@ class BrowserTabToolExecutorTest {
         val message = result.exception?.cause?.message.orEmpty()
         assertTrue(message.contains("instead of a boolean"), message)
         assertFalse(message.contains("no element matches selector"), message)
+    }
+
+    @Test
+    @DisplayName("ariaSnapshot viewportBoxes subtracts both scroll offsets")
+    fun ariaSnapshotViewportBoxesSubtractsBothScrollOffsets() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        `when`(driver.ariaSnapshot(defaultAriaSnapshotOptions))
+            .thenReturn("- link [box=500,1200,50,40]")
+        `when`(driver.evaluateValue(Mockito.anyString())).thenReturn(listOf(200, 800))
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "ariaSnapshot", mutableMapOf<String, Any?>("viewportBoxes" to true)),
+            driver
+        )
+
+        assertTrue(result.success, "viewport conversion must succeed: ${result.exception}")
+        assertEquals("- link [box=300,400,50,40]", result.value)
+    }
+
+    @Test
+    @DisplayName("ariaSnapshot viewportBoxes converts a purely horizontal scroll")
+    fun ariaSnapshotViewportBoxesConvertsPurelyHorizontalScroll() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        `when`(driver.ariaSnapshot(defaultAriaSnapshotOptions))
+            .thenReturn("- link [box=500,200,50,40]")
+        `when`(driver.evaluateValue(Mockito.anyString())).thenReturn(listOf(150, 0))
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "ariaSnapshot", mutableMapOf<String, Any?>("viewportBoxes" to true)),
+            driver
+        )
+
+        assertTrue(result.success, "horizontal conversion must succeed: ${result.exception}")
+        assertEquals("- link [box=350,200,50,40]", result.value)
+    }
+
+    @Test
+    @DisplayName("ariaSnapshot viewportBoxes rejects an unreadable scroll offset")
+    fun ariaSnapshotViewportBoxesRejectsUnreadableScrollOffset() = runBlocking {
+        val driver = Mockito.mock(WebDriver::class.java)
+        `when`(driver.ariaSnapshot(defaultAriaSnapshotOptions))
+            .thenReturn("- link [box=500,200,50,40]")
+        `when`(driver.evaluateValue(Mockito.anyString())).thenReturn("not an offset pair")
+
+        val result = executor.callFunctionOn(
+            ToolCall("tab", "ariaSnapshot", mutableMapOf<String, Any?>("viewportBoxes" to true)),
+            driver
+        )
+
+        assertFalse(result.success)
+        assertTrue(result.exception?.cause?.message.orEmpty().contains("expected [scrollX, scrollY]"))
     }
 
     @Test

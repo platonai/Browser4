@@ -744,8 +744,25 @@ class AgenticCliRunner(
                 params["doubleClick"] = true
                 params
             },
-            "mousemove" to FixedCommandResolver("browser_mouse_move_xy") { args ->
-                mapOf("x" to (args["x"] ?: 0), "y" to (args["y"] ?: 0))
+            "mousemove" to object : CommandResolver {
+                override fun resolveToolName(args: Map<String, Any?>): String {
+                    return if (listOf("space", "steps", "duration").any { args.containsKey(it) }) {
+                        "mouse_move_at"
+                    } else {
+                        "browser_mouse_move_xy"
+                    }
+                }
+
+                override fun resolveParams(args: Map<String, Any?>): Map<String, Any?> {
+                    val params = mutableMapOf<String, Any?>(
+                        "x" to (args["x"] ?: 0),
+                        "y" to (args["y"] ?: 0),
+                    )
+                    args["space"]?.let { params["space"] = it }
+                    args["steps"]?.let { params["steps"] = it }
+                    args["duration"]?.let { params["durationMillis"] = it }
+                    return params
+                }
             },
             "mousedown" to FixedCommandResolver("browser_mouse_down") { args ->
                 val params = mutableMapOf<String, Any?>()

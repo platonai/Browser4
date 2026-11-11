@@ -94,6 +94,18 @@ class AgenticCliRunnerTest {
             "evaluateValue" to ToolSpec("tab", "evaluateValue", listOf(ToolSpec.Arg("expression", "String")), description = "Evaluate"),
             "resize" to ToolSpec("tab", "resize", listOf(ToolSpec.Arg("width", "Int"), ToolSpec.Arg("height", "Int")), description = "Resize"),
             "mouseMove" to ToolSpec("tab", "mouseMove", listOf(ToolSpec.Arg("x", "Double"), ToolSpec.Arg("y", "Double")), description = "Mouse move"),
+            "mouseMoveAt" to ToolSpec(
+                "tab",
+                "mouseMoveAt",
+                listOf(
+                    ToolSpec.Arg("x", "Double"),
+                    ToolSpec.Arg("y", "Double"),
+                    ToolSpec.Arg("space", "String"),
+                    ToolSpec.Arg("steps", "Int"),
+                    ToolSpec.Arg("durationMillis", "Long"),
+                ),
+                description = "Mouse move with coordinate space and pacing",
+            ),
             "mouseDown" to ToolSpec("tab", "mouseDown", listOf(ToolSpec.Arg("button", "String")), description = "Mouse down"),
             "mouseUp" to ToolSpec("tab", "mouseUp", listOf(ToolSpec.Arg("button", "String")), description = "Mouse up"),
             "mouseWheel" to ToolSpec("tab", "mouseWheel", listOf(ToolSpec.Arg("deltaX", "Double"), ToolSpec.Arg("deltaY", "Double")), description = "Mouse wheel"),
@@ -739,6 +751,24 @@ class AgenticCliRunnerTest {
             assertEquals("type", result.toolCall.method)
             assertEquals("hello world", result.toolCall.arguments["text"])
             assertEquals("#search", result.toolCall.arguments["selector"])
+        }
+
+        @Test
+        @DisplayName("forwards mousemove coordinate space and pacing options")
+        fun forwardsMousemoveCoordinateSpaceAndPacingOptions() = runBlocking {
+            coEvery { toolManager.execute(any()) } returns toolCallResult(null)
+
+            val result = runner.execute("mousemove 100 1200 --space document --steps 8 --duration 750")
+
+            assertTrue(result.success)
+            assertNotNull(result.toolCall)
+            assertEquals("tab", result.toolCall!!.domain)
+            assertEquals("mouseMoveAt", result.toolCall.method)
+            assertEquals(100, result.toolCall.arguments["x"])
+            assertEquals(1200, result.toolCall.arguments["y"])
+            assertEquals("document", result.toolCall.arguments["space"])
+            assertEquals(8, result.toolCall.arguments["steps"])
+            assertEquals(750, result.toolCall.arguments["durationMillis"])
         }
 
         @Test

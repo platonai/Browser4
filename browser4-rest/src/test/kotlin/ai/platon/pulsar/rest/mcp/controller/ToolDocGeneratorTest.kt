@@ -149,6 +149,45 @@ class ToolDocGeneratorTest {
         )
     }
 
+    @Test
+    @DisplayName("example JSON literals follow declared argument types")
+    fun exampleJsonLiteralsFollowDeclaredArgumentTypes() {
+        val spec = ToolSpec(
+            domain = "test",
+            method = "typedExamples",
+            arguments = listOf(
+                ToolSpec.Arg("attrValue", "String"),
+                ToolSpec.Arg("propValue", "String"),
+                ToolSpec.Arg("x", "Double"),
+                ToolSpec.Arg("count", "Int"),
+                ToolSpec.Arg("force", "Boolean"),
+            ),
+            description = "Render examples without changing their declared types.",
+            examples = listOf(
+                ToolExample(
+                    title = "Typed values",
+                    args = mapOf(
+                        "attrValue" to "1",
+                        "propValue" to "false",
+                        "x" to "1.5",
+                        "count" to "3",
+                        "force" to "false",
+                    ),
+                )
+            ),
+        )
+
+        val markdown = ToolDocGenerator.toMarkdown(ToolDocGenerator.buildDocs(listOf(spec)))
+
+        assertTrue(
+            markdown.contains(
+                "- Typed values: `{\"attrValue\": \"1\", \"propValue\": \"false\", " +
+                    "\"x\": 1.5, \"count\": 3, \"force\": false}`"
+            ),
+            "String values must stay quoted while numeric and boolean values remain literals:\n$markdown"
+        )
+    }
+
     /** Canonical tool names plus the frontend aliases each one is reachable by. */
     private fun advertisedNames(): Map<String, List<String>> {
         val names = linkedMapOf<String, MutableList<String>>()

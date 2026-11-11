@@ -59,8 +59,8 @@ Returns: `String`
 
 Examples:
 
-- Drive a form and read the result in one call: `{"steps": "[{"tool":"navigate","args":{"url":"https://example.com"}},{"tool":"click","args":{"selector":"#submit"}},{"tool":"title","args":{}}]"}`
-- Read four things in parallel: `{"steps": "[{"tool":"title","args":{}},{"tool":"current_url","args":{}}]", "concurrency": "2"}`
+- Drive a form and read the result in one call: `{"steps": "[{\"tool\":\"navigate\",\"args\":{\"url\":\"https://example.com\"}},{\"tool\":\"click\",\"args\":{\"selector\":\"#submit\"}},{\"tool\":\"title\",\"args\":{}}]"}`
+- Read four things in parallel: `{"steps": "[{\"tool\":\"title\",\"args\":{}},{\"tool\":\"current_url\",\"args\":{}}]", "concurrency": 2}`
   - Allowed because every step is read-only
 
 <details><summary>Full documentation</summary>
@@ -99,7 +99,7 @@ Returns: `Boolean`
 
 Examples:
 
-- Close the second tab: `{"index": "1"}`
+- Close the second tab: `{"index": 1}`
 
 <details><summary>Full documentation</summary>
 
@@ -172,7 +172,7 @@ Returns: `WebDriver`
 
 Examples:
 
-- Switch to the second tab: `{"index": "1"}`
+- Switch to the second tab: `{"index": 1}`
 
 <details><summary>Full documentation</summary>
 
@@ -344,7 +344,7 @@ Examples:
 
 - Load a page asynchronously: `{"command": "https://example.com"}`
   - Returns a task id; poll it with command.status
-- Run an agent task and wait: `{"command": "collect the page title", "async": "false"}`
+- Run an agent task and wait: `{"command": "collect the page title", "async": false}`
 
 <details><summary>Full documentation</summary>
 
@@ -623,8 +623,8 @@ Pass the envelope's `taskId` **value** to that tool under the argument name its 
 
 Examples:
 
-- Crawl one link level from a seed URL: `{"url": "https://example.com", "depth": "1"}`
-- Seed page only, then poll: `{"url": "https://example.com", "depth": "0"}`
+- Crawl one link level from a seed URL: `{"url": "https://example.com", "depth": 1}`
+- Seed page only, then poll: `{"url": "https://example.com", "depth": 0}`
   - Feed the returned task id to crawl.status
 
 <details><summary>Full documentation</summary>
@@ -698,7 +698,7 @@ Returns: `String`
 
 Examples:
 
-- List what is known about one domain: `{"filter": "example.com", "page_size": "50"}`
+- List what is known about one domain: `{"filter": "example.com", "page_size": 50}`
   - Every argument is optional — `experience_list` with no arguments lists everything.
 
 ### `experience_query`
@@ -758,7 +758,7 @@ Returns: `String`
 
 Examples:
 
-- Record what a finished task learned: `{"url": "https://example.com/product/1", "trace": "{"steps":[{"tool":"click","selector":"#buy"}],"outcome":"success"}", "intent": "buy the product"}`
+- Record what a finished task learned: `{"url": "https://example.com/product/1", "trace": "{\"steps\":[{\"tool\":\"click\",\"selector\":\"#buy\"}],\"outcome\":\"success\"}", "intent": "buy the product"}`
   - `facts` is optional; pass it to merge selectors, blockers or anti-patterns.
 
 ## Domain `html_snapshot`
@@ -816,7 +816,7 @@ Returns: `String`
 
 Examples:
 
-- Export the page HTML: `{"sessionId": "<session-id>", "clean": "true"}`
+- Export the page HTML: `{"sessionId": "<session-id>", "clean": true}`
 
 ### `html_snapshot_inspect`
 
@@ -846,7 +846,7 @@ Returns: `String`
 
 Examples:
 
-- Find selectors for repeated cards: `{"sessionId": "<session-id>", "selector": ".product", "max": "10"}`
+- Find selectors for repeated cards: `{"sessionId": "<session-id>", "selector": ".product", "max": 10}`
 
 ### `html_snapshot_query`
 
@@ -962,7 +962,7 @@ Returns: `String`
 
 Examples:
 
-- Read every product title: `{"sessionId": "<session-id>", "field": "text", "selector": ".product > h2", "limit": "20"}`
+- Read every product title: `{"sessionId": "<session-id>", "field": "text", "selector": ".product > h2", "limit": 20}`
 
 ### `html_snapshot_summary`
 
@@ -1118,8 +1118,8 @@ Returns: `Map<String, Any?>`
 
 Examples:
 
-- Markdown and links from the current page: `{"formats": "["markdown","links"]"}`
-- Full-page screenshot plus the raw HTML: `{"formats": "[{"type":"screenshot","fullPage":true},"rawHtml"]"}`
+- Markdown and links from the current page: `{"formats": "[\"markdown\",\"links\"]"}`
+- Full-page screenshot plus the raw HTML: `{"formats": "[{\"type\":\"screenshot\",\"fullPage\":true},\"rawHtml\"]"}`
 
 ## Domain `skill`
 
@@ -1231,7 +1231,7 @@ Examples:
 ### `aria_snapshot`, `browser_snapshot`
 
 ```
-tab.ariaSnapshot(viewports: String? = null, interactive: Boolean? = false, urls: Boolean? = false, compact: Boolean? = true, depth: Int? = -1, selector: String? = null, boxes: Boolean? = true, limit: Int? = -1)
+tab.ariaSnapshot(viewports: String? = null, interactive: Boolean? = false, urls: Boolean? = false, compact: Boolean? = true, depth: Int? = -1, selector: String? = null, boxes: Boolean? = true, viewportBoxes: Boolean? = false, limit: Int? = -1)
 ```
 
 Build an ARIA accessibility snapshot of the current page.
@@ -1245,13 +1245,14 @@ Build an ARIA accessibility snapshot of the current page.
 | `depth` | Int? | no | -1 | Maximum tree depth; -1 for unlimited. |
 | `selector` | String? | no | null | Root the snapshot at this selector. |
 | `boxes` | Boolean? | no | true | Include element bounding boxes. |
+| `viewportBoxes` | Boolean? | no | false | Render [box=...] in viewport coordinates (subtract scrollX and scrollY) instead of document-absolute ones. |
 | `limit` | Int? | no | -1 | Maximum number of nodes; -1 for unlimited. |
 
 Returns: `String`
 
 Examples:
 
-- Compact accessibility snapshot: `{"compact": "true"}`
+- Compact accessibility snapshot: `{"compact": true}`
 
 <details><summary>Full documentation</summary>
 
@@ -1408,7 +1409,7 @@ Returns: `Unit`
 Examples:
 
 - Click a button: `{"selector": "#submit"}`
-- Click a row twice: `{"selector": "#row-1", "count": "2"}`
+- Click a row twice: `{"selector": "#row-1", "count": 2}`
 
 <details><summary>Full documentation</summary>
 
@@ -1642,7 +1643,7 @@ Returns: `Unit`
 
 Examples:
 
-- Wait half a second: `{"millis": "500"}`
+- Wait half a second: `{"millis": 500}`
 
 <details><summary>Full documentation</summary>
 
@@ -1806,7 +1807,7 @@ Returns: `Unit`
 
 Examples:
 
-- Drag a slider 50px to the right: `{"selector": "#slider", "deltaX": "50"}`
+- Drag a slider 50px to the right: `{"selector": "#slider", "deltaX": 50}`
 
 ### `eval`
 
@@ -2544,7 +2545,7 @@ Returns: `String`
 
 Examples:
 
-- Restore a saved session: `{"state": "{"cookies":[],"origins":[]}"}`
+- Restore a saved session: `{"state": "{\"cookies\":[],\"origins\":[]}"}`
 
 <details><summary>Full documentation</summary>
 
@@ -2598,7 +2599,7 @@ Returns: `Unit`
 
 Examples:
 
-- Move the pointer: `{"x": "320", "y": "180"}`
+- Move the pointer: `{"x": 320, "y": 180}`
 
 <details><summary>Full documentation</summary>
 
@@ -2631,6 +2632,11 @@ Moves the mouse to ([x], [y]) interpreted in the given coordinate [space].
 | `durationMillis` | Long | no | 0 | Total movement duration in ms, or `0` for the driver default (spread over [steps]). |
 
 Returns: `Unit`
+
+Examples:
+
+- Move to a document-space box from a snapshot: `{"x": 320, "y": 2400, "space": "document"}`
+- Flick the pointer over in three steps: `{"x": 10, "y": 10, "steps": 3, "durationMillis": 60}`
 
 <details><summary>Full documentation</summary>
 
@@ -2689,7 +2695,7 @@ Returns: `Unit`
 
 Examples:
 
-- Wheel inside an element: `{"selector": "#list", "deltaY": "300"}`
+- Wheel inside an element: `{"selector": "#list", "deltaY": 300}`
 
 <details><summary>Full documentation</summary>
 
@@ -2721,7 +2727,7 @@ Returns: `Unit`
 
 Examples:
 
-- Scroll three wheel notches down: `{"count": "3"}`
+- Scroll three wheel notches down: `{"count": 3}`
 
 <details><summary>Full documentation</summary>
 
@@ -2752,7 +2758,7 @@ Returns: `Unit`
 
 Examples:
 
-- Scroll three wheel notches up: `{"count": "3"}`
+- Scroll three wheel notches up: `{"count": 3}`
 
 <details><summary>Full documentation</summary>
 
@@ -2782,7 +2788,7 @@ Returns: `Unit`
 
 Examples:
 
-- Hover 10px right of the avatar: `{"selector": "#avatar", "deltaX": "10"}`
+- Hover 10px right of the avatar: `{"selector": "#avatar", "deltaX": 10}`
   - Coordinates are relative to the element's top-left corner.
 
 <details><summary>Full documentation</summary>
@@ -3230,7 +3236,7 @@ Returns: `Unit`
 
 Examples:
 
-- Resize the viewport: `{"width": "1280", "height": "800"}`
+- Resize the viewport: `{"width": 1280, "height": 800}`
 
 ### `save_storage_state`, `browser_save_storage_state`
 
@@ -3272,7 +3278,7 @@ Returns: `String`
 
 Examples:
 
-- Capture the full page: `{"fullPage": "true"}`
+- Capture the full page: `{"fullPage": true}`
 - Capture one element: `{"selector": "#chart"}`
 
 <details><summary>Full documentation</summary>
@@ -3304,7 +3310,7 @@ Returns: `Double`
 
 Examples:
 
-- Scroll down one viewport: `{"pixels": "800"}`
+- Scroll down one viewport: `{"pixels": 800}`
 
 <details><summary>Full documentation</summary>
 
@@ -3336,7 +3342,7 @@ Returns: `Double`
 
 Examples:
 
-- Scroll down one viewport: `{"count": "1"}`
+- Scroll down one viewport: `{"count": 1}`
 
 <details><summary>Full documentation</summary>
 
@@ -3416,7 +3422,7 @@ Returns: `Double`
 
 Examples:
 
-- Scroll to the middle of the page: `{"ratio": "0.5"}`
+- Scroll to the middle of the page: `{"ratio": 0.5}`
 
 <details><summary>Full documentation</summary>
 
@@ -3465,7 +3471,7 @@ Returns: `Double`
 
 Examples:
 
-- Jump to the third viewport: `{"n": "3"}`
+- Jump to the third viewport: `{"n": 3}`
 
 <details><summary>Full documentation</summary>
 
@@ -3493,7 +3499,7 @@ Returns: `Double`
 
 Examples:
 
-- Scroll up one viewport: `{"count": "1"}`
+- Scroll up one viewport: `{"count": 1}`
 
 <details><summary>Full documentation</summary>
 
@@ -4066,7 +4072,7 @@ Returns: `Unit`
 
 Examples:
 
-- Wait for the page after leaving a URL: `{"oldUrl": "https://example.com/login", "timeoutMillis": "10000"}`
+- Wait for the page after leaving a URL: `{"oldUrl": "https://example.com/login", "timeoutMillis": 10000}`
 
 <details><summary>Full documentation</summary>
 
@@ -4096,7 +4102,7 @@ Returns: `Unit`
 
 Examples:
 
-- Wait for a URL to load: `{"url": "https://example.com/next", "timeoutMillis": "15000"}`
+- Wait for a URL to load: `{"url": "https://example.com/next", "timeoutMillis": 15000}`
 
 <details><summary>Full documentation</summary>
 
@@ -4122,7 +4128,7 @@ Returns: `Unit`
 
 Examples:
 
-- Wait for results to render: `{"selector": "#results", "timeoutMillis": "5000"}`
+- Wait for results to render: `{"selector": "#results", "timeoutMillis": 5000}`
 
 <details><summary>Full documentation</summary>
 

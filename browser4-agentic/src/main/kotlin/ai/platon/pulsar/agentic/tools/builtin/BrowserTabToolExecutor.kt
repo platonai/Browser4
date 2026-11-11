@@ -573,7 +573,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 ToolSpec.Arg("boxes", "Boolean?", "true", "Include element bounding boxes."),
                 ToolSpec.Arg(
                     "viewportBoxes", "Boolean?", "false",
-                    "Render [box=...] in viewport coordinates (subtract scrollY) instead of document-absolute ones."
+                    "Render [box=...] in viewport coordinates (subtract scrollX and scrollY) instead of document-absolute ones."
                 ),
                 ToolSpec.Arg("limit", "Int?", "-1", "Maximum number of nodes; -1 for unlimited."),
             ),
@@ -3023,19 +3023,16 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
 /**
  * Rewrite a rendered snapshot's `[box=x,y,w,h]` values from document-absolute
- * to viewport coordinates (`y - scrollY`), which is the space `mousemove` and
- * `click` consume.
+ * to viewport coordinates (`x - scrollX`, `y - scrollY`), which is the space
+ * `mousemove` and `click` consume.
  *
  * The renderer emits document-space bounds because that is what the CDP layout
  * snapshot reports; converting here keeps the conversion engine-side and uses
  * the scroll offset at render time instead of one a caller read earlier.
- * `x`/width/height are unchanged: only the vertical origin differs between the
- * two spaces on a non-horizontally-scrolled page, and a horizontal offset would
- * need `scrollX` — which this conversion deliberately ignores to stay a single
- * cheap read (document it: use `get box` for exact viewport numbers).
  *
- * Returns the snapshot unchanged when it carries no boxes or the scroll offset
- * is zero/unreadable.
+ * Returns the snapshot unchanged when it carries no boxes or both offsets are
+ * zero. An unreadable offset fails the tool call rather than silently returning
+ * document coordinates under the requested viewport-coordinate contract.
  */
 private suspend fun boxesAsViewportCoordinates(snapshot: String, driver: WebDriver): String {
     if (!snapshot.contains("[box=")) {
@@ -3044,17 +3041,28 @@ private suspend fun boxesAsViewportCoordinates(snapshot: String, driver: WebDriv
     val scroll = runCatching {
         driver.evaluateValue(
             "(() => { const s = document.scrollingElement || document.documentElement; " +
-                "return window.scrollY || (s && s.scrollTop) || 0; })()"
+                "return [window.scrollX || (s && s.scrollLeft) || 0, " +
+                "window.scrollY || (s && s.scrollTop) || 0]; })()"
         )
-    }.getOrNull()
-    val scrollY = (scroll as? Number)?.toDouble()?.takeIf { it != 0.0 } ?: return snapshot
+    }.getOrElse {
+        throw IllegalStateException("viewportBoxes could not read the current scroll offset", it)
+    }
+    val offsets = scroll as? List<*>
+        ?: throw IllegalStateException("viewportBoxes expected [scrollX, scrollY], got: $scroll")
+    val scrollX = (offsets.getOrNull(0) as? Number)?.toDouble()
+        ?: throw IllegalStateException("viewportBoxes received a non-numeric scrollX: $scroll")
+    val scrollY = (offsets.getOrNull(1) as? Number)?.toDouble()
+        ?: throw IllegalStateException("viewportBoxes received a non-numeric scrollY: $scroll")
+    if (scrollX == 0.0 && scrollY == 0.0) {
+        return snapshot
+    }
 
     // Rendered boxes are integers ("x,y,w,h"); decimals are tolerated so a
     // rounding change in the renderer cannot silently disable the conversion.
     val boxPattern = Regex("""\[box=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)]""")
     return boxPattern.replace(snapshot) { match ->
-        val x = match.groupValues[1]
+        val viewportX = (match.groupValues[1].toDouble() - scrollX).toInt()
         val viewportY = (match.groupValues[2].toDouble() - scrollY).toInt()
-        "[box=$x,$viewportY,${match.groupValues[3]},${match.groupValues[4]}]"
+        "[box=$viewportX,$viewportY,${match.groupValues[3]},${match.groupValues[4]}]"
     }
 }
