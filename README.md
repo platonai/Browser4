@@ -388,7 +388,7 @@ browser4-cli wait --load networkidle
 |---|---|
 | `keydown <key>` | Press and hold a key. |
 | `keyup <key>` | Release a held key. |
-| `mousemove <x> <y>` | Move the mouse to screen/page coordinates. |
+| `mousemove <x> <y>` | Move the mouse to viewport CSS pixels `(x, y)`, relative to the main frame's viewport top-left corner. This is not a desktop/screen coordinate and it does not move the OS cursor; a coordinate outside the viewport means "leave the page", not "outside the browser window". Coordinates are stale after the page scrolls. |
 | `mousedown [button]` | Press a mouse button. |
 | `mouseup [button]` | Release a mouse button. |
 | `mousewheel <dx> <dy>` | Scroll using a wheel delta. |

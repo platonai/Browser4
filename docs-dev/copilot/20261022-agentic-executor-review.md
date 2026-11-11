@@ -67,6 +67,8 @@
 27. **AgenticCliRunner.kt L225-236** — 引号内不支持转义（`"a\"b"` 解析错误）；**L233 空引号 `""` 被丢弃**（`isNotEmpty()` 检查），`type ""`（清空输入框）无法表达。
 28. **AgenticCliRunner.kt L194** — `--key value` 前瞻只检查下一 token 是否 `--` 开头，`--verbose snapshot` 这类"flag 后跟位置参数"会把位置参数吞成 flag 值。
 29. **AgenticCliRunner.kt L529-531 / L712 / L725 / L802** — `parseNumber` 静默归零：`mousemove abc def` → (0,0) 错误坐标静默生效；`resize` 无参会改成 0×0。违反 no-silent-failures。
+    **已修（2026-11-10，与 `20261110-mouse-pointer-todo.md` 的 P4-3/M4 合并跟踪）**：`parseNumber(command, name, raw)` 现在对非数字抛 `IllegalArgumentException`，文案与 Rust CLI 的 `mousemove` 校验统一为 `Invalid <arg> for <command>: expected a number…`；`execute()`/`executeCommand()` 把它转成失败结果（不发工具调用），不再把 0 传给驱动。调用点：`mousemove`(x,y)、`mousewheel`(dx,dy)、`resize`(w,h)、`tab-select`/`tab-close`(index)。回归用例见 `AgenticCliRunnerTest`。
+
 30. **AgenticCliRunner.kt L1157-1161** — 自定义 `Any?.toBoolean()` 用 `toBooleanStrictOrNull ?: false`，与标准库 ignoreCase 语义冲突：**browser_handle_dialog（L970）的 `"True"`/`"TRUE"` 会把 accept 静默变 dismiss**（安全相关分支）。
 31. **BrowserTabToolExecutor.kt L1716/L1802/L1843/L1894/L2548** — `args["submit"] == true` / `args["autoDismissDialogs"] == true` / `(normalizedArgs["awaitPromise"] as? Boolean) ?: false` 只认 Boolean：MCP/CLI 传字符串 `"true"` 时 submit/auto-dismiss/awaitPromise **静默失效**无提示；同文件 L1673 却用 `paramBool`，风格不一致导致行为不一致。
 32. **BrowserToolExecutor.kt L307** — `parseTabIndex` 中 `is Number -> raw.toInt()`：`index=1.9` 静默截断为 1，可能切换/关闭错误标签页。非整值应报错。

@@ -99,6 +99,34 @@ object ToolDocGenerator {
     fun toJson(docs: List<Map<String, Any?>>): String =
         prettyPulsarObjectMapper().writeValueAsString(linkedMapOf("tools" to docs))
 
+    /**
+     * A JSON number literal, or `null` when [value] is not exactly one.
+     *
+     * JSON numbers may not carry a leading `+`, a leading zero, or a bare
+     * decimal point, so `BigDecimal` alone is too permissive (`+5` and `1.`
+     * parse there but are not valid JSON).
+     */
+    private val JSON_NUMBER = Regex("""-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?""")
+
+    /**
+     * Render one example argument as the JSON literal a caller should send.
+     *
+     * [ToolExample.args] stores every value as a `String` (KDoc has no types to
+     * harvest), so quoting blindly turned numeric examples into strings:
+     * `{"x": "320"}` for a `Double` parameter. Copying that into `--json` sends
+     * the wrong type — the CLI's number parser rejects it, and the MCP schema
+     * coerces it at best. Emit a bare number/boolean when the text is exactly
+     * that literal and a properly escaped JSON string otherwise.
+     */
+    private fun exampleArgumentValue(value: String): String {
+        val trimmed = value.trim()
+        if (trimmed == value) {
+            if (trimmed == "true" || trimmed == "false") return trimmed
+            if (JSON_NUMBER.matches(trimmed)) return trimmed
+        }
+        return prettyPulsarObjectMapper().writeValueAsString(value)
+    }
+
     /** Human-readable artifact. */
     fun toMarkdown(docs: List<Map<String, Any?>>): String = buildString {
         appendLine("# Browser4 MCP tool reference")
@@ -212,7 +240,9 @@ object ToolDocGenerator {
                 val args = example["args"] as Map<String, String>? ?: emptyMap()
                 when {
                     args.isNotEmpty() -> {
-                        val json = args.entries.joinToString(", ") { "\"${it.key}\": \"${it.value}\"" }
+                        val json = args.entries.joinToString(", ") {
+                            "\"${it.key}\": ${exampleArgumentValue(it.value)}"
+                        }
                         out.appendLine("- $title: `{$json}`")
                     }
                     // A no-argument call is a real call: say so instead of

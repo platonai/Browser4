@@ -193,7 +193,7 @@ The `htmlsnapshot` capture prints each interactive element as
 
 | Extra | Meaning |
 |-------|---------|
-| `box=<x> <y> <width> <height>` | Bounding box, printed verbatim from the runtime's `vi` data |
+| `box=<x> <y> <width> <height>` | Bounding box, printed verbatim from the runtime's `vi` data. **Document-absolute** CSS pixels (origin = the page's top-left corner), the same space as `snapshot`'s `[box=…]` — **not** the viewport space `mousemove` and `get box` use, and not body-relative (the pre-4.11.31 `vi` was). The serialized document states this: `<input id="PulsarMetaInformation" … box-space="document">`. A capture without `box-space` predates the change and its boxes are body-relative. |
 | `w=<n>` | Visual-prominence weight — `1 000 000 + area` for controls, group area for links |
 
 The list is ordered by weight descending, and the renderer keeps that order inside each printed

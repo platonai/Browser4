@@ -76,7 +76,8 @@ open class BasicHtmlIntegrityChecker(val conf: ImmutableConfig) : AbstractHtmlIn
 
         val bodyTag = pageSource.substring(p1, p2)
         tracer?.trace("Body tag: $bodyTag")
-        // The javascript set data-error flag to indicate if the vision information of all DOM nodes is calculated
+        // The serializer emits the data-error flag in the captured HTML (it is not
+        // written to the live DOM) to indicate that every DOM node was annotated.
         val r = bodyTag.contains("data-error=\"0\"")
         if (!r) {
             return HtmlIntegrity.NO_JS_OK_FLAG

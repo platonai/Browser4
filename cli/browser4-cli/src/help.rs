@@ -1522,6 +1522,49 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli click \"#note\" --count=3            # triple click".to_string());
     }
 
+    if cmd.name == "mousemove" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(wrap_text(
+            "The coordinates are CSS pixels relative to the top-left corner of the main frame's viewport — the browser's content area, not the desktop screen. This injects a page event: the OS cursor does not move, and `resize` changes the emulated viewport rather than the window.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "A coordinate outside the viewport is how a script expresses 'leave the page' (the page sees mouseleave); it cannot place the pointer over a taskbar or outside the browser window.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "Box coordinates are a different space: `snapshot`/`htmlsnapshot` boxes are document-absolute, so they go stale as soon as the page scrolls. Pass them with --space document and the engine converts them at dispatch time (recommended); subtracting scrollY yourself is only correct if nothing scrolls in between.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "--steps / --duration control the movement itself: the step count and the total time to spread over it. Defaults let the driver derive a human-like curved path (distance-based steps, 8-16 ms each); an explicit pace turns that off.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "--allow-outside only silences the out-of-viewport hint (the note printed when the coordinate falls outside the visible viewport). The dispatch is identical either way.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "--no-snapshot skips the automatic post-command accessibility snapshot, which keeps a long sequence of pointer moves fast.",
+            "  - ",
+            4,
+        ));
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli mousemove 100 200".to_string());
+        lines.push("  browser4-cli mousemove 0 0                      # viewport top-left".to_string());
+        lines.push("  browser4-cli mousemove 640 1200                 # below the viewport = leave the page".to_string());
+        lines.push("  browser4-cli mousemove 120 2400 --space document  # document-absolute box".to_string());
+        lines.push("  browser4-cli mousemove 10 10 --steps 3 --duration 60   # a quick flick".to_string());
+        lines.push("  browser4-cli mousemove 5 5 --no-snapshot".to_string());
+    }
+
     if cmd.name == "fill" {
         lines.push(String::new());
         lines.push("Notes:".to_string());

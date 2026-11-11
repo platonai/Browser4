@@ -4191,6 +4191,45 @@ fn read_interactive_state(ctx: &mut E2ECtx) -> serde_json::Value {
     serde_json::from_str(text.trim()).unwrap_or(serde_json::Value::Null)
 }
 
+/// Read the mouse fixture's **page-level pointer log** (`window.__browser4Pointer`).
+///
+/// Unlike `#state-log` (which only records events inside `#mouse-track-area`),
+/// this log covers every pointer event the page received: `last`/`first`
+/// (client coordinates), `moves`, `maxClientX`/`maxClientY`, `leaveCount`,
+/// `down`/`up` (coordinates + target id), `viewport` and `scroll`.
+///
+/// It is what the coordinate-space and pointer-state scenarios assert against,
+/// because the requested coordinate is not necessarily the delivered one: an
+/// out-of-viewport move is clamped and produces a `mouseleave`, and a
+/// document-space move is converted by the engine before dispatch.
+fn read_pointer_state(ctx: &mut E2ECtx) -> serde_json::Value {
+    let text = eval_text(ctx, "JSON.stringify(window.__browser4Pointer || null)");
+    serde_json::from_str(text.trim()).unwrap_or(serde_json::Value::Null)
+}
+
+/// Poll [`read_pointer_state`] until [predicate] holds, or abort the scenario.
+fn wait_for_pointer_or_abort<F>(
+    ctx: &mut E2ECtx,
+    predicate: F,
+    timeout_ms: u64,
+    failure_message: &str,
+) -> serde_json::Value
+where
+    F: Fn(&serde_json::Value) -> bool,
+{
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        let state = read_pointer_state(ctx);
+        if predicate(&state) {
+            return state;
+        }
+        if Instant::now() >= deadline {
+            panic!("{failure_message}\npointer state: {state}");
+        }
+        thread::sleep(Duration::from_millis(150));
+    }
+}
+
 fn key_event_count(state: &serde_json::Value) -> usize {
     state["keyEvents"]
         .as_array()

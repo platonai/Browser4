@@ -49,6 +49,13 @@ When the `--boxes` flag is passed to `browser4-cli snapshot`, each element also 
 annotation with the element's bounding box coordinates. Coordinates are rounded to 1 decimal place. Elements
 without bounds data omit the annotation.
 
+**Coordinate space:** the numbers are **document-absolute** CSS pixels (origin = the document's top-left
+corner), so scrolling the page does not change them; a layout change does. This is the same space as the
+`htmlsnapshot` `vi` boxes — and *not* the viewport space `mousemove` consumes, so subtract the current
+`scrollY` (or pass `--viewport-boxes`, which renders the same boxes in viewport coordinates) before feeding
+a box to a pointer command. A coordinate outside the viewport means the pointer leaves the page; it cannot
+be placed outside the browser window.
+
 ```yaml title="snapshot with --boxes"
 - link "Get started" [ref=e39] [box=120,80,200,24] [cursor=pointer]:
     - /url: /docs/intro

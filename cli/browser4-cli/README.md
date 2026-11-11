@@ -108,7 +108,7 @@ report the skew). See [CLI install & upgrade](../../docs/cli-install-upgrade.md#
 | `dblclick <ref> [button]` | Perform double click on a web page. `--modifiers`, `--follow` (detect new tabs) |
 | `hover <ref>` | Hover over element on page |
 | `drag <startRef> <endRef>` | Perform drag and drop between two elements |
-| `mousemove <x> <y>` | Move mouse to a given position |
+| `mousemove <x> <y>` | Move mouse to `(x, y)` in main-frame viewport CSS pixels (not screen coordinates; does not move the OS cursor). A coordinate outside the viewport means "leave the page"; coordinates go stale when the page scrolls. `--no-snapshot` skips the automatic snapshot |
 | `mousedown [button]` | Press mouse down |
 | `mouseup [button]` | Press mouse up |
 | `mousewheel <dx> <dy>` | Scroll mouse wheel |

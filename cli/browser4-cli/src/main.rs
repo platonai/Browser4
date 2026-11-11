@@ -14957,6 +14957,52 @@ fn parse_number_arg(tool_params: &Value, name: &str) -> Result<f64, String> {
         .ok_or_else(|| format!("Missing numeric parameter: {name}"))
 }
 
+/// Whether [command] leaves the CLI's recorded pointer position stale.
+///
+/// Two families:
+///
+/// - **Navigation / tab switches** (`goto`, `reload`, back/forward, tab
+///   switches, new windows) load a different document, so a coordinate
+///   recorded on the previous page must never be replayed onto the new one — the
+///   first `mousedown`/`mouseup`/`mousewheel` would otherwise emit a
+///   `mousemove` to a spot that no longer means anything (M7).
+/// - **Actions that move the real pointer themselves** (`hover`, `click`,
+///   `dblclick`, `drag`): the driver positioned the browser's pointer on the
+///   element/point it acted on, and that pointer is what the next
+///   `mousedown`/`mouseup`/`mousewheel` must use.  Restoring the *old*
+///   coordinate would bounce it away from the target first (M6).  Since the
+///   CLI cannot observe a better value than "wherever the driver left it",
+///   the record is dropped instead of rewritten — see [clear_mouse_position].
+fn invalidates_mouse_position(command: &str) -> bool {
+    matches!(
+        command,
+        "goto"
+            | "reload"
+            | "go-back"
+            | "go-forward"
+            | "tab-select"
+            | "tab-close"
+            | "window-new"
+            | "open"
+            | "hover"
+            | "click"
+            | "dblclick"
+            | "drag"
+    )
+}
+
+/// Drop the recorded pointer position, leaving the browser's real pointer as
+/// the only source of truth for the next positioned mouse command.
+///
+/// No-op (and no state write) when nothing is recorded, so this is safe to call
+/// after every command in the family above.
+fn clear_mouse_position(session_name: Option<&str>) {
+    let mut state = read_state(None, session_name);
+    if state.last_mouse_position.take().is_some() {
+        let _ = write_state(&state, None, session_name);
+    }
+}
+
 fn persist_mouse_position(
     base_url: &str,
     session_name: Option<&str>,
@@ -15001,12 +15047,45 @@ async fn restore_mouse_position(
     Ok(())
 }
 
+/// Read the viewport geometry as `(innerWidth, innerHeight, scrollX, scrollY)`.
+///
+/// Used by `mousemove` for two things the engine cannot report back today: the
+/// out-of-viewport hint (`--allow-outside` suppresses it) and the document→viewport
+/// conversion the CLI has to record for a document-space move. Best effort on
+/// purpose — a probe failure must not turn a successful move into an error.
+async fn read_viewport_geometry(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+) -> Option<(f64, f64, f64, f64)> {
+    let expression = "[window.innerWidth, window.innerHeight, window.scrollX || 0, window.scrollY || 0]";
+    let raw = call_session_tool(
+        client,
+        base_url,
+        session_name,
+        "browser_evaluate",
+        json!({ "expression": expression }),
+    )
+    .await
+    .ok()?;
+    let value: Value = serde_json::from_str(raw.trim()).ok()?;
+    let values = value.as_array()?;
+    let number = |index: usize| values.get(index).and_then(|v| v.as_f64());
+    Some((
+        number(0)?,
+        number(1)?,
+        number(2)?,
+        number(3)?,
+    ))
+}
+
 async fn handle_mouse_move(
     client: &Client,
     base_url: &str,
     tool_name: &str,
     tool_params: &Value,
     session_name: Option<&str>,
+    allow_outside: bool,
 ) -> Result<(), String> {
     handle_tool_command(
         client,
@@ -15017,9 +15096,63 @@ async fn handle_mouse_move(
         session_name,
     )
     .await?;
+
     let x = parse_number_arg(tool_params, "x")?;
     let y = parse_number_arg(tool_params, "y")?;
-    persist_mouse_position(base_url, session_name, MousePosition { x, y })?;
+    let space = tool_params
+        .get("space")
+        .and_then(|value| value.as_str())
+        .unwrap_or("viewport")
+        .trim()
+        .to_ascii_lowercase();
+    let document_space = !space.is_empty() && space != "viewport" && space != "client";
+
+    // Geometry is needed for the hint (unless suppressed) and to record the
+    // viewport point a document-space move became. A viewport-space move with
+    // `--allow-outside` therefore costs no extra round trip at all.
+    let geometry = if document_space || !allow_outside {
+        read_viewport_geometry(client, base_url, session_name).await
+    } else {
+        None
+    };
+
+    let viewport_point = if document_space {
+        // Without a scroll offset the converted point is unknown; leaving the
+        // record empty makes the next mousedown use the driver's real pointer,
+        // which is where the engine left it.
+        geometry.map(|(_, _, scroll_x, scroll_y)| (x - scroll_x, y - scroll_y))
+    } else {
+        Some((x, y))
+    };
+
+    let Some((viewport_x, viewport_y)) = viewport_point else {
+        clear_mouse_position(session_name);
+        return Ok(());
+    };
+
+    persist_mouse_position(
+        base_url,
+        session_name,
+        MousePosition { x: viewport_x, y: viewport_y },
+    )?;
+
+    if !allow_outside {
+        if let Some((viewport_width, viewport_height, _, _)) = geometry {
+            let outside = viewport_x < 0.0
+                || viewport_y < 0.0
+                || viewport_x > viewport_width
+                || viewport_y > viewport_height;
+            if outside {
+                eprintln!(
+                    "ℹ️  ({}, {}) is outside the {}×{} viewport: the page sees the pointer leave \
+                     (mouseleave), not a pointer outside the browser window. Pass --allow-outside \
+                     to silence this hint.",
+                    x as i64, y as i64, viewport_width as i64, viewport_height as i64
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -31702,6 +31835,8 @@ enum BatchStepAction {
     MouseMove {
         tool_name: String,
         tool_params: Value,
+        /// `--allow-outside`: skip the out-of-viewport hint (dispatch unchanged).
+        allow_outside: bool,
     },
     /// `mousedown` / `mouseup` / `mousewheel` — restores the pointer position first.
     MousePositioned {
@@ -31713,6 +31848,9 @@ enum BatchStepAction {
 #[derive(Debug, Clone)]
 struct BatchStepPlan {
     display: String,
+    /// The resolved internal command name (`mousemove`, `goto`, …), used for
+    /// post-step bookkeeping such as invalidating the recorded pointer position.
+    command: String,
     action: BatchStepAction,
 }
 
@@ -31964,6 +32102,17 @@ fn compile_batch_step(
     let tool_name = (cmd_def.tool_name_fn)(&parsed);
     let mut tool_params = (cmd_def.tool_params_fn)(&parsed);
 
+    // A params builder reports a CLI-side argument error through this sentinel
+    // (see `commands::CLI_ERROR_SENTINEL`). In batch mode the step must fail
+    // before any tool call is sent — the same contract the standalone dispatch
+    // enforces, otherwise a bad `mousemove` argument becomes a backend call.
+    if let Some(message) = tool_params
+        .get(commands::CLI_ERROR_SENTINEL)
+        .and_then(|v| v.as_str())
+    {
+        return Err(message.to_string());
+    }
+
     let action = match nested_command.as_str() {
         "open" | "close" => {
             return Err(format!(
@@ -32054,6 +32203,10 @@ fn compile_batch_step(
             BatchStepAction::MouseMove {
                 tool_name,
                 tool_params,
+                allow_outside: parsed
+                    .get("allow-outside")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
             }
         }
         "mousedown" | "mouseup" | "mousewheel" => BatchStepAction::MousePositioned {
@@ -32074,6 +32227,7 @@ fn compile_batch_step(
 
     Ok(BatchStepPlan {
         display: spec.display.clone(),
+        command: nested_command,
         action,
     })
 }
@@ -32209,7 +32363,18 @@ async fn execute_batch_step(
         BatchStepAction::MouseMove {
             tool_name,
             tool_params,
-        } => handle_mouse_move(client, base_url, tool_name, tool_params, session_name).await,
+            allow_outside,
+        } => {
+            handle_mouse_move(
+                client,
+                base_url,
+                tool_name,
+                tool_params,
+                session_name,
+                *allow_outside,
+            )
+            .await
+        }
         BatchStepAction::MousePositioned {
             tool_name,
             tool_params,
@@ -32308,6 +32473,11 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
             if bail {
                 break;
             }
+        } else if invalidates_mouse_position(&plan.command) {
+            // Same bookkeeping the standalone dispatch does: a navigation or a
+            // pointer-moving action invalidates the recorded coordinate, so the
+            // next positioned mouse step cannot replay a stale point.
+            clear_mouse_position(global.session_name.as_deref());
         }
     }
 
@@ -34130,12 +34300,17 @@ async fn run(
             .await?;
         }
         "mousemove" => {
+            let allow_outside = parsed
+                .get("allow-outside")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             handle_mouse_move(
                 &client,
                 &base_url,
                 &tool_name,
                 &tool_params,
                 global.session_name.as_deref(),
+                allow_outside,
             )
             .await?;
         }
@@ -34981,6 +35156,15 @@ async fn run(
             }
             result?;
         }
+    }
+
+    // Pointer bookkeeping: navigation loads a new document and the
+    // hover/click/drag family leaves the real pointer where the driver put it,
+    // so a coordinate recorded earlier must not be replayed onto either.  The
+    // positioned mouse commands (`mousedown`/`mouseup`/`mousewheel`) then act at
+    // the browser's actual pointer instead of bouncing it back to an old spot.
+    if invalidates_mouse_position(command) {
+        clear_mouse_position(global.session_name.as_deref());
     }
 
     // Post-command snapshot for commands that modify browser state.
@@ -45414,6 +45598,65 @@ linkGroups:
             error.contains("Invalid x for mousemove"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn invalidates_mouse_position_covers_navigation_and_pointer_actions() {
+        // M6/M7: after a navigation or an action that moved the real pointer,
+        // the recorded coordinate must not be replayed by the next
+        // mousedown/mouseup/mousewheel.
+        for command in [
+            "goto",
+            "reload",
+            "go-back",
+            "go-forward",
+            "tab-select",
+            "tab-close",
+            "window-new",
+            "open",
+            "hover",
+            "click",
+            "dblclick",
+            "drag",
+        ] {
+            assert!(
+                invalidates_mouse_position(command),
+                "{command} must invalidate the recorded pointer position"
+            );
+        }
+    }
+
+    #[test]
+    fn invalidates_mouse_position_leaves_explicit_moves_and_reads_alone() {
+        // `mousemove` is the command that *establishes* the position; reads and
+        // unrelated actions must keep it (restoring it is their whole point).
+        for command in [
+            "mousemove",
+            "mousedown",
+            "mouseup",
+            "mousewheel",
+            "snapshot",
+            "get",
+            "eval",
+            "scroll",
+        ] {
+            assert!(
+                !invalidates_mouse_position(command),
+                "{command} must keep the recorded pointer position"
+            );
+        }
+    }
+
+    #[test]
+    fn batch_step_plan_records_the_resolved_command_name() {
+        let spec = BatchCommandSpec {
+            display: "reload".to_string(),
+            tokens: vec!["reload".to_string()],
+        };
+
+        let plan = compile_batch_step(&spec, &commands_map(), true).unwrap();
+        assert_eq!(plan.command, "reload");
+        assert!(invalidates_mouse_position(&plan.command));
     }
 
     #[test]

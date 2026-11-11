@@ -265,6 +265,14 @@ like GUI, and in Docker/headless environments the launch is forced headless anyw
   trusted click presses at that hovered point rather than the center (Chrome would otherwise move the
   pointer back and repeat the same pixel), and the hit test is repeated there, so the click still
   never lands on an overlay covering the element's edge.
+- **`mousemove` coordinates are main-frame viewport CSS pixels** (the content area, not the desktop
+  screen) — the same space as `getBoundingClientRect()`, `get box` and CDP `Input.dispatchMouseEvent`.
+  They do not move the OS cursor. A coordinate outside the viewport means "leave the page" (the page
+  sees `mouseleave`), not "move outside the browser window"; `--allow-outside` only silences the hint
+  for that case. Boxes from `snapshot`/`htmlsnapshot` are document-absolute instead, so they go stale
+  as soon as the page scrolls or re-lays-out: pass them with `mousemove --space document` (the engine
+  converts at dispatch time) or use `snapshot --viewport-boxes`. `--steps`/`--duration` replace the
+  driver's human-like path with an explicit step count and total duration.
 - Clicks are dispatched as **trusted** input (`Input.dispatchMouseEvent` — `event.isTrusted` true,
   real coordinates) instead of synthetic DOM events. A one-shot check first proves trusted input
   reaches the page on this platform/session; when the element cannot be clicked at its own

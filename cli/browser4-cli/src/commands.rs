@@ -249,6 +249,26 @@ fn get_number_value(map: &HashMap<String, Value>, key: &str) -> Option<Value> {
     map.get(key).filter(|v| v.is_number()).cloned()
 }
 
+/// The trimmed, non-empty `--space` value of `mousemove`, when one was given.
+///
+/// The option is only meaningful for coordinate actions, and its presence is
+/// what selects the engine-side conversion tool (`mouse_move_at`) instead of
+/// the plain viewport move — see the `mousemove` command definition.
+fn mousemove_space<'a>(map: &'a HashMap<String, Value>) -> Option<&'a str> {
+    get_opt_str(map, "space").map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// True when a move needs `mouse_move_at` (coordinate-space conversion or
+/// explicit pacing) instead of the plain `browser_mouse_move_xy` tool.
+///
+/// `--allow-outside` is deliberately absent: it is a CLI-side hint switch and
+/// must not change which engine tool runs (nor its arguments).
+fn mousemove_needs_engine_options(map: &HashMap<String, Value>) -> bool {
+    mousemove_space(map).is_some()
+        || get_opt_str(map, "steps").is_some()
+        || get_opt_str(map, "duration").is_some()
+}
+
 fn raw_positionals(map: &HashMap<String, Value>) -> Vec<String> {
     match map.get("_") {
         Some(Value::Array(values)) => values
@@ -1598,17 +1618,74 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[
-                ArgDef { name: "x", description: "X coordinate", optional: false },
-                ArgDef { name: "y", description: "Y coordinate", optional: false },
+                ArgDef { name: "x", description: "X coordinate in main-frame viewport CSS pixels", optional: false },
+                ArgDef { name: "y", description: "Y coordinate in main-frame viewport CSS pixels", optional: false },
             ],
-            options: &[],
+            options: &[
+                OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
+                OptionDef { name: "space", description: "Coordinate space of <x>/<y>: 'viewport' (default, main-frame viewport CSS pixels) or 'document' (absolute page pixels, the space of snapshot/htmlsnapshot boxes — converted by the engine right before the move)", is_bool: false, short: None },
+                OptionDef { name: "steps", description: "Number of mouse-move events to emit (default: the driver's distance-derived human-like path)", is_bool: false, short: None },
+                OptionDef { name: "duration", description: "Total movement duration in milliseconds (default: the driver's human-like pace)", is_bool: false, short: None },
+                OptionDef { name: "allow-outside", description: "Do not hint when the coordinate is outside the viewport; the dispatch itself is unchanged", is_bool: true, short: None },
+            ],
             e2e_coverage: E2eCoverage::Tested,
-            tool_name_fn: |_| "browser_mouse_move_xy".to_string(),
+            tool_name_fn: |args| {
+                // A document-space coordinate must be converted by the engine at
+                // dispatch time: the CLI cannot do it, because it would have to
+                // read scrollY in an earlier round trip and the page can scroll
+                // (click/hover scroll into view) in between. Explicit pacing
+                // lives on the same tool because the engine owns the mouse.
+                if mousemove_needs_engine_options(args) {
+                    "mouse_move_at".to_string()
+                } else {
+                    "browser_mouse_move_xy".to_string()
+                }
+            },
             tool_params_fn: |args| {
-                json!({
-                    "x": get_number_value(args, "x").unwrap_or_else(|| json!(0)),
-                    "y": get_number_value(args, "y").unwrap_or_else(|| json!(0)),
-                })
+                // A non-numeric coordinate used to fall back to 0, so
+                // `mousemove abc 200` silently parked the pointer in the
+                // top-left corner and exited 0.  Report it as a usage error
+                // before the tool call is sent (the dispatch layer turns this
+                // sentinel into exit code 2), matching the batch path.
+                let mut params = serde_json::Map::new();
+                for axis in ["x", "y"] {
+                    match get_number_value(args, axis) {
+                        Some(value) => {
+                            params.insert(axis.to_string(), value);
+                        }
+                        None => {
+                            return cli_error(format!(
+                                "Invalid {} for mousemove: expected a number (e.g. 'mousemove 120 240').",
+                                axis
+                            ));
+                        }
+                    }
+                }
+                if let Some(space) = mousemove_space(args) {
+                    let normalized = space.to_ascii_lowercase();
+                    if normalized != "document" && normalized != "viewport" {
+                        return cli_error(format!(
+                            "Invalid space '{space}' for mousemove: expected 'document' or 'viewport'."
+                        ));
+                    }
+                    params.insert("space".to_string(), json!(normalized));
+                }
+                for (option, field) in [("steps", "steps"), ("duration", "durationMillis")] {
+                    let Some(raw) = get_opt_str(args, option) else {
+                        continue;
+                    };
+                    match raw.trim().parse::<i64>() {
+                        Ok(value) if value > 0 => {
+                            params.insert(field.to_string(), json!(value));
+                        }
+                        _ => {
+                            return cli_error(format!(
+                                "Invalid --{option} for mousemove: expected a positive integer, got '{raw}'."
+                            ));
+                        }
+                    }
+                }
+                Value::Object(params)
             },
         },
         CommandDef {
@@ -2042,8 +2119,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[],
             options: &[
                 OptionDef { name: "filename", description: "Save snapshot to file instead of returning it in the response — a bare name is written to the snapshot directory with a .yml extension", is_bool: false, short: None },
-                OptionDef { name: "boxes", description: "Include each element's bounding box as [box=x,y,width,height] (enabled by default)", is_bool: true, short: None },
+                OptionDef { name: "boxes", description: "Include each element's bounding box as [box=x,y,width,height] (enabled by default). Boxes are document-absolute, the space of the htmlsnapshot `vi` boxes.", is_bool: true, short: None },
                 OptionDef { name: "no-boxes", description: "Disable bounding boxes in snapshot output", is_bool: true, short: None },
+                OptionDef { name: "viewport-boxes", description: "Render each [box=...] in viewport coordinates (subtract the current scrollY) instead of the default document-absolute space — the space `mousemove` consumes", is_bool: true, short: None },
                 OptionDef { name: "interactive", description: "Interactive-only rendering: keeps the interactive nodes (pointer/role) and merges their inner text into the names, so each ref line reads as a self-contained target; non-interactive nodes (li[draggable] wrappers, tooltip spans) are dropped. Combine with -v <n> (e.g. -i -v 0) to bound a long page, and with --stdout to see the refs inline.", is_bool: true, short: Some("i") },
                 OptionDef { name: "urls", description: "Include href URLs for link elements", is_bool: true, short: Some("u") },
                 OptionDef { name: "compact", description: "Remove empty structural elements (enabled by default)", is_bool: true, short: Some("c") },
@@ -2066,6 +2144,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(f) = get_opt_str(args, "filename") { p["filename"] = json!(f); }
                 if let Some(true) = get_bool(args, "no-boxes") { p["boxes"] = json!(false); }
                 else if let Some(true) = get_bool(args, "boxes") { p["boxes"] = json!(true); }
+                if let Some(true) = get_bool(args, "viewport-boxes") { p["viewportBoxes"] = json!(true); }
                 if let Some(true) = get_bool(args, "interactive") { p["interactive"] = json!(true); }
                 if let Some(true) = get_bool(args, "urls") { p["urls"] = json!(true); }
                 if let Some(true) = get_bool(args, "no-compact") { p["compact"] = json!(false); }
@@ -11197,6 +11276,198 @@ mod tests {
         let map = commands_map();
         let cmd = map.get("mousewheel").unwrap();
         assert!(cmd.batch_supported);
+    }
+
+    // =========================================================================
+    // mousemove command tests
+    // =========================================================================
+
+    #[test]
+    fn test_mousemove_keeps_numeric_coordinates() {
+        let map = commands_map();
+        let cmd = map.get("mousemove").unwrap();
+        let mut args = HashMap::new();
+        args.insert("x".to_string(), json!(120));
+        args.insert("y".to_string(), json!(240.5));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["x"], json!(120));
+        assert_eq!(params["y"], json!(240.5));
+        assert!(params.get(CLI_ERROR_SENTINEL).is_none());
+    }
+
+    #[test]
+    fn test_mousemove_accepts_negative_coordinates() {
+        let map = commands_map();
+        let cmd = map.get("mousemove").unwrap();
+        let mut args = HashMap::new();
+        args.insert("x".to_string(), json!(-20));
+        args.insert("y".to_string(), json!(-30));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["x"], json!(-20));
+        assert_eq!(params["y"], json!(-30));
+    }
+
+    #[test]
+    fn test_mousemove_rejects_non_numeric_x_before_dispatch() {
+        // M4: `mousemove abc 200` used to build {"x": 0, "y": 200} and park the
+        // pointer in the top-left corner with exit code 0.  The builder must
+        // report a CLI error instead, so the dispatch layer never sends the
+        // tool call (it turns the sentinel into a usage error).
+        let map = commands_map();
+        let cmd = map.get("mousemove").unwrap();
+        let mut args = HashMap::new();
+        args.insert("x".to_string(), json!("abc"));
+        args.insert("y".to_string(), json!(200));
+
+        let params = (cmd.tool_params_fn)(&args);
+        let message = params
+            .get(CLI_ERROR_SENTINEL)
+            .and_then(|v| v.as_str())
+            .expect("non-numeric x must produce a CLI error payload");
+        assert!(
+            message.contains("Invalid x for mousemove"),
+            "unexpected message: {message}"
+        );
+        assert!(message.contains("expected a number"), "unexpected message: {message}");
+        assert!(params.get("x").is_none());
+        assert!(params.get("y").is_none());
+    }
+
+    #[test]
+    fn test_mousemove_rejects_non_numeric_y_before_dispatch() {
+        let map = commands_map();
+        let cmd = map.get("mousemove").unwrap();
+        let mut args = HashMap::new();
+        args.insert("x".to_string(), json!(100));
+        args.insert("y".to_string(), json!("nope"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        let message = params
+            .get(CLI_ERROR_SENTINEL)
+            .and_then(|v| v.as_str())
+            .expect("non-numeric y must produce a CLI error payload");
+        assert!(
+            message.contains("Invalid y for mousemove"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[test]
+    fn test_mousemove_declares_no_snapshot_option() {
+        let map = commands_map();
+        let cmd = map.get("mousemove").unwrap();
+        assert!(
+            cmd.options.iter().any(|option| option.name == "no-snapshot"),
+            "mousemove must accept --no-snapshot like hover does"
+        );
+    }
+
+    #[test]
+    fn test_mousemove_default_keeps_the_plain_viewport_tool() {
+        let map = commands_map();
+        let cmd = map.get("mousemove").unwrap();
+        let mut args = HashMap::new();
+        args.insert("x".to_string(), json!(10));
+        args.insert("y".to_string(), json!(20));
+
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_mouse_move_xy");
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("space").is_none());
+    }
+
+    #[test]
+    fn test_mousemove_document_space_uses_the_engine_conversion_tool() {
+        // The CLI cannot subtract the right scrollY: the page may scroll
+        // between the read and the move. The engine conversion tool is the
+        // only place the document->viewport translation can be made at
+        // dispatch time.
+        let map = commands_map();
+        let cmd = map.get("mousemove").unwrap();
+        let mut args = HashMap::new();
+        args.insert("x".to_string(), json!(120));
+        args.insert("y".to_string(), json!(2400));
+        args.insert("space".to_string(), json!("Document"));
+
+        assert_eq!((cmd.tool_name_fn)(&args), "mouse_move_at");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["x"], json!(120));
+        assert_eq!(params["y"], json!(2400));
+        assert_eq!(params["space"], json!("document"));
+    }
+
+    #[test]
+    fn test_mousemove_rejects_unknown_space_before_dispatch() {
+        let map = commands_map();
+        let cmd = map.get("mousemove").unwrap();
+        let mut args = HashMap::new();
+        args.insert("x".to_string(), json!(1));
+        args.insert("y".to_string(), json!(2));
+        args.insert("space".to_string(), json!("screen"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        let message = params
+            .get(CLI_ERROR_SENTINEL)
+            .and_then(|v| v.as_str())
+            .expect("an unknown space must produce a CLI error payload");
+        assert!(message.contains("Invalid space 'screen'"), "unexpected message: {message}");
+        assert!(params.get("x").is_none());
+    }
+
+    #[test]
+    fn test_mousemove_steps_and_duration_use_the_pacing_tool() {
+        // Explicit pacing is an engine-side capability: the CLI can only pass
+        // the request through, so the coordinate tool must switch to the
+        // pacing-aware one.
+        let map = commands_map();
+        let cmd = map.get("mousemove").unwrap();
+        let mut args = HashMap::new();
+        args.insert("x".to_string(), json!(10));
+        args.insert("y".to_string(), json!(20));
+        args.insert("steps".to_string(), json!("4"));
+        args.insert("duration".to_string(), json!("80"));
+
+        assert_eq!((cmd.tool_name_fn)(&args), "mouse_move_at");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["steps"], json!(4));
+        assert_eq!(params["durationMillis"], json!(80));
+        assert!(params.get("space").is_none());
+    }
+
+    #[test]
+    fn test_mousemove_rejects_non_positive_pacing() {
+        let map = commands_map();
+        let cmd = map.get("mousemove").unwrap();
+        let mut args = HashMap::new();
+        args.insert("x".to_string(), json!(10));
+        args.insert("y".to_string(), json!(20));
+        args.insert("steps".to_string(), json!("0"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        let message = params
+            .get(CLI_ERROR_SENTINEL)
+            .and_then(|v| v.as_str())
+            .expect("a non-positive step count must produce a CLI error payload");
+        assert!(message.contains("Invalid --steps"), "unexpected message: {message}");
+    }
+
+    #[test]
+    fn test_mousemove_allow_outside_stays_cli_side() {
+        // `--allow-outside` only silences the out-of-viewport hint; it must not
+        // select another tool nor leak into the backend arguments.
+        let map = commands_map();
+        let cmd = map.get("mousemove").unwrap();
+        let mut args = HashMap::new();
+        args.insert("x".to_string(), json!(10));
+        args.insert("y".to_string(), json!(2000));
+        args.insert("allow-outside".to_string(), json!(true));
+
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_mouse_move_xy");
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("allow-outside").is_none());
+        assert!(params.get("allow_outside").is_none());
+        assert_eq!(params["y"], json!(2000));
     }
 
     // =========================================================================

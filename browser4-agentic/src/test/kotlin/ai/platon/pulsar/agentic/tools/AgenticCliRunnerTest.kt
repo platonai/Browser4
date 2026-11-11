@@ -296,6 +296,54 @@ class AgenticCliRunnerTest {
         }
 
         @Test
+        @DisplayName("rejects a non-numeric mousemove coordinate instead of moving to (0,0)")
+        fun rejectsNonNumericMousemoveCoordinate() {
+            // M4 in the coordinate issue list: the runner used to turn "abc"
+            // into 0, so the pointer silently jumped to the viewport's top-left
+            // corner. The Rust CLI rejects the same input with the same wording.
+            val message = try {
+                runner.parseCommand("mousemove abc 200")
+                null
+            } catch (e: IllegalArgumentException) {
+                e.message
+            }
+            assertNotNull(message, "a non-numeric coordinate must be rejected")
+            assertTrue(
+                message!!.contains("Invalid x for mousemove"),
+                "unexpected message: $message"
+            )
+        }
+
+        @Test
+        @DisplayName("rejects a non-numeric resize dimension instead of resizing to 0x0")
+        fun rejectsNonNumericResizeDimension() {
+            val message = try {
+                runner.parseCommand("resize 1280 abc")
+                null
+            } catch (e: IllegalArgumentException) {
+                e.message
+            }
+            assertNotNull(message, "a non-numeric dimension must be rejected")
+            assertTrue(
+                message!!.contains("Invalid h for resize"),
+                "unexpected message: $message"
+            )
+        }
+
+        @Test
+        @DisplayName("execute() reports a bad coordinate as a failed result, not an exception")
+        fun executeReportsBadCoordinateAsResult() = runBlocking {
+            val result = runner.execute("mousemove abc 200")
+
+            assertFalse(result.success, "a bad coordinate must not execute")
+            assertTrue(
+                result.error.orEmpty().contains("Invalid x for mousemove"),
+                "unexpected error: ${result.error}"
+            )
+            assertNull(result.toolCall, "no tool call may be dispatched for a usage error")
+        }
+
+        @Test
         @DisplayName("parses agent-run command")
         fun parsesAgentRun() {
             val (name, args) = runner.parseCommand("agent-run 'go to amazon.com and search for laptops'")

@@ -832,6 +832,39 @@ class HTMLSnapshotToolExecutorTest {
             assertTrue(el.has("tier"), "Element must carry a tier")
             assertTrue(el.has("weight"), "Element must carry a weight")
         }
+
+        // Coordinate contract: `vi` is document-absolute on base 4.11.31+, and
+        // the payload says so instead of leaving the consumer to guess. A
+        // payload without boxSpace is schema 1 (body-relative `vi`).
+        assertEquals(2, json["schemaVersion"].asInt(), "capture schema version must be recorded")
+        assertEquals("document", json["boxSpace"].asText(), "vi boxes are document coordinates")
+        assertFalse(
+            json.has("scrollTopAtCapture"),
+            "an unreadable scroll offset must be omitted, not defaulted to 0"
+        )
+    }
+
+    @Test
+    @DisplayName("the capture metadata records the scroll offset when it is known")
+    fun captureMetadataRecordsScrollOffset() {
+        val html = "<html><head><title>Scrolled</title></head><body><p>hi</p></body></html>"
+
+        val json = mapper.readTree(
+            htmlSnapshotMetadataJson(
+                document = document(html, "https://example.com/scrolled"),
+                url = "https://example.com/scrolled",
+                href = "https://example.com/scrolled",
+                sizeBytes = html.length.toLong(),
+                capturedAt = "2026-09-03T10:00:00Z",
+                contentType = "text/html",
+                scrollTopAtCapture = 800.0,
+            )
+        )
+
+        // Document-space boxes do not need the offset to be read, but it is what
+        // converts one into the viewport coordinate `mousemove` consumes.
+        assertEquals(800.0, json["scrollTopAtCapture"].asDouble(), 0.001)
+        assertEquals("document", json["boxSpace"].asText())
     }
 
     @Test
@@ -1185,9 +1218,9 @@ class HTMLSnapshotToolExecutorTest {
 
     @Test
     fun `runtime lz and tp text markers are stripped but vi boxes and page links survive`() {
-        // The runtime compute pass writes lz/tp onto the LIVE DOM; serialized
-        // reads must not expose them, while the wanted vi annotation and the
-        // normalizedURI head link must survive.
+        // The runtime emits lz/tp into the serialized HTML (they never exist on the
+        // LIVE DOM); serialized reads must not expose them, while the wanted vi
+        // annotation and the normalizedURI head link must survive.
         val html = """
             <html><head><title>P</title>
             <link rel="normalizedURI" href="https://books.toscrape.com/">

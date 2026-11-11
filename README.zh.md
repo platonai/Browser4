@@ -394,7 +394,7 @@ browser4-cli wait --load networkidle
 |---|---|
 | `keydown <key>` | 按下并保持某个键。 |
 | `keyup <key>` | 释放某个已按住的键。 |
-| `mousemove <x> <y>` | 把鼠标移动到页面 / 屏幕坐标。 |
+| `mousemove <x> <y>` | 把鼠标移动到主框架视口左上角起算的 CSS 像素 `(x, y)`。这不是桌面/屏幕坐标，也不会移动操作系统光标；越界表示"离开视口"，而不是"移到浏览器窗口外"。页面滚动后坐标即失效。 |
 | `mousedown [button]` | 按下鼠标按键。 |
 | `mouseup [button]` | 释放鼠标按键。 |
 | `mousewheel <dx> <dy>` | 用滚轮 delta 进行滚动。 |

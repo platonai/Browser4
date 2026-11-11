@@ -868,7 +868,15 @@ interface WebDriver : Closeable {
      * This method hovers over the element. @mcp
      *
      * 1. Scroll the element into view if needed.
-     * 2. Move mouse to hover over a random position near the center of the element.
+     * 2. Glide the pointer to a point about 50 px above and to the left of the
+     *    element (clamped to the viewport), then move it onto the element's
+     *    interactive point — the same fixed (un-jittered) point a click uses.
+     *    The final mouse position is the element, not a random spot near it.
+     *
+     * Side effects worth knowing: the tab is brought to the front and the page
+     * may scroll (both are needed to make the hover observable).  There is no
+     * occlusion check: if another element covers the target, the pointer still
+     * lands on the coordinates and the topmost element receives the hover.
      *
      * ```kotlin
      * driver.hover("h1")
@@ -1340,16 +1348,80 @@ interface WebDriver : Closeable {
     /**
      * Moves the mouse to the position specified by [x] and [y]. @mcp
      *
+     * **Coordinate space:** [x] and [y] are CSS pixels relative to the top-left
+     * corner of the **main frame's viewport** (CDP `Input.dispatchMouseEvent`
+     * semantics) — not desktop/screen coordinates, and not document coordinates.
+     * The method injects a page event; it never moves the OS cursor.
+     *
+     * Consequences worth designing around:
+     *
+     * - Scrolling does not change what the page shows at a viewport coordinate,
+     *   but a coordinate derived from a document-space box (for example
+     *   `htmlsnapshot`'s `box`, or `snapshot --boxes`) becomes stale as soon as
+     *   the page scrolls.  Subtract the current `scrollY` (or use a selector)
+     *   right before moving.
+     * - A coordinate outside the viewport is not clamped to the page's valid
+     *   range: the page sees the pointer leave (a `mouseleave` at the edge), the
+     *   requested coordinate itself never appears in an event, and the pointer
+     *   cannot be placed outside the browser window.
+     *
      * ```kotlin
      * driver.mouseMove(100.0, 200.0)
      * ```
      *
-     * @param x The x coordinate to move to.
-     * @param y The y coordinate to move to.
+     * @param x The x coordinate to move to, in main-frame viewport CSS pixels.
+     * @param y The y coordinate to move to, in main-frame viewport CSS pixels.
      */
     @Throws(WebDriverException::class)
     @MCP
     suspend fun mouseMove(x: Double, y: Double)
+
+    /**
+     * Moves the mouse to ([x], [y]) interpreted in the given coordinate [space]. @mcp
+     *
+     * This is the coordinate-space-aware form of [mouseMove]: a caller holding a
+     * box from `snapshot --boxes` or `htmlsnapshot` (document-absolute) can pass
+     * it in directly instead of subtracting `scrollY` itself — a subtraction the
+     * caller can only do against a scroll position that may already be stale.
+     *
+     * The driver converts `document` coordinates to viewport pixels itself,
+     * immediately before dispatching the move, so the conversion and the input
+     * it describes stay together. Prefer a selector/ref-based action when one is
+     * available: a coordinate is always a snapshot of a layout that can change.
+     *
+     * `steps` and `durationMillis` give explicit control over the movement pace
+     * for callers that need a "flick" (a few large steps) or a slow glide; both
+     * default to `0`, which means "the driver's own human-like pacing".  Usage:
+     * `driver.mouseMoveAt(120.0, 2400.0, "document")`.
+     *
+     * @param x The x coordinate to move to.
+     * @param y The y coordinate to move to.
+     * @param space `viewport` (default) for main-frame viewport CSS pixels, or `document` for document-absolute pixels.
+     * @param steps Number of move events to emit, or `0` for the driver default.
+     * @param durationMillis Total movement duration in ms, or `0` for the driver default (spread over [steps]).
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun mouseMoveAt(
+        x: Double,
+        y: Double,
+        space: String = "viewport",
+        steps: Int = 0,
+        durationMillis: Long = 0,
+    ) {
+        // Default: drivers that cannot translate a space or pace a move only
+        // support the native viewport coordinates. Failing loudly beats moving
+        // the pointer to a document coordinate (or ignoring the requested pace)
+        // and calling it a day.
+        val normalized = space.trim().lowercase()
+        if (normalized.isNotEmpty() && normalized != "viewport" && normalized != "client") {
+            throw WebDriverException("This driver does not support mouseMoveAt space '$space'")
+        }
+        if (steps != 0 || durationMillis != 0L) {
+            throw WebDriverException("This driver does not support explicit mouseMoveAt pacing")
+        }
+        mouseMove(x, y)
+    }
 
     /**
      * Presses a mouse button at the current mouse position. @mcp
@@ -1393,13 +1465,18 @@ interface WebDriver : Closeable {
     /**
      * The mouse moves to the element with [selector]. @mcp
      *
+     * The pointer lands on the element's clickable point plus the deltas, which
+     * are **offsets added to that point**: a positive [deltaX] moves right and a
+     * positive [deltaY] moves down.  Coordinates are main-frame viewport CSS
+     * pixels (same space as [mouseMove]).
+     *
      * ```kotlin
      * driver.moveMouseTo("h2.title")
      * ```
      *
      * @param selector The selector of the element, multiple formats supported.
-     * @param deltaX The distance to the left of the element.
-     * @param deltaY The distance to the top of the element.
+     * @param deltaX Horizontal offset from the element's clickable point; positive is right.
+     * @param deltaY Vertical offset from the element's clickable point; positive is down.
      */
     @Throws(WebDriverException::class)
     @MCP
@@ -2161,10 +2238,22 @@ interface WebDriver : Closeable {
     /**
      * Return the bounding box of an element located by [selector]. @mcp
      *
+     * **Coordinate space:** the returned numbers are **viewport** CSS pixels —
+     * the same space as `getBoundingClientRect()`, `elementFromPoint()` and the
+     * coordinates `mouseMove` consumes, and the opposite of the
+     * document-absolute boxes a page snapshot reports. Do not compare the two
+     * without converting (subtract the current `scrollY`); a viewport box also
+     * goes stale as soon as the page scrolls.
+     *
+     * Measuring does not move the page when the element is already visible: the
+     * element is located without scrolling, and only an off-screen box is
+     * scrolled into view (then the scroll is allowed to settle before the box is
+     * read again).
+     *
      * If the element does not exist, returns null.
      *
      * @param selector The selector of the element, multiple formats supported. Used to calculate the bounding box.
-     * @return The bounding box of the element.
+     * @return The bounding box of the element in viewport CSS pixels.
      * */
     @Throws(WebDriverException::class)
     @MCP
