@@ -580,20 +580,24 @@
 
              4.11.29 (published 2026-11-01) added the keyboard, wheel and mouse input fixes.
 
-             4.11.30 (published 2026-11-02) is the current latest release; its pulsar-bom is
-             byte-for-byte identical to 4.11.29 apart from the version element, so this bump
-             carries only the base library's own source changes (no dependency changes) —
-             notably the curved, speed-profiled multi-step pointer movement in Mouse.moveTo.
+             4.11.30 (published 2026-11-02) carried the curved, speed-profiled multi-step
+             pointer movement in Mouse.moveTo; its pulsar-bom is byte-for-byte identical to
+             4.11.29 apart from the version element.
 
-             4.11.31-SNAPSHOT (local, 2026-11-10) carries the mouse/coordinate fixes this
-             repository depends on: `vi` boxes are document-absolute (`getDocumentRect`),
-             `compute()` no longer scrolls the page or calls `window.stop()`, stale `vi` data
-             is recomputed when the layout changes, `boundingBox` stops scrolling a visible
-             element and waits for the scroll it does cause, `hover` warns when the target is
-             covered, and `mouseMoveAt` adds engine-side document→viewport conversion plus
-             explicit move pacing. The vendored `js/dom_rect.js` must match this generation —
-             `RuntimeScriptContract` fails driver creation on a mixed bundle. -->
-        <browser4-base.version>4.11.31-SNAPSHOT</browser4-base.version>
+             4.11.31 (published 2026-11-11) is the current latest release and ships the
+             mouse/coordinate fixes this repository depends on: `vi` boxes are document-absolute
+             (`getDocumentRect`), `compute()` no longer scrolls the page or calls `window.stop()`,
+             stale `vi` data is recomputed when the layout changes, `boundingBox` stops scrolling
+             a visible element and waits for the scroll it does cause, `hover` warns when the
+             target is covered, and `mouseMoveAt` adds engine-side document→viewport conversion
+             plus explicit move pacing.  Its pulsar-bom is byte-for-byte identical to 4.11.30
+             apart from the version element, so the bump carries only base-source changes (no
+             dependency changes) — this repository consumed those changes through a local
+             `4.11.31-SNAPSHOT` install before the release; 4.11.31 is the same code.  The
+             vendored `js/dom_rect.js` is byte-identical to the one in the published jar (7050 B,
+             SHA-256 41bf2ea3…a0f2a0a) and must stay so — `RuntimeScriptContract` fails driver
+             creation on a mixed bundle. -->
+        <browser4-base.version>4.11.31</browser4-base.version>
         <cdt-kotlin-client.version>4.8.0</cdt-kotlin-client.version>
 
         <!-- Agent memory system: SQLite FTS derived index (design: docs-dev/copilot/robust-browser-agent-memory-system-design.md) -->
