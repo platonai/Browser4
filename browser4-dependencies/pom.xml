@@ -598,8 +598,7 @@
              SHA-256 41bf2ea3…a0f2a0a) and must stay so — `RuntimeScriptContract` fails driver
              creation on a mixed bundle.
 
-             4.11.32-SNAPSHOT (base `main`, consumed through a local `mvnw install`
-             until 4.11.32 is published) adds the prompt-cache breakdown to
+             4.11.32 (published 2026-11-12) adds the prompt-cache breakdown to
              `ai.platon.pulsar.external.TokenUsage`: `cachedInputTokenCount`,
              `cacheWriteInputTokenCount`, `cacheCountedInInputTokenCount` and the
              derived `effectiveInputTokenCount` / `cacheHitRatio`, extracted from
@@ -608,8 +607,9 @@
              (`cache_read_input_tokens` + `cache_creation_input_tokens`).  The agent
              token statistics in this repository (`AgentRunEvent` →
              `AgentTaskEvent` → `AgentTaskRunStats` → `GET /api/commands/{id}/stats`
-             → CLI `/stats`) read those fields; 4.11.31 and older do not carry them. -->
-        <browser4-base.version>4.11.32-SNAPSHOT</browser4-base.version>
+             → CLI `/stats`) read those fields; 4.11.31 and older do not carry them.
+             Its pulsar-bom carries no dependency changes beyond the version element. -->
+        <browser4-base.version>4.11.32</browser4-base.version>
         <cdt-kotlin-client.version>4.8.0</cdt-kotlin-client.version>
 
         <!-- Agent memory system: SQLite FTS derived index (design: docs-dev/copilot/robust-browser-agent-memory-system-design.md) -->
