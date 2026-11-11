@@ -84,6 +84,29 @@ pub fn major_version(java_exe: &Path) -> Result<i32, String> {
     })
 }
 
+/// True when the executable reports a GraalVM build (`java -version` mentions
+/// `GraalVM`).
+///
+/// GraalVM (JDK 25) defaults `UseJVMCICompiler=true`, which breaks the Kotlin
+/// compile/kapt daemon's RMI handshake (`Failed connecting to the daemon in 4
+/// retries`) even though the sources are fine — the same build passes seconds
+/// later. `build-runtime-bundle.ps1` disables the Kotlin daemon for exactly this
+/// case; the CLI's in-process build must apply the same workaround.
+pub fn is_graalvm(java_exe: &Path) -> bool {
+    let Ok(output) = Command::new(java_exe)
+        .arg("-version")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+    else {
+        return false;
+    };
+    // `java -version` writes to stderr, but a wrapped launcher may use stdout.
+    let mut text = String::from_utf8_lossy(&output.stderr).to_string();
+    text.push_str(&String::from_utf8_lossy(&output.stdout));
+    text.to_ascii_lowercase().contains("graalvm")
+}
+
 /// True when the executable exists and reports a Java version >= 17.
 fn is_java17_or_newer(java_exe: &Path) -> bool {
     java_exe.is_file() && major_version(java_exe).map(|v| v >= 17).unwrap_or(false)
@@ -436,6 +459,14 @@ mod tests {
     fn executable_name_is_platform_aware() {
         let name = executable_name();
         assert!(name == "java.exe" || name == "java");
+    }
+
+    #[test]
+    fn is_graalvm_is_false_for_a_missing_executable() {
+        // The GraalVM probe must never turn an unreadable JDK into a hard build
+        // failure: it only decides whether the Kotlin daemon workaround is
+        // applied.
+        assert!(!is_graalvm(Path::new("definitely-not-a-java-binary")));
     }
 
     #[test]

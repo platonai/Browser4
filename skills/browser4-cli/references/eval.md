@@ -185,6 +185,8 @@ printed (the logged lines are readable with `browser4-cli console`).
 |---------|-------|-----|
 | Printed value is `null` or `""` although the script computes something | `console.log` output is not eval's result | End with the value or `return`; read logs with `console` |
 | `element is not defined` | The expression used `element.property` instead of an arrow function | Write `element => element.property` and pass the ref (`--ref e5` or positionally) |
+| `error: unknown option '-file' for 'eval'` | Long options are double-dash; a single-dash token is not an option, and it used to be bound to the expression with the path bound to `ref` (surfacing as `TARGET_NOT_FOUND: No element matches selector "script.js"`) | Use the double-dash form: `eval --file script.js [ref]`. The same rule covers `-stdin`, `-json`, `-await`, `-ref`, … |
+| `error: unexpected positional arguments` | `eval` takes one expression plus one optional `ref`; extra tokens used to be joined into the `ref` slot (`"e5 extra"`), a selector that can never match | Quote the whole expression as one argument, or read it with `--file`/`--stdin` |
 | Expression mangled by the shell | Quotes stripped by bash/PowerShell before the CLI sees them | Use `--file`, `--stdin`/`--js`, `--base64`, or see [shell-quoting.md](shell-quoting.md) |
 | JS exception reported as a CLI error | The expression threw in the page (typo, missing element) | Guard with optional chaining or select the element first |
 | Element ref no longer resolves | Refs are ephemeral — they expire after navigation/interaction | Take a fresh `snapshot -i` and use the new ref |

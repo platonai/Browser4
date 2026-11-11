@@ -273,6 +273,12 @@ runner 上证明稳定，把该 job 提到 `--level=BASIC` 只是一个词的改
 `Enforce CI Gate`）：JVM 阶段失败不再让 Docker 构建、应用启动和 CLI e2e 阶段被跳过，
 一轮就能同时拿到两侧结论（`.github/workflows/nightly.yml`、`ci.yml` 的 `Check Test Status` 只记录状态）。
 
+两者的 checkout 之后、构建之前还有一道 **版本一致性** 前置步骤（`node bin/version.mjs check`）：它除根 pom 外
+还沿根 pom 的 `<modules>` 遍历 reactor，逐个校验项目 `<version>` 与仓内 `<parent><version>`。某个模块的父版本
+一旦滞后（例如版本 bump 发生在维护分支、而该模块只存在于 main，2026-11-08 nightly 即为此），Maven 会按旧版本
+构建它，依赖 `${project.version}` 的兄弟模块随即报 `Could not find artifact ...:jar:<version>`。该步骤在数秒内
+点名父模块失败，而不是三分钟后再在 reactor 里失败；模板/generated 等不在 reactor 内的 pom 不在校验范围。
+
 ### CLI e2e 的 experience 覆盖（本轮补齐）
 
 `experience save|query|list|deep-learn` 原先标 `E2eCoverage::Excluded`：Rust 参数映射单测、REST 派发单测

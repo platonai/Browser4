@@ -40,6 +40,9 @@ class EgoLiteBrowserLauncherTest {
     @Test
     fun resolveBinaryHonoursConfiguredEgoPath(@TempDir tempDir: Path) {
         val fakeEgo = Files.writeString(tempDir.resolve("ego.exe"), "MZ")
+        // resolveBinaryOrNull only honours a configured path that is executable,
+        // so make the fixture binary runnable (cross-platform via File API).
+        check(fakeEgo.toFile().setExecutable(true)) { "failed to make fixture executable" }
         val conf = MutableConfig().apply { set(EgoLiteBrowsers.EGO_PATH_PROPERTY, fakeEgo.toString()) }
 
         val resolved = EgoLiteBrowsers.resolveBinaryOrNull(conf)

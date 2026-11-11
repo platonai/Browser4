@@ -47,7 +47,8 @@ class ProfileImportToolExecutor(
                 "source: chrome|edge|safari; profile: Chrome/Edge profile name or directory " +
                 "(default: first profile); data: comma-separated subset of " +
                 "bookmarks,history,passwords,cookies,extensions (default: all); " +
-                "into: reserved for future use.",
+                "into: landing: temp (snapshot dir, default), prototype (seed the prototype " +
+                "profile), or default (populate the default profile dir).",
             cliName = "profile import",
         )
     }

@@ -39,7 +39,7 @@
 
 import { execSync } from "child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "fs";
-import { join, relative, resolve } from "path";
+import { dirname, join, relative, resolve } from "path";
 import { createInterface } from "readline";
 import { fileURLToPath } from "url";
 
@@ -68,7 +68,17 @@ function getRepoRoot() {
   }
 }
 
-const REPO_ROOT = getRepoRoot();
+/**
+ * Repository root the checks run against.
+ *
+ * `BROWSER4_VERSION_REPO_ROOT` is a test seam: it points the checks at a
+ * fixture tree so `bin/tests/version-mjs.tests.ps1` can prove they catch a
+ * drifted pom without touching the real checkout.  Unset (the normal case) it
+ * is the git top level.
+ */
+const REPO_ROOT = process.env.BROWSER4_VERSION_REPO_ROOT
+  ? resolve(process.env.BROWSER4_VERSION_REPO_ROOT)
+  : getRepoRoot();
 
 function stripSnapshot(version) {
   return version.endsWith("-SNAPSHOT")
@@ -333,8 +343,10 @@ function findFiles(dir, targetName, maxDepth) {
     for (const entry of entries) {
       const full = join(current, entry.name);
       if (entry.isDirectory()) {
-        // Skip well-known non-source directories
-        if (entry.name === "node_modules" || entry.name === "target" || entry.name === ".git") continue;
+        // Skip well-known non-source directories.  Hidden directories are
+        // skipped too: git worktrees (.claude/worktrees/...) and tool caches
+        // hold full checkouts that would otherwise be scanned as duplicates.
+        if (entry.name === "node_modules" || entry.name === "target" || entry.name.startsWith(".")) continue;
         walk(full, depth + 1);
       } else if (entry.isFile() && entry.name === targetName) {
         results.push(full);
@@ -454,10 +466,15 @@ function cmdCliSync(args) {
     console.error("ERROR: cli/package.json does not contain a version field.");
     process.exit(1);
   }
+  // Track CLI-file drift separately from process.exitCode: an earlier check in
+  // the same run may already have failed (e.g. a pom version), and reporting
+  // that as "CLI files out of sync" sends the reader to the wrong fix.
+  let cliFilesInSync = true;
   if (packageJson.version !== version) {
     if (checkOnly) {
       console.error(`MISMATCH: cli/package.json version is "${packageJson.version}", expected "${version}"`);
       process.exitCode = 1;
+      cliFilesInSync = false;
     } else if (dryRun) {
       console.log(`  [DRY-RUN] cli/package.json: ${packageJson.version} -> ${version}`);
     } else {
@@ -486,6 +503,7 @@ function cmdCliSync(args) {
     if (checkOnly) {
       console.error(`MISMATCH: cli/browser4-cli/Cargo.toml version is "${cargoVersion}", expected "${version}"`);
       process.exitCode = 1;
+      cliFilesInSync = false;
     } else if (dryRun) {
       console.log(`  [DRY-RUN] cli/browser4-cli/Cargo.toml: ${cargoVersion} -> ${version}`);
       cargoChanged = true;
@@ -508,7 +526,7 @@ function cmdCliSync(args) {
 
   // 6. Report
   if (checkOnly) {
-    if (process.exitCode === 1) {
+    if (!cliFilesInSync) {
       console.error("\nVersion mismatch detected! Run 'node bin/version.mjs cli sync' to fix.");
     } else {
       console.log(`\nAll CLI files in sync with VERSION: ${version}`);
@@ -713,33 +731,196 @@ function setPomTag(expectedTag) {
   return true;
 }
 
+/**
+ * Tags that end a pom's project header.  `<groupId>/<artifactId>/<version>`
+ * must appear before the first of them; anything after is a dependency, a
+ * plugin or a property whose `<version>` has nothing to do with the project
+ * version (e.g. `<version>${kotlin.version}</version>` inside <dependencies>).
+ */
+const POM_HEADER_END =
+  /<(name|description|packaging|url|inceptionYear|organization|licenses|developers|contributors|properties|dependencies|dependencyManagement|build|profiles|modules|repositories|pluginRepositories|reporting|distributionManagement|scm|issueManagement|ciManagement|mailingLists)>/;
+
+/**
+ * Read the facts the version checks need from a pom.xml:
+ *   { relPath, artifactId, version, parent, modules }
+ *
+ * `version` is the pom's *own* project <version>; it is null for a module pom
+ * that inherits its version — the normal case here, and precisely why a drifted
+ * `<parent><version>` cannot be caught by looking at the project version alone.
+ */
+function readPomFacts(pomPath) {
+  const content = readFileSync(pomPath, "utf-8");
+  const first = (block, tag) => {
+    const m = block.match(new RegExp(`<${tag}>([^<]+)</${tag}>`));
+    return m ? m[1].trim() : null;
+  };
+  const parentMatch = content.match(/<parent>([\s\S]*?)<\/parent>/);
+  const parentBlock = parentMatch ? parentMatch[1] : "";
+  const afterParent = parentMatch
+    ? content.slice(parentMatch.index + parentMatch[0].length)
+    : content;
+  const header = afterParent.split(POM_HEADER_END)[0];
+
+  let parent = null;
+  if (parentMatch) {
+    const relativePathMatch = parentBlock.match(/<relativePath>([^<]*)<\/relativePath>/);
+    parent = {
+      groupId: first(parentBlock, "groupId"),
+      artifactId: first(parentBlock, "artifactId"),
+      version: first(parentBlock, "version"),
+      relativePath: relativePathMatch ? relativePathMatch[1].trim() : null,
+    };
+  }
+
+  const modules = [...content.matchAll(/<module>([^<]+)<\/module>/g)].map((m) => m[1].trim());
+
+  // Explicit versions pinned on in-repo artifacts (a BOM, or a stray
+  // dependencyManagement entry). Property placeholders are resolved by Maven
+  // from the project version and cannot drift here.
+  const dependencyVersions = [...content.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)]
+    .map((m) => ({
+      groupId: first(m[1], "groupId"),
+      artifactId: first(m[1], "artifactId"),
+      version: first(m[1], "version"),
+    }))
+    .filter(
+      (d) =>
+        d.groupId &&
+        d.groupId.startsWith("ai.platon") &&
+        d.artifactId &&
+        d.version &&
+        !d.version.includes("${")
+    );
+
+  return {
+    relPath: relative(REPO_ROOT, pomPath),
+    artifactId: first(header, "artifactId"),
+    version: first(header, "version"),
+    parent,
+    modules,
+    dependencyVersions,
+  };
+}
+
 /** Read the project <version> from a pom.xml (skipping any <parent> block). */
 function readPomProjectVersion(pomPath) {
-  let content = readFileSync(pomPath, "utf-8");
-  const withoutParent = content.replace(/<parent>[\s\S]*?<\/parent>/g, "");
-  const match = withoutParent.match(/<version>([^<]+)<\/version>/);
-  return match ? match[1] : null;
+  return readPomFacts(pomPath).version;
+}
+
+/**
+ * Walk the Maven reactor from the root pom through its <modules> and return
+ * the facts of every pom that actually takes part in the build.
+ *
+ * Only reactor poms are version-checked: template poms under
+ * `archetype-resources/`, generated samples in `docs-dev/`, and other stray
+ * checkouts are not built by Maven and legitimately carry unrelated versions
+ * (placeholders such as `${browser4-version}`, or a plugin sample's own number).
+ * Returns null when the root pom is missing.
+ */
+function collectReactorPoms() {
+  const rootPomPath = join(REPO_ROOT, "pom.xml");
+  if (!existsSync(rootPomPath)) return null;
+
+  const seen = new Map();
+  const queue = [rootPomPath];
+  while (queue.length > 0) {
+    const pomPath = resolve(queue.shift());
+    if (seen.has(pomPath)) continue;
+    const facts = readPomFacts(pomPath);
+    seen.set(pomPath, facts);
+    for (const modulePath of facts.modules) {
+      const childPom = resolve(dirname(pomPath), modulePath, "pom.xml");
+      if (existsSync(childPom)) queue.push(childPom);
+    }
+  }
+  return [...seen.values()];
+}
+
+/**
+ * Check the project version of every reactor pom against `expectedVersion`.
+ *
+ * Returns `{ facts, problems }`, where `problems` is a list of
+ * `{ relPath, message }` (empty when everything agrees).  Both version
+ * locations are checked, because a module pom usually carries no <version> of
+ * its own and inherits it from its parent:
+ *
+ *   1. an own <version> (root pom, aggregators) must equal expectedVersion;
+ *   2. a <parent><version> whose parent is an in-repo module must equal
+ *      expectedVersion.  A stale parent version makes Maven build that module
+ *      under the *old* version, so a sibling depending on `${project.version}`
+ *      fails with "Could not find artifact ...:jar:<expectedVersion>" even
+ *      though the module is right there in the reactor.
+ *   3. an explicit <version> pinned on an in-repo artifact (the PDK BOM, a
+ *      leftover dependencyManagement entry) must equal expectedVersion.  The
+ *      same drift reached the Docker build this way: browser4-pdk-bom still
+ *      pinned the behavior artifacts at 4.16.1-SNAPSHOT, and every plugin
+ *      inheriting that BOM resolved the old version.
+ *
+ * External parents (e.g. the upstream pulsar parent) are not versioned here —
+ * they follow the parent BOM.
+ */
+function checkPomVersions(expectedVersion) {
+  const facts = collectReactorPoms() || findFiles(REPO_ROOT, "pom.xml", 8).map(readPomFacts);
+  const inRepoArtifacts = new Set(facts.map((f) => f.artifactId).filter(Boolean));
+  const problems = [];
+
+  for (const f of facts) {
+    if (f.version !== null && f.version !== expectedVersion) {
+      problems.push({
+        relPath: f.relPath,
+        message: `${f.version} (expected ${expectedVersion})`,
+      });
+    }
+    if (
+      f.parent &&
+      f.parent.version &&
+      f.parent.artifactId &&
+      inRepoArtifacts.has(f.parent.artifactId) &&
+      f.parent.version !== expectedVersion
+    ) {
+      problems.push({
+        relPath: f.relPath,
+        message: `parent ${f.parent.artifactId} is ${f.parent.version} (expected ${expectedVersion})`,
+      });
+    }
+    const stalePins = (f.dependencyVersions || [])
+      .filter((d) => inRepoArtifacts.has(d.artifactId) && d.version !== expectedVersion)
+      .map((d) => `${d.artifactId}:${d.version}`);
+    if (stalePins.length > 0) {
+      problems.push({
+        relPath: f.relPath,
+        message: `in-repo dependency pinned to ${[...new Set(stalePins)].join(", ")} (expected ${expectedVersion})`,
+      });
+    }
+  }
+
+  return { facts, problems };
 }
 
 /** Check that all pom.xml files match the expected version. */
 function checkAllPomVersions(expectedVersion) {
-  const pomFiles = findFiles(REPO_ROOT, "pom.xml", 8);
-  if (pomFiles.length === 0) {
+  if (findFiles(REPO_ROOT, "pom.xml", 8).length === 0) {
     checkItem("pom.xml", "error", "No pom.xml files found");
     process.exitCode = 1;
     return;
   }
-  for (const pomPath of pomFiles) {
-    const relPath = relative(REPO_ROOT, pomPath);
-    const pomVersion = readPomProjectVersion(pomPath);
-    if (pomVersion === null) {
-      checkItem(relPath, "error", "Cannot parse <version>");
+
+  const { facts, problems } = checkPomVersions(expectedVersion);
+  const problemsByPath = new Map();
+  for (const p of problems) {
+    problemsByPath.set(p.relPath, [...(problemsByPath.get(p.relPath) || []), p.message]);
+  }
+
+  for (const f of facts) {
+    const messages = problemsByPath.get(f.relPath);
+    if (messages) {
+      checkItem(f.relPath, "failed", messages.join("; "));
       process.exitCode = 1;
-    } else if (pomVersion === expectedVersion) {
-      checkItem(relPath, "passed", pomVersion);
+    } else if (f.version !== null) {
+      checkItem(f.relPath, "passed", f.version);
     } else {
-      checkItem(relPath, "failed", `${pomVersion} (expected ${expectedVersion})`);
-      process.exitCode = 1;
+      // Inherits its version from an in-repo parent — verified above.
+      checkItem(f.relPath, "passed", `inherits ${f.parent?.version ?? "version"}`);
     }
   }
 }
@@ -1394,6 +1575,21 @@ function cmdCheck() {
     allPassed = false;
   } else {
     checkItem("SNAPSHOT consistency", "passed", versionIsSnapshot ? "SNAPSHOT" : "RELEASE");
+  }
+
+  // 3b. Module poms: own <version> and in-repo <parent><version> must match
+  //     VERSION. A module pom normally inherits its version, so a stale parent
+  //     reference is invisible to the root-pom check above — yet it builds the
+  //     module under the old version and breaks any sibling that depends on
+  //     ${project.version}.
+  const { facts: pomFacts, problems: pomProblems } = checkPomVersions(versionFileVersion);
+  if (pomProblems.length === 0) {
+    checkItem("module pom versions", "passed", `${pomFacts.length} pom.xml scanned`);
+  } else {
+    for (const p of pomProblems) {
+      checkItem(p.relPath, "failed", p.message);
+    }
+    allPassed = false;
   }
 
   // 4. CLI: Cargo.toml and package.json must match VERSION (minus -SNAPSHOT)
