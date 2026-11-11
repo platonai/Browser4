@@ -4358,6 +4358,52 @@ impl Repl {
     }
 }
 
+/// Strip terminal control noise from a line read from stdin.
+///
+/// On Windows the console line editor consumes arrow keys before the CLI ever
+/// sees them. On a Unix cooked terminal it does not: arrow keys arrive as CSI
+/// sequences (`ESC [ A` …), function keys as SS3 sequences (`ESC O P` …), and
+/// Ctrl+Space as a NUL byte. Those bytes used to be forwarded to
+/// `POST /api/commands/{id}/input` verbatim and became part of the prompt the
+/// model saw. Drop them here, at the single point where interactive user input
+/// enters the session.
+fn sanitize_stdin_line(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\x1b' => match chars.peek().copied() {
+                // CSI: ESC '[' parameters/intermediates, then a final byte in
+                // 0x40..=0x7E (arrows, Home/End, Del, bracketed paste …).
+                Some('[') => {
+                    chars.next();
+                    for next in chars.by_ref() {
+                        if ('@'..='~').contains(&next) {
+                            break;
+                        }
+                    }
+                }
+                // SS3: ESC 'O' and one final byte (F1–F4, keypad, arrows).
+                Some('O') => {
+                    chars.next();
+                    let _ = chars.next();
+                }
+                // Any other two-byte escape (Alt+key) — or a lone ESC.
+                Some(_) => {
+                    chars.next();
+                }
+                None => {}
+            },
+            // A literal tab is harmless; every other control character is
+            // terminal noise (NUL from Ctrl+Space, DEL, C1 controls …).
+            '\t' => out.push('\t'),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Read stdin lines on a dedicated thread and forward them to the async loop.
 ///
 /// A plain thread (not `spawn_blocking`) because the read is blocking for the
@@ -4370,7 +4416,7 @@ fn spawn_stdin_reader() -> tokio::sync::mpsc::UnboundedReceiver<String> {
         for line in stdin.lock().lines() {
             match line {
                 Ok(line) => {
-                    if tx.send(line).is_err() {
+                    if tx.send(sanitize_stdin_line(&line)).is_err() {
                         return;
                     }
                 }
@@ -6934,5 +6980,56 @@ mod tests {
         let payload = repl.resume_payload("task-1", None);
         assert_eq!(payload["resumeTaskId"], "task-1");
         assert_eq!(payload["tokenBudget"], 2_000_000);
+    }
+
+    /// Arrow keys reach a Unix cooked terminal as raw CSI sequences; they must
+    /// never become part of the prompt text sent to the backend.
+    #[test]
+    fn sanitize_stdin_line_strips_arrow_key_sequences() {
+        assert_eq!(
+            sanitize_stdin_line("open https://example.com\u{1b}[D\u{1b}[A\u{1b}[B\u{1b}[C"),
+            "open https://example.com"
+        );
+        // Parameterized CSI (Ctrl+Right, Delete) is consumed whole.
+        assert_eq!(sanitize_stdin_line("ab\u{1b}[1;5Ccd\u{1b}[3~e"), "abcde");
+    }
+
+    /// Ctrl+Space emits NUL, and bracketed paste wraps text in its own markers;
+    /// neither belongs in the user's message.
+    #[test]
+    fn sanitize_stdin_line_strips_nul_and_paste_markers() {
+        assert_eq!(
+            sanitize_stdin_line("hello\u{0}()\u{7f}world"),
+            "hello()world"
+        );
+        assert_eq!(
+            sanitize_stdin_line("\u{1b}[200~pasted text\u{1b}[201~"),
+            "pasted text"
+        );
+    }
+
+    /// F1–F4, keypad keys and Alt+key combinations are shorter escapes too.
+    #[test]
+    fn sanitize_stdin_line_strips_ss3_and_alt_sequences() {
+        assert_eq!(sanitize_stdin_line("a\u{1b}OPb\u{1b}vc"), "abc");
+    }
+
+    /// A line made only of terminal noise collapses to nothing, so the
+    /// interactive loop's emptiness check drops it instead of sending it.
+    #[test]
+    fn sanitize_stdin_line_drops_line_made_only_of_noise() {
+        assert_eq!(sanitize_stdin_line("\u{1b}[D\u{1b}[A\u{1b}[B\u{1b}[C"), "");
+        assert!(sanitize_stdin_line("\u{0}\u{1b}[200~\u{1b}[201~")
+            .trim()
+            .is_empty());
+    }
+
+    /// Ordinary text — including non-ASCII and literal tabs — is untouched.
+    #[test]
+    fn sanitize_stdin_line_keeps_plain_text() {
+        assert_eq!(
+            sanitize_stdin_line("写个测试 ✅ café\tok"),
+            "写个测试 ✅ café\tok"
+        );
     }
 }
