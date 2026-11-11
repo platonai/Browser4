@@ -51,7 +51,7 @@
 | M14 `vi` 一次性冻结（I2） | ✅ **已验证** | `compute()` 增加 `layoutVersion`（DOM 变更计数 + 滚动/视口尺寸 + URL）与 `isLayoutStale()`；在元素上方插入 400px 后二次捕获 `vi.y` +441（§12.8） |
 | M2/M3 `get box` 与 snapshot 空间不同、测量-滚动竞态（I4） | ✅ **已验证** | `boundingBox` 改为"可见不滚、不可见滚后等落定再测"；`get box` 输出 `boxSpace:"viewport"`，与 `vi − scrollY` 一致（§12.8） |
 | M4–M13、D1–D4、T1–T3 | ✅ 已修/已验证 | P0/P1/P2/P3 各项，逐条证据见 `20261110-mouse-pointer-todo.md`；三组新 e2e 在真实浏览器通过（§12.8） |
-| 改动落地状态 | ✅ 已提交 | 基库 `4.11.31-SNAPSHOT` install 成功（含 `pulsar-bom`），Browser4 `browser4-base.version` 升版并重建 bundle；两份仓库均提交（见待办 P0-1） |
+| 改动落地状态 | ✅ 已提交 | 基库 `4.11.31-SNAPSHOT` install 成功（含 `pulsar-bom`），Browser4 `browser4-base.version` 升版并重建 bundle；两份仓库均提交（见待办 P0-1）。正式版 `4.11.31` 于 2026-11-11 发布到 Maven Central 后，v4.16.5 起 pin 已改为该正式版（与本地 SNAPSHOT 同一份代码，`pulsar-bom` 与 4.11.30 仅版本号不同） |
 | 在 Browser4 运行时生效 | ✅ 已验证 | 注入的 `isolated-world.gen.js` 含 `getDocumentRect`、`_computeDone`、`_layoutMutationCount`、`box-space`，不含 `bodyRect`，`window.stop` 仅出现在注释；驱动启动时 `RuntimeScriptContract` 校验通过（§12.8） |
 
 #### 0.1.1 运行时三态（2026-11-10 复查；2026-11-11 起为第三态）

@@ -68,6 +68,7 @@
 
 - [x] **P1-2 升级基库版本**
   位置：`browser4-dependencies/pom.xml`：`<browser4-base.version>4.11.31-SNAPSHOT</browser4-base.version>`（含该批改动的说明注释）。
+  后续（2026-11-11，v4.16.5）：正式版 `4.11.31` 已发布到 Maven Central，pin 改为 `<browser4-base.version>4.11.31</browser4-base.version>`——与本地 SNAPSHOT 同一份代码；发布 jar 内 `js/dom_rect.js` 与 vendored 副本逐字节一致（7050 B，SHA-256 `41bf2ea3…a0f2a0a`），全量编译与 `RuntimeScriptContractTest`/`EmulationHandlerTest` 通过。
 
 - [x] **P1-3 重建 runtime bundle**
   命令：`browser4-apps/browser4-bundle/build-runtime-bundle.ps1 -SkipMavenInstall`（Maven 侧先以 `-Pall-main-modules,asset-bundle` 安装）。
