@@ -4214,6 +4214,28 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli sessionstorage-clear".to_string());
     }
 
+    if cmd.name == "star" {
+        // `add_note_line` inserts directly below the heading, so these are
+        // written back-to-front to read top-to-bottom.
+        add_note_line(
+            &mut lines,
+            "The reminder printed after value-producing commands appears at most 3 times, at least \
+             7 days apart, and never in --json/--quiet output; BROWSER4_NO_PROMO=1 turns it off \
+             permanently.",
+        );
+        add_note_line(
+            &mut lines,
+            "Browser order: the attached browser you are already using, then (only after you \
+             confirm) a local browser started with --remote-debugging-port, then your default \
+             browser. Only the first two can be verified, so the fallback says so.",
+        );
+        add_note_line(
+            &mut lines,
+            "The CLI never stars the repository itself. It opens the page, reads whether you are \
+             signed in, and waits for YOUR click — no star is ever sent from your account.",
+        );
+    }
+
     // Subcommands — `config` never mentioned `config get|set|delete`, `crawl`
     // never mentioned `crawl resume`, `doctor` never mentioned `doctor log`, and
     // so on: the family was only visible in the top-level reference, which is
@@ -5012,6 +5034,10 @@ const CLI_EXAMPLES: &[(&str, &[&str])] = &[
     (
         "plugin-remove",
         &["browser4-cli plugin remove captcha --yes"],
+    ),
+    (
+        "star",
+        &["browser4-cli star", "browser4-cli star --check"],
     ),
 ];
 

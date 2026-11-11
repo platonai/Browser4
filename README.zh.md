@@ -15,6 +15,8 @@
 
 [English](README.md) | 简体中文 | [中国镜像](https://gitee.com/platonai_galaxyeye/Browser4)
 
+> ⭐ **Browser4 对你有帮助？** 运行 `browser4-cli star` —— 它会用你已登录的浏览器打开本仓库，然后等你自己点 Star。CLI 绝不会代你点。
+
 <!-- TOC -->
 **目录**
 - [🤖 Browser4](#-browser4)

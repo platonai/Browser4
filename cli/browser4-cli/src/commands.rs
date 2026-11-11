@@ -3870,6 +3870,28 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "star",
+            description: "Open the Browser4 repository in the browser you are already logged into and wait while you click Star. The CLI never stars the repository for you: it navigates, reads whether you are signed in, and polls until your click shows up. Uses the attached browser when there is one, otherwise offers to connect a local browser started with --remote-debugging-port, and otherwise hands the URL to your default browser. `star --check` re-reads a tab that already shows the repository (after a reload) and never opens one.",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "check", description: "Report the current state instead of opening anything: whether the attached browser is signed in and whether the repository is already starred. Reloads a tab that already shows the repository; never opens one.", is_bool: true, short: None },
+                OptionDef { name: "no-open", description: "Do not touch any browser: print the URL and the commands that would open it", is_bool: true, short: None },
+                OptionDef { name: "wait <seconds>", description: "How long to wait for your click in the attached browser (default: 60, 0 = return immediately, max: 600)", is_bool: false, short: None },
+                OptionDef { name: "dismiss", description: "Turn the periodic star reminder off permanently (same as BROWSER4_NO_PROMO=1)", is_bool: true, short: None },
+            ],
+            // Deliberately outside the e2e suite: `star` opens a real, already
+            // logged-in browser and waits for a human click.  The detection half
+            // is covered by unit tests plus the `b4/star-fixture.html` fixture
+            // (point the CLI at it with BROWSER4_STAR_URL), which is where a
+            // future scenario should start.
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
             name: "doctor",
             description: "Run system diagnostics: build info, LLM status, and auto-clean stale daemon files. Use --verbose to include logs and metrics, --fix for destructive repairs.",
             category: Category::Browsers,

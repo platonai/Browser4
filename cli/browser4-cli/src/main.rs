@@ -30,6 +30,7 @@ mod webminer;
 mod skills;
 mod snapshot;
 mod snapshot_diff;
+mod star_guide;
 mod state;
 mod tips;
 mod update_check;
@@ -33559,6 +33560,15 @@ async fn run(
         }
     }
 
+    // `star` drives the browser the user is already logged into, so it decides
+    // for itself whether a backend is needed: opening the repository must not
+    // cost a cold server start (which can rebuild the runtime bundle first).
+    if command == "star" {
+        star_guide::run(&base_url, global.session_name.as_deref(), &parsed).await?;
+        emit_json_envelope_for_early_return(&command);
+        return Ok(());
+    }
+
     // Ensure the Browser4 server is running (for relevant commands).
     //
     // The backend is started (or restarted) **before** any page-dependent
@@ -35197,6 +35207,10 @@ async fn run(
 
     // Show a relevant tip on stderr to help AI agents discover advanced features.
     tips::show_tip(command);
+
+    // …and, once in a while, tell a human about the repository itself.  Gated
+    // on a TTY, frequency-capped, and silent in every machine-readable mode.
+    star_guide::maybe_show_cta(command);
 
     Ok(())
 }

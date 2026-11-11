@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Browser4 CLI Star Fixture</title>
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; padding: 24px; }
+    #repo-header { display: flex; align-items: center; gap: 12px; }
+    button { padding: 6px 14px; border: 1px solid #d0d7de; border-radius: 6px; background: #f6f8fa; cursor: pointer; }
+    button[aria-pressed="true"] { background: #fff8c5; }
+    #state-log { margin-top: 20px; padding: 10px; border: 1px solid #ccc; font-family: monospace; white-space: pre; }
+  </style>
+</head>
+<body>
+  <!--
+    Fixture for `browser4-cli star` — the e2e harness must never point the CLI at
+    real github.com.  This page reproduces exactly the three signals the CLI's
+    detection script reads, and nothing else:
+
+      * <meta name="user-login">        → signed in, value is the login
+      * form[action$="/star"]           → not starred yet
+      * form[action$="/unstar"]         → starred
+      * button[aria-pressed="true"]     → starred (the current React control)
+
+    Query parameters:
+      ?state=out       render the signed-out page (no meta tag)
+      ?state=starred   render an already-starred page
+      ?login=<name>    override the login (default: fixture-user)
+      ?reset=1         clear the stored state first (localStorage)
+
+    The state is kept in localStorage, because starring is account-level rather
+    than tab-level: a click in one tab must be visible to another tab after a
+    reload — that is exactly what `star --check` relies on.
+
+    Clicking the button flips the page between the two states, which is what the
+    user does with GitHub's real Star button.  `#state-log` carries the same
+    verdict as text so a test can assert on it without re-implementing detection.
+
+    Drive it with:
+      BROWSER4_STAR_URL=http://localhost:<port>/b4/star-fixture.html browser4-cli star
+  -->
+  <h1>Star fixture</h1>
+  <p>This page stands in for the GitHub repository page. Browser4 only reads it.</p>
+
+  <div id="repo-header">
+    <strong>platonai/Browser4</strong>
+    <form id="star-form" action="/platonai/Browser4/star" method="post">
+      <button id="star-button" type="submit" aria-pressed="false">Star</button>
+    </form>
+  </div>
+
+  <div id="state-log">not-starred</div>
+
+  <script>
+    (function () {
+      // Starring is an account-level fact, not a tab-level one: the state lives
+      // in localStorage so a second tab (or a reload of the first) sees the
+      // click. That is what the real page does, and it is what makes
+      // `star --check` (which reloads a repo tab) meaningful.
+      var STORAGE_KEY = 'b4-star-fixture-state';
+      var params = new URLSearchParams(location.search);
+      var login = params.get('login') || 'fixture-user';
+      var log = document.getElementById('state-log');
+      var form = document.getElementById('star-form');
+      var button = document.getElementById('star-button');
+
+      if (params.get('reset') === '1') {
+        localStorage.removeItem(STORAGE_KEY);
+      }
+
+      function initialState() {
+        var stored = localStorage.getItem(STORAGE_KEY);
+        if (stored) { return stored; }
+        var fromQuery = (params.get('state') || '').toLowerCase();
+        if (fromQuery === 'out') { return 'logged-out'; }
+        if (fromQuery === 'starred') { return 'starred'; }
+        return 'not-starred';
+      }
+
+      function applyState(state) {
+        var signedIn = state !== 'logged-out';
+        var starred = state === 'starred';
+        var existing = document.querySelector('meta[name="user-login"]');
+        if (existing) { existing.remove(); }
+        if (signedIn) {
+          var meta = document.createElement('meta');
+          meta.name = 'user-login';
+          meta.content = login;
+          document.head.appendChild(meta);
+        }
+        form.setAttribute('action', '/platonai/Browser4/' + (starred ? 'unstar' : 'star'));
+        button.setAttribute('aria-pressed', starred ? 'true' : 'false');
+        button.textContent = starred ? 'Unstar' : 'Star';
+        log.textContent = state;
+      }
+
+      applyState(initialState());
+
+      button.addEventListener('click', function (event) {
+        event.preventDefault();
+        // Reading the live DOM keeps the toggle honest even if a test flips the
+        // attribute directly: the action is the source of truth, as on GitHub.
+        var starred = /\/unstar$/.test(form.getAttribute('action') || '');
+        var next = starred ? 'not-starred' : 'starred';
+        localStorage.setItem(STORAGE_KEY, next);
+        applyState(next);
+      });
+    })();
+  </script>
+</body>
+</html>

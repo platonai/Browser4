@@ -208,6 +208,7 @@ Full guide: [`skills/browser4-cli/references/network.md`](../../skills/browser4-
 | Command | Description |
 |---|---|
 | `profiles list` | List browser profile (context) directories under `~/.browser4/browser/chrome` |
+| `star` | Open the Browser4 repository in the browser you are already logged into and wait for **your** Star click — the CLI never stars it for you. Uses the attached browser, otherwise offers (once, after asking) to connect a local browser started with `--remote-debugging-port`, otherwise hands the URL to your default browser. `--check` only reads the page, `--wait <seconds>` bounds the wait, `--no-open` prints the URL without touching a browser, `--dismiss` turns the periodic reminder off |
 
 ### Storage
 
