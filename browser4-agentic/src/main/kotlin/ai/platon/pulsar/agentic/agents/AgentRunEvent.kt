@@ -22,15 +22,28 @@ package ai.platon.pulsar.agentic.agents
  * @property durationMs tool execution time
  * @property text model text / steering text / usage category (`compaction`)
  * @property turn 1-based outer agent round
- * @property inputTokens provider-reported input tokens of the model request
- *   ([USAGE] only; `null` when the provider reported no usage)
- * @property outputTokens provider-reported output tokens of the model request
- * @property totalTokens provider-reported total tokens of the model request
+ * @property inputTokens prompt tokens the model request processed, prompt-cache
+ *   reads and writes included ([USAGE] only; `null` when the provider reported no
+ *   usage).  Normalized across protocols on purpose: OpenAI-compatible providers
+ *   already count cache hits inside `prompt_tokens`, Anthropic-style ones report
+ *   them separately, and every consumer (budget, `/stats`, the cache-hit ratio)
+ *   must see one meaning.
+ * @property outputTokens completion tokens of the model request
+ * @property totalTokens the request's accounted total: [inputTokens] + output
+ *   tokens
+ * @property cachedInputTokens prompt tokens served from the provider's prompt
+ *   cache for this request ([USAGE] only; `null` — not `0` — when the provider
+ *   reported no cache details)
+ * @property cacheWriteInputTokens prompt tokens this request wrote into the
+ *   provider's prompt cache (Anthropic-style APIs; `null` when unreported).  A
+ *   write is billed above the base input price, which is why it is reported apart
+ *   from the reads.
  * @property budgetTokens the run's effective token budget ([USAGE] only): `0` means
  *   unlimited, `null` when the run reports no budget
- * @property cumulativeTokens tokens consumed by the run so far, this request
- *   included ([USAGE] only) — the number a supervisor needs to see "how close to
- *   the abort are we", which a per-request count alone cannot answer
+ * @property cumulativeTokens charged tokens consumed by this run so far, this
+ *   request included ([USAGE] only) — cache-miss prompt tokens + output, the
+ *   number the budget and the "how close to the abort are we" question use;
+ *   prompt-cache reads are excluded (they cost ~10% of the base price)
  * */
 data class AgentRunEvent(
     val type: String,
@@ -43,6 +56,10 @@ data class AgentRunEvent(
     val inputTokens: Int? = null,
     val outputTokens: Int? = null,
     val totalTokens: Int? = null,
+    /** Prompt tokens served from the provider cache ([USAGE] only; `null` = unreported). */
+    val cachedInputTokens: Int? = null,
+    /** Prompt tokens written to the provider cache ([USAGE] only; `null` = unreported). */
+    val cacheWriteInputTokens: Int? = null,
     /** Effective token budget of this run ([USAGE] only; 0 = unlimited). */
     val budgetTokens: Long? = null,
     /** Tokens consumed by this run so far, this request included ([USAGE] only). */

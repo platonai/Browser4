@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 @Tag("Unit")
@@ -163,6 +164,50 @@ class AgentTaskEventLogTest {
         assertEquals(1_750, stats.totalTokens, "1200 + (500+50) + 0 for the usage-less request")
         assertEquals(mapOf("b4.run" to 2L, "browser_snapshot" to 1L), stats.toolCounts)
         assertTrue(stats.tokensReported)
+    }
+
+    @Test
+    @DisplayName("stats accumulate the prompt-cache breakdown and expose a hit ratio")
+    fun statsAccumulatePromptCacheBreakdown() {
+        val log = AgentTaskEventLog()
+        log.append(
+            AgentTaskEvent.TYPE_USAGE,
+            inputTokens = 1_000,
+            outputTokens = 100,
+            totalTokens = 1_100,
+            cachedInputTokens = 800,
+            cacheWriteInputTokens = 0,
+        )
+        log.append(
+            AgentTaskEvent.TYPE_USAGE,
+            inputTokens = 500,
+            outputTokens = 20,
+            totalTokens = 520,
+            cachedInputTokens = 450,
+        )
+        // A request whose provider disclosed nothing must not reset the counters.
+        log.append(AgentTaskEvent.TYPE_USAGE, inputTokens = 100, outputTokens = 10)
+
+        val stats = log.stats()
+
+        assertEquals(1_600, stats.inputTokens)
+        assertEquals(1_250, stats.cachedInputTokens)
+        assertEquals(0, stats.cacheWriteInputTokens)
+        assertTrue(stats.cacheReported)
+        assertEquals(1_250.0 / 1_600.0, stats.cacheHitRatio!!, 1e-9)
+    }
+
+    @Test
+    @DisplayName("an unreported prompt cache stays unknown instead of becoming a 0% hit ratio")
+    fun unreportedPromptCacheIsNotZeroPercent() {
+        val log = AgentTaskEventLog()
+        log.append(AgentTaskEvent.TYPE_USAGE, inputTokens = 700, outputTokens = 70, totalTokens = 770)
+
+        val stats = log.stats()
+
+        assertFalse(stats.cacheReported)
+        assertEquals(0, stats.cachedInputTokens)
+        assertNull(stats.cacheHitRatio, "unknown is not 0%")
     }
 
     @Test

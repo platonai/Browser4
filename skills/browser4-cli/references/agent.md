@@ -76,7 +76,7 @@ The workspace lives on the backend machine (copy the artifacts when it is remote
 
 ### Cost control (`--token-budget`, `--follow` usage lines)
 
-A run is capped at `agent.token.budget.total` (5M tokens by default) and aborts with `TOKEN_BUDGET` before it can burn unbounded provider credits. Two different knobs:
+A run is capped at `agent.token.budget.total` (**5M cache-miss tokens** by default) and aborts with `TOKEN_BUDGET` before it can burn unbounded provider credits. The cap counts **cache-miss prompt tokens + output tokens**: prompt-cache reads cost ~10% of the input price and are *not* charged, so a long loop that re-sends a mostly cached prefix no longer aborts a run that actually costs little. Uncached prompt (Anthropic's cache *writes* included) and output stay charged; a provider that reports no cache details charges its whole prompt — an unknown cache is never treated as a hit. Two different knobs:
 
 | Knob | Scope | Use it when |
 |---|---|---|
@@ -86,12 +86,45 @@ A run is capped at `agent.token.budget.total` (5M tokens by default) and aborts 
 `--token-budget 0` means unlimited (accounting only). `--follow` reports the spend:
 
 ```text
-[04:31] tokens 412.0k / 5.00M (8%) · 37 requests
-[12:02] tokens 4.02M / 5.00M (80%) · 118 requests ⚠ 80% of the token budget used
-[15:24] ✖ token budget exhausted: 5.01M / 5.00M — the run is being aborted
+[04:31] budget 412.0k / 5.00M (8%) · cache 331.8k (81%) · 37 requests
+[12:02] budget 4.02M / 5.00M (80%) · cache 3.62M (90%) · 118 requests ⚠ 80% of the cache-miss budget used
+[15:24] ✖ cache-miss token budget exhausted: 5.01M / 5.00M — the run is being aborted
 ```
 
-The progress line is throttled (every 10 requests or 15s); the 80% warning appears once and the abort line names both numbers. `--ndjson` carries the same information as `effectiveTokenBudget` + `cumulativeTokens` on every `run.usage` line, and `agent result --json` reports the budget as `result.effectiveTokenBudget`.
+The first number is the **charged** amount (cache-miss prompt + output), not the raw token total — that is why the line says `budget`. The progress line is throttled (every 10 requests or 15s); the 80% warning appears once and the abort line names both numbers. The `cache` part is the run's prompt-cache hit ratio (cache-read tokens ÷ prompt tokens) and appears only when the provider reports cache details — a provider that reports none stays silent rather than claiming `0%`. `--ndjson` carries the same information as `effectiveTokenBudget` + `cumulativeTokens` on every `run.usage` line, plus `cachedInputTokens` / `cacheWriteInputTokens` when the provider disclosed them. `cumulativeTokens` is the **charged** amount (cache-miss prompt + output, what the budget enforces); `inputTokens` on the same line stays the raw prompt count, so the two differ exactly by the cache reads. `agent result --json` reports the budget as `result.effectiveTokenBudget`.
+
+#### After a budget abort: continue
+
+A budget abort is **resumable**: the run's workspace, files and progress are already on disk. In the interactive session (`-i`) the failure is followed by a numbered choice, and choosing *continue* resumes the task with a **doubled** cap:
+
+```text
+✖ failed · 3b27930e · 12.1s — token_budget: Token budget exceeded (cache-miss accounting)…
+next (type a number, or a new task):
+  1) continue with a 10.0M cache-miss budget  /resume --budget 10000000
+  2) run statistics                           /stats
+  3) start a new task (fresh context)         /new
+```
+
+Typing `1` runs the command on the right; the resume re-uses the interrupted task's workspace and instruction, and the new task shows as `▶ resume <old> → task <new>`. From a script or `--follow`/`--wait`, the same thing is one command (the failure line prints it with the doubled budget):
+
+```bash
+browser4-cli agent run --resume <task-id> --token-budget 10000000
+```
+
+`/resume [--budget <n>] [task-id]` is also a plain session command — useful for any resumable failure (`NOOP_LIMIT`, a cancellation), not just budget aborts.
+
+#### After every task: what next
+
+When a task ends in `-i`, the session offers 2–3 follow-ups, numbered and chosen by typing the number (any other input — a task, a `/command` — supersedes the block):
+
+| Outcome | Choices |
+|---|---|
+| `done` | full result as JSON (`/result --json`) · run statistics (`/stats`) · new task with a fresh context (`/new`) |
+| budget abort / resumable failure | continue with a doubled cache-miss budget (`/resume --budget <2×>`) · run statistics · new task |
+| cancelled | continue this task · full result as JSON · new task |
+| non-resumable failure | run statistics · new task |
+
+Piped stdin (no TTY) gets no menu: a numbered choice a script cannot answer would only be noise. The `resume:` hint line keeps carrying the exact command for those runs.
 
 ### Permissions (`--access`)
 
@@ -282,11 +315,16 @@ browser4-cli agent run "Collect the top 5 products" --follow --ndjson | jq -c 's
 {"type":"task.submitted","taskId":"…","task":"Collect the top 5 products"}
 {"taskId":"…","seq":3,"type":"tool.call","epochMillis":1761…,"tool":"b4.run","arguments":"{\"args\":\"goto …\"}","turn":1}
 {"taskId":"…","seq":4,"type":"tool.result","epochMillis":1761…,"tool":"b4.run","ok":true,"durationMs":6200,"text":"…","turn":1}
-{"taskId":"…","seq":5,"type":"run.usage","epochMillis":1761…,"turn":1,"inputTokens":4821,"outputTokens":212,"totalTokens":5033}
+{"taskId":"…","seq":5,"type":"run.usage","epochMillis":1761…,"turn":1,"inputTokens":4821,"outputTokens":212,"totalTokens":5033,"cachedInputTokens":3900,"cacheWriteInputTokens":0}
 {"taskId":"…","type":"task.result","status":"done","elapsedMs":41300,"result":{"summary":"…"}}
 ```
 
-`run.usage` is one line per model request, carrying the provider's token counts (`inputTokens`/`outputTokens`/`totalTokens`, omitted when the provider reports none) — the same numbers `/stats` sums.
+`run.usage` is one line per model request, carrying the provider's token counts (`inputTokens`/`outputTokens`/`totalTokens`, omitted when the provider reports none) — the same numbers `/stats` sums — plus the prompt-cache breakdown when the provider discloses it:
+
+- `cachedInputTokens` — prompt tokens served from the provider's prompt cache (cache *read*), `null`/absent when the provider reported no cache details (unknown, not `0`);
+- `cacheWriteInputTokens` — prompt tokens written into the prompt cache (Anthropic-style APIs; `0`/absent elsewhere).
+
+`inputTokens` is **cache-inclusive across protocols**: OpenAI-compatible APIs (DeepSeek, OpenRouter, …) already count cache hits inside `prompt_tokens`, while Anthropic reports them separately and Browser4 folds them in. `cachedInputTokens / inputTokens` is therefore a comparable hit ratio, and `totalTokens` is `inputTokens` + output.
 
 The visible detail is deliberately bounded: tool arguments and results are truncated to ~240 characters, and values whose key names a credential (`password`, `token`, `apiKey`, …) are redacted to `***`, as is typed text whose selector names a credential field (`input[type=password]`).
 
@@ -397,10 +435,12 @@ Session commands:
 |---|---|
 | `/help` | List the commands |
 | `/status` | Status of the running (or last) task |
-| `/stats [task-id]` | Run statistics: LLM rounds and requests, token usage, tool calls |
+| `/stats [task-id]` | Run statistics: LLM rounds and requests, token usage (prompt-cache reads/writes and hit ratio included when the provider reports them), tool calls |
 | `/result [--json]` | Print the last finished task's result as sections (`--json`: the raw envelope) |
+| `/resume [--budget <n>] [task-id]` | Continue an interrupted/stalled task with its workspace and files. After a budget abort pass a larger `--budget` (the numbered continue choice does this with a doubled cap) |
 | `/cancel` | Cancel the running task (same as Ctrl+C) |
 | `/new` | Start a new session — the next task gets a fresh agent context |
+| `1` / `2` / `3` | Pick a suggested follow-up while the "next" block is on screen (any other input, a task or a `/command`, supersedes it) |
 | `/session` | Print the current session id |
 | `/coding [on\|off]` | Treat following tasks as coding tasks |
 | `/quiet [on\|off]` | Silence the session's human lines — the same effect as the global `-q`, for the rest of this session (bare `/quiet` flips it) |
@@ -416,18 +456,20 @@ agent> /stats
 5b0c3f2a · running · 3m12s
   llm     3 round(s) · 11 request(s)
   tokens  in 48,231 · out 6,120 · total 54,351
+  cache   38,585 read · 120 written (80.0% hit)
   tools   39 call(s) · 2 failed (b4.run 12, browser_snapshot 8)
   steps   132 · 1 steering message(s)
 ```
 
 - **llm**: outer agent `round`s (each may issue several model requests) and the model `request`s — the honest "how many LLM calls" count.
-- **tokens**: what the provider reported, summed per request. `not reported by the provider` means the calls happened but no usage block arrived (a local model, a gateway that drops it) — it is not a measured zero.
+- **tokens**: what the provider reported, summed per request. `not reported by the provider` means the calls happened but no usage block arrived (a local model, a gateway that drops it) — it is not a measured zero. `in` counts the whole prompt the model processed, prompt-cache reads included (see **cache** below), so it stays comparable across providers.
+- **cache**: prompt tokens the provider served from its prompt cache (`read`), how many the run wrote into that cache (`written`, Anthropic-style APIs), and the hit ratio (`read ÷ in`). The line appears **only** when at least one request reported cache details — an unreported cache is unknown, not `0%`. Reads bill at roughly a tenth of the base input price and writes above it, so a high hit rate is the cheapest way to run a long loop.
 - **tools**: tool calls, how many failed, and the most-called tools.
 - **steps**: every step the run emitted; `dropped from the buffer` means the bounded step log evicted older steps (the counters still include them).
 
-The numbers come from `GET /api/commands/{id}/stats`, which counts every step as it is appended — exact even for steps the step log no longer retains. `/stats <task-id>` reports another task of this session; against a backend without that endpoint the report is labelled `counted by this session` and can only undercount.
+The numbers come from `GET /api/commands/{id}/stats`, which counts every step as it is appended — exact even for steps the step log no longer retains. `/stats <task-id>` reports another task of this session; against a backend without that endpoint the report is labelled `counted by this session` and can only undercount. A backend that predates the prompt-cache counters simply omits the **cache** line (its `cachedInputTokens` / `cacheWriteInputTokens` / `cacheReported` fields are missing).
 
-The completion line already carries a compact version of these numbers (`· 3 round(s) · 39 tool(s) · 54.4k tokens`), so `/stats` is for the breakdown — rounds vs individual requests, input/output tokens, failures and the per-tool counts.
+The completion line already carries a compact version of these numbers (`· 3 round(s) · 39 tool(s) · 54.4k tokens · cache 80%`), so `/stats` is for the breakdown — rounds vs individual requests, input/output tokens, cache reads/writes, failures and the per-tool counts.
 
 An optional task runs immediately: `agent run -i "Summarize this page"`. With piped stdin the banner and prompt are omitted, so a harness can drive the session: `printf 'task one\n/quit\n' | browser4-cli agent run -i`.
 

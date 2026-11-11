@@ -207,6 +207,10 @@ data class AgentTaskStatus(
      * number attached, so a caller could not tell whether the configured 5M default
      * was too small or the run was runaway. Filled from the agent's own budget at the
      * end of the run (see `RobustBrowserAgent.lastRunTokenBudget`).
+     *
+     * The cap is counted in **cache-miss** tokens: uncached prompt + output, with
+     * prompt-cache reads excluded (they cost ~10% of the input price). A CLI client
+     * uses it to offer "continue with a doubled budget" after a `TOKEN_BUDGET` abort.
      */
     var effectiveTokenBudget: Long? = null
 

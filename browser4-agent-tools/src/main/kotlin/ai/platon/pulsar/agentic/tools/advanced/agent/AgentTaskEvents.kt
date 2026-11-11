@@ -31,14 +31,25 @@ import com.fasterxml.jackson.databind.node.ObjectNode
  * @property durationMs tool execution time
  * @property text model text, result preview, or lifecycle message
  * @property turn 1-based outer agent round the step belongs to
- * @property inputTokens provider-reported input tokens of one model request
- *   ([TYPE_USAGE] only; `null` when the provider reported no usage at all)
+ * @property inputTokens prompt tokens of one model request, prompt-cache reads
+ *   and writes included ([TYPE_USAGE] only; `null` when the provider reported no
+ *   usage at all).  Normalized across provider protocols: OpenAI-compatible
+ *   providers already count cache hits inside `prompt_tokens`, Anthropic-style
+ *   ones report them separately — both arrive here cache-inclusive, so
+ *   `cachedInputTokens / inputTokens` is a hit ratio for either.
  * @property outputTokens provider-reported output tokens of one model request
- * @property totalTokens provider-reported total tokens of one model request
+ * @property totalTokens the request's accounted total: [inputTokens] + output
+ *   tokens
+ * @property cachedInputTokens prompt tokens served from the provider's prompt
+ *   cache for this request ([TYPE_USAGE] only; `null` — not `0` — when the
+ *   provider reported no cache details)
+ * @property cacheWriteInputTokens prompt tokens this request wrote into the
+ *   provider's prompt cache (Anthropic-style APIs; `null` when unreported)
  * @property budgetTokens the run's effective token budget ([TYPE_USAGE] only;
  *   `0` = unlimited, `null` = not reported)
- * @property cumulativeTokens tokens consumed so far, this request included
- *   ([TYPE_USAGE] only) — what a follower needs to show "1.24M / 5.0M (25%)"
+ * @property cumulativeTokens charged tokens consumed so far, this request included
+ *   ([TYPE_USAGE] only) — cache-miss prompt tokens + output, what the budget
+ *   enforces; a follower needs it to show "1.24M / 5.0M (25%)"
  * @property errorCode machine-readable failure reason ([TYPE_FAILED] only):
  *   `TOKEN_BUDGET`, `NOOP_LIMIT`, `CANCELLED`, `TOOL_ERROR`
  * @property resumable whether `agent run --resume <id>` can continue the task
@@ -58,6 +69,10 @@ data class AgentTaskEvent(
     val inputTokens: Int? = null,
     val outputTokens: Int? = null,
     val totalTokens: Int? = null,
+    /** Prompt tokens served from the provider cache ([TYPE_USAGE] only; `null` = unreported). */
+    val cachedInputTokens: Int? = null,
+    /** Prompt tokens written to the provider cache ([TYPE_USAGE] only; `null` = unreported). */
+    val cacheWriteInputTokens: Int? = null,
     val budgetTokens: Long? = null,
     val cumulativeTokens: Long? = null,
     val errorCode: String? = null,
@@ -130,10 +145,15 @@ data class AgentTaskEvent(
  * @property toolFailures tool calls that reported failure (`tool.result` with
  *   `ok=false`)
  * @property steerMessages user steering messages injected into the run
- * @property inputTokens summed provider-reported input tokens
+ * @property inputTokens summed prompt tokens of the run, prompt-cache reads and
+ *   writes included
  * @property outputTokens summed provider-reported output tokens
- * @property totalTokens summed provider-reported total tokens; a provider that
- *   omits the total is accounted as input + output
+ * @property totalTokens summed accounted totals ([inputTokens] + output); a
+ *   provider that omits the total is accounted as input + output
+ * @property cachedInputTokens summed prompt tokens served from the provider cache
+ * @property cacheWriteInputTokens summed prompt tokens written to the provider cache
+ * @property cacheReported whether any model request reported prompt-cache details;
+ *   `false` means the cache counters are *unknown*, not zero
  * @property events every step ever appended (retained plus evicted)
  * @property droppedEvents steps that fell out of the bounded buffer
  * @property firstEpochMillis wall-clock time of the first step
@@ -150,6 +170,12 @@ data class AgentTaskRunStats(
     val inputTokens: Long = 0,
     val outputTokens: Long = 0,
     val totalTokens: Long = 0,
+    /** Summed prompt tokens served from the provider cache ([cacheReported] gates it). */
+    val cachedInputTokens: Long = 0,
+    /** Summed prompt tokens written to the provider cache (Anthropic-style APIs). */
+    val cacheWriteInputTokens: Long = 0,
+    /** True when at least one model request reported prompt-cache details. */
+    val cacheReported: Boolean = false,
     val events: Long = 0,
     val droppedEvents: Long = 0,
     val firstEpochMillis: Long? = null,
@@ -165,6 +191,19 @@ data class AgentTaskRunStats(
      * */
     val tokensReported: Boolean
         get() = inputTokens > 0 || outputTokens > 0 || totalTokens > 0
+
+    /**
+     * Share of the run's prompt tokens served from the provider cache, `0.0..1.0`.
+     *
+     * `null` when no request reported cache details (an unreported cache is not a
+     * 0% hit rate) or when the run processed no prompt tokens at all.
+     * */
+    val cacheHitRatio: Double?
+        get() = if (cacheReported && inputTokens > 0) {
+            cachedInputTokens.toDouble() / inputTokens
+        } else {
+            null
+        }
 
     companion object {
         /** How many distinct tools [toolCounts] keeps (the most-called ones). */
@@ -186,6 +225,9 @@ private class RunStatsAccumulator {
     var inputTokens = 0L
     var outputTokens = 0L
     var totalTokens = 0L
+    var cachedInputTokens = 0L
+    var cacheWriteInputTokens = 0L
+    var cacheReported = false
     var events = 0L
     var firstEpochMillis: Long? = null
     var lastEpochMillis: Long? = null
@@ -198,6 +240,8 @@ private class RunStatsAccumulator {
         inputTokens: Int?,
         outputTokens: Int?,
         totalTokens: Int?,
+        cachedInputTokens: Int?,
+        cacheWriteInputTokens: Int?,
         epochMillis: Long,
     ) {
         events++
@@ -222,6 +266,17 @@ private class RunStatsAccumulator {
                 // A provider that reports only input/output must still be
                 // accounted: `total` is input + output, never "-1"/absent.
                 this.totalTokens += (totalTokens ?: (input + output)).coerceAtLeast(0)
+                // Cache counters are only meaningful when the provider reported
+                // them: a null on every request must stay "unknown" (0% would be a
+                // lie), so a single reported value flips the flag for the run.
+                cachedInputTokens?.let {
+                    this.cachedInputTokens += it.coerceAtLeast(0)
+                    cacheReported = true
+                }
+                cacheWriteInputTokens?.let {
+                    this.cacheWriteInputTokens += it.coerceAtLeast(0)
+                    cacheReported = true
+                }
             }
         }
     }
@@ -235,6 +290,9 @@ private class RunStatsAccumulator {
         inputTokens = inputTokens,
         outputTokens = outputTokens,
         totalTokens = totalTokens,
+        cachedInputTokens = cachedInputTokens,
+        cacheWriteInputTokens = cacheWriteInputTokens,
+        cacheReported = cacheReported,
         events = events,
         droppedEvents = dropped,
         firstEpochMillis = firstEpochMillis,
@@ -287,6 +345,8 @@ class AgentTaskEventLog(val capacity: Int = DEFAULT_CAPACITY) {
         inputTokens: Int? = null,
         outputTokens: Int? = null,
         totalTokens: Int? = null,
+        cachedInputTokens: Int? = null,
+        cacheWriteInputTokens: Int? = null,
         budgetTokens: Long? = null,
         cumulativeTokens: Long? = null,
         errorCode: String? = null,
@@ -311,12 +371,17 @@ class AgentTaskEventLog(val capacity: Int = DEFAULT_CAPACITY) {
             inputTokens = inputTokens,
             outputTokens = outputTokens,
             totalTokens = totalTokens,
+            cachedInputTokens = cachedInputTokens,
+            cacheWriteInputTokens = cacheWriteInputTokens,
             budgetTokens = budgetTokens,
             cumulativeTokens = cumulativeTokens,
             errorCode = errorCode,
             resumable = resumable,
         )
-        accumulator.record(type, tool, ok, inputTokens, outputTokens, totalTokens, epochMillis)
+        accumulator.record(
+            type, tool, ok, inputTokens, outputTokens, totalTokens,
+            cachedInputTokens, cacheWriteInputTokens, epochMillis,
+        )
         events.addLast(event)
         while (events.size > capacity) {
             events.removeFirst()

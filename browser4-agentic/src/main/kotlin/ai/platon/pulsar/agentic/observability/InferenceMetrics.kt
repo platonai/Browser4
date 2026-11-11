@@ -59,6 +59,8 @@ object InferenceMetrics {
     val activeInferenceCount = AtomicInteger(0)
     private val totalInputTokens = AtomicLong(0)
     private val totalOutputTokens = AtomicLong(0)
+    private val totalCachedInputTokens = AtomicLong(0)
+    private val totalCacheWriteInputTokens = AtomicLong(0)
 
     init {
         Gauge.builder("inference.active.calls", activeInferenceCount, AtomicInteger::toDouble)
@@ -68,12 +70,22 @@ object InferenceMetrics {
 
         Gauge.builder("inference.tokens.input.total", totalInputTokens, AtomicLong::toDouble)
             .tag("component", "inference")
-            .description("Total input tokens processed")
+            .description("Total input tokens processed (prompt-cache reads included)")
             .register(registry)
 
         Gauge.builder("inference.tokens.output.total", totalOutputTokens, AtomicLong::toDouble)
             .tag("component", "inference")
             .description("Total output tokens generated")
+            .register(registry)
+
+        Gauge.builder("inference.tokens.cached.total", totalCachedInputTokens, AtomicLong::toDouble)
+            .tag("component", "inference")
+            .description("Total prompt tokens served from the provider prompt cache")
+            .register(registry)
+
+        Gauge.builder("inference.tokens.cache_write.total", totalCacheWriteInputTokens, AtomicLong::toDouble)
+            .tag("component", "inference")
+            .description("Total prompt tokens written to the provider prompt cache")
             .register(registry)
     }
 
@@ -146,10 +158,20 @@ object InferenceMetrics {
      * Record token usage for an inference call.
      *
      * @param modelName The name of the model
-     * @param inputTokens Number of input tokens
+     * @param inputTokens Prompt tokens of the request, prompt-cache tokens included
      * @param outputTokens Number of output tokens
+     * @param cachedInputTokens Prompt tokens the provider served from its prompt
+     *   cache, when reported (`null` = the provider disclosed no cache details)
+     * @param cacheWriteInputTokens Prompt tokens the request wrote to the provider
+     *   prompt cache (Anthropic-style APIs), when reported
      */
-    fun recordTokenUsage(modelName: String, inputTokens: Int, outputTokens: Int) {
+    fun recordTokenUsage(
+        modelName: String,
+        inputTokens: Int,
+        outputTokens: Int,
+        cachedInputTokens: Int? = null,
+        cacheWriteInputTokens: Int? = null,
+    ) {
         totalInputTokens.addAndGet(inputTokens.toLong())
         totalOutputTokens.addAndGet(outputTokens.toLong())
 
@@ -157,6 +179,19 @@ object InferenceMetrics {
             .increment(inputTokens.toDouble())
         registry.counter("inference.tokens.output", "model_name", modelName)
             .increment(outputTokens.toDouble())
+
+        // Cache counters are recorded only when the provider reported them: an
+        // undisclosed cache must not look like a 0% hit rate in the dashboards.
+        if (cachedInputTokens != null) {
+            totalCachedInputTokens.addAndGet(cachedInputTokens.toLong().coerceAtLeast(0L))
+            registry.counter("inference.tokens.cached", "model_name", modelName)
+                .increment(cachedInputTokens.toDouble().coerceAtLeast(0.0))
+        }
+        if (cacheWriteInputTokens != null) {
+            totalCacheWriteInputTokens.addAndGet(cacheWriteInputTokens.toLong().coerceAtLeast(0L))
+            registry.counter("inference.tokens.cache_write", "model_name", modelName)
+                .increment(cacheWriteInputTokens.toDouble().coerceAtLeast(0.0))
+        }
 
         // Record token efficiency (output/input ratio)
         if (inputTokens > 0) {
@@ -236,4 +271,18 @@ object InferenceMetrics {
      * @return Total output tokens
      */
     fun getTotalOutputTokens(): Long = totalOutputTokens.get()
+
+    /**
+     * Get total prompt tokens served from a provider prompt cache.
+     *
+     * @return Total cache-read tokens reported by the providers (0 when none did)
+     */
+    fun getTotalCachedInputTokens(): Long = totalCachedInputTokens.get()
+
+    /**
+     * Get total prompt tokens written to a provider prompt cache.
+     *
+     * @return Total cache-write tokens reported by the providers (0 when none did)
+     */
+    fun getTotalCacheWriteInputTokens(): Long = totalCacheWriteInputTokens.get()
 }

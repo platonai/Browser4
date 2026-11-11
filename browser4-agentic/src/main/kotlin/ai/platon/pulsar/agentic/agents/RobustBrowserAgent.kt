@@ -34,6 +34,7 @@ import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
+import ai.platon.pulsar.external.TokenUsage
 import com.fasterxml.jackson.databind.node.JsonNodeFactory
 import dev.langchain4j.agent.tool.ToolExecutionRequest
 import dev.langchain4j.data.message.*
@@ -435,7 +436,7 @@ internal const val CLI_BUDGET_FINAL_PERCENT = 95
  * reported partial result beats an aborted run with no report — the same lesson as
  * [codingProgressNudge], expressed for the budget instead of read-only rounds.
  *
- * @param consumed the run's tokens so far
+ * @param consumed the run's charged (cache-miss) tokens so far
  * @param limit the run's effective budget (`0` or a negative value means unlimited)
  * @param percent threshold the caller wants to announce (80 or 95)
  * @return the directive, or `null` while the run is below [percent]
@@ -445,12 +446,14 @@ internal fun budgetPressureNudge(consumed: Long, limit: Long, percent: Int = CLI
     if (consumed * 100 < limit * percent) return null
     val now = consumed * 100 / limit
     return if (percent >= CLI_BUDGET_FINAL_PERCENT) {
-        "You have used $now% of this task's token budget ($consumed of $limit). This is the last chance to " +
+        "You have used $now% of this task's cache-miss token budget ($consumed of $limit; prompt-cache " +
+            "reads are free, so this counts uncached input plus output). This is the last chance to " +
             "report: do not start another collection or repair step. Make sure the deliverable is in the " +
             "workspace root, list every field the page did not provide in `problems`, and call " +
             "system.taskComplete NOW. An honest partial report is better than an aborted run with no report."
     } else {
-        "You have used $now% of this task's token budget ($consumed of $limit). Stop collecting and " +
+        "You have used $now% of this task's cache-miss token budget ($consumed of $limit; prompt-cache " +
+            "reads are free, so this counts uncached input plus output). Stop collecting and " +
             "re-auditing: write the deliverable to the workspace root now if it is still under .b4scratch, " +
             "list every field the page did not provide in `problems`, and call system.taskComplete. " +
             "An honest partial report is better than an aborted run with no report."
@@ -1557,12 +1560,20 @@ open class RobustBrowserAgent(
                 // includes this request (a task-level budget that is about to abort
                 // must still be visible), then reported with the effective budget.
                 tokenBudget?.let { budget ->
-                    runCatching { response.tokenUsage() }.getOrNull()?.let { usage ->
+                    runCatching { response.tokenUsage() }.getOrNull()?.let { rawUsage ->
                         // A provider that omits usage contributes nothing; the request
                         // is still counted by the loop's own totals.
+                        //
+                        // Charge the prompt the request actually processed: cache
+                        // reads/writes are real prompt tokens (Anthropic reports them
+                        // OUTSIDE `input_tokens`, OpenAI-style providers inside it), and
+                        // `normalized()` folds them into `inputTokenCount` exactly once —
+                        // never twice, or a cache-heavy run would abort early.
+                        val usage = TokenUsage.from(rawUsage).normalized()
                         budget.charge(
-                            usage.inputTokenCount()?.toLong() ?: 0L,
-                            usage.outputTokenCount()?.toLong() ?: 0L,
+                            usage.inputTokenCount.toLong(),
+                            usage.outputTokenCount.toLong(),
+                            usage.cachedInputTokenCount?.toLong() ?: 0L,
                         )
                     }
                 }
@@ -1737,15 +1748,23 @@ open class RobustBrowserAgent(
         category: String? = null,
         budget: AgentTokenBudget? = null,
     ) {
+        // Normalize across protocols: `inputTokens` is the prompt the request
+        // actually processed (prompt-cache reads and writes included), so
+        // `cachedInputTokens / inputTokens` is a hit ratio for OpenAI-compatible
+        // and Anthropic-style providers alike. Cache counters stay null when the
+        // provider reported none — an unknown cache is not a 0% hit rate.
         val usage = runCatching { response.tokenUsage() }.getOrNull()
+            ?.let { TokenUsage.from(it).normalized() }
         emitRunEvent(
             AgentRunEvent(
                 AgentRunEvent.USAGE,
                 text = category,
                 turn = turn,
-                inputTokens = usage?.inputTokenCount(),
-                outputTokens = usage?.outputTokenCount(),
-                totalTokens = usage?.totalTokenCount(),
+                inputTokens = usage?.inputTokenCount,
+                outputTokens = usage?.outputTokenCount,
+                totalTokens = usage?.totalTokenCount,
+                cachedInputTokens = usage?.cachedInputTokenCount,
+                cacheWriteInputTokens = usage?.cacheWriteInputTokenCount,
                 budgetTokens = budget?.effectiveMaxTotalTokens,
                 cumulativeTokens = budget?.consumedTotal,
             )
@@ -1914,17 +1933,24 @@ open class RobustBrowserAgent(
          * Persist the real provider token usage for one model request, paired
          * with its request dump via `requestSeq`. Append-only JSONL so every
          * round's usage survives (the loop sums usage across rounds).
+         *
+         * The prompt-cache breakdown is written alongside the counts (null when
+         * the provider reported none) so a run can be re-analyzed for cache
+         * efficiency without re-calling the provider.
          */
         fun logResponse(requestSeq: Int, response: ChatResponse) {
             if (!enabled) return
             try {
-                val usage = response.tokenUsage()
+                val usage = runCatching { response.tokenUsage() }.getOrNull()
+                    ?.let { TokenUsage.from(it).normalized() }
                 val payload = mapOf(
                     "timestamp" to AppPaths.fromNow(),
                     "requestSeq" to requestSeq,
-                    "inputTokens" to usage?.inputTokenCount(),
-                    "outputTokens" to usage?.outputTokenCount(),
-                    "totalTokens" to usage?.totalTokenCount(),
+                    "inputTokens" to usage?.inputTokenCount,
+                    "outputTokens" to usage?.outputTokenCount,
+                    "totalTokens" to usage?.totalTokenCount,
+                    "cachedInputTokens" to usage?.cachedInputTokenCount,
+                    "cacheWriteInputTokens" to usage?.cacheWriteInputTokenCount,
                     "finishReason" to response.finishReason()?.name,
                 )
                 jsonlWriter.writeTo(payload, runDir.resolve("cli-usage.jsonl"))
@@ -1941,14 +1967,17 @@ open class RobustBrowserAgent(
         fun logCompactionUsage(response: ChatResponse) {
             if (!enabled) return
             try {
-                val usage = response.tokenUsage()
+                val usage = runCatching { response.tokenUsage() }.getOrNull()
+                    ?.let { TokenUsage.from(it).normalized() }
                 val payload = mapOf(
                     "timestamp" to AppPaths.fromNow(),
                     "requestSeq" to 0,
                     "category" to "compaction",
-                    "inputTokens" to usage?.inputTokenCount(),
-                    "outputTokens" to usage?.outputTokenCount(),
-                    "totalTokens" to usage?.totalTokenCount(),
+                    "inputTokens" to usage?.inputTokenCount,
+                    "outputTokens" to usage?.outputTokenCount,
+                    "totalTokens" to usage?.totalTokenCount,
+                    "cachedInputTokens" to usage?.cachedInputTokenCount,
+                    "cacheWriteInputTokens" to usage?.cacheWriteInputTokenCount,
                     "finishReason" to response.finishReason()?.name,
                 )
                 jsonlWriter.writeTo(payload, runDir.resolve("cli-usage.jsonl"))

@@ -98,7 +98,8 @@ object TaskEnvelopes {
      *   instead of parsing [error], and `statusCode` (417 for every failure) cannot
      *   tell the cases apart.
      * @param resumable whether the task can be continued (agent tasks only)
-     * @param effectiveTokenBudget the token budget the run enforced (`0` = unlimited)
+     * @param effectiveTokenBudget the **cache-miss** token budget the run enforced
+     *   (`0` = unlimited): uncached prompt + output, prompt-cache reads excluded
      */
     fun of(
         taskId: String,

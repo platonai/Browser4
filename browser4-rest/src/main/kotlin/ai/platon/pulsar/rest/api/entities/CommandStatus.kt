@@ -101,10 +101,12 @@ data class CommandStatus(
     var resumable: Boolean? = null,
 
     /**
-     * The token budget the run actually enforced (`0` = unlimited, `null` = unknown).
+     * The **cache-miss** token budget the run actually enforced (`0` = unlimited,
+     * `null` = unknown): uncached prompt + output, prompt-cache reads excluded.
      *
      * A budget abort without the number is unactionable: "5M was not enough" and
-     * "the configured limit was 20k by mistake" look identical.
+     * "the configured limit was 20k by mistake" look identical — and the CLI cannot
+     * offer "continue with a doubled budget" without the cap it just hit.
      */
     var effectiveTokenBudget: Long? = null,
 ) {

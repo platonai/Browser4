@@ -7,6 +7,7 @@ import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.external.BrowserChatModel
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
+import ai.platon.pulsar.external.TokenUsage
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
@@ -194,9 +195,12 @@ class AgentToolCallLoop(
         // Accumulate real usage across all rounds — previously only the final
         // response's usage was reported, undercounting consumption by every
         // intermediate tool-calling round.
-        var totalInput = 0
-        var totalOutput = 0
-        var totalTotal = 0
+        //
+        // Each response is normalized before it is added: prompt-cache reads (and
+        // Anthropic-style cache writes) become part of the prompt count exactly
+        // once, whichever protocol reported them, so the returned [ModelResponse]
+        // never double counts a cache hit.
+        var totalUsage = TokenUsage()
         val executedTools = mutableListOf<String>()
         // Provider-confirmed context-window overflow recovery budget: reset on
         // every successful response, consumed by prune+compact retries.
@@ -293,16 +297,14 @@ class AgentToolCallLoop(
             messages.add(aiMessage)
 
             response.tokenUsage()?.let { u ->
-                totalInput += u.inputTokenCount() ?: 0
-                totalOutput += u.outputTokenCount() ?: 0
-                totalTotal += u.totalTokenCount() ?: 0
+                totalUsage += TokenUsage.from(u).normalized()
             }
 
             val toolRequests = aiMessage.toolExecutionRequests()
             if (toolRequests.isNullOrEmpty()) {
                 // No more tool calls — return the final response
                 logger.debug("Tool loop finished after ${iteration + 1} round(s)")
-                return chatResponseToModelResponse(response, totalInput, totalOutput, totalTotal)
+                return chatResponseToModelResponse(response, totalUsage)
             }
 
             logger.debug("Tool loop round ${iteration + 1}: executing ${toolRequests.size} tool(s)")
@@ -351,7 +353,7 @@ class AgentToolCallLoop(
         // a whole step's work (the results list itself dies with the loop).
         logger.warn("Tool loop exceeded max iterations ($maxIterations)")
         val executed = executedTools.distinct().joinToString(", ")
-        return chatResponseToModelResponse(response!!, totalInput, totalOutput, totalTotal).let { mr ->
+        return chatResponseToModelResponse(response!!, totalUsage).let { mr ->
             mr.copy(modelError = OVERFLOW_ERROR_PREFIX + " ($maxIterations)" +
                 (if (executed.isNotBlank()) "; executed: $executed" else "") +
                 overflowProgressSummary(messages))
@@ -399,25 +401,22 @@ class AgentToolCallLoop(
 
     private fun chatResponseToModelResponse(
         response: ChatResponse,
-        summedInput: Int = 0,
-        summedOutput: Int = 0,
-        summedTotal: Int = 0,
+        summedUsage: TokenUsage = TokenUsage(),
     ): ModelResponse {
         val content = response.aiMessage().text() ?: ""
-        // Prefer summed usage when non-zero (multi-round loop); fall back to the
-        // single-response usage for the trivial single-round case.
-        val usage = response.tokenUsage()
-        val input = if (summedInput > 0) summedInput else (usage?.inputTokenCount() ?: 0)
-        val output = if (summedOutput > 0) summedOutput else (usage?.outputTokenCount() ?: 0)
-        val total = if (summedTotal > 0) summedTotal else (usage?.totalTokenCount() ?: 0)
+        // Prefer the summed usage when the loop saw any (multi-round); fall back to
+        // the single response's usage for the trivial single-round case. Both are
+        // already normalized (prompt-cache tokens folded into the prompt count).
+        val single = response.tokenUsage()?.let { TokenUsage.from(it).normalized() } ?: TokenUsage()
+        val usage = if (summedUsage.inputTokenCount > 0 || summedUsage.outputTokenCount > 0) {
+            summedUsage
+        } else {
+            single
+        }
         return ModelResponse(
             content = content,
             state = ResponseState.STOP,
-            tokenUsage = ai.platon.pulsar.external.TokenUsage(
-                inputTokenCount = input,
-                outputTokenCount = output,
-                totalTokenCount = total,
-            ),
+            tokenUsage = usage,
         )
     }
 

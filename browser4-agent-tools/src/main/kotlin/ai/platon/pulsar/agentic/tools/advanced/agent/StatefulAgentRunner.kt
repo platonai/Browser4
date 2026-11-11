@@ -352,6 +352,8 @@ open class StatefulAgentRunner(
             inputTokens = event.inputTokens,
             outputTokens = event.outputTokens,
             totalTokens = event.totalTokens,
+            cachedInputTokens = event.cachedInputTokens,
+            cacheWriteInputTokens = event.cacheWriteInputTokens,
             budgetTokens = event.budgetTokens,
             cumulativeTokens = event.cumulativeTokens,
         )

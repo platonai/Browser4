@@ -19,6 +19,7 @@ import ai.platon.pulsar.external.BrowserChatModel
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
+import ai.platon.pulsar.external.TokenUsage
 import ai.platon.pulsar.skeleton.llm.TestChatModelFactory
 import dev.langchain4j.data.image.Image
 import dev.langchain4j.data.message.ChatMessage
@@ -389,29 +390,43 @@ open class ContextToAction(
      * Resilient to null/zero usage (some providers omit counts on errors).
      */
     private fun accountTokenUsage(response: ModelResponse) {
-        val usage = response.tokenUsage
+        // Normalized: the prompt count is cache-inclusive, so a cache read is never
+        // charged twice (OpenAI-style) and never dropped (Anthropic-style).
+        val usage = response.tokenUsage.normalized()
         val input = usage.inputTokenCount.toLong().coerceAtLeast(0L)
         val output = usage.outputTokenCount.toLong().coerceAtLeast(0L)
+        val cached = usage.cachedInputTokenCount?.toLong()?.coerceAtLeast(0L) ?: 0L
         if (input == 0L && output == 0L) return
 
-        val total = tokenBudget.add(input, output)
+        // Cache-miss accounting: prompt-cache reads are billed at ~10% and are not
+        // charged, so a cached loop no longer burns the budget it did not spend.
+        val total = tokenBudget.add(input, output, cached)
 
         // Feed the existing Micrometer metrics — previously never recorded in
-        // production, leaving the token gauges at zero.
+        // production, leaving the token gauges at zero. The cache breakdown is
+        // recorded alongside the headline counts.
         runCatching {
-            InferenceMetrics.recordTokenUsage(metricsModelName, input.toInt(), output.toInt())
+            InferenceMetrics.recordTokenUsage(
+                metricsModelName, input.toInt(), output.toInt(),
+                cachedInputTokens = usage.cachedInputTokenCount,
+                cacheWriteInputTokens = usage.cacheWriteInputTokenCount,
+            )
         }
 
         if (tokenBudget.shouldWarn()) {
-            logger.warn("⚠️ token usage at 80%+ of budget: $tokenBudget")
+            logger.warn("⚠️ cache-miss token usage at 80%+ of budget: $tokenBudget")
         }
 
         if (tokenBudget.isExceeded) {
             logger.error(
-                "🛑 token budget exceeded: consumed {} tokens, budget {} — aborting agent run",
-                total, tokenBudget.maxTotalTokens
+                "🛑 cache-miss token budget exceeded: charged {} tokens (cache reads not charged), budget {} — aborting agent run",
+                total, tokenBudget.effectiveMaxTotalTokens
             )
-            throw TokenBudgetExceededException(total, tokenBudget.maxTotalTokens)
+            throw TokenBudgetExceededException(
+                total,
+                tokenBudget.effectiveMaxTotalTokens,
+                tokenBudget.consumedCacheReadTokens,
+            )
         }
     }
 
@@ -617,15 +632,13 @@ open class ContextToAction(
      */
     private fun chatResponseToModelResponse(response: ChatResponse): ModelResponse {
         val content = response.aiMessage().text() ?: ""
-        val lc4jUsage = response.tokenUsage()
+        // Keep the provider's prompt-cache breakdown and normalize it, so the
+        // budget/metrics see one meaning regardless of the provider protocol.
+        val usage = TokenUsage.from(response.tokenUsage()).normalized()
         return ModelResponse(
             content = content,
             state = ResponseState.STOP,
-            tokenUsage = ai.platon.pulsar.external.TokenUsage(
-                inputTokenCount = lc4jUsage?.inputTokenCount() ?: 0,
-                outputTokenCount = lc4jUsage?.outputTokenCount() ?: 0,
-                totalTokenCount = lc4jUsage?.totalTokenCount() ?: 0,
-            ),
+            tokenUsage = usage,
         )
     }
 

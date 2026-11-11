@@ -92,6 +92,12 @@ struct TaskEvent {
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     total_tokens: Option<u64>,
+    /// Prompt tokens the provider served from its prompt cache, when it reported
+    /// cache details (`None` = unknown, which is not the same as 0).
+    cached_input_tokens: Option<u64>,
+    /// Prompt tokens the request wrote into the provider prompt cache
+    /// (Anthropic-style APIs; `None` = unreported).
+    cache_write_input_tokens: Option<u64>,
     /// The run's effective token budget (`run.usage` steps; 0 = unlimited).
     budget_tokens: Option<u64>,
     /// Tokens consumed by the run so far, this request included.
@@ -138,6 +144,14 @@ impl TaskEvent {
         }
         if let Some(tokens) = self.total_tokens {
             obj["totalTokens"] = json!(tokens);
+        }
+        // Prompt-cache breakdown: machine consumers get "how much of this prompt
+        // was served from cache" without re-deriving it from provider logs.
+        if let Some(tokens) = self.cached_input_tokens {
+            obj["cachedInputTokens"] = json!(tokens);
+        }
+        if let Some(tokens) = self.cache_write_input_tokens {
+            obj["cacheWriteInputTokens"] = json!(tokens);
         }
         // Budget visibility for machine consumers: `--ndjson` must answer "how
         // close to the abort are we" without a second call.
@@ -213,6 +227,10 @@ fn parse_events_page(body: &str) -> Result<EventsPage, String> {
             input_tokens: item.get("inputTokens").and_then(|v| v.as_u64()),
             output_tokens: item.get("outputTokens").and_then(|v| v.as_u64()),
             total_tokens: item.get("totalTokens").and_then(|v| v.as_u64()),
+            cached_input_tokens: item.get("cachedInputTokens").and_then(|v| v.as_u64()),
+            cache_write_input_tokens: item
+                .get("cacheWriteInputTokens")
+                .and_then(|v| v.as_u64()),
             budget_tokens: item
                 .get("effectiveTokenBudget")
                 .and_then(|v| v.as_u64())
@@ -273,6 +291,10 @@ struct StatusProgress {
     error_code: Option<String>,
     /// Whether `agent run --resume <id>` can continue the task.
     resumable: Option<bool>,
+    /// The cache-miss token budget this run enforced (`effectiveTokenBudget`;
+    /// `0` = unlimited), when the envelope reports one. Used to offer a
+    /// "continue" with a doubled budget after a budget abort.
+    effective_budget: Option<u64>,
 }
 
 fn parse_status_progress(body: &str) -> StatusProgress {
@@ -285,6 +307,7 @@ fn parse_status_progress(body: &str) -> StatusProgress {
             tools: 0,
             error_code: None,
             resumable: None,
+            effective_budget: None,
         };
     };
 
@@ -335,6 +358,18 @@ fn parse_status_progress(body: &str) -> StatusProgress {
         .map(str::to_string);
     let resumable = value.get("resumable").and_then(|v| v.as_bool());
 
+    // The run's effective cache-miss budget. It rides the status envelope (and
+    // `agent result --json`); a nested `details` object is the legacy shape.
+    let effective_budget = value
+        .get("effectiveTokenBudget")
+        .and_then(|v| v.as_u64())
+        .or_else(|| {
+            value
+                .get("details")
+                .and_then(|details| details.get("effectiveTokenBudget"))
+                .and_then(|v| v.as_u64())
+        });
+
     // The backend answers an unknown id with `statusCode: 404` and a message
     // naming the id; a missing ROUTE (an older backend) has no such envelope.
     let status_code = value.get("statusCode").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -352,6 +387,7 @@ fn parse_status_progress(body: &str) -> StatusProgress {
         tools,
         error_code,
         resumable,
+        effective_budget,
     }
 }
 
@@ -379,6 +415,13 @@ struct RunStats {
     input_tokens: u64,
     output_tokens: u64,
     total_tokens: u64,
+    /// Prompt tokens served from the provider prompt cache, when reported.
+    cached_input_tokens: u64,
+    /// Prompt tokens written into the provider prompt cache, when reported.
+    cache_write_input_tokens: u64,
+    /// True when at least one model request reported cache details; `false`
+    /// means the cache counters are unknown, not 0.
+    cache_reported: bool,
     /// Every step the run emitted (retained plus evicted).
     events: u64,
     /// Steps evicted from the backend's bounded buffer.
@@ -419,6 +462,16 @@ impl RunStats {
                 self.input_tokens += input;
                 self.output_tokens += output;
                 self.total_tokens += event.total_tokens.unwrap_or(input + output);
+                // Cache counters stay "unknown" unless a request reported them;
+                // counting a missing value as zero would fake a 0% hit rate.
+                if let Some(cached) = event.cached_input_tokens {
+                    self.cached_input_tokens += cached;
+                    self.cache_reported = true;
+                }
+                if let Some(written) = event.cache_write_input_tokens {
+                    self.cache_write_input_tokens += written;
+                    self.cache_reported = true;
+                }
             }
             _ => {}
         }
@@ -430,6 +483,18 @@ impl RunStats {
     /// token numbers are *unknown* — a report must not claim "0 tokens".
     fn tokens_reported(&self) -> bool {
         self.input_tokens > 0 || self.output_tokens > 0 || self.total_tokens > 0
+    }
+
+    /// Share of the prompt served from the provider's prompt cache, `0.0..=1.0`.
+    ///
+    /// `None` when no model request reported cache details (an unknown cache is
+    /// not a 0% hit rate) or when the run counted no prompt tokens.
+    fn cache_hit_ratio(&self) -> Option<f64> {
+        if self.cache_reported && self.input_tokens > 0 {
+            Some(self.cached_input_tokens as f64 / self.input_tokens as f64)
+        } else {
+            None
+        }
     }
 
     /// The most-called tools, highest count first (at most [TOP_TOOLS]).
@@ -457,6 +522,10 @@ impl RunStats {
             "inputTokens": self.input_tokens,
             "outputTokens": self.output_tokens,
             "totalTokens": self.total_tokens,
+            "cachedInputTokens": self.cached_input_tokens,
+            "cacheWriteInputTokens": self.cache_write_input_tokens,
+            "cacheReported": self.cache_reported,
+            "cacheHitRatio": self.cache_hit_ratio(),
             "tokensReported": self.tokens_reported(),
             "events": self.events,
             "droppedEvents": self.dropped_events,
@@ -519,6 +588,17 @@ fn parse_task_stats(body: &str) -> Result<TaskStatsReport, String> {
             input_tokens: u64_field(stats, "inputTokens"),
             output_tokens: u64_field(stats, "outputTokens"),
             total_tokens: u64_field(stats, "totalTokens"),
+            cached_input_tokens: u64_field(stats, "cachedInputTokens"),
+            cache_write_input_tokens: u64_field(stats, "cacheWriteInputTokens"),
+            // An older backend sends neither the flag nor the counters: "unknown"
+            // is the honest default, and a positive counter still proves a report.
+            cache_reported: stats
+                .get("cacheReported")
+                .and_then(|v| v.as_bool())
+                .unwrap_or_else(|| {
+                    u64_field(stats, "cachedInputTokens") > 0
+                        || u64_field(stats, "cacheWriteInputTokens") > 0
+                }),
             events: u64_field(stats, "events"),
             dropped_events: u64_field(stats, "droppedEvents"),
             tool_counts,
@@ -556,6 +636,13 @@ struct Renderer {
     pending_calls: Vec<(String, u64)>,
     /// Successful model requests seen (`run.usage` steps), for the usage cadence.
     usage_requests: u64,
+    /// Run-level prompt tokens seen so far (`run.usage` steps), for the cache-hit
+    /// ratio: a per-request ratio would jump around and hide the run's trend.
+    usage_input_tokens: u64,
+    /// Run-level prompt tokens served from the provider cache, when reported.
+    usage_cached_tokens: u64,
+    /// Whether any usage step reported cache details (unknown ≠ 0%).
+    usage_cache_reported: bool,
     /// When the last usage line was printed (time-based cadence).
     last_usage_at: Option<Instant>,
     /// Whether the one-shot 80% warning has been printed.
@@ -586,6 +673,9 @@ impl Renderer {
             tool_index: 0,
             pending_calls: Vec::new(),
             usage_requests: 0,
+            usage_input_tokens: 0,
+            usage_cached_tokens: 0,
+            usage_cache_reported: false,
             last_usage_at: None,
             warned_80: false,
             exhausted_printed: false,
@@ -747,6 +837,19 @@ impl Renderer {
     /// so it stays readable, but the 80% warning and the exhaustion line always print.
     fn format_usage(&mut self, event: &TaskEvent) -> Option<String> {
         self.usage_requests += 1;
+        // Accumulate the run-level prompt/cache counters before any early return:
+        // the cadence check below intentionally skips lines, and skipped steps
+        // must still count toward the run's hit ratio.
+        if let Some(input) = event.input_tokens {
+            self.usage_input_tokens += input;
+        }
+        if let Some(cached) = event.cached_input_tokens {
+            self.usage_cached_tokens += cached;
+            self.usage_cache_reported = true;
+        }
+        if event.cache_write_input_tokens.is_some() {
+            self.usage_cache_reported = true;
+        }
         let cumulative = event.cumulative_tokens?;
         let budget = event.budget_tokens.unwrap_or(0);
         let now = Instant::now();
@@ -759,7 +862,7 @@ impl Renderer {
         if budget > 0 && fraction >= 1.0 && !self.exhausted_printed {
             self.exhausted_printed = true;
             return Some(format!(
-                "{} {} token budget exhausted: {} / {} — the run is being aborted",
+                "{} {} cache-miss token budget exhausted: {} / {} — the run is being aborted",
                 self.time_prefix(),
                 self.paint("✖", Style::Error),
                 format_token_amount(cumulative),
@@ -784,17 +887,36 @@ impl Renderer {
             String::new()
         };
         let mut line = format!(
-            "{} tokens {}{} · {} requests",
+            "{} budget {}{}{} · {} requests",
             self.time_prefix(),
             format_token_amount(cumulative),
             ratio,
+            self.format_usage_cache(),
             self.usage_requests
         );
         if warn_now {
             self.warned_80 = true;
-            line = format!("{} {} 80% of the token budget used", line, self.paint("⚠", Style::Error));
+            line = format!(
+                "{} {} 80% of the cache-miss budget used",
+                line,
+                self.paint("⚠", Style::Error)
+            );
         }
         Some(line)
+    }
+
+    /// ` · cache 18.0k (75%)` for the run so far, or `""` when the provider
+    /// reported no cache details — an unknown cache must not read as 0%.
+    fn format_usage_cache(&self) -> String {
+        if !self.usage_cache_reported || self.usage_input_tokens == 0 {
+            return String::new();
+        }
+        let ratio = self.usage_cached_tokens as f64 / self.usage_input_tokens as f64;
+        format!(
+            " · cache {} ({:.0}%)",
+            format_token_amount(self.usage_cached_tokens),
+            ratio * 100.0
+        )
     }
 
     /// Print a human-readable line.
@@ -1008,15 +1130,202 @@ fn failure_detail(progress: Option<&StatusProgress>) -> Option<String> {
     }
 }
 
+/// The machine-readable failure code of an exhausted (cache-miss) token budget.
+const ERROR_TOKEN_BUDGET: &str = "TOKEN_BUDGET";
+
 /// `    resume: agent run --resume <id> · /status for the envelope`, or `None`
 /// when the backend does not say the task can be continued.
+///
+/// A budget abort adds the doubled `--token-budget`, because resuming the same
+/// task under the same exhausted cap would abort again immediately: the point of
+/// the hint is the command that actually continues the work.
 fn resume_hint_line(task_id: &str, progress: Option<&StatusProgress>) -> Option<String> {
     if !progress.and_then(|progress| progress.resumable).unwrap_or(false) {
         return None;
     }
+    let budget_abort = progress
+        .and_then(|progress| progress.error_code.as_deref())
+        .is_some_and(|code| code == ERROR_TOKEN_BUDGET);
+    let budget = if budget_abort {
+        budget_abort_continue(progress)
+            .map(|budget| format!(" --token-budget {budget}"))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
     Some(format!(
-        "    resume: agent run --resume {task_id} · /status for the envelope"
+        "    resume: agent run --resume {task_id}{budget} · /status for the envelope"
     ))
+}
+
+/// The budget to request when continuing after a budget abort: double the cap the
+/// run enforced, or `None` when that cap is unknown/unlimited.
+fn budget_abort_continue(progress: Option<&StatusProgress>) -> Option<u64> {
+    continued_budget(progress?.effective_budget)
+}
+
+/// Double an exhausted budget so one "continue" buys another full window.
+///
+/// `None` (unknown budget) and `0` (unlimited) have nothing to double; the
+/// continue command then simply omits `--token-budget`.
+fn continued_budget(budget: Option<u64>) -> Option<u64> {
+    budget.filter(|budget| *budget > 0).map(|budget| budget.saturating_mul(2))
+}
+
+/// One suggested follow-up, offered as a numbered choice after a task ends.
+///
+/// The `command` is what selecting it runs — a REPL command (`/stats`,
+/// `/result --json`, `/resume --budget N`, `/new`) — so a choice and a typed
+/// command share one code path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NextAction {
+    /// Short label shown to the user ("continue with a 10.0M cache-miss budget").
+    label: String,
+    /// The REPL command that performs it.
+    command: String,
+}
+
+/// What the interactive session knows about a finished task when it decides what
+/// to offer next.
+#[derive(Debug, Clone, Copy, Default)]
+struct TaskOutcome<'a> {
+    /// `done`, `failed`, `cancelled` (the terminal status word).
+    status: &'a str,
+    /// Machine failure code (`TOKEN_BUDGET`, `NOOP_LIMIT`, …).
+    error_code: Option<&'a str>,
+    /// Whether `agent run --resume <id>` can continue it.
+    resumable: bool,
+    /// The cache-miss budget the run enforced (`None` = unknown, `0` = unlimited).
+    budget: Option<u64>,
+}
+
+impl TaskOutcome<'_> {
+    fn can_continue(&self) -> bool {
+        self.resumable || self.error_code == Some(ERROR_TOKEN_BUDGET)
+    }
+}
+
+/// The 2–3 follow-ups worth offering after a task ends.
+///
+/// Deliberately static and outcome-driven: a list derived from the *result* (a
+/// budget abort wants `continue`, a finished run wants the result, a failure
+/// wants the counters) is what makes the numbers useful instead of decorative.
+fn next_actions(outcome: TaskOutcome<'_>) -> Vec<NextAction> {
+    let result_json = NextAction {
+        label: "full result as JSON".to_string(),
+        command: "/result --json".to_string(),
+    };
+    let stats = NextAction {
+        label: "run statistics".to_string(),
+        command: "/stats".to_string(),
+    };
+    let fresh = NextAction {
+        label: "start a new task (fresh context)".to_string(),
+        command: "/new".to_string(),
+    };
+
+    if outcome.can_continue() {
+        let budget = continued_budget(outcome.budget);
+        let label = match budget {
+            Some(budget) => format!(
+                "continue with a {} cache-miss budget",
+                format_token_amount(budget)
+            ),
+            None => "continue this task".to_string(),
+        };
+        let command = match budget {
+            Some(budget) => format!("/resume --budget {budget}"),
+            None => "/resume".to_string(),
+        };
+        let mut actions = vec![NextAction { label, command }];
+        // A cancelled task may still have produced a payload (files, findings);
+        // a failed one is better served by its counters.
+        actions.push(if outcome.status == "cancelled" {
+            result_json
+        } else {
+            stats
+        });
+        actions.push(fresh);
+        return actions;
+    }
+
+    if outcome.status == "done" {
+        return vec![result_json, stats, fresh];
+    }
+    vec![stats, fresh]
+}
+
+/// The numbered choice block: one header plus one aligned line per action.
+fn format_next_actions(actions: &[NextAction]) -> Vec<String> {
+    if actions.is_empty() {
+        return Vec::new();
+    }
+    let width = actions.iter().map(|action| action.label.len()).max().unwrap_or(0);
+    let mut lines = vec!["next (type a number, or a new task):".to_string()];
+    for (index, action) in actions.iter().enumerate() {
+        lines.push(format!(
+            "  {}) {:<width$}  {}",
+            index + 1,
+            action.label,
+            action.command,
+            width = width
+        ));
+    }
+    lines
+}
+
+/// The action index a typed line selects, when it is a bare number in range.
+///
+/// Numbers are only a selection while a suggestion block is on screen; any other
+/// input (a task, a `/command`) supersedes the block.
+fn action_selection(line: &str, count: usize) -> Option<usize> {
+    let selected: usize = line.trim().parse().ok()?;
+    // `then` (not `then_some`): the subtraction must not run for "0".
+    (1..=count).contains(&selected).then(|| selected - 1)
+}
+
+/// `/resume [--budget <tokens>] [task-id]` → `(task-id, budget)`.
+///
+/// Deliberately tiny: the command owns no state, and an unknown flag or a
+/// non-numeric budget is reported instead of silently resuming under the old cap
+/// (the exact failure mode `--token-budget` exists to prevent).
+fn parse_resume_args(argument: &str) -> Result<(Option<String>, Option<i64>), String> {
+    let mut task_id = None;
+    let mut budget = None;
+    let mut tokens = argument.split_whitespace();
+    while let Some(token) = tokens.next() {
+        match token {
+            "--budget" => {
+                let Some(raw) = tokens.next() else {
+                    return Err(
+                        "--budget expects a non-negative integer (0 = unlimited)".to_string(),
+                    );
+                };
+                budget = Some(parse_budget_value(raw)?);
+            }
+            flag if flag.starts_with("--") => {
+                return Err(format!(
+                    "unknown option '{flag}' — usage: /resume [--budget <tokens>] [task-id]"
+                ));
+            }
+            id => task_id = Some(id.to_string()),
+        }
+    }
+    Ok((task_id, budget))
+}
+
+/// A `--budget` value: a non-negative integer, or `unlimited` (0).
+fn parse_budget_value(raw: &str) -> Result<i64, String> {
+    let text = raw.trim();
+    if text.eq_ignore_ascii_case("unlimited") {
+        return Ok(0);
+    }
+    match text.parse::<i64>() {
+        Ok(value) if value >= 0 => Ok(value),
+        _ => Err(format!(
+            "--budget expects a non-negative integer (0 = unlimited), got '{raw}'"
+        )),
+    }
 }
 
 /// The `/status` line: `task <id> · <status> · N step(s) — <message>`.
@@ -1076,6 +1385,11 @@ fn format_run_cost(stats: &RunStats) -> String {
     }
     if stats.tokens_reported() {
         parts.push(format!("{} tokens", format_token_amount(stats.total_tokens)));
+        // One extra token for the cache ratio: it is the part of the bill a
+        // prompt-caching regression shows up in first.
+        if let Some(ratio) = stats.cache_hit_ratio() {
+            parts.push(format!("cache {:.0}%", ratio * 100.0));
+        }
     }
     parts.join(" · ")
 }
@@ -1139,6 +1453,23 @@ fn format_stats_report(report: &TaskStatsReport) -> Vec<String> {
             format_thousands(stats.output_tokens),
             format_thousands(stats.total_tokens)
         ));
+        // Prompt-cache efficiency, printed only when the provider reported it:
+        // an unreported cache is unknown, not a 0% hit rate. `in` above is
+        // cache-inclusive, so the ratio is `cached / in`.
+        if let Some(ratio) = stats.cache_hit_ratio() {
+            let mut cache = format!(
+                "  cache   {} read",
+                format_thousands(stats.cached_input_tokens)
+            );
+            if stats.cache_write_input_tokens > 0 {
+                cache.push_str(&format!(
+                    " · {} written",
+                    format_thousands(stats.cache_write_input_tokens)
+                ));
+            }
+            cache.push_str(&format!(" ({:.1}% hit)", ratio * 100.0));
+            lines.push(cache);
+        }
     } else if stats.model_requests > 0 {
         // The provider sends no usage block (a local model, a gateway that drops
         // it): the calls happened, the token numbers are unknown, not zero.
@@ -2073,6 +2404,9 @@ struct Repl {
     /// describing only the last task, as they always did (format plan P0-5).
     tasks_json: Vec<Value>,
     prompt_pending: bool,
+    /// Suggested follow-ups of the last task, shown as a numbered block. A bare
+    /// number typed at the prompt selects one; any other input clears the block.
+    next_actions: Vec<NextAction>,
 }
 
 impl Repl {
@@ -2131,6 +2465,7 @@ impl Repl {
             last_local_stats: None,
             tasks_json: Vec::new(),
             prompt_pending: true,
+            next_actions: Vec::new(),
         }
     }
 
@@ -2262,10 +2597,17 @@ impl Repl {
                 _ = ctrl_c.as_mut() => {
                     match self.current.take() {
                         Some(follower) => {
-                            let outcome = cancel_task(&self.client, &self.base_url, &follower.task_id).await;
+                            let task_id = follower.task_id.clone();
+                            let outcome = cancel_task(&self.client, &self.base_url, &task_id).await;
                             self.out(&format!("⏹ {outcome}"));
                             self.release_current(follower, "cancelled", true);
                             self.prompt_pending = true;
+                            // A cancelled run is resumable: offer the continue
+                            // choice instead of leaving the user to reconstruct
+                            // the resume command.
+                            let progress =
+                                status_failure_progress(&self.client, &self.base_url, &task_id).await;
+                            self.offer_next_after("cancelled", progress.as_ref());
                         }
                         None => break,
                     }
@@ -2299,8 +2641,20 @@ impl Repl {
         }
 
         if let Some(command) = line.strip_prefix('/') {
+            // A typed command supersedes the suggestions of the previous task.
+            self.next_actions.clear();
             return self.handle_slash_command(command).await;
         }
+
+        // A bare number picks a suggested follow-up while the block is on screen.
+        // Only while idle: a number typed mid-run is steering text, not a choice.
+        if self.current.is_none() {
+            if let Some(index) = action_selection(&line, self.next_actions.len()) {
+                return self.run_next_action(index).await;
+            }
+        }
+        // Any other input is a task (or steering) and supersedes the block.
+        self.next_actions.clear();
 
         match self.current.as_ref().map(|follower| follower.task_id.clone()) {
             Some(task_id) => {
@@ -2333,7 +2687,66 @@ impl Repl {
         Ok(true)
     }
 
-    /// The task this session started that the backend still reports as live.
+    /// Run one suggested follow-up and report what it is about to do.
+    ///
+    /// A suggestion is a REPL command string, so selecting it takes exactly the
+    /// path a typed command takes (`/result --json`, `/stats`, `/resume …`, `/new`).
+    async fn run_next_action(&mut self, index: usize) -> Result<bool, String> {
+        let Some(action) = self.next_actions.get(index).cloned() else {
+            return Ok(true);
+        };
+        self.next_actions.clear();
+        self.out(&format!("▸ {}", action.label));
+        match action.command.strip_prefix('/') {
+            Some(command) => self.handle_slash_command(command).await,
+            None => {
+                if let Err(error) = self.start_task(action.command.clone()).await {
+                    self.out(&format!("✖ {error}"));
+                    self.prompt_pending = true;
+                }
+                Ok(true)
+            }
+        }
+    }
+
+    /// Show the follow-ups worth choosing after a task ended, when a human is at
+    /// the prompt.
+    ///
+    /// Piped stdin gets nothing: a numbered menu a script cannot answer would only
+    /// add noise, and a bare `1` must keep meaning "a task called 1".
+    fn offer_next(&mut self, outcome: TaskOutcome<'_>) {
+        self.next_actions.clear();
+        if !self.tty || !human_output_enabled(self.quiet) {
+            return;
+        }
+        let actions = next_actions(outcome);
+        if actions.is_empty() {
+            return;
+        }
+        self.out("");
+        for line in format_next_actions(&actions) {
+            self.out(&line);
+        }
+        self.next_actions = actions;
+    }
+
+    /// Offer the follow-ups of a task that just ended, filling the failure
+    /// semantics from [progress] (and the session's budget when the envelope has
+    /// none).
+    fn offer_next_after(&mut self, status: &str, progress: Option<&StatusProgress>) {
+        let budget = progress
+            .and_then(|progress| progress.effective_budget)
+            .or_else(|| self.token_budget.map(|budget| budget.max(0) as u64));
+        let outcome = TaskOutcome {
+            status,
+            error_code: progress.and_then(|progress| progress.error_code.as_deref()),
+            resumable: progress
+                .and_then(|progress| progress.resumable)
+                .unwrap_or(status == "cancelled"),
+            budget,
+        };
+        self.offer_next(outcome);
+    }
     ///
     /// The follower is the normal source of that knowledge, but it must not be
     /// the only one: a session that lost it — a backend hiccup, a task submitted
@@ -2427,6 +2840,7 @@ impl Repl {
     }
 
     async fn start_task(&mut self, task: String) -> Result<(), String> {
+        self.next_actions.clear();
         let extra = self.payload();
         let task_id = crate::submit_agent_task(&self.client, &self.base_url, &task, extra).await?;
         // A blank line separates two tasks, and the line names the task: a session
@@ -2469,6 +2883,12 @@ impl Repl {
     /// applies; without a TTY nobody can answer an approval, so the backend's
     /// unattended default takes over (see plan P4-1).
     fn payload(&self) -> Value {
+        self.payload_with(self.token_budget)
+    }
+
+    /// [`Self::payload`] with an explicit token budget, so `/resume --budget N`
+    /// can continue one task under a larger cap without changing the session's.
+    fn payload_with(&self, token_budget: Option<i64>) -> Value {
         let mut extra = crate::build_agent_run_extra(
             &self.engine,
             self.noop_limit,
@@ -2478,11 +2898,75 @@ impl Repl {
             self.access.as_deref(),
             Some(!self.tty),
             self.session_id().as_deref(),
-            self.token_budget,
+            token_budget,
         );
         // Extra folders granted with `--add-dir`: every task of this session keeps
         // the grant, exactly like `--access` does. The list is already absolute.
         crate::apply_add_dirs(&mut extra, &self.add_dirs);
+        extra
+    }
+
+    /// `/resume [--budget <tokens>] [task-id]`: continue the last (or named) task
+    /// with the workspace and files the interrupted run already produced.
+    async fn resume_command(&mut self, argument: &str) {
+        let (task_id, budget) = match parse_resume_args(argument) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                self.out(&format!("✖ {error}"));
+                return;
+            }
+        };
+        let Some(task_id) = task_id.or_else(|| self.last_task.clone()) else {
+            self.out("no task to resume — type a task first, or /resume <task-id>");
+            return;
+        };
+        self.resume_task(&task_id, budget).await;
+    }
+
+    /// Submit a backend-side resume of [resume_id] and follow the new task.
+    ///
+    /// The task text is empty on purpose: the checkpoint's instruction is the
+    /// base, and the CLI cannot invent it. `token_budget` overrides the session's
+    /// `--token-budget` for this run only — a "continue" after a budget abort is
+    /// meaningless under the same exhausted cap.
+    async fn resume_task(&mut self, resume_id: &str, token_budget: Option<i64>) {
+        let extra = self.resume_payload(resume_id, token_budget);
+        match crate::submit_agent_task(&self.client, &self.base_url, "", extra).await {
+            Ok(task_id) => {
+                self.next_actions.clear();
+                self.out("");
+                self.out(&format!("▶ resume {resume_id} → task {task_id}"));
+                crate::json_field("task_id", json!(&task_id));
+                let _ = crate::state::track_async_task(
+                    &task_id,
+                    "agent",
+                    &format!("resume {resume_id}"),
+                    None,
+                );
+                self.current = Some(TaskFollower::new(
+                    &task_id,
+                    false,
+                    color_enabled(),
+                    self.quiet,
+                ));
+                if let Some(follower) = self.current.as_mut() {
+                    follower.renderer.verbose = self.verbose;
+                }
+                self.prompt_pending = false;
+                self.poll_and_recover().await;
+            }
+            Err(error) => {
+                self.out(&format!("✖ {error}"));
+                self.prompt_pending = true;
+            }
+        }
+    }
+
+    /// The `command_run` payload of a resume: the session's knobs, the chosen
+    /// budget, and the checkpoint id.
+    fn resume_payload(&self, resume_id: &str, token_budget: Option<i64>) -> Value {
+        let mut extra = self.payload_with(token_budget.or(self.token_budget));
+        crate::apply_resume_task_id(&mut extra, Some(resume_id));
         extra
     }
 
@@ -2621,6 +3105,7 @@ impl Repl {
                 self.print_payload(&task_id, &result);
                 crate::json_field("raw", crate::json_text_or_value(&result));
                 let _ = crate::state::update_async_task_status(&task_id, "completed", None);
+                self.offer_next_after("done", None);
             }
             "cancelled" => {
                 let suffix = if tool_calls > 0 {
@@ -2636,6 +3121,10 @@ impl Repl {
                     None,
                 ));
                 let _ = crate::state::update_async_task_status(&task_id, "cancelled", None);
+                // The envelope still knows the budget and the resume flag; ask it
+                // instead of guessing from the session's `--token-budget`.
+                let progress = status_failure_progress(&self.client, &self.base_url, &task_id).await;
+                self.offer_next_after("cancelled", progress.as_ref());
             }
             _ => {
                 let progress = status_failure_progress(&self.client, &self.base_url, &task_id).await;
@@ -2652,6 +3141,7 @@ impl Repl {
                     self.out(&hint);
                 }
                 let _ = crate::state::update_async_task_status(&task_id, "failed", None);
+                self.offer_next_after("failed", progress.as_ref());
             }
         }
 
@@ -2677,6 +3167,9 @@ impl Repl {
             "status" => self.print_status().await,
             "result" => self.print_result(argument).await,
             "cancel" | "stop" => self.cancel_current().await,
+            // `/resume [--budget <tokens>] [task-id]`: continue an interrupted
+            // (or budget-aborted) task with its workspace and files.
+            "resume" => self.resume_command(argument).await,
             "new" => self.new_session(),
             "coding" => self.set_coding(argument),
             "add-dir" => self.add_dir(argument),
@@ -2879,6 +3372,8 @@ impl Repl {
         self.out("  /help              this list");
         self.out("  /status            status of the running (or last) task");
         self.out("  /result [--json]   print the last finished task's result (--json: raw envelope)");
+        self.out("  /resume [--budget <n>] [task-id]");
+        self.out("                     continue an interrupted/stalled task (a budget abort needs a bigger --budget)");
         self.out("  /cancel            cancel the running task (same as Ctrl+C)");
         self.out("  /new               start a new session (fresh agent context)");
         self.out("  /session           print the current session id");
@@ -2897,6 +3392,7 @@ impl Repl {
         self.out("");
         self.out("Anything else is a task. While a task runs, a typed line steers it at its");
         self.out("next model round — /cancel the running task first to start a different one.");
+        self.out("After a task ends, type 1–3 to pick a suggested next step.");
     }
 
     async fn print_status(&mut self) {
@@ -3063,16 +3559,20 @@ impl Repl {
             self.out("no task is running");
             return;
         };
-        let outcome = cancel_task(&self.client, &self.base_url, &follower.task_id).await;
+        let task_id = follower.task_id.clone();
+        let outcome = cancel_task(&self.client, &self.base_url, &task_id).await;
         self.out(&format!("⏹ {outcome}"));
         // Keep the tally: `/stats` on a cancelled task still answers (from the
         // backend when it has counters, from this session otherwise).
         self.release_current(follower, "cancelled", true);
         self.prompt_pending = true;
+        let progress = status_failure_progress(&self.client, &self.base_url, &task_id).await;
+        self.offer_next_after("cancelled", progress.as_ref());
     }
 
     fn new_session(&mut self) {
         self.generation += 1;
+        self.next_actions.clear();
         let session = self.session_id().unwrap_or_else(|| "default".to_string());
         self.out(&format!(
             "new session: {session} (the next task starts a fresh agent context)"
@@ -3830,6 +4330,9 @@ mod tests {
                 input_tokens: 48_231,
                 output_tokens: 6_120,
                 total_tokens: 54_351,
+                cached_input_tokens: 38_585,
+                cache_write_input_tokens: 120,
+                cache_reported: true,
                 events: 132,
                 dropped_events: 0,
                 tool_counts: vec![
@@ -3870,7 +4373,7 @@ mod tests {
     #[test]
     fn the_terminal_line_carries_the_cost_chain_when_it_is_known() {
         let cost = format_run_cost(&a_served_stats_report().stats);
-        assert_eq!(cost, "3 round(s) · 39 tool(s) · 54.4k tokens");
+        assert_eq!(cost, "3 round(s) · 39 tool(s) · 54.4k tokens · cache 80%");
 
         // Long runs read as `3m12s`, not `192.0s`.
         assert_eq!(
@@ -3881,7 +4384,7 @@ mod tests {
                 &cost,
                 None
             ),
-            "✔ Agent completed in 3m12s · task-1 · 3 round(s) · 39 tool(s) · 54.4k tokens"
+            "✔ Agent completed in 3m12s · task-1 · 3 round(s) · 39 tool(s) · 54.4k tokens · cache 80%"
         );
     }
 
@@ -3908,6 +4411,18 @@ mod tests {
                 ..Default::default()
             }),
             "1 tool(s)"
+        );
+
+        // A known token count with an unreported cache prints no cache part: an
+        // unknown cache must not read as 0%.
+        assert_eq!(
+            format_run_cost(&RunStats {
+                input_tokens: 1_000,
+                output_tokens: 100,
+                total_tokens: 1_100,
+                ..Default::default()
+            }),
+            "1,100 tokens"
         );
 
         let bare = terminal_status_line(
@@ -4051,6 +4566,191 @@ mod tests {
         };
         assert_eq!(resume_hint_line("5b0c3f2a", Some(&not_resumable)), None);
         assert_eq!(resume_hint_line("5b0c3f2a", None), None);
+    }
+
+    #[test]
+    fn resume_hint_adds_a_doubled_budget_for_a_budget_abort() {
+        let budget_abort = StatusProgress {
+            word: "failed".to_string(),
+            error_code: Some("TOKEN_BUDGET".to_string()),
+            resumable: Some(true),
+            effective_budget: Some(5_000_000),
+            ..Default::default()
+        };
+        assert_eq!(
+            resume_hint_line("5b0c3f2a", Some(&budget_abort)).as_deref(),
+            Some(
+                "    resume: agent run --resume 5b0c3f2a --token-budget 10000000 · /status for the envelope"
+            )
+        );
+
+        // Doubling a cap that was not the failure reason would only confuse.
+        let noop_abort = StatusProgress {
+            word: "failed".to_string(),
+            error_code: Some("NOOP_LIMIT".to_string()),
+            resumable: Some(true),
+            effective_budget: Some(5_000_000),
+            ..Default::default()
+        };
+        assert_eq!(
+            resume_hint_line("5b0c3f2a", Some(&noop_abort)).as_deref(),
+            Some("    resume: agent run --resume 5b0c3f2a · /status for the envelope")
+        );
+    }
+
+    #[test]
+    fn parse_status_progress_reads_the_effective_budget() {
+        let progress = parse_status_progress(
+            r#"{"status":"failed","errorCode":"TOKEN_BUDGET","resumable":true,"effectiveTokenBudget":5000000}"#,
+        );
+        assert_eq!(progress.effective_budget, Some(5_000_000));
+
+        // The legacy nested shape still counts.
+        let nested = parse_status_progress(
+            r#"{"status":"failed","details":{"effectiveTokenBudget":2000000}}"#,
+        );
+        assert_eq!(nested.effective_budget, Some(2_000_000));
+        assert_eq!(
+            parse_status_progress(r#"{"status":"running"}"#).effective_budget,
+            None
+        );
+    }
+
+    // ---- next actions after a task ends -------------------------------------
+
+    #[test]
+    fn a_budget_abort_offers_continue_with_a_doubled_budget() {
+        let actions = next_actions(TaskOutcome {
+            status: "failed",
+            error_code: Some("TOKEN_BUDGET"),
+            resumable: true,
+            budget: Some(5_000_000),
+        });
+
+        assert_eq!(actions.len(), 3);
+        assert_eq!(actions[0].command, "/resume --budget 10000000");
+        assert!(actions[0].label.contains("10.00M"), "{:?}", actions[0]);
+        assert_eq!(actions[1].command, "/stats");
+        assert_eq!(actions[2].command, "/new");
+    }
+
+    #[test]
+    fn a_budget_abort_without_a_known_cap_still_offers_continue() {
+        let actions = next_actions(TaskOutcome {
+            status: "failed",
+            error_code: Some("TOKEN_BUDGET"),
+            resumable: false,
+            budget: None,
+        });
+
+        assert_eq!(actions[0].command, "/resume");
+        assert_eq!(actions[0].label, "continue this task");
+    }
+
+    #[test]
+    fn a_finished_run_offers_result_stats_and_a_fresh_task() {
+        let actions = next_actions(TaskOutcome {
+            status: "done",
+            ..Default::default()
+        });
+
+        assert_eq!(actions.len(), 3);
+        assert_eq!(actions[0].command, "/result --json");
+        assert_eq!(actions[1].command, "/stats");
+        assert_eq!(actions[2].command, "/new");
+    }
+
+    #[test]
+    fn a_cancelled_run_offers_continue_result_and_a_fresh_task() {
+        let actions = next_actions(TaskOutcome {
+            status: "cancelled",
+            resumable: true,
+            budget: Some(5_000_000),
+            ..Default::default()
+        });
+
+        assert_eq!(actions[0].command, "/resume --budget 10000000");
+        assert_eq!(actions[1].command, "/result --json");
+        assert_eq!(actions[2].command, "/new");
+    }
+
+    #[test]
+    fn a_non_resumable_failure_offers_no_continue() {
+        let actions = next_actions(TaskOutcome {
+            status: "failed",
+            error_code: Some("INFRASTRUCTURE"),
+            resumable: false,
+            budget: None,
+        });
+
+        assert!(
+            actions.iter().all(|action| action.command != "/resume"),
+            "a non-resumable failure must not offer continue: {actions:?}"
+        );
+        assert_eq!(actions[0].command, "/stats");
+        assert_eq!(actions[1].command, "/new");
+    }
+
+    #[test]
+    fn next_actions_are_numbered_and_aligned() {
+        let lines = format_next_actions(&next_actions(TaskOutcome {
+            status: "failed",
+            error_code: Some("TOKEN_BUDGET"),
+            resumable: true,
+            budget: Some(5_000_000),
+        }));
+
+        assert_eq!(lines[0], "next (type a number, or a new task):");
+        assert!(
+            lines[1].starts_with("  1) continue with a 10.00M cache-miss budget"),
+            "{lines:?}"
+        );
+        assert!(lines[1].contains("/resume --budget 10000000"), "{lines:?}");
+        assert!(lines[2].starts_with("  2) run statistics"), "{lines:?}");
+        assert!(
+            lines[3].starts_with("  3) start a new task (fresh context)"),
+            "{lines:?}"
+        );
+        assert!(format_next_actions(&[]).is_empty());
+    }
+
+    #[test]
+    fn action_selection_accepts_only_numbers_in_range() {
+        assert_eq!(action_selection(" 2 ", 3), Some(1));
+        assert_eq!(action_selection("3", 3), Some(2));
+        assert_eq!(action_selection("0", 3), None);
+        assert_eq!(action_selection("4", 3), None);
+        assert_eq!(action_selection("two", 3), None);
+        assert_eq!(action_selection("1", 0), None);
+    }
+
+    #[test]
+    fn parse_resume_args_reads_a_budget_and_an_id() {
+        assert_eq!(parse_resume_args("").unwrap(), (None, None));
+        assert_eq!(
+            parse_resume_args("--budget 10000000").unwrap(),
+            (None, Some(10_000_000))
+        );
+        assert_eq!(
+            parse_resume_args("abc --budget 0").unwrap(),
+            (Some("abc".to_string()), Some(0))
+        );
+        assert_eq!(
+            parse_resume_args("--budget unlimited").unwrap(),
+            (None, Some(0))
+        );
+        assert!(parse_resume_args("--budget lots").is_err());
+        assert!(parse_resume_args("--budget -5").is_err());
+        assert!(parse_resume_args("--budget").is_err());
+        assert!(parse_resume_args("--wat").is_err());
+    }
+
+    #[test]
+    fn continued_budget_doubles_only_a_real_cap() {
+        assert_eq!(continued_budget(Some(5_000_000)), Some(10_000_000));
+        assert_eq!(continued_budget(Some(0)), None, "unlimited has nothing to double");
+        assert_eq!(continued_budget(None), None);
+        assert_eq!(continued_budget(Some(u64::MAX)), Some(u64::MAX), "saturating");
     }
 
     #[test]
@@ -4387,6 +5087,8 @@ mod tests {
         assert_eq!(stats.input_tokens, 48_231);
         assert_eq!(stats.output_tokens, 6_120);
         assert_eq!(stats.total_tokens, 54_351);
+        assert_eq!(stats.cached_input_tokens, 0, "an older backend reports no cache counters");
+        assert!(!stats.cache_reported);
         assert_eq!(stats.events, 132);
         assert_eq!(stats.dropped_events, 4);
         assert!(stats.tokens_reported());
@@ -4442,6 +5144,41 @@ mod tests {
     }
 
     #[test]
+    fn run_stats_observe_accumulates_the_prompt_cache_breakdown() {
+        let mut stats = RunStats::default();
+        let mut first = stats_event("run.usage", None, None);
+        first.input_tokens = Some(1_000);
+        first.cached_input_tokens = Some(800);
+        stats.observe(&first);
+        let mut second = stats_event("run.usage", None, None);
+        second.input_tokens = Some(500);
+        second.cached_input_tokens = Some(450);
+        second.cache_write_input_tokens = Some(20);
+        stats.observe(&second);
+        // A request whose provider disclosed nothing must not reset the counters.
+        let mut third = stats_event("run.usage", None, None);
+        third.input_tokens = Some(100);
+        stats.observe(&third);
+
+        assert_eq!(stats.input_tokens, 1_600);
+        assert_eq!(stats.cached_input_tokens, 1_250);
+        assert_eq!(stats.cache_write_input_tokens, 20);
+        assert!(stats.cache_reported);
+        assert!((stats.cache_hit_ratio().unwrap() - 1_250.0 / 1_600.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn an_unreported_prompt_cache_is_unknown_not_zero_percent() {
+        let mut stats = RunStats::default();
+        let mut usage = stats_event("run.usage", None, None);
+        usage.input_tokens = Some(700);
+        stats.observe(&usage);
+
+        assert!(!stats.cache_reported);
+        assert_eq!(stats.cache_hit_ratio(), None);
+    }
+
+    #[test]
     fn format_stats_report_lists_llm_tokens_and_tools() {
         let lines = format_stats_report(&a_served_stats_report()).join("\n");
 
@@ -4458,9 +5195,112 @@ mod tests {
         assert!(lines.contains("132"), "{lines}");
         assert!(lines.contains("1 steering message(s)"), "{lines}");
         assert!(
+            lines.contains("cache   38,585 read · 120 written (80.0% hit)"),
+            "the cache line reports reads, writes and the run's hit ratio:\n{lines}"
+        );
+        assert!(
             !lines.contains('⚠'),
             "a served report must never be labelled local:\n{lines}"
         );
+    }
+
+    #[test]
+    fn parse_task_stats_reads_the_prompt_cache_breakdown() {
+        let body = r#"{
+            "taskId": "t3",
+            "status": "done",
+            "isDone": true,
+            "stats": {
+                "modelRequests": 2, "inputTokens": 2000, "outputTokens": 100,
+                "totalTokens": 2100, "cachedInputTokens": 1500,
+                "cacheWriteInputTokens": 88, "cacheReported": true
+            }
+        }"#;
+
+        let stats = parse_task_stats(body).expect("stats must parse").stats;
+
+        assert_eq!(stats.cached_input_tokens, 1_500);
+        assert_eq!(stats.cache_write_input_tokens, 88);
+        assert!(stats.cache_reported);
+        assert_eq!(stats.cache_hit_ratio(), Some(0.75));
+    }
+
+    #[test]
+    fn parse_task_stats_infers_cache_report_from_positive_counters() {
+        // A backend that predates `cacheReported` still reports the counters; a
+        // positive one proves the provider disclosed the cache.
+        let inferred = parse_task_stats(
+            r#"{"taskId":"t4","stats":{"inputTokens":1000,"cachedInputTokens":700,
+                "cacheWriteInputTokens":0,"totalTokens":1000}}"#,
+        )
+        .expect("stats must parse")
+        .stats;
+        assert!(inferred.cache_reported);
+        assert_eq!(inferred.cache_hit_ratio(), Some(0.7));
+
+        let unknown = parse_task_stats(
+            r#"{"taskId":"t5","stats":{"inputTokens":700,"totalTokens":700}}"#,
+        )
+        .expect("stats must parse")
+        .stats;
+        assert!(!unknown.cache_reported, "no counters and no flag is 'unknown'");
+        assert_eq!(unknown.cache_hit_ratio(), None);
+    }
+
+    #[test]
+    fn format_stats_report_omits_the_cache_line_when_unreported() {
+        let mut report = a_served_stats_report();
+        report.stats.cached_input_tokens = 0;
+        report.stats.cache_write_input_tokens = 0;
+        report.stats.cache_reported = false;
+
+        let lines = format_stats_report(&report).join("\n");
+
+        assert!(lines.contains("in 48,231"), "{lines}");
+        assert!(!lines.contains("cache   "), "unknown cache must not print as 0%:\n{lines}");
+    }
+
+    #[test]
+    fn usage_line_shows_the_run_cache_hit_ratio() {
+        let mut renderer = Renderer::new(Instant::now(), false, false);
+        let mut usage = event("run.usage");
+        usage.input_tokens = Some(1_000);
+        usage.cached_input_tokens = Some(750);
+        usage.cumulative_tokens = Some(1_000);
+        usage.budget_tokens = Some(0);
+
+        let line = renderer.format_usage(&usage).expect("the first usage line is due");
+
+        // The number is the charged (cache-miss) amount, so it is labelled as the
+        // budget rather than as total tokens.
+        assert!(line.contains("budget 1,000"), "{line}");
+        assert!(line.contains("cache 750 (75%)"), "{line}");
+    }
+
+    #[test]
+    fn the_exhausted_line_names_the_cache_miss_budget() {
+        let mut renderer = Renderer::new(Instant::now(), false, false);
+        let mut usage = event("run.usage");
+        usage.input_tokens = Some(5_000_000);
+        usage.cumulative_tokens = Some(5_000_100);
+        usage.budget_tokens = Some(5_000_000);
+
+        let line = renderer.format_usage(&usage).expect("the exhaustion line is due");
+
+        assert!(line.contains("cache-miss token budget exhausted"), "{line}");
+    }
+
+    #[test]
+    fn usage_line_omits_the_cache_part_when_unreported() {
+        let mut renderer = Renderer::new(Instant::now(), false, false);
+        let mut usage = event("run.usage");
+        usage.input_tokens = Some(1_000);
+        usage.cumulative_tokens = Some(1_000);
+        usage.budget_tokens = Some(0);
+
+        let line = renderer.format_usage(&usage).expect("the first usage line is due");
+
+        assert!(!line.contains("cache"), "unknown cache must stay silent: {line}");
     }
 
     #[test]
@@ -4518,6 +5358,24 @@ mod tests {
         assert_eq!(json["inputTokens"], 120);
         assert_eq!(json["totalTokens"], 150);
         assert!(json.get("outputTokens").is_none());
+    }
+
+    #[test]
+    fn task_event_to_json_carries_the_prompt_cache_breakdown() {
+        let mut usage = event("run.usage");
+        usage.input_tokens = Some(1_000);
+        usage.cached_input_tokens = Some(900);
+        usage.cache_write_input_tokens = Some(88);
+
+        let json = usage.to_json("t1");
+
+        assert_eq!(json["cachedInputTokens"], 900);
+        assert_eq!(json["cacheWriteInputTokens"], 88);
+        // `null` (provider disclosed nothing) stays absent rather than 0.
+        let mut plain = event("run.usage");
+        plain.input_tokens = Some(10);
+        let json = plain.to_json("t1");
+        assert!(json.get("cachedInputTokens").is_none());
     }
 
     // ---- follower resilience and output modes ------------------------------
@@ -5058,5 +5916,69 @@ mod tests {
             Some("t1"),
             "the follower of a task being followed is never replaced"
         );
+    }
+
+    #[tokio::test]
+    async fn a_number_picks_a_suggested_next_action() {
+        let client = Client::builder().build().expect("client");
+        let mut repl = Repl::new(&client, "http://127.0.0.1:1", &json!({}), None);
+        repl.next_actions = next_actions(TaskOutcome {
+            status: "done",
+            ..Default::default()
+        });
+        assert_eq!(repl.next_actions.len(), 3);
+
+        repl.handle_line("3".to_string())
+            .await
+            .expect("a choice never aborts the session");
+
+        assert_eq!(repl.generation, 1, "choice 3 runs /new");
+        assert!(
+            repl.next_actions.is_empty(),
+            "an executed choice clears the block"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_number_outside_the_menu_is_not_a_choice() {
+        let client = Client::builder().build().expect("client");
+        // Nothing listens: the submission fails, which the session reports and
+        // survives. The menu must be gone either way, and the generation unchanged.
+        let mut repl = Repl::new(&client, "http://127.0.0.1:1", &json!({}), None);
+        repl.next_actions = next_actions(TaskOutcome {
+            status: "done",
+            ..Default::default()
+        });
+
+        repl.handle_line("9".to_string())
+            .await
+            .expect("a failed submission never aborts the session");
+
+        assert_eq!(repl.generation, 0, "'9' is a task, not a choice");
+        assert!(
+            repl.next_actions.is_empty(),
+            "typed input supersedes the suggestions"
+        );
+    }
+
+    #[test]
+    fn a_resume_payload_carries_the_checkpoint_and_the_chosen_budget() {
+        let client = Client::builder().build().expect("client");
+        let repl = Repl::new(
+            &client,
+            "http://localhost:1",
+            &json!({ "tokenBudget": 2_000_000 }),
+            None,
+        );
+
+        let payload = repl.resume_payload("task-1", Some(10_000_000));
+        assert_eq!(payload["resumeTaskId"], "task-1");
+        assert_eq!(payload["tokenBudget"], 10_000_000);
+        assert_eq!(payload["engine"], "cli");
+
+        // No explicit budget keeps the session's `--token-budget`.
+        let payload = repl.resume_payload("task-1", None);
+        assert_eq!(payload["resumeTaskId"], "task-1");
+        assert_eq!(payload["tokenBudget"], 2_000_000);
     }
 }

@@ -16,9 +16,11 @@ package ai.platon.pulsar.rest.api.entities
  * @property errorCode Machine-readable failure reason (`TOKEN_BUDGET`, `NOOP_LIMIT`,
  *   `CANCELLED`, `TOOL_ERROR`), so a client can branch instead of parsing prose.
  * @property resumable Whether `agent run --resume <id>` can continue this task.
- * @property effectiveTokenBudget The token budget this run actually enforced
- *   (`0` = unlimited, `null` = unknown). A failed run that aborted on the budget
- *   must say which budget, or the caller cannot tell "too small" from "runaway".
+ * @property effectiveTokenBudget The **cache-miss** token budget this run actually
+ *   enforced (`0` = unlimited, `null` = unknown): uncached prompt + output, with
+ *   prompt-cache reads excluded. A failed run that aborted on the budget must say
+ *   which budget, or the caller cannot tell "too small" from "runaway" — and cannot
+ *   offer the doubled-budget "continue".
  */
 data class CommandResult(
     var summary: String? = null,

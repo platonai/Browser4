@@ -51,7 +51,10 @@ and page-status reporting:
 - **`AgentTaskEvents`** — `AgentTaskEvent` and `AgentTaskRunStats` plus the bounded,
   thread-safe `AgentTaskEventLog` (1,000-event ring buffer with sequence cursors)
   and `AgentTaskEventSanitizer`, which truncates/redacts previews and repairs
-  unpaired surrogates. Backs `GET /api/commands/{id}/events` and `/stats`.
+  unpaired surrogates. Backs `GET /api/commands/{id}/events` and `/stats`. The run
+  stats carry the provider's prompt-cache breakdown (`cachedInputTokens`,
+  `cacheWriteInputTokens`, `cacheReported`, derived `cacheHitRatio`); an
+  unreported cache stays "unknown" (`cacheReported=false`), never 0%.
 - **`AgentResume`** — Builds resume checkpoints and `## Resume context` instructions,
   isolates per-task workspaces, and attributes the deliverables an aborted run
   already produced. Used by `agent run --resume <id>`.

@@ -1889,10 +1889,15 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - -i, --follow and --wait end with the same line: `✔ Agent completed in 41.3s ·".to_string(),
         );
         lines.push(
-            "    <id> · 3 round(s) · 39 tool(s) · 54.4k tokens` (a cost part is omitted when the".to_string(),
+            "    <id> · 3 round(s) · 39 tool(s) · 54.4k tokens · cache 80%` (a cost part is omitted"
+                .to_string(),
         );
         lines.push(
-            "    backend does not answer the stats call within 2s).".to_string(),
+            "    when the backend does not answer the stats call within 2s; `cache <pct>` appears"
+                .to_string(),
+        );
+        lines.push(
+            "    only when the provider reported prompt-cache details).".to_string(),
         );
         lines.push(
             "  - A run silent for 30s prints `⋯ still running · N step(s) · 30s since the last".to_string(),
@@ -1924,8 +1929,26 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    and tool calls (served by the backend's run counters; /stats <task-id> for another task)."
+            "    (prompt-cache reads/writes and the hit ratio included when the provider reports"
                 .to_string(),
+        );
+        lines.push(
+            "    them) and tool calls (served by the backend's run counters; /stats <task-id> for"
+                .to_string(),
+        );
+        lines.push(
+            "    another task).".to_string(),
+        );
+        lines.push(
+            "  - In the session, /resume [--budget <n>] [task-id] continues an interrupted or"
+                .to_string(),
+        );
+        lines.push(
+            "    budget-aborted task with its workspace and files; after every task ends, -i"
+                .to_string(),
+        );
+        lines.push(
+            "    offers 2-3 numbered next steps (type the number, or a new task).".to_string(),
         );
         lines.push(
             "  - A step the CLI cannot parse is skipped (one notice line) instead of ending the"
@@ -1955,18 +1978,38 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    unlimited). The configured default applies again to the next task; `config set` is"
+            "    unlimited). The budget counts CACHE-MISS tokens (uncached prompt + output):"
                 .to_string(),
         );
         lines.push(
-            "    the process-wide knob and changes every later task on the backend.".to_string(),
-        );
-        lines.push(
-            "  - --follow prints a `tokens <used> / <budget> (<pct>)` line every 10 requests or 15s,"
+            "    prompt-cache reads cost ~10% of the input price and are free here, so a cached"
                 .to_string(),
         );
         lines.push(
-            "    a one-time warning at 80% of the budget, and an explicit abort line at 100%."
+            "    loop no longer aborts a run that costs little. The configured default applies"
+                .to_string(),
+        );
+        lines.push(
+            "    again to the next task; `config set` is the process-wide knob.".to_string(),
+        );
+        lines.push(
+            "  - --follow prints a `budget <charged> / <limit> (<pct>) · cache <read> (<pct>)`"
+                .to_string(),
+        );
+        lines.push(
+            "    line every 10 requests or 15s (the cache part only when the provider reports it),"
+                .to_string(),
+        );
+        lines.push(
+            "    a one-time warning at 80% of the budget, and an explicit abort line at 100%. A"
+                .to_string(),
+        );
+        lines.push(
+            "    budget abort is resumable: `-i` offers to continue with a doubled budget, and"
+                .to_string(),
+        );
+        lines.push(
+            "    `agent run --resume <id> --token-budget <n>` does the same from a script."
                 .to_string(),
         );
         lines.push(

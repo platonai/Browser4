@@ -828,6 +828,8 @@ class StatefulAgentRunnerTest {
                     inputTokens = 900,
                     outputTokens = 90,
                     totalTokens = 990,
+                    cachedInputTokens = 720,
+                    cacheWriteInputTokens = 30,
                 ),
             )
             runner.recordRunEvent(
@@ -856,6 +858,10 @@ class StatefulAgentRunnerTest {
             assertEquals(900, stats.inputTokens)
             assertEquals(90, stats.outputTokens)
             assertEquals(990, stats.totalTokens)
+            assertEquals(720, stats.cachedInputTokens, "the cache breakdown must survive the pass-through")
+            assertEquals(30, stats.cacheWriteInputTokens)
+            assertTrue(stats.cacheReported)
+            assertEquals(0.8, stats.cacheHitRatio!!, 1e-9)
             assertTrue(stats.tokensReported)
             assertEquals(mapOf("coding.read" to 1L), stats.toolCounts)
             assertEquals(6, stats.events, "task.created plus the five reported steps")

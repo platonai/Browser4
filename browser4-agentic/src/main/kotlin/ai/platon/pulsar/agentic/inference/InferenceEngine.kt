@@ -69,9 +69,11 @@ class InferenceEngine(
                 "timestamp" to timestamp,
                 "llmInputFile" to llmInputFile,
                 "llmOutputFile" to llmOutputFile,
-                "inputToken" to modelResponse.tokenUsage.inputTokenCount,
+                "inputToken" to modelResponse.tokenUsage.effectiveInputTokenCount,
                 "outputToken" to modelResponse.tokenUsage.outputTokenCount,
-                "totalToken" to modelResponse.tokenUsage.totalTokenCount,
+                "totalToken" to modelResponse.tokenUsage.effectiveTotalTokenCount,
+                "cachedInputToken" to modelResponse.tokenUsage.cachedInputTokenCount,
+                "cacheWriteInputToken" to modelResponse.tokenUsage.cacheWriteInputTokenCount,
                 "inferenceTimeMillis" to DateTimes.elapsedTime(startTime).toMillis()
             )
         )
@@ -142,9 +144,11 @@ class InferenceEngine(
                 "timestamp" to timestamp,
                 "llmInputFile" to llmInputFile,
                 "llmOutputFile" to extractOutputFile,
-                "inputToken" to extractResponse.tokenUsage.inputTokenCount,
+                "inputToken" to extractResponse.tokenUsage.effectiveInputTokenCount,
                 "outputToken" to extractResponse.tokenUsage.outputTokenCount,
-                "totalToken" to extractResponse.tokenUsage.totalTokenCount,
+                "totalToken" to extractResponse.tokenUsage.effectiveTotalTokenCount,
+                "cachedInputToken" to extractResponse.tokenUsage.cachedInputTokenCount,
+                "cacheWriteInputToken" to extractResponse.tokenUsage.cacheWriteInputTokenCount,
                 "inferenceTimeMillis" to DateTimes.elapsedTime(extractStartTime).toMillis()
             )
         )
@@ -175,18 +179,23 @@ class InferenceEngine(
             payload = mapOf(
                 "extractInferenceType" to "metadata",
                 "timestamp" to timestamp,
-                "inputToken" to metadataResponse.tokenUsage.inputTokenCount,
+                "inputToken" to metadataResponse.tokenUsage.effectiveInputTokenCount,
                 "outputToken" to metadataResponse.tokenUsage.outputTokenCount,
-                "totalToken" to metadataResponse.tokenUsage.totalTokenCount,
+                "totalToken" to metadataResponse.tokenUsage.effectiveTotalTokenCount,
+                "cachedInputToken" to metadataResponse.tokenUsage.cachedInputTokenCount,
+                "cacheWriteInputToken" to metadataResponse.tokenUsage.cacheWriteInputTokenCount,
                 "inferenceTimeMillis" to DateTimes.elapsedTime(metadataStartTime).toMillis()
             )
         )
 
         val usage1 = extractResponse.tokenUsage
         val usage2 = metadataResponse.tokenUsage
-        val inputTokenCount = usage1.inputTokenCount + usage2.inputTokenCount
-        val outputTokenCount = usage1.outputTokenCount + usage2.outputTokenCount
-        val totalTokenCount = usage1.totalTokenCount + usage2.totalTokenCount
+        // Both calls may report cache details; normalize their sum so the prompt
+        // count is cache-inclusive exactly once (see TokenUsage.normalized).
+        val summedUsage = (usage1 + usage2).normalized()
+        val inputTokenCount = summedUsage.inputTokenCount
+        val outputTokenCount = summedUsage.outputTokenCount
+        val totalTokenCount = summedUsage.totalTokenCount
 
         val totalInferenceTimeMillis = DateTimes.elapsedTime(extractStartTime).toMillis()
 
@@ -205,7 +214,9 @@ class InferenceEngine(
             totalInferenceTimeMillis = totalInferenceTimeMillis,
             inputTokenCount = inputTokenCount,
             outputTokenCount = outputTokenCount,
-            totalTokenCount = totalTokenCount
+            totalTokenCount = totalTokenCount,
+            cachedInputTokenCount = summedUsage.cachedInputTokenCount,
+            cacheWriteInputTokenCount = summedUsage.cacheWriteInputTokenCount,
         )
         InferenceEventEmitter.onDidExtract(params, inferenceResult)
 
@@ -242,8 +253,13 @@ class InferenceEngine(
          * as if they were extracted fields.
          */
         internal fun stripInferenceBookkeeping(node: ObjectNode) {
-            // Summary keys the engine logs (never schema fields).
-            for (key in listOf("inputToken", "outputToken", "totalToken", "inferenceTimeMillis")) {
+            // Summary keys the engine logs (never schema fields). The cache
+            // breakdown belongs here too: a model that echoes the bookkeeping back
+            // must not inject cache counters into the user payload.
+            for (key in listOf(
+                "inputToken", "outputToken", "totalToken",
+                "cachedInputToken", "cacheWriteInputToken", "inferenceTimeMillis",
+            )) {
                 node.remove(key)
             }
             // Evaluator-shaped metadata echo: an object whose keys are progress /

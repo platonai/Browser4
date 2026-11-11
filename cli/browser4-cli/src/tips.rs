@@ -747,9 +747,11 @@ fn failure_tip_for(
     if error_code == Some("TOKEN_BUDGET") || error_message.contains("Token budget exceeded") {
         let name = crate::help::public_command_name(command);
         return Some(format!(
-            "Tip: '{name}' stopped at the run's token budget — raise the cap for one task with \
-             `agent run <task> --token-budget <n>`, change the backend default with \
-             `config set agent.token.budget.total <n>`, or continue with `agent run --resume <task-id>`."
+            "Tip: '{name}' stopped at the run's cache-miss token budget (prompt-cache reads do not \
+             count) — continue it with a bigger cap using \
+             `agent run --resume <task-id> --token-budget <n>`, raise the cap for one task with \
+             `agent run <task> --token-budget <n>`, or change the backend default with \
+             `config set agent.token.budget.total <n>`."
         ));
     }
     // The page-evaluate deadline is worth naming before the code extraction: the

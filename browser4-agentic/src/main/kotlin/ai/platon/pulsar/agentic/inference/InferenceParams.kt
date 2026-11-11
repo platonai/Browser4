@@ -45,6 +45,15 @@ data class ObserveParams(
  * @property completed Whether the extraction task is complete — `true` whenever
  * usable content is present in [result], otherwise the evaluator's judgment.
  * @property progress Free-text progress description from the evaluator.
+ * @property inputTokenCount Summed prompt tokens of both calls, prompt-cache
+ *   reads and writes included (the provider protocols count them differently;
+ *   see `TokenUsage.normalized`).
+ * @property outputTokenCount Summed output tokens of both calls.
+ * @property totalTokenCount Summed accounted totals: [inputTokenCount] + output.
+ * @property cachedInputTokenCount Prompt tokens the providers served from their
+ *   prompt cache, or `null` when none of the calls reported cache details.
+ * @property cacheWriteInputTokenCount Prompt tokens the calls wrote into the
+ *   provider prompt cache, or `null` when unreported.
  */
 data class ExtractInferenceResult(
     val result: ObjectNode,
@@ -55,5 +64,7 @@ data class ExtractInferenceResult(
     val totalInferenceTimeMillis: Long,
     val inputTokenCount: Int,
     val outputTokenCount: Int,
-    val totalTokenCount: Int
+    val totalTokenCount: Int,
+    val cachedInputTokenCount: Int? = null,
+    val cacheWriteInputTokenCount: Int? = null,
 )

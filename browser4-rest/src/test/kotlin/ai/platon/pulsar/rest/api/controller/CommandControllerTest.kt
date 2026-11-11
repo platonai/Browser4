@@ -116,6 +116,10 @@ class CommandControllerTest {
                 executor.submitPlainCommand(
                     any(), any(), anyOrNull(), anyOrNull(), anyOrNull(),
                     anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(),
+                    // addDirs (11th parameter, defaulted): a defaulted argument
+                    // still occupies a matcher slot, so omitting it mixes raw
+                    // values with matchers and fails the stubbing.
+                    anyOrNull(),
                 )
             ).thenReturn("agent-task-9")
 
@@ -143,6 +147,8 @@ class CommandControllerTest {
                 executor.executePlainCommand(
                     any(), any(), anyOrNull(), anyOrNull(), anyOrNull(),
                     anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(),
+                    // addDirs (11th parameter, defaulted) — see the async test above.
+                    anyOrNull(),
                 )
             ).thenReturn(status)
 
@@ -358,6 +364,9 @@ class CommandControllerTest {
                 inputTokens = 48_231,
                 outputTokens = 6_120,
                 totalTokens = 54_351,
+                cachedInputTokens = 38_585,
+                cacheWriteInputTokens = 120,
+                cacheReported = true,
                 events = 132,
                 toolCounts = linkedMapOf("b4.run" to 12L, "browser_snapshot" to 8L),
             )
@@ -379,6 +388,11 @@ class CommandControllerTest {
         assertEquals(39, body.stats.toolCalls)
         assertEquals(2, body.stats.toolFailures)
         assertEquals(54_351, body.stats.totalTokens)
+        // The prompt-cache breakdown is part of the wire contract the CLI reads.
+        assertEquals(38_585, body.stats.cachedInputTokens)
+        assertEquals(120, body.stats.cacheWriteInputTokens)
+        assertTrue(body.stats.cacheReported)
+        assertEquals(38_585.0 / 48_231.0, body.stats.cacheHitRatio!!, 1e-9)
         assertEquals(12L, body.stats.toolCounts["b4.run"])
     }
 
@@ -427,6 +441,9 @@ class CommandControllerTest {
                 inputTokens = 48_231,
                 outputTokens = 6_120,
                 totalTokens = 54_351,
+                cachedInputTokens = 38_585,
+                cacheWriteInputTokens = 120,
+                cacheReported = true,
                 events = 132,
                 toolCounts = linkedMapOf("b4.run" to 12L),
             )
@@ -447,6 +464,17 @@ class CommandControllerTest {
         assertEquals(48_231, stats["inputTokens"])
         assertEquals(6_120, stats["outputTokens"])
         assertEquals(54_351, stats["totalTokens"])
+        // Prompt-cache breakdown: the CLI reads these names verbatim.
+        assertEquals(38_585, stats["cachedInputTokens"])
+        assertEquals(120, stats["cacheWriteInputTokens"])
+        assertEquals(true, stats["cacheReported"])
+        // `pulsarObjectMapper` rounds doubles to 2 decimals on the wire, so the
+        // ratio is checked within that precision instead of bit-exactly.
+        val ratio = stats["cacheHitRatio"] as Double
+        assertTrue(
+            ratio in 0.79..0.81,
+            "the cache hit ratio must ride the wire (38,585 / 48,231 ≈ 0.80), got $ratio",
+        )
         assertEquals(132, stats["events"])
         assertEquals(mapOf("b4.run" to 12), stats["toolCounts"])
     }
