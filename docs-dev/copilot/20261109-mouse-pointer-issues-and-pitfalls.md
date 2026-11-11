@@ -732,6 +732,10 @@ node_ops.js -> jar:…/lib/pulsar-browser-4.11.30.jar!/js/node_ops.js
 | ③ 滚动后重算仍为文档坐标 | 滚到 800 再 capture，`#click-target` 仍是 `29 57 93 33`（不随滚动变化） |
 | ④ body margin 页 | `body{margin:8px}` + 1200px spacer：`vi.y=1208`，与 `getBoundingClientRect().top + scrollY = 1208` 完全一致（修复前 body 相对会少 8–16px） |
 | `get box` 空间 | `{"x":29,"y":57,...,"boxSpace":"viewport"}`；元素已可见时不滚动，不可见时滚动后等待落定再测 |
+| `--space document` | 滚到 `scrollY=800` 后 `mousemove 29 1342 --space document` → 页面收到 `clientY=542`（= 1342 − 800）：引擎在派发前换算 |
+| `--steps/--duration` | `mousemove 10 10 --steps 3 --duration 60` → 落点精确 `(10,10)`，退出码 0 |
+| `--allow-outside` | 越界时不打印提示；不带该 flag 时打印 `ℹ️  (640, 1200) is outside the 1280×900 viewport …`，两种都 exit 0（提示不影响派发） |
+| `snapshot --viewport-boxes` | `#hover-zone` 默认 `[box=29,1342,204,64]`（文档）；加 flag 后 `[box=29,542,204,64]`（= 1342 − 800） |
 | capture 元数据 | `boxSpace:"document"`、`schemaVersion:2`、`scrollTopAtCapture` 均存在 |
 
 **C. inspect 阈值复核（P2-4）**

@@ -122,7 +122,7 @@
 
 - [x] **P2-6 动作 API 支持 `space` 参数**
   位置：基库 `WebDriver.mouseMoveAt(x,y,space,steps,durationMillis)`（默认实现拒绝非 viewport）+ `PulsarWebDriver` 覆写（`document → viewport` 在派发前用 `SCROLL_POSITION_JS` 换算；`steps/durationMillis` 显式节奏）；`BrowserTabToolExecutor` 新增 `mouseMoveAt` 分发；CLI `mousemove --space/--steps/--duration`（有任一 → `mouse_move_at`）。
-  验收：单测 `test_mousemove_document_space_uses_the_engine_conversion_tool`、`test_mousemove_steps_and_duration_use_the_pacing_tool`；文档与 `docs/mcp-tools.md` 的 `mouse_move_at` 一节。
+  验收：单测 `test_mousemove_document_space_uses_the_engine_conversion_tool`、`test_mousemove_steps_and_duration_use_the_pacing_tool`；**真实浏览器**（`scrollY=800`）：`mousemove 29 1342 --space document` → 页面 `clientY=542`（1342−800）；`mousemove 10 10 --steps 3 --duration 60` → 落点 (10,10)。文档与 `docs/mcp-tools.md` 的 `mouse_move_at` 一节同步。
 
 ---
 
@@ -154,7 +154,7 @@
 
 - [x] **P3-7 可选参数**
   位置：`mousemove --steps/--duration`（→ `mouse_move_at` 的 `steps`/`durationMillis`）、`--allow-outside`（仅抑制越界提示，不改变派发；越界提示由 CLI 读取 `[innerWidth,innerHeight,scrollX,scrollY]` 后打印）、`snapshot --viewport-boxes`（`BrowserTabToolExecutor` 在渲染后按当前 `scrollY` 改写 `[box=]`）。
-  验收：单测 `test_mousemove_rejects_non_positive_pacing`、`test_mousemove_allow_outside_stays_cli_side`；帮助/文档（`help.rs`、`browser-modes.md`、`snapshot.md`）给出用法；默认行为不变（`mousemove` 仍走 `browser_mouse_move_xy`）。
+  验收：单测 `test_mousemove_rejects_non_positive_pacing`、`test_mousemove_allow_outside_stays_cli_side`；**真实浏览器**：越界不带 `--allow-outside` 打印 `ℹ️ … outside the 1280×900 viewport …`、带之静默，两者 exit 0；`snapshot --viewport-boxes` 把 `[box=29,1342,…]` 输出成 `[box=29,542,…]`（−scrollY 800）。帮助/文档（`help.rs`、`browser-modes.md`、`snapshot.md`）给出用法；默认行为不变（`mousemove` 仍走 `browser_mouse_move_xy`）。
 
 ---
 
