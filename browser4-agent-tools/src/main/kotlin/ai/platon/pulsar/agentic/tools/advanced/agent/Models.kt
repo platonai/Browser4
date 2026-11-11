@@ -185,6 +185,17 @@ data class AgentTaskStatus(
     /** Access preset id this task ran under (null when unknown), reused on resume. */
     var accessPreset: String? = null
 
+    /**
+     * Extra folders granted to this task besides its workspace (`agent run --add-dir`),
+     * as absolute paths (null when none were granted).
+     *
+     * Recorded for two reasons: `coding.permissions` and the status envelope can say where the
+     * run was allowed to work, and `agent run --resume <id>` inherits the grant — a resumed run
+     * that silently lost it would fail on exactly the folders its instruction tells it to
+     * continue with.
+     */
+    var addedDirs: List<String>? = null
+
     /** The interrupted task this run resumes, when started with `agent run --resume <id>`. */
     var resumedFrom: String? = null
 
@@ -379,6 +390,7 @@ fun AgentTaskStatus.detachedSnapshot(includeHistory: Boolean = true): AgentTaskS
     // `agent run --resume` inherits and the artifacts an aborted run produced.
     snapshot.codingMode = codingMode
     snapshot.accessPreset = accessPreset
+    snapshot.addedDirs = addedDirs
     snapshot.resumedFrom = resumedFrom
     snapshot.deliverables = deliverables
     snapshot.effectiveTokenBudget = effectiveTokenBudget

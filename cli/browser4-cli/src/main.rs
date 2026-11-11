@@ -15922,6 +15922,46 @@ fn apply_resume_task_id(extra: &mut Value, resume_task_id: Option<&str>) {
     }
 }
 
+/// The `--add-dir` values of a parsed `agent run` payload.
+///
+/// The command definition builds a JSON array; a single value may still arrive as a
+/// plain string (an older caller, or `--help-json`-driven clients), so both shapes
+/// are accepted. Blank entries are not folders and are dropped, keeping the order
+/// the user passed.
+fn add_dirs_of(raw: Option<&Value>) -> Vec<String> {
+    match raw {
+        Some(Value::Array(values)) => values
+            .iter()
+            .filter_map(|value| value.as_str())
+            .map(str::trim)
+            .filter(|dir| !dir.is_empty())
+            .map(ToOwned::to_owned)
+            .collect(),
+        Some(Value::String(dir)) => {
+            let dir = dir.trim();
+            if dir.is_empty() {
+                Vec::new()
+            } else {
+                vec![dir.to_string()]
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Forward `--add-dir <dir>` (repeatable) into the `command.run` payload.
+///
+/// The command definition already resolved each value to an absolute path against
+/// the shell directory the user typed the command in, so this only carries the
+/// list to the backend, which owns the "does it exist, is it a directory"
+/// decision (and knows whether it runs on the same machine). An empty list leaves
+/// the key out entirely, so the task keeps its workspace-only boundary.
+fn apply_add_dirs(extra: &mut Value, add_dirs: &[String]) {
+    if !add_dirs.is_empty() {
+        extra["addDirs"] = json!(add_dirs);
+    }
+}
+
 /// Submit one agent task in async mode and return its task id.
 ///
 /// Shared by the one-shot forms and the interactive session, so every mode
@@ -16076,6 +16116,7 @@ async fn handle_agent_run(
         tool_params.get("tokenBudget").and_then(|v| v.as_i64()),
     );
     apply_resume_task_id(&mut extra, resume_task_id);
+    apply_add_dirs(&mut extra, &add_dirs_of(tool_params.get("addDirs")));
     let task_id = submit_agent_task(client, base_url, task, extra).await?;
 
     // Say which session the task was bound to.  A silent submission is exactly
@@ -42595,6 +42636,28 @@ linkGroups:
 
         let absent = build_agent_run_extra("cli", None, false, false, false, None, None, None, None);
         assert!(absent.get("tokenBudget").is_none(), "got {absent}");
+    }
+
+    /// `--add-dir` (repeatable) reaches `command.run` as a `addDirs` array; a blank
+    /// value is not a folder, and no value at all must leave the key out so the
+    /// task keeps the workspace-only boundary.
+    #[test]
+    fn apply_add_dirs_forwards_every_real_folder_and_omits_blanks() {
+        let mut extra = build_agent_run_extra("cli", None, false, false, false, None, None, None, None);
+        let dirs = add_dirs_of(Some(&json!(["/corpus/a", "  ", "/corpus/b"])));
+        assert_eq!(dirs, vec!["/corpus/a".to_string(), "/corpus/b".to_string()]);
+        apply_add_dirs(&mut extra, &dirs);
+        assert_eq!(extra["addDirs"], json!(["/corpus/a", "/corpus/b"]));
+
+        // A single value (not an array) is still a folder.
+        assert_eq!(add_dirs_of(Some(&json!(" /corpus/a "))), vec!["/corpus/a".to_string()]);
+
+        let mut absent = build_agent_run_extra("cli", None, false, false, false, None, None, None, None);
+        apply_add_dirs(&mut absent, &add_dirs_of(Some(&json!(["  "]))));
+        assert!(absent.get("addDirs").is_none(), "got {absent}");
+
+        apply_add_dirs(&mut absent, &add_dirs_of(None));
+        assert!(absent.get("addDirs").is_none(), "got {absent}");
     }
 
     #[test]

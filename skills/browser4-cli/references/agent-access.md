@@ -93,6 +93,24 @@ A readable root that also sits on the sensitive list (the data root does — it 
 readable by design: that is the relaxation. The OS credential stores stay refused whatever is
 configured — adding `$HOME` as a readable root does **not** expose `~/.ssh`.
 
+### Added folders — `agent run --add-dir`
+
+`--add-dir <folder>` grants one task extra folders besides its workspace. Unlike the readable roots
+these are **read-write scope**, and they can be a `coding.shell` working directory — but the grant
+is still scope, not power:
+
+| Question | Answer |
+|---|---|
+| May the task read/write there? | yes under `full`/`write`; a `read` or `read-build` preset keeps the folder **read-only** (same `READ_ONLY` refusal as the workspace) |
+| May it run commands there? | only when the preset grants the shell (`full`) — the folder does not unlock execution |
+| Which folders are accepted? | an **existing** directory on the backend machine, absolute; `~` is expanded, credential stores are refused; a missing path fails the submission |
+| How long does it last? | this task only — reset when it ends; `--resume <id>` inherits the interrupted task's folders |
+| Can it change mid-session? | yes: in `agent run -i`, `/add-dir <folder>` grants the following tasks a folder and `/dirs [clear]` lists or drops the grants |
+| Where does the agent see them? | the task prompt names them and `coding.permissions` lists them |
+
+The OS sandbox is told the same folders (`browser4.agent.sandbox=windows-acl` provisions them as
+writable roots), so an allowed step is not denied by the OS afterwards.
+
 ### Refusal codes
 
 A denied call fails like any other failed step (the task still ends whatever its own

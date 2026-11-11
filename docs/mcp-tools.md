@@ -296,7 +296,7 @@ call this directly and treat a non-terminal `status` as "not ready".
 ### `command_run`
 
 ```
-command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, sharedWorkspace: Boolean? = null, engine: String? = null, access: String? = null, unattended: Boolean? = true, resumeTaskId: String? = null, tokenBudget: Long? = null)
+command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, sharedWorkspace: Boolean? = null, engine: String? = null, access: String? = null, unattended: Boolean? = true, resumeTaskId: String? = null, tokenBudget: Long? = null, addDirs: List<String>? = null)
 ```
 
 Execute a plain command (URL, instruction, or agent task). When async=true (default), returns a task ID immediately. When async=false, blocks until done and returns the CommandStatus as JSON. noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. engine is a deprecated compatibility argument: the CLI tool loop is the only engine, and the removed 'observe-act' engine is rejected. coding=true explicitly marks an agent task as a coding task (file/build work, no page); omitted or false means a browser task — the default, and never auto-detected.
@@ -314,6 +314,7 @@ Execute a plain command (URL, instruction, or agent task). When async=true (defa
 | `unattended` | Boolean? | no | true | Whether nobody is watching this task (the default). An unattended task that names no `access` preset derives the documented default (`full` with outbound network, audited as ACCESS_APPROVED source=default); pass false from an interactive TTY run so the server-wide policy applies instead. `browser4.agent.access.unattended` narrows the derived default. |
 | `resumeTaskId` | String? | no | null | Resume an interrupted task by id: the new run starts from that task's checkpoint — its instruction, workspace and the files already written — and inherits its coding/access flags. `command` may then be empty. The id must be known to this backend (the interrupted row is restored after a restart, within its TTL). |
 | `tokenBudget` | Long? | no | null | Token budget for THIS task (`agent run --token-budget`), overriding `agent.token.budget.total` for this run only — a per-run override, never a process-wide config write. 0 means unlimited. Omit to use the configured default. |
+| `addDirs` | List<String>? | no | null | Extra folders this task's agent may reach besides its workspace (`agent run --add-dir`, repeatable). Each entry must be an absolute path to an existing directory on the backend machine; relative paths, missing folders and OS credential stores are rejected at submission. An added folder is readable, writable and usable as a shell working directory for this task only (the grant is reset when it ends), while the access preset still decides whether anything may be written there. |
 
 Returns: `String`
 
@@ -359,6 +360,9 @@ async=false when you would rather block for the finished status.
 Pass coding=true for a pure coding task (read/write files, run builds):
 the agent then works from its coding tool set without a browser page.
 Tasks are browser tasks unless the caller says otherwise.
+addDirs grants extra absolute folders besides the workspace ("agent run
+--add-dir"): the task may read, write and run commands there, the access
+preset still limits what may be written, and the grant ends with the task.
 
 </details>
 

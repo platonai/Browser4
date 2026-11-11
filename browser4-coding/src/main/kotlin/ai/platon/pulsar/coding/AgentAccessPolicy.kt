@@ -90,6 +90,8 @@ class ToolAccessDeniedException(
  * @property allowNetwork when true, the shell may use network-capable commands
  * @property denyTools tool patterns denied regardless of preset; supports `*`, `domain.*`, `domain.method` and bare `method`
  * @property protectedFiles workspace-relative paths that must never be written or deleted
+ * @property additionalDirs extra folders granted to this task besides its workspace
+ *   (`agent run --add-dir`); see [withAdditionalDirs]
  * @property operatorGrants live operator-issued capabilities (plan P4-1). Read on every decision so
  *   an approval issued while a task runs takes effect on the next call. The grants widen what the
  *   preset refuses **within the rails** (deny tools, protected/sensitive paths, the workspace
@@ -106,6 +108,8 @@ data class AgentAccessPolicy(
     val protectedDirs: Set<String> = CodingAgentFileSystem.DEFAULT_PROTECTED_DIRS,
     /** Locations outside the workspace that must never be read or written. */
     val sensitivePaths: Set<String> = CodingAgentFileSystem.DEFAULT_SENSITIVE_PATHS,
+    /** Extra absolute folders this task may reach; empty keeps the workspace-only boundary. */
+    val additionalDirs: Set<Path> = emptySet(),
     /** Operator grants in effect for this task; empty when no approval channel is attached. */
     val operatorGrants: () -> List<Capability> = { emptyList() },
 ) {
@@ -228,6 +232,26 @@ data class AgentAccessPolicy(
      */
     fun withTaskOverrides(preset: AccessPreset?): AgentAccessPolicy =
         copy(preset = preset ?: this.preset)
+
+    /**
+     * Grants this task extra folders besides its workspace (`agent run --add-dir`).
+     *
+     * The folders are **scope**, not power: they join both boundary grants for reads and writes
+     * (so the file tools can reach them and the shell can use them as a working directory), while
+     * what the model may *do* there is still decided by [preset] — an `--access read` task keeps
+     * them read-only, and a preset that forbids the shell keeps them unusable as a working
+     * directory. They are absolute and normalized here; the caller has already checked that each
+     * one exists on this machine, and the rails stay in force (the credential locations in
+     * [sensitivePaths] and the protected/denied tools are never reached through an added folder).
+     *
+     * Empty input returns this policy unchanged, so a task that names no folder behaves exactly
+     * as before.
+     */
+    fun withAdditionalDirs(dirs: Collection<Path>): AgentAccessPolicy {
+        if (dirs.isEmpty()) return this
+        val normalized = dirs.map { it.toAbsolutePath().normalize() }.toSet()
+        return copy(additionalDirs = additionalDirs + normalized)
+    }
 
     /**
      * A structured refusal for `domain.method`, or `null` when the call is allowed.

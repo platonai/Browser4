@@ -1194,6 +1194,96 @@ pub(super) fn test_agent_run_omits_access_when_absent(ctx: &mut E2ECtx) {
     );
 }
 
+/// `--add-dir` grants a folder besides the workspace: it must reach `command_run`
+/// as an array of **absolute** paths. The backend runs in the runtime bundle, so a
+/// path relative to the user's shell directory would name a different place there.
+pub(super) fn test_agent_run_forwards_add_dir(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task = "Port the helper from the corpus";
+    mock_server.set_command_status_response(
+        "agent-task-1",
+        completed_status("agent-task-1", task, "done"),
+    );
+
+    // The CLI resolves nothing here: an absolute folder is forwarded verbatim, so the
+    // assertion does not depend on the child's working directory.
+    let corpus = ctx.workspace_dir.join("added-corpus");
+    std::fs::create_dir_all(&corpus).expect("create the granted folder");
+    let corpus_arg = corpus.to_string_lossy().to_string();
+
+    let run_result = run_command(
+        ctx,
+        &["agent", "run", task, "--coding", "--add-dir", corpus_arg.as_str()],
+    );
+    assert!(
+        run_result.stdout.contains("Task submitted: agent-task-1"),
+        "expected task submission in:\n{}",
+        run_result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    let command_call = snapshot
+        .tool_calls
+        .iter()
+        .find(|call| call.tool == "command_run")
+        .expect("expected command_run MCP tool call");
+    assert_eq!(
+        command_call.arguments["addDirs"],
+        serde_json::json!([corpus_arg]),
+        "command_run payload should forward --add-dir as an absolute path array: {:?}",
+        command_call.arguments
+    );
+    assert!(
+        snapshot
+            .tool_calls
+            .iter()
+            .filter(|call| call.tool == "command_run")
+            .all(|call| call.arguments.get("addDirs").is_some()),
+        "the grant must travel with the submission: {:?}",
+        snapshot.tool_calls
+    );
+}
+
+/// Without `--add-dir` the payload carries no `addDirs` key at all, so the task
+/// keeps its workspace-only boundary (an empty array would still be a grant).
+pub(super) fn test_agent_run_omits_add_dir_when_absent(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task = "Read the changelog";
+    mock_server.set_command_status_response(
+        "agent-task-1",
+        completed_status("agent-task-1", task, "done"),
+    );
+
+    let run_result = run_command(ctx, &["agent", "run", task, "--coding"]);
+    assert!(
+        run_result.stdout.contains("Task submitted: agent-task-1"),
+        "expected task submission in:\n{}",
+        run_result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    let command_call = snapshot
+        .tool_calls
+        .iter()
+        .find(|call| call.tool == "command_run")
+        .expect("expected command_run MCP tool call");
+    assert!(
+        command_call.arguments.get("addDirs").is_none(),
+        "an omitted --add-dir must not appear in the payload: {:?}",
+        command_call.arguments
+    );
+}
+
 /// In an interactive session the preset applies to the tasks typed later, not
 /// just to the invocation — the same grant, one payload each.
 pub(super) fn test_agent_run_interactive_forwards_access_preset(ctx: &mut E2ECtx) {
@@ -1229,10 +1319,51 @@ pub(super) fn test_agent_run_interactive_forwards_access_preset(ctx: &mut E2ECtx
     );
 }
 
+/// `/add-dir <dir>` inside `-i` is the live form of `--add-dir`: the next task
+/// submitted from the same session must carry the grant, so a long session does not
+/// have to be restarted (losing the agent context) to reach another folder.
+pub(super) fn test_agent_run_interactive_add_dir_grants_the_next_task(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+    mock_server.set_command_result_response("agent-task-1", "interactive result");
+
+    let corpus = ctx.workspace_dir.join("interactive-corpus");
+    std::fs::create_dir_all(&corpus).expect("create the granted folder");
+    let corpus_arg = corpus.to_string_lossy().to_string();
+
+    let stdin = format!("/add-dir {corpus_arg}\nFix the failing test\n/quit\n");
+    let run_result = run_command_with_stdin(ctx, &["agent", "run", "-i", "--coding"], &stdin);
+    assert!(
+        run_result.stdout.contains("added:"),
+        "the session must confirm the grant:\n{}",
+        run_result.stdout
+    );
+    assert!(
+        run_result.stdout.contains("▶ task agent-task-1"),
+        "the typed line after /add-dir must be submitted as a task:\n{}",
+        run_result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    let command_call = snapshot
+        .tool_calls
+        .iter()
+        .find(|call| call.tool == "command_run")
+        .expect("expected command_run MCP tool call");
+    assert_eq!(
+        command_call.arguments["addDirs"],
+        serde_json::json!([corpus_arg]),
+        "a folder granted with /add-dir must travel with the next task: {:?}",
+        command_call.arguments
+    );
+}
+
 /// A one-shot `agent run` has nobody to watch it, so it leaves the decision to the
 /// backend: the payload must not invent an `unattended` value of its own (plan P4-1).
 pub(super) fn test_agent_run_omits_unattended(ctx: &mut E2ECtx) {
-    reset_cli_artifacts(ctx);
     let started_at = Instant::now();
     let mock_server = MockBrowser4Server::start();
     ctx.record_step("mock Browser4 server start", started_at.elapsed());

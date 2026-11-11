@@ -97,7 +97,7 @@ class ExecutionSandboxTest {
     fun windowsAclProvisionsOncePerWorkspace() {
         val calls = mutableListOf<Path>()
         val sandbox = WindowsAclSandbox(
-            provision = { workspace ->
+            provision = { workspace, _ ->
                 calls.add(workspace)
                 SandboxAccount("b4-agent", charArrayOf('s'))
             },
@@ -118,11 +118,39 @@ class ExecutionSandboxTest {
     }
 
     @Test
+    @DisplayName("`--add-dir` folders reach provisioning and are part of the cache key")
+    fun grantedFoldersReachProvisioning() {
+        val calls = mutableListOf<Pair<Path, List<Path>>>()
+        val sandbox = WindowsAclSandbox(
+            provision = { workspace, extras ->
+                calls.add(workspace to extras)
+                SandboxAccount("b4-agent", charArrayOf('s'))
+            },
+            selfCheck = { _, _ -> null },
+        )
+        val ws = Files.createDirectories(tempDir.resolve("ws"))
+        val corpus = Files.createDirectories(tempDir.resolve("corpus"))
+        val spec = ProcessSpec(listOf("cmd.exe"), ws, emptyMap())
+
+        val first = sandbox.prepare(spec, ws, allowNetwork = true, extraWritableRoots = listOf(corpus))
+        val second = sandbox.prepare(spec, ws, allowNetwork = true, extraWritableRoots = listOf(corpus))
+
+        assertSame(first.sandboxAccount, second.sandboxAccount, "one grant set reuses its account")
+        assertEquals(1, calls.size, "one provision per workspace+grant set")
+        assertEquals(corpus.toAbsolutePath().normalize(), calls.single().second.single())
+
+        // Dropping the grant changes the ACL matrix, so it needs its own provisioning.
+        sandbox.prepare(spec, ws, allowNetwork = true, extraWritableRoots = emptyList())
+        assertEquals(2, calls.size, "a different grant set must not reuse the old ACLs")
+        assertTrue(calls.last().second.isEmpty(), "the un-granted run provisions no extra root")
+    }
+
+    @Test
     @DisplayName("the write probe runs once per workspace (plan P3-2)")
     fun writeProbeRunsOncePerWorkspace() {
         val checks = mutableListOf<Path>()
         val sandbox = WindowsAclSandbox(
-            provision = { SandboxAccount("b4-agent", charArrayOf('s')) },
+            provision = { _, _ -> SandboxAccount("b4-agent", charArrayOf('s')) },
             selfCheck = { workspace, _ ->
                 checks.add(workspace)
                 null
@@ -142,7 +170,7 @@ class ExecutionSandboxTest {
     fun workspaceCacheIsBounded() {
         val accounts = mutableListOf<SandboxAccount>()
         val sandbox = WindowsAclSandbox(
-            provision = {
+            provision = { _, _ ->
                 SandboxAccount("b4-agent", charArrayOf('s')).also { account -> accounts.add(account) }
             },
             selfCheck = { _, _ -> null },
@@ -163,7 +191,7 @@ class ExecutionSandboxTest {
     @DisplayName("a failing write probe is a hard failure, never an unwrapped launch")
     fun writeProbeFailureIsHardFailure() {
         val sandbox = WindowsAclSandbox(
-            provision = { SandboxAccount("b4-agent", charArrayOf('s')) },
+            provision = { _, _ -> SandboxAccount("b4-agent", charArrayOf('s')) },
             selfCheck = { _, _ ->
                 "the sandbox account cannot write inside the workspace 'C:\\ws'"
             },
@@ -183,7 +211,7 @@ class ExecutionSandboxTest {
     @DisplayName("a failing windows-acl provision is a hard failure, not an unwrapped launch")
     fun windowsAclFailureDoesNotFallBack() {
         val sandbox = WindowsAclSandbox(
-            provision = {
+            provision = { _, _ ->
                 throw SandboxUnavailableException("windows-acl", "sandbox account 'b4-agent' is not usable")
             },
             selfCheck = { _, _ -> null },

@@ -74,7 +74,12 @@ object CodingComponents {
     private val boundaryAuthorizerLock = Any()
 
     /** Cache key: the canonical workspace root plus the readable roots it was built with. */
-    private data class BoundaryKey(val root: Path, val readableRoots: List<Path>)
+    private data class BoundaryKey(
+        val root: Path,
+        val readableRoots: List<Path>,
+        /** Folders `agent run --add-dir` granted to the task, normalized and sorted. */
+        val additionalDirs: List<Path>,
+    )
 
     private val boundaryAuthorizers = object : LinkedHashMap<BoundaryKey, Authorizer>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<BoundaryKey, Authorizer>?): Boolean =
@@ -149,10 +154,13 @@ object CodingComponents {
      *
      * @param root the workspace root
      * @param readableRoots the readable roots in effect; defaults to [ReadablePaths.roots]
+     * @param additionalDirs folders granted to the task besides the workspace
+     *   (`agent run --add-dir`); they are read+write in both boundary grants
      */
     internal fun scopeManifest(
         root: Path,
         readableRoots: List<Path> = ReadablePaths.roots(),
+        additionalDirs: Collection<Path> = emptyList(),
     ): List<ScopeEntry> {
         val realRoot = runCatching { root.toRealPath() }.getOrDefault(root.toAbsolutePath().normalize())
         val boundaryGrants = setOf(CAP_FS_BOUNDARY, CAP_SHELL_BOUNDARY)
@@ -181,7 +189,25 @@ object CodingComponents {
                     grants = boundaryGrants,
                 )
             }
-        return listOf(workspace) + mirrors + toolchain + readable
+        // Folders `agent run --add-dir` granted. Read+write like the workspace (the preset still
+        // decides whether anything may be written), so one entry covers "readable, writable and
+        // executable" without a second switch. A folder that is already an exact boundary root is
+        // dropped: the workspace entry already covers it.
+        val added = additionalDirs
+            .map { runCatching { it.toRealPath() }.getOrDefault(it.toAbsolutePath().normalize()) }
+            .distinct()
+            .filterNot { it in known }
+            .sortedBy { it.toString() }
+            .map {
+                ScopeEntry(
+                    id = "added:$it",
+                    path = it,
+                    kind = ScopeKind.ADDED,
+                    effects = BOUNDARY_EFFECTS,
+                    grants = boundaryGrants,
+                )
+            }
+        return listOf(workspace) + mirrors + toolchain + readable + added
     }
 
     /**
@@ -203,10 +229,13 @@ object CodingComponents {
      * file-system request.
      *
      * @param root the workspace root
+     * @param additionalDirs folders `agent run --add-dir` granted to this task; they join the
+     *   read **and** write scope of both grants, so the file tools and the shell agree on them
      */
-    fun boundaryAuthorizer(root: Path): Authorizer {
+    fun boundaryAuthorizer(root: Path, additionalDirs: Collection<Path> = emptyList()): Authorizer {
         val realRoot = runCatching { root.toRealPath() }.getOrDefault(root.toAbsolutePath().normalize())
-        val key = BoundaryKey(realRoot, ReadablePaths.roots())
+        val extras = additionalDirs.map { it.toAbsolutePath().normalize() }.distinct().sortedBy { it.toString() }
+        val key = BoundaryKey(realRoot, ReadablePaths.roots(), extras)
         synchronized(boundaryAuthorizerLock) {
             boundaryAuthorizers[key]?.let { return it }
             val built = buildBoundaryAuthorizer(key)
@@ -216,7 +245,7 @@ object CodingComponents {
     }
 
     private fun buildBoundaryAuthorizer(key: BoundaryKey): Authorizer {
-        val manifest = scopeManifest(key.root, key.readableRoots)
+        val manifest = scopeManifest(key.root, key.readableRoots, key.additionalDirs)
         // The manifest is the single source of truth: an entry's `effects` say whether its path is
         // read-only (the readable roots) or read+write (workspace, mirrors, shell toolchain roots).
         fun rootsOf(grant: CapabilityId, effect: Effect): Set<Path> =
@@ -268,7 +297,7 @@ object CodingComponents {
         policy: AgentAccessPolicy = AgentAccessPolicy.serverDefault,
         sessionEnv: Map<String, String> = emptyMap(),
     ): CodingAgentShell {
-        val boundary = boundaryAuthorizer(root)
+        val boundary = boundaryAuthorizer(root, policy.additionalDirs)
         return CodingAgentShell(
             baseDir = root,
             allowNetwork = policy.allowNetwork,
@@ -283,6 +312,7 @@ object CodingComponents {
             boundaryAuthorizer = boundary,
             initialSessionEnv = sessionEnv,
             readableRoots = ReadablePaths.roots().toSet(),
+            additionalDirs = policy.additionalDirs,
         )
     }
 
@@ -314,7 +344,7 @@ object CodingComponents {
         // approves one program; reusing it would make a permitted build fail on `mvn` because a
         // grant for `git` does not cover it.
         if (policy.preset == AccessPreset.FULL) return modelShell ?: shell(root, policy)
-        val boundary = boundaryAuthorizer(root)
+        val boundary = boundaryAuthorizer(root, policy.additionalDirs)
         return CodingAgentShell(
             baseDir = root,
             buildOnly = true,
@@ -326,6 +356,7 @@ object CodingComponents {
             protectedDirs = policy.protectedDirs,
             boundaryAuthorizer = boundary,
             readableRoots = ReadablePaths.roots().toSet(),
+            additionalDirs = policy.additionalDirs,
         )
     }
 
@@ -349,7 +380,7 @@ object CodingComponents {
         policy: AgentAccessPolicy = AgentAccessPolicy.serverDefault,
         persistSnapshots: Boolean = false,
     ): CodingAgentFileSystem {
-        val boundary = boundaryAuthorizer(root)
+        val boundary = boundaryAuthorizer(root, policy.additionalDirs)
         return CodingAgentFileSystem(
             workspaceRoot = root,
             allowExternalAccess = policy.allowExternalAccess,
@@ -363,6 +394,7 @@ object CodingComponents {
             persistSnapshots = persistSnapshots,
             boundaryAuthorizer = boundary,
             readableRoots = ReadablePaths.roots().toSet(),
+            additionalDirs = policy.additionalDirs,
         )
     }
 }

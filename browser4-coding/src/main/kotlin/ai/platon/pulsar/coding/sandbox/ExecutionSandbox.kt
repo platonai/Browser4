@@ -36,35 +36,57 @@ data class ProcessSpec(
 interface ExecutionSandbox {
     val id: String
 
-    fun prepare(spec: ProcessSpec, workspace: Path, allowNetwork: Boolean): ProcessSpec
+    /**
+     * Prepares [spec] for launch inside the boundary of [workspace].
+     *
+     * @param extraWritableRoots folders granted for this task besides the workspace
+     *   (`agent run --add-dir`). A sandbox must grant them exactly like the workspace, otherwise a
+     *   folder the string layer allows would be denied by the OS and the grant would be a lie.
+     *   Implementations that do not provision ACLs (e.g. [OffSandbox]) ignore them.
+     */
+    fun prepare(
+        spec: ProcessSpec,
+        workspace: Path,
+        allowNetwork: Boolean,
+        extraWritableRoots: List<Path> = emptyList(),
+    ): ProcessSpec
 }
 
 object OffSandbox : ExecutionSandbox {
     override val id: String = "off"
 
-    override fun prepare(spec: ProcessSpec, workspace: Path, allowNetwork: Boolean): ProcessSpec = spec
+    override fun prepare(
+        spec: ProcessSpec,
+        workspace: Path,
+        allowNetwork: Boolean,
+        extraWritableRoots: List<Path>,
+    ): ProcessSpec = spec
 }
 
 /**
  * Plan P1-2/P1-3/P3-2 — the Windows ACL sandbox.
  *
- * The default [provision] applies the full ACL matrix from the P0 scope list: the workspace and its
- * mirror roots are writable, the toolchain roots are read-only, and the operator profile is denied.
- * The account is cached per workspace, because provisioning runs `net user` and several `icacls`
- * calls; the cache keeps those to once per workspace rather than once per command. The cache is
- * bounded ([DEFAULT_CACHE_LIMIT]) because every task gets a fresh workspace: the least recently
- * used workspace is dropped and its password copy zeroed. The ACL grants are left in place — they
- * are out-of-band provisioning, not cache state.
+ * The default [provision] applies the full ACL matrix from the P0 scope list: the workspace, its
+ * mirror roots and the folders granted to the task (`agent run --add-dir`) are writable, the
+ * toolchain roots are read-only, and the operator profile is denied. The account is cached per
+ * workspace **and per set of granted folders**, because provisioning runs `net user` and several
+ * `icacls` calls; the cache keeps those to once per workspace rather than once per command. The
+ * cache is bounded ([DEFAULT_CACHE_LIMIT]) because every task gets a fresh workspace: the least
+ * recently used workspace is dropped and its password copy zeroed. The ACL grants are left in
+ * place — they are out-of-band provisioning, not cache state.
  *
  * Right after provisioning, [selfCheck] runs the two-write probe (P3-2): a write inside the
  * workspace must succeed and a write outside it must be refused. A mismatch is a hard failure —
  * a sandbox that cannot write its own workspace or leak outside it must not be used silently.
+ * The granted folders are not probed: they are passed to the same `icacls` matrix, so a folder the
+ * account was not granted fails the first command loudly with an OS denial instead of passing
+ * silently.
  *
  * A provisioning failure propagates as [SandboxUnavailableException]; nothing falls back to an
  * unwrapped launch.
  */
 class WindowsAclSandbox(
-    private val provision: (Path) -> SandboxAccount = defaultProvision(),
+    private val provision: (Path, List<Path>) -> SandboxAccount = defaultProvision(),
     private val selfCheck: (Path, SandboxAccount) -> String? = ::defaultSelfCheck,
     cacheLimit: Int = DEFAULT_CACHE_LIMIT,
 ) : ExecutionSandbox {
@@ -91,17 +113,36 @@ class WindowsAclSandbox(
         var verified: Boolean = false
     }
 
-    private val entries = ConcurrentHashMap<Path, WorkspaceEntry>()
+    /**
+     * Provisioning cache key: the workspace plus the folders granted to the task.
+     *
+     * The extra folders are part of the ACL matrix, so two tasks in the same workspace with
+     * different `--add-dir` grants need different accounts; the key keeps that honest instead of
+     * reusing a grant that does not cover the new folder.
+     */
+    private data class ProvisionKey(val workspace: Path, val extraRoots: List<Path>)
+
+    private val entries = ConcurrentHashMap<ProvisionKey, WorkspaceEntry>()
 
     /** Access-ordered index over [entries], guarded by [evictionLock]; it only bounds the cache. */
-    private val recency = LinkedHashMap<Path, Unit>(16, 0.75f, true)
+    private val recency = LinkedHashMap<ProvisionKey, Unit>(16, 0.75f, true)
 
     private val evictionLock = Any()
 
-    override fun prepare(spec: ProcessSpec, workspace: Path, allowNetwork: Boolean): ProcessSpec {
+    override fun prepare(
+        spec: ProcessSpec,
+        workspace: Path,
+        allowNetwork: Boolean,
+        extraWritableRoots: List<Path>,
+    ): ProcessSpec {
         val root = workspace.toAbsolutePath().normalize()
-        val entry = entries.computeIfAbsent(root) { WorkspaceEntry(provision(it)) }
-        touchAndTrim(root)
+        val extras = extraWritableRoots
+            .map { it.toAbsolutePath().normalize() }
+            .distinct()
+            .sortedBy { it.toString() }
+        val key = ProvisionKey(root, extras)
+        val entry = entries.computeIfAbsent(key) { WorkspaceEntry(provision(it.workspace, it.extraRoots)) }
+        touchAndTrim(key)
         if (!entry.verified) {
             // The write probe runs once per workspace, not once per command; the double check
             // makes two concurrent first commands observe the same result.
@@ -124,14 +165,14 @@ class WindowsAclSandbox(
     }
 
     /**
-     * Marks [root] as most recently used and evicts the least recently used workspaces beyond the
+     * Marks [key] as most recently used and evicts the least recently used workspaces beyond the
      * bound. Evicted accounts are disposed, clearing their password copy; the ACL grants stay on
      * disk because they are out-of-band provisioning, not cache state.
      */
-    private fun touchAndTrim(root: Path) {
-        val evicted = mutableListOf<Path>()
+    private fun touchAndTrim(key: ProvisionKey) {
+        val evicted = mutableListOf<ProvisionKey>()
         synchronized(evictionLock) {
-            recency[root] = Unit
+            recency[key] = Unit
             while (recency.size > cacheLimit) {
                 val eldest = recency.keys.firstOrNull() ?: break
                 recency.remove(eldest)
@@ -165,16 +206,17 @@ class SandboxUnavailableException(
  * Default provisioning for `windows-acl` (plan P1-3).
  *
  * The writable set is the workspace plus the real paths its module junctions point at — writes the
- * file tools make through a mirror must also work for a build the sandbox runs. The read-only set is
- * the toolchain roots from the P0 scope list. The deny set is the operator profile, applied as a
- * folder-only deny so a workspace nested under it keeps its explicit grant.
+ * file tools make through a mirror must also work for a build the sandbox runs — plus the folders
+ * the task was granted (`agent run --add-dir`), which the string layer already allows. The
+ * read-only set is the toolchain roots from the P0 scope list. The deny set is the operator
+ * profile, applied as a folder-only deny so a workspace nested under it keeps its explicit grant.
  */
-private fun defaultProvision(): (Path) -> SandboxAccount {
+private fun defaultProvision(): (Path, List<Path>) -> SandboxAccount {
     val bootstrap = WindowsSandboxBootstrap()
-    return { workspace ->
+    return { workspace, additionalDirs ->
         bootstrap.provision(
             workspace,
-            writableRoots = MirrorRoots.derive(workspace).toList(),
+            writableRoots = (MirrorRoots.derive(workspace) + additionalDirs).toList(),
             readOnlyRoots = CodingComponents.sandboxReadOnlyRoots(),
             denyRoots = defaultDenyRoots(),
         )

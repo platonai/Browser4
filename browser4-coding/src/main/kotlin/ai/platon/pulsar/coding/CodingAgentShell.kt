@@ -162,6 +162,15 @@ class CodingAgentShell(
      * governed by the command tier and `allowDestructive`.
      */
     private val readableRoots: Set<Path> = emptySet(),
+    /**
+     * Folders granted to this task besides the workspace (`agent run --add-dir`).
+     *
+     * They are in the shell scope (the injected [boundaryAuthorizer] already has them) and, more
+     * importantly here, they are handed to the execution sandbox as extra writable roots: with
+     * `-Dbrowser4.agent.sandbox=windows-acl` the low-privilege account must be granted the same
+     * folder, otherwise the string layer would allow a command the OS then denies.
+     */
+    private val additionalDirs: Set<Path> = emptySet(),
 ) {
     /**
      * The workspace this shell is bound to.
@@ -751,8 +760,8 @@ class CodingAgentShell(
      *
      * Rules:
      * - No argument → canonicalBaseDir (always valid, auto-creates).
-     * - Absolute path → must already exist AND must be lexically inside
-     *   canonicalBaseDir (or allowExternalAccess=true).
+     * - Absolute path → must already exist AND must lie lexically inside canonicalBaseDir, inside a
+     *   folder granted with `agent run --add-dir`, or anywhere when allowExternalAccess=true.
      * - Relative path → resolved against canonicalBaseDir; the resulting
      *   path must be lexically inside canonicalBaseDir; non-parent directories
      *   are auto-created (agent is expected to want a new subdir); absolute
@@ -769,7 +778,7 @@ class CodingAgentShell(
             raw.isAbsolute -> raw.normalize()
             else -> canonicalBaseDir.resolve(raw).normalize()
         }
-        if (!allowExternalAccess && !candidate.startsWith(canonicalBaseDir)) {
+        if (!allowExternalAccess && !candidate.startsWith(canonicalBaseDir) && !isInAddedDir(candidate)) {
             throw WorkspaceEscapeException(candidate, canonicalBaseDir)
         }
         // A working directory inside a protected subtree would make every relative path in the
@@ -986,6 +995,22 @@ class CodingAgentShell(
         readableRoots.map { it.toAbsolutePath().normalize() }
     }
 
+    /** [additionalDirs] as absolute normalised paths; resolved once per instance. */
+    private val resolvedAdditionalDirs: List<Path> by lazy {
+        additionalDirs.map { it.toAbsolutePath().normalize() }
+    }
+
+    /**
+     * Whether [candidate] lies inside a folder granted with `agent run --add-dir`.
+     *
+     * Such a folder is usable as a shell working directory — that is the "executable" part of the
+     * grant: the command's cwd may be there, and the OS sandbox was given the same folder (see
+     * [runCommand]). The workspace boundary check in [workspaceBoundaryViolation] already consults
+     * the shared [boundaryAuthorizer], which has these folders in scope.
+     */
+    private fun isInAddedDir(candidate: Path): Boolean =
+        resolvedAdditionalDirs.any { candidate.startsWith(it) }
+
     /** Absolute roots of [protectedDirs] under the workspace base. */
     private val protectedRoots: List<Path> by lazy {
         protectedDirs.map { canonicalBaseDir.resolve(it).normalize() }
@@ -1174,7 +1199,10 @@ class CodingAgentShell(
      * Built lazily so the mirror scan runs once and only when a command is actually validated.
      */
     private val fallbackBoundaryAuthorizer: Authorizer by lazy {
-        val roots = (listOf(canonicalBaseDir) + CodingComponents.toolchainRoots() + MirrorRoots.derive(baseDir)).toSet()
+        val roots = (
+            listOf(canonicalBaseDir) + CodingComponents.toolchainRoots() + MirrorRoots.derive(baseDir) +
+                additionalDirs.map { it.toAbsolutePath().normalize() }
+            ).toSet()
         Authorizer(
             listOf(
                 Capability(
@@ -1762,6 +1790,7 @@ class CodingAgentShell(
             ProcessSpec(commandLine, workDir.toPath(), environment),
             workspace,
             networkAllowed(),
+            additionalDirs.map { it.toAbsolutePath().normalize() },
         )
 
         val process = ProcessLauncher.start(spec, redirectErrorStream = false)

@@ -327,7 +327,11 @@ class B4CliToolExecutor(
     /** Refuse `file://` reads and absolute uploads outside the workspace (D4). */
     private fun externalPathRefusal(cliArgs: String, workspace: Path): String? {
         val policy = runCatching { accessPolicy() }.getOrNull() ?: AgentAccessPolicy.serverDefault
-        return externalPathRefusal(cliArgs, workspace, policy.allowExternalAccess)
+        // `--add-dir` folders are part of the boundary for this task, so a b4 command may read and
+        // write there too — refusing them here would make the grant unusable from the CLI surface.
+        return externalPathRefusal(
+            cliArgs, workspace, policy.allowExternalAccess, policy.additionalDirs,
+        )
     }
 
     /** Refuse direct-MCP commands while the task preset is narrowed (P3). */
@@ -478,16 +482,24 @@ internal fun jobStateFailure(method: String, id: String, state: String, text: St
  * run used exactly that to reach a fixture the file tools refused (D4, 2026-10-28). With
  * `browser4.agent.allowExternalAccess=true` the operator opted in and nothing is refused.
  *
- * Relative paths (resolved in the workspace) and paths inside it are always allowed.
+ * Relative paths (resolved in the workspace) and paths inside it are always allowed, and so is a
+ * path inside a folder granted with `agent run --add-dir` ([additionalDirs]): that folder is part of
+ * this task's boundary, so the CLI surface must agree with the coding tools.
  *
  * Write destinations count as well: `htmlsnapshot query --output-file`, crawl
  * `--output-file`, `har stop --path` and the `-o` short alias are written straight to
  * disk by the CLI, so a browsing-only task must not be able to drop a file outside the
  * workspace just because the `b4` domain is ungated.
  */
-internal fun externalPathRefusal(args: String, workspace: Path?, allowExternalAccess: Boolean): String? {
+internal fun externalPathRefusal(
+    args: String,
+    workspace: Path?,
+    allowExternalAccess: Boolean,
+    additionalDirs: Collection<Path> = emptyList(),
+): String? {
     if (allowExternalAccess) return null
     val root = workspace?.toAbsolutePath()?.normalize()
+    val addedRoots = additionalDirs.map { it.toAbsolutePath().normalize() }
 
     val candidates = buildList {
         FILE_URL.findAll(args).forEach { match ->
@@ -520,12 +532,14 @@ internal fun externalPathRefusal(args: String, workspace: Path?, allowExternalAc
         if (!path.isAbsolute) continue
         val normalized = path.toAbsolutePath().normalize()
         if (root != null && normalized.startsWith(root)) continue
+        if (addedRoots.any { normalized.startsWith(it) }) continue
         return PermissionAudit.format(
             tool = "b4.run",
             code = PermissionAudit.CODE_PATH_OUTSIDE_WORKSPACE,
             detail = "'$raw' is outside the workspace",
             hint = "use a path inside the workspace (relative paths resolve there, and task inputs " +
-                "are copied to .b4inputs/); external access is disabled for this task",
+                "are copied to .b4inputs/), or inside a folder granted with `agent run --add-dir` " +
+                "(coding.permissions lists them); external access is disabled for this task",
         )
     }
     return null

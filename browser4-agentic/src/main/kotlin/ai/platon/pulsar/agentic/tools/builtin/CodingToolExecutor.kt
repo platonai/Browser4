@@ -3,6 +3,7 @@ package ai.platon.pulsar.agentic.tools.builtin
 import ai.platon.pulsar.coding.AccessApprovals
 import ai.platon.pulsar.coding.AccessPreset
 import ai.platon.pulsar.coding.AccessRequest
+import ai.platon.pulsar.coding.AdditionalDirs
 import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.coding.ArtifactScaffolds
 import ai.platon.pulsar.coding.ArtifactValidator
@@ -2114,6 +2115,15 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "Readable roots (read-only, outside the workspace): " +
                     ReadablePaths.describe() + " (+ -Dbrowser4.agent.readPaths=...)"
             )
+            // `agent run --add-dir`: extra folders this task may read, write and run commands in.
+            // Listed separately because they are neither the workspace nor read-only, and the
+            // model needs their absolute paths — a relative path can only name the workspace.
+            if (policy.additionalDirs.isNotEmpty()) {
+                appendLine(
+                    "Added folders (read+write scope for this task, --add-dir): " +
+                        AdditionalDirs.describe(policy.additionalDirs)
+                )
+            }
             appendLine("Files:")
             appendLine("  read workspace           : $yes")
             appendLine("  write workspace          : ${if (policy.allowsFileMutation()) yes else no}")

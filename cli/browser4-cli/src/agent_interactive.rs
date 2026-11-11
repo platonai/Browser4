@@ -2044,6 +2044,10 @@ struct Repl {
     /// Access preset for this REPL's tasks (`--access`); `None` keeps the
     /// server-wide `browser4.agent.access` default.
     access: Option<String>,
+    /// Extra folders granted to every task of this session (`--add-dir`,
+    /// repeatable); empty keeps the workspace-only boundary. Each value is the
+    /// absolute path the command definition resolved.
+    add_dirs: Vec<String>,
     tty: bool,
     quiet: bool,
     /// `/verbose on`: the step renderer also shows round markers and fast
@@ -2101,6 +2105,7 @@ impl Repl {
             .and_then(|v| v.as_str())
             .map(str::to_string);
         let token_budget = params.get("tokenBudget").and_then(|v| v.as_i64());
+        let add_dirs = crate::add_dirs_of(params.get("addDirs"));
 
         Self {
             client: client.clone(),
@@ -2115,6 +2120,7 @@ impl Repl {
             shared_workspace,
             token_budget,
             access,
+            add_dirs,
             tty: io::stdin().is_terminal(),
             quiet: quiet_enabled(),
             verbose: false,
@@ -2178,6 +2184,11 @@ impl Repl {
         }
         if let Some(access) = self.access.as_deref().filter(|access| !access.is_empty()) {
             line.push_str(&format!(" · access={access}"));
+        }
+        if !self.add_dirs.is_empty() {
+            // The folders are long absolute paths, so the banner says how many and
+            // names them after the other knobs instead of hiding the grant.
+            line.push_str(&format!(" · add-dir={}", self.add_dirs.join(",")));
         }
         if let Some(budget) = self.token_budget.filter(|budget| *budget > 0) {
             line.push_str(&format!(" · budget={}", format_token_amount(budget as u64)));
@@ -2458,7 +2469,7 @@ impl Repl {
     /// applies; without a TTY nobody can answer an approval, so the backend's
     /// unattended default takes over (see plan P4-1).
     fn payload(&self) -> Value {
-        crate::build_agent_run_extra(
+        let mut extra = crate::build_agent_run_extra(
             &self.engine,
             self.noop_limit,
             self.coding,
@@ -2468,7 +2479,11 @@ impl Repl {
             Some(!self.tty),
             self.session_id().as_deref(),
             self.token_budget,
-        )
+        );
+        // Extra folders granted with `--add-dir`: every task of this session keeps
+        // the grant, exactly like `--access` does. The list is already absolute.
+        crate::apply_add_dirs(&mut extra, &self.add_dirs);
+        extra
     }
 
     async fn poll_current(&mut self) -> Result<(), String> {
@@ -2664,6 +2679,8 @@ impl Repl {
             "cancel" | "stop" => self.cancel_current().await,
             "new" => self.new_session(),
             "coding" => self.set_coding(argument),
+            "add-dir" => self.add_dir(argument),
+            "dirs" => self.print_dirs(argument),
             "quiet" => self.set_quiet(argument),
             "verbose" => self.set_verbose(argument),
             "noop-limit" => self.set_noop_limit(argument),
@@ -2866,6 +2883,8 @@ impl Repl {
         self.out("  /new               start a new session (fresh agent context)");
         self.out("  /session           print the current session id");
         self.out("  /coding [on|off]   treat following tasks as coding tasks");
+        self.out("  /add-dir <dir>     grant the following tasks an extra folder (no argument: list)");
+        self.out("  /dirs [clear]      list the folders granted in this session, or drop them all");
         self.out("  /quiet [on|off]    silence the session's human lines (like -q)");
         self.out("  /verbose [on|off]  also print round markers and fast successful tools");
         self.out("  /noop-limit <n>    consecutive no-op abort threshold (blank resets)");
@@ -3073,6 +3092,65 @@ impl Repl {
             "coding mode {}",
             if self.coding { "on" } else { "off" }
         ));
+    }
+
+    /// `/add-dir <dir>`: grant the following tasks an extra folder besides their
+    /// workspace, exactly like `--add-dir` on the command line.
+    ///
+    /// A long session often discovers mid-way that the work lives in another
+    /// checkout or corpus. Restarting the session (and losing the agent context the
+    /// user is steering) to add one folder is the wrong trade, so the grant is a
+    /// live knob like `/coding` and `/noop-limit`. Without an argument it lists
+    /// what is in effect instead of guessing.
+    ///
+    /// The folder is resolved here (relative to this shell's directory, `~`
+    /// expanded) and validated by the backend when the next task starts — the
+    /// backend is the only side that knows whether it exists, which matters when
+    /// it runs on another machine.
+    fn add_dir(&mut self, argument: &str) {
+        let argument = argument.trim();
+        if argument.is_empty() {
+            self.print_dirs("");
+            return;
+        }
+        let resolved = crate::commands::resolve_add_dir(argument);
+        if self.add_dirs.iter().any(|dir| dir == &resolved) {
+            self.out(&format!("already granted: {resolved}"));
+            return;
+        }
+        self.add_dirs.push(resolved.clone());
+        self.out(&format!(
+            "added: {resolved} — readable, writable and usable as a shell working directory for the next tasks"
+        ));
+        self.out("  (the backend checks it exists when they start; /dirs lists the grants)");
+    }
+
+    /// `/dirs [clear]`: the folders granted in this session, or drop all of them.
+    fn print_dirs(&mut self, argument: &str) {
+        if argument.trim() == "clear" {
+            let count = self.add_dirs.len();
+            self.add_dirs.clear();
+            self.out(&format!(
+                "cleared {count} granted folder(s) — the next tasks run in their workspace only"
+            ));
+            return;
+        }
+        if !argument.trim().is_empty() {
+            self.out(&format!(
+                "usage: /dirs [clear] — list the granted folders, or drop them all (got '{}')",
+                argument.trim()
+            ));
+            return;
+        }
+        if self.add_dirs.is_empty() {
+            self.out("no extra folders granted — add one with /add-dir <dir> (workspace only)");
+            return;
+        }
+        self.out(&format!("granted folders ({}, this session):", self.add_dirs.len()));
+        for dir in &self.add_dirs {
+            self.out(&format!("  {dir}"));
+        }
+        self.out("  the access preset still decides whether anything may be written there");
     }
 
     /// `/quiet [on|off]`: silence the session's human lines without restarting it.
@@ -4034,6 +4112,115 @@ mod tests {
         assert!(first.contains("coding=on"), "{first}");
         assert!(first.contains("access=read-build"), "{first}");
         assert!(first.contains("budget=5.00M"), "{first}");
+    }
+
+    /// `--add-dir` is a session-wide grant in `-i` mode: every task of the session
+    /// carries it, and the banner names the folders so a long session's grants are
+    /// visible without re-reading the command line.
+    #[test]
+    fn the_repl_forwards_added_dirs_and_names_them_in_the_banner() {
+        let client = Client::builder().build().expect("client");
+        let repl = Repl::new(
+            &client,
+            "http://localhost:1",
+            &json!({"addDirs": ["/corpus/a", "/corpus/b"]}),
+            None,
+        );
+
+        assert_eq!(
+            repl.payload()["addDirs"],
+            json!(["/corpus/a", "/corpus/b"]),
+            "every task of the session keeps the grant"
+        );
+        let first = &repl.banner_lines()[0];
+        assert!(first.contains("add-dir=/corpus/a,/corpus/b"), "{first}");
+
+        // No flag: the payload must not carry the key at all (workspace-only boundary).
+        let plain = Repl::new(&client, "http://localhost:1", &json!({}), None);
+        assert!(plain.payload().get("addDirs").is_none(), "{:?}", plain.payload());
+        assert!(!plain.banner_lines()[0].contains("add-dir="), "{:?}", plain.banner_lines());
+    }
+
+    /// `/add-dir` is the live counterpart of `--add-dir`: a long session discovers
+    /// mid-way that the work lives in another folder, and restarting it to add one
+    /// directory would throw away the context the user is steering.
+    #[test]
+    fn the_session_grants_a_folder_mid_way_with_add_dir() {
+        let client = Client::builder().build().expect("client");
+        let mut repl = Repl::new(&client, "http://localhost:1", &json!({}), None);
+        // The commands print their confirmation; the assertions are about state.
+        repl.quiet = true;
+
+        let first = std::env::temp_dir().join(format!("b4-repl-add-dir-{}", std::process::id()));
+        let second = std::env::temp_dir().join(format!("b4-repl-add-dir-2-{}", std::process::id()));
+        repl.add_dir(first.to_string_lossy().as_ref());
+        repl.add_dir(second.to_string_lossy().as_ref());
+        // The same folder twice is one grant, not a duplicate entry.
+        repl.add_dir(first.to_string_lossy().as_ref());
+
+        let granted = repl
+            .payload()
+            .get("addDirs")
+            .and_then(|value| value.as_array())
+            .cloned()
+            .expect("the grant must reach the task payload");
+        assert_eq!(granted.len(), 2, "{granted:?}");
+        assert_eq!(granted[0], json!(first.to_string_lossy()), "{granted:?}");
+        assert_eq!(granted[1], json!(second.to_string_lossy()), "{granted:?}");
+
+        // `/dirs clear` drops the session's grants.
+        repl.print_dirs("clear");
+        assert!(repl.add_dirs.is_empty());
+        assert!(
+            repl.payload().get("addDirs").is_none(),
+            "a cleared session must submit no grant: {:?}",
+            repl.payload()
+        );
+    }
+
+    /// A relative `/add-dir` is resolved against this shell's directory, the same
+    /// way the launch flag resolves it — the backend's CWD is the runtime bundle.
+    #[test]
+    fn the_session_resolves_a_relative_add_dir() {
+        let client = Client::builder().build().expect("client");
+        let mut repl = Repl::new(&client, "http://localhost:1", &json!({}), None);
+        repl.quiet = true;
+
+        repl.add_dir("corpus-relative");
+
+        let granted = repl.add_dirs.first().cloned().expect("one grant");
+        assert!(
+            std::path::Path::new(&granted).is_absolute(),
+            "a relative folder must be resolved before it is sent: {granted}"
+        );
+        assert!(granted.ends_with("corpus-relative"), "{granted}");
+    }
+
+    /// The dispatch table must route `/add-dir` and `/dirs`: a slash command that
+    /// silently fell through to "unknown command" would make a live grant look
+    /// supported while doing nothing.
+    #[tokio::test]
+    async fn slash_commands_route_add_dir_and_dirs() {
+        let client = Client::builder().build().expect("client");
+        let mut repl = Repl::new(&client, "http://localhost:1", &json!({}), None);
+        repl.quiet = true;
+
+        let dir = std::env::temp_dir().join(format!("b4-slash-add-dir-{}", std::process::id()));
+        let dir_arg = dir.to_string_lossy().to_string();
+        // The command arrives without the leading slash (see `handle_line`).
+        assert!(
+            repl.handle_slash_command(&format!("add-dir {dir_arg}"))
+                .await
+                .expect("slash commands cannot fail the session")
+        );
+        assert_eq!(repl.add_dirs, vec![dir_arg]);
+
+        // A typo is an unknown command and must not add a folder.
+        assert!(repl.handle_slash_command("add-dirr /tmp/nope").await.unwrap());
+        assert_eq!(repl.add_dirs.len(), 1, "{:?}", repl.add_dirs);
+
+        assert!(repl.handle_slash_command("dirs clear").await.unwrap());
+        assert!(repl.add_dirs.is_empty());
     }
 
     #[test]

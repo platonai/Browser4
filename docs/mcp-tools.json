@@ -193,7 +193,7 @@
     "domain" : "command",
     "method" : "run",
     "mcpNames" : [ "command_run" ],
-    "signature" : "command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, sharedWorkspace: Boolean? = null, engine: String? = null, access: String? = null, unattended: Boolean? = true, resumeTaskId: String? = null, tokenBudget: Long? = null)",
+    "signature" : "command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, sharedWorkspace: Boolean? = null, engine: String? = null, access: String? = null, unattended: Boolean? = true, resumeTaskId: String? = null, tokenBudget: Long? = null, addDirs: List<String>? = null)",
     "description" : "Execute a plain command (URL, instruction, or agent task). When async=true (default), returns a task ID immediately. When async=false, blocks until done and returns the CommandStatus as JSON. noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. engine is a deprecated compatibility argument: the CLI tool loop is the only engine, and the removed 'observe-act' engine is rejected. coding=true explicitly marks an agent task as a coding task (file/build work, no page); omitted or false means a browser task — the default, and never auto-detected.",
     "returnType" : "String",
     "arguments" : [ {
@@ -261,6 +261,12 @@
       "required" : false,
       "default" : "null",
       "description" : "Token budget for THIS task (`agent run --token-budget`), overriding `agent.token.budget.total` for this run only — a per-run override, never a process-wide config write. 0 means unlimited. Omit to use the configured default."
+    }, {
+      "name" : "addDirs",
+      "type" : "List<String>?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Extra folders this task's agent may reach besides its workspace (`agent run --add-dir`, repeatable). Each entry must be an absolute path to an existing directory on the backend machine; relative paths, missing folders and OS credential stores are rejected at submission. An added folder is readable, writable and usable as a shell working directory for this task only (the grant is reset when it ends), while the access preset still decides whether anything may be written there."
     } ],
     "examples" : [ {
       "title" : "Load a page asynchronously",
@@ -286,7 +292,7 @@
       "pollAfterMs" : 1000
     },
     "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\", \"statusTool\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"pollAfterMs\": {\"type\": \"integer\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
-    "help" : "command.run(command: String)\ncommand.run(command: String, async: Boolean = true, noopLimit: Int?, engine: String?, coding: Boolean?)\n\n`command` is a URL to load, a natural-language instruction, or an agent\ntask. With async=true (the default) the call returns a task id and you\npoll it with `command.status` (JSON status envelope), read the payload\nwith `command.result`, and stop it with `command.cancel`. Pass\nasync=false when you would rather block for the finished status.\nPass coding=true for a pure coding task (read/write files, run builds):\nthe agent then works from its coding tool set without a browser page.\nTasks are browser tasks unless the caller says otherwise."
+    "help" : "command.run(command: String)\ncommand.run(command: String, async: Boolean = true, noopLimit: Int?, engine: String?, coding: Boolean?)\n\n`command` is a URL to load, a natural-language instruction, or an agent\ntask. With async=true (the default) the call returns a task id and you\npoll it with `command.status` (JSON status envelope), read the payload\nwith `command.result`, and stop it with `command.cancel`. Pass\nasync=false when you would rather block for the finished status.\nPass coding=true for a pure coding task (read/write files, run builds):\nthe agent then works from its coding tool set without a browser page.\nTasks are browser tasks unless the caller says otherwise.\naddDirs grants extra absolute folders besides the workspace (\"agent run\n--add-dir\"): the task may read, write and run commands there, the access\npreset still limits what may be written, and the grant ends with the task."
   }, {
     "domain" : "command",
     "method" : "status",

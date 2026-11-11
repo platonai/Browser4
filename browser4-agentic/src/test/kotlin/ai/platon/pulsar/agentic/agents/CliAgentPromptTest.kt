@@ -216,4 +216,27 @@ class CliAgentPromptTest {
         val prompt = CliAgentPrompt.hygiene(true, workspace, policy)
         assertTrue(prompt.contains("### Permissions"), prompt)
     }
+
+    @Test
+    @DisplayName("a folder granted with --add-dir is named in the prompt so the model uses it")
+    fun permissionsBlockNamesAddedFolders() {
+        val added = Path.of("/corpus").toAbsolutePath().normalize()
+        val granted = CliAgentPrompt.hygiene(
+            true, workspace, AgentAccessPolicy().withAdditionalDirs(listOf(added)),
+        )
+        assertTrue(granted.contains("Extra folders granted"), granted)
+        assertTrue(granted.contains(added.toString()), "the absolute path must be usable as given: $granted")
+        assertTrue(granted.contains("writable"), granted)
+
+        // Under a read preset the folder is still named, but no write is promised there.
+        val read = CliAgentPrompt.hygiene(
+            true, workspace, AgentAccessPolicy(preset = AccessPreset.READ).withAdditionalDirs(listOf(added)),
+        )
+        assertTrue(read.contains("Extra folders granted"), read)
+        assertTrue(read.contains("writes there are refused"), read)
+
+        // No grant, no line.
+        val plain = CliAgentPrompt.hygiene(true, workspace, AgentAccessPolicy())
+        assertFalse(plain.contains("Extra folders granted"), plain)
+    }
 }

@@ -333,6 +333,9 @@ const TIPS_AGENT: &[Tip] = &[
         text: "`agent run <task> --token-budget <n>` caps THIS task only (0 = unlimited); `config set agent.token.budget.total` changes every later run on the backend",
     },
     Tip {
+        text: "`agent run <task> --add-dir <folder>` lets the task read, write and execute in a folder besides its workspace (repeat the flag for more); the folder must exist on the backend machine, credential stores stay refused, and `--access` still decides whether it is read-only. In `agent run -i`, `/add-dir <folder>` grants one mid-session and `/dirs [clear]` lists or drops the grants",
+    },
+    Tip {
         text: "`agent result <id>` exits non-zero for a failed task — read `errorCode` and the `resume:` line, or pass `--allow-failed` to exit 0 while still seeing the failed payload",
     },
 ];

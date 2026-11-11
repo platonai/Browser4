@@ -5,9 +5,11 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import java.nio.file.Path
 
 /**
  * Tests for [AgentAccessPolicy]: the preset matrix, the deny list, and the server-wide resolution.
@@ -23,6 +25,30 @@ class AgentAccessPolicyTest {
     }
 
     private fun policy(preset: AccessPreset) = AgentAccessPolicy(preset = preset)
+
+    @DisplayName("withAdditionalDirs widens scope only: preset, rails and task overrides are kept")
+    @Test
+    fun additionalDirsAreScopeOnly() {
+        val dir = Path.of("/corpus").toAbsolutePath().normalize()
+        val policy = AgentAccessPolicy(preset = AccessPreset.READ).withAdditionalDirs(listOf(dir))
+
+        assertEquals(AccessPreset.READ, policy.preset)
+        assertEquals(setOf(dir), policy.additionalDirs)
+        assertFalse(policy.allowsFileMutation(), "an added folder does not turn a read preset into a writer")
+
+        // Grants accumulate, and an explicit task preset keeps the folders: the preset bounds what
+        // may be done, the folders bound where.
+        val more = policy.withTaskOverrides(AccessPreset.FULL).withAdditionalDirs(listOf(Path.of("/corpus2")))
+        assertEquals(AccessPreset.FULL, more.preset)
+        assertTrue(more.additionalDirs.contains(dir), "the first grant must survive: ${more.additionalDirs}")
+        assertEquals(
+            Path.of("/corpus2").toAbsolutePath().normalize(),
+            more.additionalDirs.first { it != dir },
+        )
+
+        // No folders is the default policy: nothing to change.
+        assertSame(policy, policy.withAdditionalDirs(emptyList()))
+    }
 
     @Test
     @DisplayName("full allows every tool family")

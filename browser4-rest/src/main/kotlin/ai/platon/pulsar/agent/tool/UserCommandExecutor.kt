@@ -32,6 +32,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import java.io.Closeable
+import java.nio.file.Path
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -190,6 +191,7 @@ class UserCommandExecutor(
         unattended: Boolean = true,
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
+        addDirs: List<Path> = emptyList(),
     ): CommandStatus {
         // A resume may omit the task text entirely: the instruction comes from the
         // interrupted task's checkpoint on the backend.
@@ -202,7 +204,7 @@ class UserCommandExecutor(
                 plainCommand, noopLimit = noopLimit, coding = coding,
                 freshWorkspace = freshWorkspace, sharedWorkspace = sharedWorkspace,
                 access = access, unattended = unattended,
-                resumeTaskId = resumeTaskId, tokenBudget = tokenBudget,
+                resumeTaskId = resumeTaskId, tokenBudget = tokenBudget, addDirs = addDirs,
             )
             .toCommandStatus()
     }
@@ -229,6 +231,7 @@ class UserCommandExecutor(
         unattended: Boolean = true,
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
+        addDirs: List<Path> = emptyList(),
     ): String {
         val command = plainCommand.trim()
 
@@ -243,7 +246,7 @@ class UserCommandExecutor(
 
         return submitAgentTask(
             sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId,
-            tokenBudget,
+            tokenBudget, addDirs,
         )
     }
 
@@ -275,19 +278,21 @@ class UserCommandExecutor(
         unattended: Boolean = true,
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
+        addDirs: List<Path> = emptyList(),
     ): String {
         val runner = ensureAgentRunner(sessionId)
         val status = runner.create()
         taskOwner[status.id] = "agent"
         logger.info(
-            "Submitting agent task {} (session={}, noopLimit={}, coding={}, freshWorkspace={}, access={}, unattended={}, resume={}, tokenBudget={})",
+            "Submitting agent task {} (session={}, noopLimit={}, coding={}, freshWorkspace={}, access={}, unattended={}, resume={}, tokenBudget={}, addDirs={})",
             status.id, sessionId, noopLimit, coding ?: false, freshWorkspace ?: false,
             access?.id ?: "default", unattended, resumeTaskId ?: "none",
             tokenBudget ?: "default",
+            addDirs.map { it.toString() }.ifEmpty { listOf("none") }.joinToString(","),
         )
         runner.submit(
             plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId,
-            tokenBudget,
+            tokenBudget, addDirs,
         )
         return status.id
     }

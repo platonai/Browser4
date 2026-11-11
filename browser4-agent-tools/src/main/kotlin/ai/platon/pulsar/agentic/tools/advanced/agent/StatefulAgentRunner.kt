@@ -480,9 +480,13 @@ open class StatefulAgentRunner(
         unattended: Boolean = true,
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
+        addDirs: List<Path> = emptyList(),
     ): AgentTaskStatus {
         val status = create()
-        execute(plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId, tokenBudget)
+        execute(
+            plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId,
+            tokenBudget, addDirs,
+        )
         return status
     }
 
@@ -506,9 +510,13 @@ open class StatefulAgentRunner(
         unattended: Boolean = true,
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
+        addDirs: List<Path> = emptyList(),
     ): Job {
         val job = taskScope.launch(start = CoroutineStart.LAZY) {
-            execute(plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId, tokenBudget)
+            execute(
+                plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
+                resumeTaskId, tokenBudget, addDirs,
+            )
         }
         runningJobs[status.id] = job
         job.start()
@@ -580,11 +588,13 @@ open class StatefulAgentRunner(
         unattended: Boolean = true,
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
+        addDirs: List<Path> = emptyList(),
     ) {
         try {
             runMutex.withLock {
                 executeSerialized(
-                    plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId, tokenBudget
+                    plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
+                    resumeTaskId, tokenBudget, addDirs,
                 )
             }
         } catch (e: CancellationException) {
@@ -632,6 +642,7 @@ open class StatefulAgentRunner(
         unattended: Boolean = true,
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
+        addDirs: List<Path> = emptyList(),
     ) {
         val agent = session.companionAgent
 
@@ -660,6 +671,13 @@ open class StatefulAgentRunner(
         val instruction = resume?.let { resumeInstruction(plainCommand, it) } ?: plainCommand
         val codingMode = coding ?: resume?.codingMode ?: false
         val accessPreset = access ?: resume?.accessPreset?.let { AccessPreset.parse(it) }
+        // Extra folders granted to THIS task (`agent run --add-dir`). Explicit values win; an
+        // omitted flag on a resumed run inherits the interrupted task's grant, the same way the
+        // preset and the workspace do — a resume that silently lost its folders would fail on the
+        // exact paths the new instruction tells it to continue with.
+        val addedDirs: List<Path> = addDirs.ifEmpty {
+            resume?.additionalDirs.orEmpty().mapNotNull { runCatching { Path.of(it) }.getOrNull() }
+        }
 
         // The companion agent keeps ONE cumulative stateHistory across every task
         // executed in the session. Remember where this task's states begin so the
@@ -679,6 +697,7 @@ open class StatefulAgentRunner(
             // inheritance, and `resumedFrom` links the two task ids.
             status.codingMode = codingMode
             status.accessPreset = accessPreset?.id
+            status.addedDirs = addedDirs.map { it.toString() }.takeIf { it.isNotEmpty() }
             status.resumedFrom = resume?.taskId
             // The submit-time row says "created"; record the transition to
             // "in progress" immediately so a restart cannot revive a task that had
@@ -752,11 +771,16 @@ open class StatefulAgentRunner(
                 // TTY run keeps the server-wide policy. The finally below restores the
                 // server default either way, so a companion agent shared across tasks
                 // never inherits the previous task's grant.
-                val effectivePolicy = when {
+                val basePolicy = when {
                     accessPreset != null -> AgentAccessPolicy.serverDefault.withTaskOverrides(accessPreset)
                     unattended -> AgentAccessPolicy.unattendedDefault
                     else -> AgentAccessPolicy.serverDefault
                 }
+                // Extra folders (`agent run --add-dir`) join the boundary for THIS task only: the
+                // grant is scope, not power — the preset above still decides whether a write there
+                // is possible. Applied here, after the workspace rebind, so the boundary is built
+                // once for the workspace this task really runs in.
+                val effectivePolicy = basePolicy.withAdditionalDirs(addedDirs)
                 if (accessPreset == null && unattended) {
                     ai.platon.pulsar.coding.PermissionAudit.writeEvent(
                         tool = "coding.access",

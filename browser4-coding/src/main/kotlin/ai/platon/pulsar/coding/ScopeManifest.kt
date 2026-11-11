@@ -34,6 +34,16 @@ enum class ScopeKind {
      * boundary ([ScopeNarrowing]).
      */
     READABLE,
+
+    /**
+     * A folder granted to this task besides its workspace (`agent run --add-dir`).
+     *
+     * Carries both effects (read and write): the flag grants access to the folder, while the
+     * access preset still decides whether anything may be written there. Not a narrowing
+     * candidate — it was requested explicitly for one task, so "it went unused" is not evidence
+     * that it should be dropped.
+     */
+    ADDED,
 }
 
 /**
@@ -92,7 +102,10 @@ object ScopeNarrowing {
         // The workspace root is what the boundary is *for*; dropping it is not a narrowing. A
         // readable root is operator/environment configuration too — "it went unused" says nothing
         // about whether reading it is legitimate, so it is never a narrowing candidate either.
-        .filter { it.kind != ScopeKind.WORKSPACE && it.kind != ScopeKind.READABLE }
+        // An added folder (`--add-dir`) was requested for one task, so the same holds for it.
+        .filter {
+            it.kind != ScopeKind.WORKSPACE && it.kind != ScopeKind.READABLE && it.kind != ScopeKind.ADDED
+        }
         .mapNotNull { entry ->
             val unused = consecutiveUnusedTasks[entry.id] ?: return@mapNotNull null
             if (unused < threshold) return@mapNotNull null

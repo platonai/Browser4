@@ -222,6 +222,7 @@ Credential locations stay refused. `--access` never widens paths.
 | `--resume <task-id>` | `agent run` | reuse the interrupted task's workspace (its files are what the new run continues from) |
 | `--fresh-workspace` | `agent run` | accepted for compatibility; per-task isolation is the default now |
 | `--access <preset>` | `agent run` | which *tools* run (`full`/`write`/`read-build`/`read`); never widens paths |
+| `--add-dir <dir>` | `agent run` | grant an **existing** folder outside the workspace: readable, writable and usable as a shell working directory for this task (repeatable; scope only — the preset still bounds what may be done there, and `--resume` inherits it) |
 | `browser4.agent.copyTaskInputs` | backend | copy instruction-referenced external files into `.b4inputs/` (default `true`) |
 | `browser4.agent.allowExternalAccess` | backend | deprecated; advisory string-layer widening for absolute paths outside the workspace (default `false`) |
 | `browser4.agent.workspace` | backend | the checkout a `--coding` task mirrors (default: auto-detected) |
@@ -230,7 +231,7 @@ Credential locations stay refused. `--access` never widens paths.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `PERMISSION_DENIED \| code=PATH_DENIED` | the path is outside the workspace | name the file in the task (it is copied in), or use `--coding`, or enable external access |
+| `PERMISSION_DENIED \| code=PATH_DENIED` | the path is outside the workspace | name the file in the task (it is copied in), use `--add-dir <folder>` for a folder the task must work in, use `--coding`, or enable external access |
 | `code=PROTECTED_PATH` | governance file or protected subtree | copy what you need elsewhere; these stay unwritable by design |
 | `code=SENSITIVE_PATH` | credential location | never copied or read; move the data out of `~/.ssh`/`~/.aws`/`~/.browser4` |
 | The agent reports a blocked input in `problems` | the file could not be resolved at all | check the path exists in the checkout, then re-run |

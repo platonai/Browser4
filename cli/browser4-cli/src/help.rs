@@ -1868,6 +1868,15 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
+            "    Inside the session, /add-dir <dir> grants the following tasks an extra folder and"
+                .to_string(),
+        );
+        lines.push(
+            "    /dirs [clear] lists or drops those grants; /coding, /quiet, /verbose and"
+                .to_string(),
+        );
+        lines.push("    /noop-limit tune the other knobs live.".to_string());
+        lines.push(
             "  - A finished task's payload is rendered as sections (Summary / Key findings / Files".to_string(),
         );
         lines.push(
@@ -1960,6 +1969,34 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    a one-time warning at 80% of the budget, and an explicit abort line at 100%."
                 .to_string(),
         );
+        lines.push(
+            "  - --add-dir <dir> grants this task's agent an extra folder besides its workspace:"
+                .to_string(),
+        );
+        lines.push(
+            "    readable, writable and usable as a shell working directory. Repeat the flag for"
+                .to_string(),
+        );
+        lines.push(
+            "    more folders; a relative path resolves against your shell directory and a leading"
+                .to_string(),
+        );
+        lines.push(
+            "    ~ is your home directory. The folder must already exist on the backend machine, OS"
+                .to_string(),
+        );
+        lines.push(
+            "    credential stores (~/.ssh, ~/.aws, ~/.gnupg, ~/.config/gcloud) stay refused, and the"
+                .to_string(),
+        );
+        lines.push(
+            "    grant lasts for this task only. The preset still decides what may be done there"
+                .to_string(),
+        );
+        lines.push(
+            "    (--access read keeps it read-only); coding.permissions lists the folders in effect."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push(
@@ -1976,6 +2013,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(
             "  browser4-cli agent run \"Fix the failing test\" --coding --access read --follow"
+                .to_string(),
+        );
+        lines.push(
+            "  browser4-cli agent run \"Port the helpers from ../shared-libs\" --coding --add-dir ../shared-libs"
                 .to_string(),
         );
         lines.push(

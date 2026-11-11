@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.mockito.Mockito
 import org.mockito.Mockito.`when`
+import java.nio.file.Files
 import java.time.Instant
 
 /**
@@ -396,6 +397,69 @@ class CommandToolExecutorTest {
                 "s1", "task", null, null, null, null, null, true, null, null
             )
         }
+    }
+
+    @Test
+    @DisplayName("run forwards --add-dir folders so the task can reach them")
+    fun runForwardsAddedDirs() {
+        val dir = Files.createTempDirectory("b4-add-dir-")
+        try {
+            val resolved = dir.toAbsolutePath().normalize()
+            runBlocking {
+                `when`(
+                    runner.submitPlainCommand(
+                        "s1", "port the helper", null, true, null, null, null, true, null, null, listOf(resolved)
+                    )
+                ).thenReturn("t-add-dirs")
+
+                val taskId = call(
+                    "run",
+                    mapOf(
+                        "command" to "port the helper",
+                        "sessionId" to "s1",
+                        "coding" to true,
+                        "addDirs" to listOf(dir.toString()),
+                    )
+                )
+
+                assertEquals("t-add-dirs", taskId)
+                Mockito.verify(runner).submitPlainCommand(
+                    "s1", "port the helper", null, true, null, null, null, true, null, null, listOf(resolved)
+                )
+            }
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    @DisplayName("run rejects an --add-dir folder that does not exist instead of starting a doomed task")
+    fun runRejectsMissingAddedDir() {
+        val missing = Files.createTempDirectory("b4-add-dir-").resolve("does-not-exist")
+        try {
+            val ex = assertThrows<IllegalArgumentException> {
+                call(
+                    "run",
+                    mapOf("command" to "task", "sessionId" to "s1", "addDirs" to listOf(missing.toString()))
+                )
+            }
+
+            assertTrue(ex.message!!.contains("not an existing directory"), ex.message)
+            Mockito.verifyNoInteractions(runner)
+        } finally {
+            missing.parent.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    @DisplayName("run rejects a relative --add-dir path: only the CLI can resolve one")
+    fun runRejectsRelativeAddedDir() {
+        val ex = assertThrows<IllegalArgumentException> {
+            call("run", mapOf("command" to "task", "sessionId" to "s1", "addDirs" to listOf("relative/folder")))
+        }
+
+        assertTrue(ex.message!!.contains("absolute path"), ex.message)
+        Mockito.verifyNoInteractions(runner)
     }
 
     @Test

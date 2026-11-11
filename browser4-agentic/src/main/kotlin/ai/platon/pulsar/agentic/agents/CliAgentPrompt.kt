@@ -227,22 +227,34 @@ internal object CliAgentPrompt {
      * active, so that case keeps its own short block.
      */
     private fun permissionsBlock(policy: AgentAccessPolicy): String {
+        val added = addedDirsLine(policy)
         if (policy.preset == AccessPreset.FULL && policy.denyTools.isEmpty()) {
             if (policy.allowExternalAccess) return ""
-            return """
-
-        ### Workspace boundary
-        - Writes and shell work stay INSIDE the workspace: absolute paths, `..` traversal and
-          repo-relative paths outside it are refused with
-          `PERMISSION_DENIED | code=PATH_DENIED` (allowExternalAccess=false).
-        - Reading is wider on purpose: Browser4's own data, temp and code folders are readable
-          even outside the workspace, and they are READ-ONLY. Run coding.permissions for the exact
-          roots; the operator adds more with -Dbrowser4.agent.readPaths=…. A write there is refused
-          — do not retry it against a readable root.
-        - A refusal is structural: do NOT retry it with different quoting, a `..` prefix, or an
-          interpreter. Keep task inputs under the workspace; an input that is blocked belongs in
-          `problems` at system.taskComplete.
-            """.trimIndent()
+            val addedSuffix = if (added.isEmpty()) "" else " or an added folder named below"
+            return buildString {
+                appendLine()
+                appendLine()
+                appendLine("### Workspace boundary")
+                appendLine(
+                    "- Writes and shell work stay INSIDE the workspace$addedSuffix: absolute paths, " +
+                        "`..` traversal and repo-relative paths outside it are refused with " +
+                        "`PERMISSION_DENIED | code=PATH_DENIED` (allowExternalAccess=false)."
+                )
+                appendLine(
+                    "- Reading is wider on purpose: Browser4's own data, temp and code folders are " +
+                        "readable even outside the workspace, and they are READ-ONLY. Run " +
+                        "coding.permissions for the exact roots; the operator adds more with " +
+                        "-Dbrowser4.agent.readPaths=…. A write there is refused — do not retry it " +
+                        "against a readable root."
+                )
+                if (added.isNotEmpty()) appendLine(added)
+                appendLine(
+                    "- A refusal is structural: do NOT retry it with different quoting, a `..` prefix, " +
+                        "or an interpreter. Keep task inputs under the workspace" +
+                        (if (added.isEmpty()) "" else " or an added folder") +
+                        "; an input that is blocked belongs in `problems` at system.taskComplete."
+                )
+            }.trimEnd()
         }
         val abilities = buildList {
             add("read the workspace")
@@ -262,20 +274,45 @@ internal object CliAgentPrompt {
                 "absolute paths, `..` traversal and interpreters do not get around it. Browser4's own " +
                 "data/temp/code folders are the exception, and are READ-ONLY — coding.permissions " +
                 "lists them."
-        return """
+        return buildString {
+            appendLine()
+            appendLine()
+            appendLine("### Permissions")
+            appendLine("- This run is under access preset '${policy.preset.id}': you may ${abilities.joinToString(", ")}.")
+            if (boundary.isNotEmpty()) appendLine("- $boundary")
+            appendLine(approval)
+            if (added.isNotEmpty()) appendLine(added)
+            appendLine(
+                "- Tools the preset does not grant are not in your tool list at all, and a call that " +
+                    "slips through anyway is refused with `PERMISSION_DENIED | code=...`. A refusal is " +
+                    "structural, not a syntax problem: do NOT retry it, re-quote it, or reach for an " +
+                    "interpreter to do the same thing. The refusal text carries a `hint=` with the " +
+                    "route that is still open."
+            )
+            appendLine(
+                "- Run coding.permissions to see exactly what is allowed before planning a step that " +
+                    "might be outside it. Work you cannot do under this preset belongs in `problems` " +
+                    "at system.taskComplete — say what was blocked and how it should be run, rather " +
+                    "than looping."
+            )
+        }.trimEnd()
+    }
 
-        ### Permissions
-        - This run is under access preset '${policy.preset.id}': you may ${abilities.joinToString(", ")}.
-        - $boundary
-        $approval
-        - Tools the preset does not grant are not in your tool list at all, and a call that slips
-          through anyway is refused with `PERMISSION_DENIED | code=...`. A refusal is structural, not
-          a syntax problem: do NOT retry it, re-quote it, or reach for an interpreter to do the same
-          thing. The refusal text carries a `hint=` with the route that is still open.
-        - Run coding.permissions to see exactly what is allowed before planning a step that might be
-          outside it. Work you cannot do under this preset belongs in `problems` at
-          system.taskComplete — say what was blocked and how it should be run, rather than looping.
-        """.trimIndent()
+    /**
+     * The line naming the folders `agent run --add-dir` granted, or "" when none were.
+     *
+     * An added folder is read+write scope, so a model that kept reading "everything outside the
+     * workspace is refused" would never try the folder the operator just granted. The preset still
+     * bounds what may be done there, so the line says that too instead of promising writes.
+     */
+    private fun addedDirsLine(policy: AgentAccessPolicy): String {
+        if (policy.additionalDirs.isEmpty()) return ""
+        val folders = policy.additionalDirs.map { it.toString() }.sorted().joinToString(", ")
+        val write = if (policy.allowsFileMutation()) "you may write there" else "writes there are refused"
+        return "- Extra folders granted for this task (use these ABSOLUTE paths as given): $folders — " +
+            "readable, writable and usable as a shell working directory in addition to the " +
+            "workspace ($write under this preset). They are not copies: the task's own workspace " +
+            "stays the place for deliverables and for `coding.write`."
     }
 }
 

@@ -106,6 +106,15 @@ class CodingAgentFileSystem(
      * writes stay in the workspace.
      */
     private val readableRoots: Set<Path> = emptySet(),
+    /**
+     * Folders granted to this task besides the workspace (`agent run --add-dir`).
+     *
+     * They are read **and** write scope, exactly like the workspace; only the boundary authorizer
+     * injected by [CodingComponents.fs] needs them for the fallback used by direct construction.
+     * The preset still decides whether a write is possible at all ([readOnly]/[readOnlyProvider]),
+     * and the credential guard below still refuses the sensitive locations.
+     */
+    private val additionalDirs: Set<Path> = emptySet(),
 ) {
     /**
      * The boundary [Authorizer] actually in effect — the injected shared instance, or the
@@ -349,8 +358,17 @@ class CodingAgentFileSystem(
     }
 
     private fun recordMutation(op: String, path: Path, ok: Boolean) {
-        val relative = runCatching { workspaceRoot.relativize(path.toAbsolutePath().normalize()).toString() }
-            .getOrElse { path.toString() }
+        val absolute = path.toAbsolutePath().normalize()
+        // A file in an `--add-dir` folder (or an explicitly allowed external write) is not a
+        // workspace-relative deliverable: `relativize` would produce a `..` chain (or throw on
+        // another drive), which names nothing the report or the finish gate can match. Record the
+        // absolute path for those; writes inside the workspace keep their relative form.
+        val root = runCatching { workspaceRoot.toAbsolutePath().normalize() }.getOrNull()
+        val relative = if (root != null && absolute.startsWith(root)) {
+            runCatching { root.relativize(absolute).toString() }.getOrElse { absolute.toString() }
+        } else {
+            absolute.toString()
+        }
         val normalized = relative.replace('\\', '/')
         // Agent state (scratch scripts, tool snapshots, build output) is not a
         // repository change: recording it makes the finish gate reject a *successful*
@@ -1505,11 +1523,12 @@ class CodingAgentFileSystem(
     /**
      * Fallback boundary [Authorizer] used when none was injected. Holds a single canonical-scope
      * grant over the workspace real root and every mirrored module root [MirrorRoots] finds, plus
-     * the readable roots for reads only ([ReadablePaths]). Built lazily so the mirror scan runs once
-     * per instance and only when a path is actually resolved.
+     * the readable roots for reads only ([ReadablePaths]) and the folders `agent run --add-dir`
+     * granted for reads and writes. Built lazily so the mirror scan runs once per instance and only
+     * when a path is actually resolved.
      */
     private val fallbackBoundaryAuthorizer: Authorizer by lazy {
-        val roots = (setOf(canonicalRoot) + MirrorRoots.derive(workspaceRoot)).toSet()
+        val roots = (setOf(canonicalRoot) + MirrorRoots.derive(workspaceRoot) + resolvedAdditionalDirs).toSet()
         Authorizer(
             listOf(
                 Capability(
@@ -1523,6 +1542,11 @@ class CodingAgentFileSystem(
                 ),
             ),
         )
+    }
+
+    /** [additionalDirs] as absolute normalised paths; resolved once per instance. */
+    private val resolvedAdditionalDirs: List<Path> by lazy {
+        additionalDirs.map { it.toAbsolutePath().normalize() }
     }
 
     /** [readableRoots] as absolute normalised paths; resolved once per instance. */
@@ -1797,7 +1821,8 @@ class CodingAgentFileSystem(
         code = PermissionAudit.CODE_PATH_DENIED,
         detail = "path '$path' is outside the workspace (readable roots are read-only), lies in a " +
             "sensitive location, or is protected",
-        hint = "writes go under the workspace; reading is allowed for the readable roots listed by " +
+        hint = "writes go under the workspace or under a folder granted with `agent run --add-dir` " +
+            "(coding.permissions lists them); reading is allowed for the readable roots listed by " +
             "coding.permissions (add your own with -Dbrowser4.agent.readPaths=...), and the " +
             "deprecated allowExternalAccess opt-in still relaxes the boundary check only — the OS " +
             "sandbox still enforces the boundary, and credential locations stay refused either way",
@@ -1817,7 +1842,14 @@ class CodingAgentFileSystem(
     private fun protectionViolation(resolved: Path): String? {
         val real = runCatching { if (Files.exists(resolved)) resolved.toRealPath() else null }.getOrNull()
         val effective = if (real != null && real.startsWith(canonicalRoot)) real else resolved
-        val rel = canonicalRoot.relativize(effective).toString().replace('\\', '/')
+        // A path outside the workspace (an `--add-dir` folder, possibly on another drive) has no
+        // workspace-relative form: `relativize` would throw for a different root. Such a path is
+        // outside the protected subtree by definition, so the checks below cannot match it.
+        val rel = if (effective.startsWith(canonicalRoot)) {
+            canonicalRoot.relativize(effective).toString().replace('\\', '/')
+        } else {
+            effective.toString().replace('\\', '/')
+        }
         val protected = protectedFiles.any { p ->
             // Exact relative path, or basename match for single-file governance
             // entries (VERSION, AGENTS.md, CLAUDE.md). pom.xml is matched only by

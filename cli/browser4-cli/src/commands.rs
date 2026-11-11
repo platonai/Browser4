@@ -228,8 +228,70 @@ fn absolutize_local_dir(dir: &str) -> String {
     }
 }
 
+/// Expand a leading `~` against the user's home directory, leaving any other
+/// path verbatim.
+///
+/// A native command never receives PowerShell/bash tilde expansion when the
+/// token is quoted (`--add-dir "~/corpus"`), and an unexpanded `~` would be
+/// absolutized against the CLI's CWD into a path that cannot exist
+/// (`<cwd>/~/corpus`). Only a *leading* `~` is a home reference; `~user` forms
+/// are not expanded because neither shell passes them through.
+fn expand_home_dir(dir: &str) -> String {
+    let trimmed = dir.trim();
+    let rest = match trimmed.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') => rest,
+        _ => return trimmed.to_string(),
+    };
+    let Some(home) = dirs::home_dir() else {
+        return trimmed.to_string();
+    };
+    let rest = rest.trim_start_matches(['/', '\\']);
+    if rest.is_empty() {
+        home.to_string_lossy().into_owned()
+    } else {
+        home.join(rest).to_string_lossy().into_owned()
+    }
+}
+
+/// Resolve one `--add-dir <dir>` value into the absolute path the backend is
+/// given.
+///
+/// The backend's working directory is the runtime bundle, not the user's shell
+/// directory, so a relative folder has to be resolved here — in the process the
+/// user actually typed the command in — exactly like `--output-dir` values are
+/// (see [`absolutize_local_dir`]). Whether the folder exists is decided on the
+/// backend, which is the only side that can see its own file system.
+///
+/// Shared with the interactive session's `/add-dir` command, so a folder granted
+/// mid-session names the same directory as `--add-dir` would.
+pub(crate) fn resolve_add_dir(dir: &str) -> String {
+    absolutize_local_dir(&expand_home_dir(dir))
+}
+
 fn get_opt_str<'a>(map: &'a HashMap<String, Value>, key: &str) -> Option<&'a str> {
     map.get(key).and_then(|v| v.as_str())
+}
+
+/// Values of a **repeatable** option, in the order the user passed them.
+///
+/// `parse_raw_args` collects repeated non-boolean options into a JSON array
+/// (`-e PAT1 -e PAT2`), while a single occurrence stays a plain string. Both
+/// shapes are read here so a repeatable option behaves the same whether it was
+/// given once or many times. Blank values are dropped: `--add-dir ""` must not
+/// reach the backend as a folder named "". A non-string value (a stray boolean)
+/// is ignored for the same reason.
+fn get_str_list(map: &HashMap<String, Value>, key: &str) -> Vec<String> {
+    let raw: Vec<&Value> = match map.get(key) {
+        Some(Value::Array(values)) => values.iter().collect(),
+        Some(value) => vec![value],
+        None => Vec::new(),
+    };
+    raw.into_iter()
+        .filter_map(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn get_string_value(map: &HashMap<String, Value>, key: &str) -> Option<String> {
@@ -4193,6 +4255,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "fresh-workspace", description: "Deprecated compatibility switch: every task now runs in its own workspace directory, so this is a no-op. Use --shared-workspace for the opposite", is_bool: true, short: None },
                 OptionDef { name: "shared-workspace", description: "Run this task in the shared workspace (the old default) instead of its own per-task workspace, so it sees and mutates previous tasks' files. --resume still uses the interrupted task's workspace", is_bool: true, short: None },
                 OptionDef { name: "access", description: "Access preset for this task's coding tools: full (default), write (no shell), read-build (read + project build, no shell, no file mutation), read. Omit to use the server-wide browser4.agent.access default. Reset when the task ends", is_bool: false, short: None },
+                OptionDef { name: "add-dir <dir>", description: "Grant this task's agent an extra folder besides its workspace: readable, writable and usable as a shell working directory. Repeatable (one flag per folder); relative paths resolve against the current shell directory and ~ expands to the home directory. The folder must already exist on the backend machine, and the OS credential stores (~/.ssh, ~/.aws, ~/.gnupg, ~/.config/gcloud) stay refused. The grant lasts for this task only and is reset when it ends", is_bool: false, short: None },
                 OptionDef { name: "resume", description: "Resume an interrupted task by id: the new run is seeded with that task's instruction, workspace and files already written (the checkpoint must exist on the same backend). The task description may be omitted", is_bool: false, short: None },
                 OptionDef { name: "token-budget", description: "Token budget for THIS task, overriding agent.token.budget.total for this run only (0 = unlimited). A per-run override, never a process-wide config change; the next task keeps the configured default", is_bool: false, short: None },
                 OptionDef { name: "engine", description: "Deprecated compatibility option: the CLI tool loop is the only agent engine. `cli` is accepted; the removed `observe-act` engine is rejected", is_bool: false, short: None },
@@ -4230,6 +4293,18 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if let Some(access) = get_opt_str(args, "access") {
                     p["access"] = json!(access);
+                }
+                // `--add-dir <dir>` (repeatable): extra folders this task's agent may read,
+                // write and execute in. Forwarded only when at least one was given, so an
+                // absent key keeps the workspace-only boundary. Each value is resolved to an
+                // absolute path here (the backend runs in the runtime bundle, not the user's
+                // shell directory); existence is checked on the backend.
+                let add_dirs: Vec<String> = get_str_list(args, "add-dir")
+                    .iter()
+                    .map(|dir| resolve_add_dir(dir))
+                    .collect();
+                if !add_dirs.is_empty() {
+                    p["addDirs"] = json!(add_dirs);
                 }
                 // Backend-side resume: forwarded as-is. A blank value must not
                 // become a checkpoint id, so only a non-blank one is sent.
@@ -7484,6 +7559,77 @@ mod tests {
         negative.insert("token-budget".to_string(), json!("-5"));
         let params = (cmd.tool_params_fn)(&negative);
         assert_eq!(params["tokenBudgetInvalid"], "-5");
+    }
+
+    /// `--add-dir` grants extra folders: repeatable, forwarded as one `addDirs`
+    /// array in the order given, with every value resolved to an absolute path.
+    /// A relative folder must be resolved on the CLI side — the backend runs in the
+    /// runtime bundle, so resolving it there would name a different directory.
+    #[test]
+    fn test_agent_run_forwards_add_dir_repeatedly_as_absolute_paths() {
+        let map = commands_map();
+        let cmd = map.get("agent-run").unwrap();
+        let absolute = if cfg!(windows) { "C:\\corpus\\docs" } else { "/corpus/docs" };
+
+        // Repeated non-boolean options arrive as a JSON array (see insert_arg).
+        let mut args = HashMap::new();
+        args.insert("task".to_string(), json!("summarize the corpus"));
+        args.insert("add-dir".to_string(), json!([absolute, "../shared-libs"]));
+        let params = (cmd.tool_params_fn)(&args);
+        let dirs = params["addDirs"].as_array().expect("addDirs must be an array");
+        assert_eq!(dirs.len(), 2, "got {params}");
+        assert_eq!(dirs[0], json!(absolute));
+        let relative = dirs[1].as_str().unwrap();
+        assert!(
+            std::path::Path::new(relative).is_absolute(),
+            "a relative folder must be resolved against the shell directory, got {relative}"
+        );
+        assert!(relative.ends_with("shared-libs"), "got {relative}");
+    }
+
+    /// A single `--add-dir` is still one folder, and no flag at all leaves the key
+    /// out so the backend keeps the workspace-only boundary.
+    #[test]
+    fn test_agent_run_forwards_one_add_dir_and_omits_it_when_unset() {
+        let map = commands_map();
+        let cmd = map.get("agent-run").unwrap();
+        let absolute = if cfg!(windows) { "C:\\corpus\\docs" } else { "/corpus/docs" };
+
+        let mut single = HashMap::new();
+        single.insert("task".to_string(), json!("summarize"));
+        single.insert("add-dir".to_string(), json!(absolute));
+        let params = (cmd.tool_params_fn)(&single);
+        assert_eq!(params["addDirs"], json!([absolute]));
+
+        let mut blank = HashMap::new();
+        blank.insert("task".to_string(), json!("summarize"));
+        blank.insert("add-dir".to_string(), json!("   "));
+        let params = (cmd.tool_params_fn)(&blank);
+        assert!(params.get("addDirs").is_none(), "a blank folder is not a folder, got {params}");
+
+        let mut absent = HashMap::new();
+        absent.insert("task".to_string(), json!("summarize"));
+        let params = (cmd.tool_params_fn)(&absent);
+        assert!(params.get("addDirs").is_none(), "got {params}");
+    }
+
+    /// A quoted `--add-dir "~/corpus"` reaches the CLI unexpanded: the leading `~`
+    /// must become the home directory instead of a `<cwd>/~` folder that cannot
+    /// exist. `~user` forms and other paths are left alone.
+    #[test]
+    fn expand_home_dir_expands_only_a_leading_tilde() {
+        let Some(home) = dirs::home_dir() else {
+            return;
+        };
+        assert_eq!(expand_home_dir("~"), home.to_string_lossy());
+        assert_eq!(
+            expand_home_dir("~/corpus"),
+            home.join("corpus").to_string_lossy()
+        );
+
+        assert_eq!(expand_home_dir("~other/corpus"), "~other/corpus");
+        assert_eq!(expand_home_dir("../corpus"), "../corpus");
+        assert_eq!(expand_home_dir(" /corpus/x "), "/corpus/x");
     }
 
     #[test]

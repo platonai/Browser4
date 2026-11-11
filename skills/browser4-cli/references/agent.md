@@ -102,6 +102,22 @@ A task's coding tools run under one access **preset** (`full` / `write` / `read-
 **Two layers, one boundary.** The preset and the string checks (`pathGuard`, `workspaceBoundary`, `allowExternalAccess`) decide what the model may *spell* — they are fast-fail and advisory, not enforcement. The boundary is the **execution sandbox**: `coding.shell` and `coding.runCode` run inside it whenever `browser4.agent.sandbox` selects a backend other than `off`. A fresh Windows installation defaults to `windows-acl`; existing installations and Linux/macOS stay `off` until switched. When the
 sandbox is active, an OS denial reaches the model as `PERMISSION_DENIED | code=SANDBOX_DENIED | tool=… | needed=…` (raw evidence stays in the log), and an unavailable sandbox — missing account or credential, failed ACLs, failed write probe, unknown id — **fails the task**; there is no unsandboxed fallback. Switch values, defaults, the ACL matrix, the account property and the `off` rollback are in [config.md](../../../docs/config.md).
 
+### Extra folders (`--add-dir`)
+
+A task's boundary is its own workspace (plus its mirrored module roots and the readable roots). To let a run work on a folder that lives somewhere else, grant it explicitly:
+
+```bash
+browser4-cli agent run "Port the helpers in ../shared-libs into this repo" --coding --add-dir ../shared-libs
+browser4-cli agent run "Summarize every file in the corpus" --coding --add-dir D:/corpus --add-dir D:/archive
+```
+
+- **Repeatable** — one `--add-dir` per folder. A relative path resolves against the directory you typed the command in, and a leading `~` is your home directory.
+- **It must already exist on the backend machine.** The grant is never created implicitly, and a missing path (or a file) fails the submission with the reason instead of starting a task whose grant means nothing.
+- **Scope, not power.** The agent may read, write and use it as a `coding.shell` working directory exactly like its workspace, but `--access` still decides what is allowed — `--access read` keeps an added folder read-only — and the OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) stay refused.
+- **Task-scoped.** The grant is reset when the task ends and `--resume <id>` inherits it. `coding.permissions` lists the folders and the task prompt names them (absolute paths, as given), so the model does not have to guess.
+- **Available mid-session too.** In `agent run -i`, `/add-dir <dir>` grants the following tasks a folder without restarting the session (`/dirs` lists the grants, `/dirs clear` drops them). The session banner shows the grants it started with.
+- **The sandbox agrees.** With `-Dbrowser4.agent.sandbox=windows-acl` the sandbox account is granted the same folders, so an OS denial cannot contradict a step the boundary allowed.
+
 ## Patterns
 
 ### 1. Asynchronous Multi-Step Task

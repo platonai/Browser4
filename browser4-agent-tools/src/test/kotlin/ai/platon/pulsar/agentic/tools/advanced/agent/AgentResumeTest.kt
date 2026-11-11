@@ -97,6 +97,19 @@ class AgentResumeTest {
     }
 
     @Test
+    @DisplayName("a resume inherits the folders the interrupted task was granted")
+    fun checkpointCarriesAddedDirs(@TempDir tmp: Path) {
+        val dirs = listOf(tmp.resolve("corpus").toString())
+        val granted = status(workspace = tmp).apply { addedDirs = dirs }
+
+        assertEquals(dirs, resumeCheckpointOf(granted).additionalDirs)
+
+        // A row written before the field existed (or a task that named no folder) inherits nothing,
+        // so a resume never widens the boundary by accident.
+        assertTrue(resumeCheckpointOf(status(workspace = tmp)).additionalDirs.isEmpty())
+    }
+
+    @Test
     @DisplayName("the file listing is bounded and shows .b4scratch entries")
     fun fileListingIsBounded(@TempDir tmp: Path) {
         repeat(30) { index -> Files.writeString(tmp.resolve("f$index.csv"), "x") }
