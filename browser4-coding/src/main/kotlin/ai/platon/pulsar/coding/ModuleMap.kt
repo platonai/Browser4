@@ -32,6 +32,7 @@ object ModuleMap {
         "browser4-core",
         "browser4-core/browser4-behavior-api",
         "browser4-core/browser4-behavior-default",
+        "browser4-core/browser4-behavior-ghostcursor",
         "browser4-core/browser4-browser",
         "browser4-core/browser4-common",
         "browser4-core/browser4-parse",
@@ -68,6 +69,8 @@ object ModuleMap {
             "browser4-agent-tools", "browser4-agentic",
             "browser4-apps/browser4-bundle", "browser4-apps/browser4-standalone",
             "browser4-boot", "browser4-coding", "browser4-core",
+            "browser4-core/browser4-behavior-api", "browser4-core/browser4-behavior-default",
+            "browser4-core/browser4-behavior-ghostcursor",
             "browser4-core/browser4-browser", "browser4-core/browser4-common",
             "browser4-core/browser4-resources", "browser4-core/browser4-skeleton",
             "browser4-plugins", "browser4-rest", "browser4-tests",
@@ -96,13 +99,14 @@ object ModuleMap {
         ),
         "browser4-coding" to listOf("browser4-agentic"),
         "browser4-core" to listOf(
-            "browser4-core/browser4-behavior-api", "browser4-core/browser4-behavior-default",
             "browser4-core/browser4-parse", "browser4-core/browser4-protocol",
         ),
         "browser4-core/browser4-behavior-api" to listOf(
-            "browser4-core/browser4-behavior-default", "browser4-core/browser4-browser",
+            "browser4-core/browser4-behavior-default",
+            "browser4-core/browser4-behavior-ghostcursor", "browser4-core/browser4-browser",
         ),
         "browser4-core/browser4-behavior-default" to listOf("browser4-core/browser4-browser"),
+        "browser4-core/browser4-behavior-ghostcursor" to listOf("browser4-core/browser4-browser"),
         "browser4-core/browser4-browser" to listOf(
             "browser4-agentic", "browser4-core/browser4-protocol",
             "browser4-core/browser4-skeleton", "browser4-pdk/browser4-pdk-test-plugin",
