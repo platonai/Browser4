@@ -394,7 +394,7 @@ browser4-cli wait --load networkidle
 |---|---|
 | `keydown <key>` | 按下并保持某个键。 |
 | `keyup <key>` | 释放某个已按住的键。 |
-| `mousemove <x> <y>` | 把鼠标移动到页面 / 屏幕坐标。 |
+| `mousemove <x> <y>` | 把鼠标移动到主框架视口左上角起算的 CSS 像素 `(x, y)`。这不是桌面/屏幕坐标，也不会移动操作系统光标；越界表示"离开视口"，而不是"移到浏览器窗口外"。页面滚动后坐标即失效。 |
 | `mousedown [button]` | 按下鼠标按键。 |
 | `mouseup [button]` | 释放鼠标按键。 |
 | `mousewheel <dx> <dy>` | 用滚轮 delta 进行滚动。 |
@@ -528,7 +528,7 @@ browser4-cli htmlsnapshot readability --text-only --all
 | `chat-result <id>` | 获取异步 chat 任务结果。 |
 | `agent run <task>` | 提交一个自主浏览器任务，并立即获得任务 ID。支持 `--wait`（阻塞等待结果）和 `--wait-timeout <秒>`（默认 600）。`--follow` 实时输出每一步（工具调用、模型发言、慢/失败工具）并以结果收尾——Ctrl+C 会取消任务；`--ndjson` 把同一流输出为每行一个 JSON 对象。`-i` 进入交互会话，任务运行中键入的内容会注入该任务（steering，绝不会被排成第二个任务）；`/stats` 报告本次运行的 LLM 轮次/请求数、token 消耗与工具调用，`/help` 列出会话命令。后端抖动或某个步骤无法解析都不会中断实时输出：`-i` 会继续跟随仍在运行的任务，并跳过那一条无法解析的步骤。任务类型默认为浏览器任务；`--coding` 显式标记纯编码任务（不做自动判定）。`--access <预设>`（`full`/`write`/`read-build`/`read`）可收窄该任务的编码工具权限，任务结束后复位；被拒的步骤不是死路——`coding.requestAccess` 会登记一个 pending 请求且不阻塞任务，操作员通过 `POST /api/agent/<taskId>/access/<requestId>/approve` 批准，而 `denyTools`、受保护路径与敏感路径永不批准；无 TTY 的任务（脚本、CI、提交式任务）默认派生 `full` 并允许出站网络，而非沿用服务端预设（`browser4.agent.access.unattended` 可收窄） |
 | `agent status <id>` | 查询任务状态——共享状态信封（`status`：queued/running/done/failed/cancelled，另有 `statusCode`、`message` 与 agent 步数）。 |
-| `agent result <id>` | 获取已完成任务的结果：摘要、`keyFindings`、`filesChanged`，以及产物所在的 workspace 目录。 |
+| `agent result <id>` | 获取已完成任务的结果：摘要、`keyFindings`、`filesChanged`，以及产物所在的 workspace 目录。人类可读输出按段落渲染（`--json` 打印原始信封）。 |
 | `agent list` | 列出已跟踪的 agent 任务（状态与 `agent status` 一致，每次调用都会向服务端刷新）；`--clear` 可移除已结束的任务。 |
 
 ```bash

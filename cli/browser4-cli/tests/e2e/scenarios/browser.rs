@@ -2589,6 +2589,386 @@ pub(super) fn test_mouse_low_level_events(ctx: &mut E2ECtx) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Coordinate space / pointer state tests (todo P3-2, P3-3, P3-4)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Parse the runtime's `vi` wire format (`"x y w h"`; commas are tolerated).
+fn parse_box_text(text: &str) -> Option<(f64, f64, f64, f64)> {
+    let parts: Vec<f64> = text
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse::<f64>().ok())
+        .collect();
+    if parts.len() < 4 {
+        return None;
+    }
+    Some((parts[0], parts[1], parts[2], parts[3]))
+}
+
+/// The document-space box of an htmlsnapshot interactive element, matched by
+/// a substring of its `ref` (refs look like `#click-section button#click-target`).
+fn htmlsnapshot_box(
+    metadata: &serde_json::Value,
+    ref_needle: &str,
+) -> Option<(f64, f64, f64, f64)> {
+    let elements = metadata.get("interactiveElements")?.as_array()?;
+    let element = elements.iter().find(|element| {
+        element
+            .get("ref")
+            .and_then(|reference| reference.as_str())
+            .is_some_and(|reference| reference.contains(ref_needle))
+    })?;
+    parse_box_text(element.get("box")?.as_str()?)
+}
+
+/// Extract the `[box=x,y,w,h]` annotation of a rendered snapshot line.
+fn snapshot_box_annotation(line: &str) -> Option<(f64, f64, f64, f64)> {
+    let start = line.find("[box=")? + "[box=".len();
+    let rest = &line[start..];
+    let end = rest.find(']')?;
+    parse_box_text(&rest[..end])
+}
+
+/// Coordinate-space semantics of `mousemove` (T1): the page receives exactly the
+/// viewport pixels requested, an out-of-viewport request reads as "left the
+/// page", negative coordinates are accepted without inventing an in-page event,
+/// and scrolling does not shift a viewport coordinate.
+pub(super) fn test_mouse_coordinate_spaces(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.mouse_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["resize", "1280", "900"]);
+    sleep(Duration::from_secs(1));
+    wait_for_pointer_or_abort(
+        ctx,
+        |pointer| pointer["viewport"][0].as_i64().unwrap_or(0) > 0,
+        5_000,
+        "the mouse fixture did not initialise its page-level pointer log",
+    );
+
+    // ── 1. (0,0) is the viewport origin (not the desktop origin) ────
+    run_command(ctx, &["mousemove", "0", "0", "--no-snapshot"]);
+    wait_for_pointer_or_abort(
+        ctx,
+        |pointer| pointer["last"][0].as_i64() == Some(0) && pointer["last"][1].as_i64() == Some(0),
+        2_000,
+        "the page should receive mousemove (0,0)",
+    );
+
+    // ── 2. Below the viewport: the page sees the pointer leave ──────
+    // The requested y must never appear as an event coordinate: out-of-viewport
+    // input is not an error, it is "the pointer left the page".
+    let leave_before = read_pointer_state(ctx)["leaveCount"].as_i64().unwrap_or(0);
+    run_command(ctx, &["mousemove", "640", "1200", "--no-snapshot"]);
+    let after_outside = wait_for_pointer_or_abort(
+        ctx,
+        |pointer| pointer["leaveCount"].as_i64().unwrap_or(0) > leave_before,
+        3_000,
+        "an out-of-viewport move should make the page see mouseleave",
+    );
+    let viewport_height = after_outside["viewport"][1].as_i64().unwrap_or(0);
+    let max_client_y = after_outside["maxClientY"].as_i64().unwrap_or(-1);
+    assert!(
+        max_client_y <= viewport_height,
+        "the requested y=1200 must never appear as an event coordinate \
+         (viewport height {viewport_height}): {after_outside}"
+    );
+    assert!(
+        max_client_y < 1200,
+        "y=1200 is below the viewport and must not be delivered as an event \
+         coordinate: {after_outside}"
+    );
+
+    // ── 3. Negative coordinates: legal, but no in-page event point ──
+    let negative = run_command_allowing_failure(ctx, &["mousemove", "-20", "-20", "--no-snapshot"]);
+    assert_eq!(
+        negative.exit_code, 0,
+        "negative coordinates are legal viewport values (they mean 'left the page'):\n\
+         stdout: {}\nstderr: {}",
+        negative.stdout, negative.stderr
+    );
+    let after_negative = read_pointer_state(ctx);
+    assert!(
+        after_negative["last"][0].as_i64().unwrap_or(-1) >= 0,
+        "a negative x cannot be delivered as an in-page coordinate: {after_negative}"
+    );
+    assert!(
+        after_negative["last"][1].as_i64().unwrap_or(-1) >= 0,
+        "a negative y cannot be delivered as an in-page coordinate: {after_negative}"
+    );
+
+    // ── 4. A viewport coordinate is independent of the page scroll ──
+    run_command(ctx, &["scroll", "down", "800"]);
+    wait_for_pointer_or_abort(
+        ctx,
+        |pointer| pointer["scroll"][1].as_i64().unwrap_or(0) >= 700,
+        5_000,
+        "the page should scroll to scrollY >= 700",
+    );
+    run_command(ctx, &["mousemove", "200", "200", "--no-snapshot"]);
+    wait_for_pointer_or_abort(
+        ctx,
+        |pointer| pointer["last"][0].as_i64() == Some(200) && pointer["last"][1].as_i64() == Some(200),
+        2_000,
+        "a viewport coordinate must not be shifted by the page scroll",
+    );
+
+    // ── 5. A non-numeric coordinate fails without moving the pointer ─
+    let last_before_invalid = read_pointer_state(ctx)["last"].clone();
+    let invalid = run_command_allowing_failure(ctx, &["mousemove", "abc", "200", "--no-snapshot"]);
+    assert_ne!(
+        invalid.exit_code, 0,
+        "a non-numeric coordinate must fail instead of moving to (0,0):\n\
+         stdout: {}\nstderr: {}",
+        invalid.stdout, invalid.stderr
+    );
+    let combined = format!("{}\n{}", invalid.stdout, invalid.stderr);
+    assert!(
+        combined.contains("Invalid x for mousemove"),
+        "the error must name the offending axis, got:\n{combined}"
+    );
+    let after_invalid = read_pointer_state(ctx);
+    assert_eq!(
+        after_invalid["last"], last_before_invalid,
+        "no mouse move may be dispatched for an invalid coordinate: {after_invalid}"
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+/// Pointer-state bookkeeping (T2): `hover` leaves the real pointer on the
+/// element (a following `mousedown` presses there, not at the last explicit
+/// `mousemove`), and a navigation invalidates the recorded coordinate so the
+/// fresh page never receives a replayed move.
+pub(super) fn test_mouse_pointer_state(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.mouse_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["resize", "1280", "900"]);
+    sleep(Duration::from_secs(1));
+    wait_for_pointer_or_abort(
+        ctx,
+        |pointer| pointer["viewport"][0].as_i64().unwrap_or(0) > 0,
+        5_000,
+        "the mouse fixture did not initialise its page-level pointer log",
+    );
+
+    // ── 1. hover → mousedown: the press lands on the hovered element ─
+    // `hover` moves the browser pointer onto the element; `mousedown` must
+    // press there. Replaying the last explicit `mousemove` (5,5) would press on
+    // whatever is at the viewport corner instead.
+    run_command(ctx, &["mousemove", "5", "5", "--no-snapshot"]);
+    run_command(ctx, &["hover", "#hover-zone", "--no-snapshot"]);
+    let hovered = read_pointer_state(ctx);
+    assert!(
+        hovered["last"][1].as_i64().unwrap_or(-1) > 5,
+        "hover should have moved the pointer onto the element: {hovered}"
+    );
+    run_command(ctx, &["mousedown", "left"]);
+    run_command(ctx, &["mouseup", "left"]);
+    let pressed = wait_for_pointer_or_abort(
+        ctx,
+        |pointer| pointer["down"].is_object(),
+        2_000,
+        "mousedown should reach the page",
+    );
+    assert_eq!(
+        pressed["down"]["target"].as_str(),
+        Some("hover-zone"),
+        "the press must happen where the hover left the pointer, not at the last \
+         mousemove: {pressed}"
+    );
+    let rect_json = eval_text(
+        ctx,
+        "JSON.stringify((function(){var r=document.getElementById('hover-zone').getBoundingClientRect(); \
+         return [r.left, r.top, r.right, r.bottom];})())",
+    );
+    let rect: Vec<f64> = serde_json::from_str(rect_json.trim())
+        .unwrap_or_else(|error| panic!("hover-zone rect did not parse ({error}): {rect_json}"));
+    let press_x = pressed["down"]["x"].as_f64().unwrap_or(f64::NAN);
+    let press_y = pressed["down"]["y"].as_f64().unwrap_or(f64::NAN);
+    assert!(
+        press_x >= rect[0] - 1.0
+            && press_x <= rect[2] + 1.0
+            && press_y >= rect[1] - 1.0
+            && press_y <= rect[3] + 1.0,
+        "press ({press_x}, {press_y}) should be inside the hovered element {rect:?}"
+    );
+
+    // ── 2. A navigation drops the recorded coordinate ───────────────
+    run_command(ctx, &["mousemove", "300", "300", "--no-snapshot"]);
+    let url = ctx.mouse_url();
+    run_command(ctx, &["goto", &url]);
+    sleep(Duration::from_secs(1));
+    let fresh = wait_for_pointer_or_abort(
+        ctx,
+        |pointer| pointer["viewport"][0].as_i64().unwrap_or(0) > 0,
+        5_000,
+        "the reloaded fixture did not initialise its pointer log",
+    );
+    assert_eq!(
+        fresh["moves"].as_i64().unwrap_or(-1),
+        0,
+        "the reloaded page must not receive a replayed mousemove: {fresh}"
+    );
+    run_command(ctx, &["mousedown", "left"]);
+    let after_press = wait_for_pointer_or_abort(
+        ctx,
+        |pointer| pointer["down"].is_object(),
+        2_000,
+        "mousedown on the new page should reach it",
+    );
+    assert_eq!(
+        after_press["moves"].as_i64().unwrap_or(-1),
+        0,
+        "the press must not first emit a mousemove to the previous page's \
+         coordinate: {after_press}"
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+/// Box-coordinate consistency (T3): the capture payload labels document space,
+/// `snapshot --boxes` and the capture agree, `get box` is viewport space and
+/// consistent with the current scroll, an image of the page captured twice does
+/// not move the page, and a layout change refreshes `vi`.
+pub(super) fn test_htmlsnapshot_box_space(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.mouse_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["resize", "1280", "900"]);
+    sleep(Duration::from_secs(1));
+    wait_for_pointer_or_abort(
+        ctx,
+        |pointer| pointer["viewport"][0].as_i64().unwrap_or(0) > 0,
+        5_000,
+        "the mouse fixture did not initialise its page-level pointer log",
+    );
+
+    // Scroll away from the top so document and viewport coordinates differ.
+    run_command(ctx, &["scroll", "down", "800"]);
+    let scrolled = wait_for_pointer_or_abort(
+        ctx,
+        |pointer| pointer["scroll"][1].as_i64().unwrap_or(0) >= 700,
+        5_000,
+        "the page should scroll to scrollY >= 700",
+    );
+    let scroll_y = scrolled["scroll"][1].as_f64().unwrap_or(0.0);
+
+    // ── 1. The capture labels its coordinate space and never scrolls ─
+    let first_capture = run_command(ctx, &["htmlsnapshot", "capture", "--json"]);
+    let envelope: serde_json::Value = serde_json::from_str(first_capture.stdout.trim())
+        .unwrap_or_else(|error| {
+            panic!(
+                "htmlsnapshot capture --json did not print an envelope ({error}):\n{}",
+                first_capture.stdout
+            )
+        });
+    let metadata = envelope["output"]["snapshot_metadata"].clone();
+    assert_eq!(
+        metadata["boxSpace"].as_str(),
+        Some("document"),
+        "the capture must label its box space: {metadata}"
+    );
+    assert_eq!(
+        metadata["schemaVersion"].as_i64(),
+        Some(2),
+        "the capture must record its schema version: {metadata}"
+    );
+    let scroll_at_capture = metadata["scrollTopAtCapture"]
+        .as_f64()
+        .expect("the capture must record scrollTopAtCapture");
+    assert!(
+        (scroll_at_capture - scroll_y).abs() <= 2.0,
+        "scrollTopAtCapture ({scroll_at_capture}) should match the page scrollY ({scroll_y})"
+    );
+    let after_capture = read_pointer_state(ctx);
+    assert_eq!(
+        after_capture["scroll"][1].as_f64().unwrap_or(-1.0),
+        scroll_y,
+        "a capture must not change the page scroll (M15): {after_capture}"
+    );
+    let (_, capture_y, _, _) = htmlsnapshot_box(&metadata, "hover-zone")
+        .expect("the capture should list #hover-zone as an interactive element");
+
+    // ── 2. `snapshot --boxes` reports the same document space ───────
+    let snapshot = run_command(ctx, &["snapshot", "--raw", "--boxes", "--no-compact"]);
+    // Match the element's own line, not its ancestor's: the section wrapper
+    // aggregates its descendants' text ("hover-section Hover Zone hover-zone
+    // Hover over me"), so a bare "Hover over me" search picks the wrapper and
+    // compares two different boxes. Quoting the accessible name keeps the match
+    // on the element whose own name is exactly "hover-zone Hover over me".
+    let hover_line = snapshot
+        .stdout
+        .lines()
+        .find(|line| line.contains("\"hover-zone Hover over me\""))
+        .unwrap_or_else(|| {
+            panic!(
+                "the snapshot should render the hover zone:\nstdout:\n{}\nstderr:\n{}",
+                snapshot.stdout, snapshot.stderr
+            )
+        });
+    let (_, snapshot_y, _, _) = snapshot_box_annotation(hover_line).unwrap_or_else(|| {
+        panic!("the hover-zone snapshot line should carry [box=…]: {hover_line}")
+    });
+    assert!(
+        (snapshot_y - capture_y).abs() <= 1.0,
+        "the capture (`vi`) and `snapshot --boxes` must report the same \
+         document y (capture {capture_y}, snapshot {snapshot_y})"
+    );
+
+    // ── 3. `get box` reports viewport space and is consistent ───────
+    let get_box = run_command(ctx, &["get", "box", "#hover-zone"]);
+    let get_box: serde_json::Value = serde_json::from_str(get_box.stdout.trim())
+        .unwrap_or_else(|error| panic!("get box did not print JSON ({error}): {}", get_box.stdout));
+    assert_eq!(
+        get_box["boxSpace"].as_str(),
+        Some("viewport"),
+        "get box must label its viewport space: {get_box}"
+    );
+    let get_box_y = get_box["y"].as_f64().expect("get box must carry y");
+    // The element is already visible at this scroll offset, so measuring must
+    // not scroll the page (I4): the scroll before and after is the same.
+    let scroll_after_measure = eval_text(ctx, "String(window.scrollY)");
+    let scroll_after_measure: f64 = scroll_after_measure.trim().parse().unwrap_or(f64::NAN);
+    assert!(
+        (scroll_after_measure - scroll_y).abs() <= 1.0,
+        "measuring a visible element must not scroll the page (before {scroll_y}, after {scroll_after_measure})"
+    );
+    assert!(
+        (get_box_y - (capture_y - scroll_after_measure)).abs() <= 2.0,
+        "get box y ({get_box_y}) should be the document y ({capture_y}) minus \
+         scrollY ({scroll_after_measure})"
+    );
+
+    // ── 4. A layout change refreshes `vi` on the next capture (M14) ─
+    run_command(
+        ctx,
+        &[
+            "eval",
+            "document.querySelector('#hover-section').insertAdjacentHTML('beforebegin', \
+             '<div id=\"spacer-inserted\" style=\"height:400px\"></div>'); 'ok'",
+        ],
+    );
+    sleep(Duration::from_millis(500));
+    let second_capture = run_command(ctx, &["htmlsnapshot", "capture", "--json"]);
+    let second_envelope: serde_json::Value = serde_json::from_str(second_capture.stdout.trim())
+        .unwrap_or_else(|error| panic!("second capture envelope did not parse ({error})"));
+    let second_metadata = second_envelope["output"]["snapshot_metadata"].clone();
+    let (_, capture_y2, _, _) = htmlsnapshot_box(&second_metadata, "hover-zone")
+        .expect("the second capture should still list #hover-zone");
+    assert!(
+        capture_y2 - capture_y >= 300.0,
+        "a 400px insert above the element must refresh `vi` (before {capture_y}, \
+         after {capture_y2}) — a frozen `vi` would keep reporting the old layout"
+    );
+    assert_eq!(
+        second_metadata["boxSpace"].as_str(),
+        Some("document"),
+        "the second capture must keep the same box space contract"
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Keyboard fixture tests
 // ═══════════════════════════════════════════════════════════════════════════
 

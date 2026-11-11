@@ -792,8 +792,9 @@ open class InteractiveBrowserEmulator(
         // the full HTML string over the wire for a simple length check.
         task.originalContentLength = if (hasPulsarUtils) getOriginalContentLength(driver) else 0
 
-        // Compute document features so that vi (visual-information) attributes are
-        // injected into the DOM.  These attributes contain bounding-box data
+        // Compute document features so that the serializer can emit the vi
+        // (visual-information) attributes into the captured HTML; the live DOM is not
+        // modified.  These attributes contain bounding-box data
         // ("x y w h") and are required by downstream consumers such as
         // html_snapshot_capture (computeInteractiveWeights) and html_snapshot_inspect
         // (PowerCSS :expr() selectors).

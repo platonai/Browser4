@@ -622,7 +622,7 @@
   } ],
   "returnType" : "Unit",
   "description" : "This method hovers over the element.",
-  "help" : "This method hovers over the element.\n\n1. Scroll the element into view if needed. 2. Move mouse to hover over a random position near the center of the element.\n\n```kotlin driver.hover(\"h1\") ```",
+  "help" : "This method hovers over the element.\n\n1. Scroll the element into view if needed. 2. Glide the pointer to a point about 50 px above and to the left of the element (clamped to the viewport), then move it onto the element's interactive point — the same fixed (un-jittered) point a click uses. The final mouse position is the element, not a random spot near it.\n\nSide effects worth knowing: the tab is brought to the front and the page may scroll (both are needed to make the hover observable).  There is no occlusion check: if another element covers the target, the pointer still lands on the coordinates and the topmost element receives the hover.\n\n```kotlin driver.hover(\"h1\") ```",
   "expression" : "tab.hover(selector: String)",
   "cli" : "browser4-cli tab hover --selector=<String>",
   "examples" : [ {
@@ -1354,6 +1354,32 @@
   "arguments" : [ {
     "name" : "x",
     "type" : "Double",
+    "description" : "The x coordinate to move to, in main-frame viewport CSS pixels.",
+    "expression" : "x: Double",
+    "cliOptions" : "--x=<Double>"
+  }, {
+    "name" : "y",
+    "type" : "Double",
+    "description" : "The y coordinate to move to, in main-frame viewport CSS pixels.",
+    "expression" : "y: Double",
+    "cliOptions" : "--y=<Double>"
+  } ],
+  "returnType" : "Unit",
+  "description" : "Moves the mouse to the position specified by [x] and [y].",
+  "help" : "Moves the mouse to the position specified by [x] and [y].\n\n**Coordinate space:** [x] and [y] are CSS pixels relative to the top-left corner of the **main frame's viewport** (CDP `Input.dispatchMouseEvent` semantics) — not desktop/screen coordinates, and not document coordinates. The method injects a page event; it never moves the OS cursor.\n\nConsequences worth designing around:\n\n- Scrolling does not change what the page shows at a viewport coordinate, but a coordinate derived from a document-space box (for example `htmlsnapshot`'s `box`, or `snapshot --boxes`) becomes stale as soon as the page scrolls.  Subtract the current `scrollY` (or use a selector) right before moving. - A coordinate outside the viewport is not clamped to the page's valid range: the page sees the pointer leave (a `mouseleave` at the edge), the requested coordinate itself never appears in an event, and the pointer cannot be placed outside the browser window.\n\n```kotlin driver.mouseMove(100.0, 200.0) ```",
+  "expression" : "tab.mouseMove(x: Double, y: Double)",
+  "cli" : "browser4-cli tab mouseMove --x=<Double> --y=<Double>",
+  "examples" : [ {
+    "title" : "Example usage",
+    "code" : "* driver.mouseMove(100.0, 200.0)\n     *",
+    "expectsError" : false
+  } ]
+}, {
+  "domain" : "tab",
+  "method" : "mouseMoveAt",
+  "arguments" : [ {
+    "name" : "x",
+    "type" : "Double",
     "description" : "The x coordinate to move to.",
     "expression" : "x: Double",
     "cliOptions" : "--x=<Double>"
@@ -1363,17 +1389,33 @@
     "description" : "The y coordinate to move to.",
     "expression" : "y: Double",
     "cliOptions" : "--y=<Double>"
+  }, {
+    "name" : "space",
+    "type" : "String",
+    "defaultValue" : "viewport",
+    "description" : "`viewport` (default) for main-frame viewport CSS pixels, or `document` for document-absolute pixels.",
+    "expression" : "space: String = viewport",
+    "cliOptions" : "--space=<String>, default=viewport"
+  }, {
+    "name" : "steps",
+    "type" : "Int",
+    "defaultValue" : "0",
+    "description" : "Number of move events to emit, or `0` for the driver default.",
+    "expression" : "steps: Int = 0",
+    "cliOptions" : "--steps=<Int>, default=0"
+  }, {
+    "name" : "durationMillis",
+    "type" : "Long",
+    "defaultValue" : "0",
+    "description" : "Total movement duration in ms, or `0` for the driver default (spread over [steps]).",
+    "expression" : "durationMillis: Long = 0",
+    "cliOptions" : "--durationMillis=<Long>, default=0"
   } ],
   "returnType" : "Unit",
-  "description" : "Moves the mouse to the position specified by [x] and [y].",
-  "help" : "Moves the mouse to the position specified by [x] and [y].\n\n```kotlin driver.mouseMove(100.0, 200.0) ```",
-  "expression" : "tab.mouseMove(x: Double, y: Double)",
-  "cli" : "browser4-cli tab mouseMove --x=<Double> --y=<Double>",
-  "examples" : [ {
-    "title" : "Example usage",
-    "code" : "* driver.mouseMove(100.0, 200.0)\n     *",
-    "expectsError" : false
-  } ]
+  "description" : "Moves the mouse to ([x], [y]) interpreted in the given coordinate [space].",
+  "help" : "Moves the mouse to ([x], [y]) interpreted in the given coordinate [space].\n\nThis is the coordinate-space-aware form of [mouseMove]: a caller holding a box from `snapshot --boxes` or `htmlsnapshot` (document-absolute) can pass it in directly instead of subtracting `scrollY` itself — a subtraction the caller can only do against a scroll position that may already be stale.\n\nThe driver converts `document` coordinates to viewport pixels itself, immediately before dispatching the move, so the conversion and the input it describes stay together. Prefer a selector/ref-based action when one is available: a coordinate is always a snapshot of a layout that can change.\n\n`steps` and `durationMillis` give explicit control over the movement pace for callers that need a \"flick\" (a few large steps) or a slow glide; both default to `0`, which means \"the driver's own human-like pacing\".  Usage: `driver.mouseMoveAt(120.0, 2400.0, \"document\")`.",
+  "expression" : "tab.mouseMoveAt(x: Double, y: Double, space: String = viewport, steps: Int = 0, durationMillis: Long = 0)",
+  "cli" : "browser4-cli tab mouseMoveAt --x=<Double> --y=<Double> --space=<String>, default=viewport --steps=<Int>, default=0 --durationMillis=<Long>, default=0"
 }, {
   "domain" : "tab",
   "method" : "mouseDown",
@@ -1442,20 +1484,20 @@
   }, {
     "name" : "deltaX",
     "type" : "Int",
-    "description" : "The distance to the left of the element.",
+    "description" : "Horizontal offset from the element's clickable point; positive is right.",
     "expression" : "deltaX: Int",
     "cliOptions" : "--deltaX=<Int>"
   }, {
     "name" : "deltaY",
     "type" : "Int",
     "defaultValue" : "0",
-    "description" : "The distance to the top of the element.",
+    "description" : "Vertical offset from the element's clickable point; positive is down.",
     "expression" : "deltaY: Int = 0",
     "cliOptions" : "--deltaY=<Int>, default=0"
   } ],
   "returnType" : "Unit",
   "description" : "The mouse moves to the element with [selector].",
-  "help" : "The mouse moves to the element with [selector].\n\n```kotlin driver.moveMouseTo(\"h2.title\") ```",
+  "help" : "The mouse moves to the element with [selector].\n\nThe pointer lands on the element's clickable point plus the deltas, which are **offsets added to that point**: a positive [deltaX] moves right and a positive [deltaY] moves down.  Coordinates are main-frame viewport CSS pixels (same space as [mouseMove]).\n\n```kotlin driver.moveMouseTo(\"h2.title\") ```",
   "expression" : "tab.moveMouseTo(selector: String, deltaX: Int, deltaY: Int = 0)",
   "cli" : "browser4-cli tab moveMouseTo --selector=<String> --deltaX=<Int> --deltaY=<Int>, default=0",
   "examples" : [ {
@@ -2216,7 +2258,7 @@
   } ],
   "returnType" : "RectD?",
   "description" : "Return the bounding box of an element located by [selector].",
-  "help" : "Return the bounding box of an element located by [selector].\n\nIf the element does not exist, returns null.",
+  "help" : "Return the bounding box of an element located by [selector].\n\n**Coordinate space:** the returned numbers are **viewport** CSS pixels — the same space as `getBoundingClientRect()`, `elementFromPoint()` and the coordinates `mouseMove` consumes, and the opposite of the document-absolute boxes a page snapshot reports. Do not compare the two without converting (subtract the current `scrollY`); a viewport box also goes stale as soon as the page scrolls.\n\nMeasuring does not move the page when the element is already visible: the element is located without scrolling, and only an off-screen box is scrolled into view (then the scroll is allowed to settle before the box is read again).\n\nIf the element does not exist, returns null.",
   "expression" : "tab.boundingBox(selector: String)",
   "cli" : "browser4-cli tab boundingBox --selector=<String>"
 }, {

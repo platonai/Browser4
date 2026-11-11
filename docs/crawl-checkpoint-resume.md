@@ -109,8 +109,8 @@ fetched.
 
 ```bash
 # CLI
-browser4-cli crawl resume <task-id>              # continue, then poll to completion
-browser4-cli crawl resume <task-id> --bg         # continue, return immediately
+browser4-cli crawl resume <task-id>                      # continue, then poll to completion
+browser4-cli crawl resume <task-id> --background         # continue, return immediately
 browser4-cli crawl resume <task-id> --retry-failed
 browser4-cli crawl resume <task-id> --force
 
@@ -173,7 +173,7 @@ reported as interrupted first, so nothing is silent.
 
 ```bash
 # 1. Start a crawl that takes a while (depth >= 1, several seeds, parallel > 1).
-browser4-cli crawl --seed-file urls.txt --depth 2 --parallel 4 -ol "a[href]" --bg
+browser4-cli crawl --seed-file urls.txt --depth 2 --parallel 4 -ol "a[href]" --background
 # 2. Kill the backend process outright while it runs.
 # 3. Restart it.
 browser4-cli crawl status <task-id>     # → Interrupted, with remaining / skipped counts

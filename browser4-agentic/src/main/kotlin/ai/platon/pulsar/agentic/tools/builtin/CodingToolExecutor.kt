@@ -27,6 +27,7 @@ import ai.platon.pulsar.coding.MavenBuildSupport
 import ai.platon.pulsar.coding.ModuleGraph
 import ai.platon.pulsar.coding.ModuleMap
 import ai.platon.pulsar.coding.PermissionAudit
+import ai.platon.pulsar.coding.ReadablePaths
 import ai.platon.pulsar.coding.RepoConsistencyReporter
 import ai.platon.pulsar.coding.Request
 import ai.platon.pulsar.coding.SkeletonExtractor
@@ -2106,6 +2107,13 @@ class CodingToolExecutor : AbstractToolExecutor() {
             appendLine("Workspace root: ${fs.workspaceRoot}")
             appendLine("Isolation: ${CodingWorkspace.isolationMode}" +
                 (WorkspaceMirror.defaultSourceRepo()?.let { " (mirror of $it)" } ?: " (no source checkout detected)"))
+            // Reads are not limited by the preset: the readable roots are where Browser4's own
+            // data/temp/checkout live, and a model that was refused a workspace write needs to
+            // know it can still read them (and where the list comes from).
+            appendLine(
+                "Readable roots (read-only, outside the workspace): " +
+                    ReadablePaths.describe() + " (+ -Dbrowser4.agent.readPaths=...)"
+            )
             appendLine("Files:")
             appendLine("  read workspace           : $yes")
             appendLine("  write workspace          : ${if (policy.allowsFileMutation()) yes else no}")
@@ -2133,6 +2141,9 @@ class CodingToolExecutor : AbstractToolExecutor() {
             appendLine("  protected files   : ${policy.protectedFiles.sorted().joinToString(", ")}")
             appendLine("  protected dirs    : ${policy.protectedDirs.sorted().joinToString(", ")}")
             appendLine("  credential paths  : ${policy.sensitivePaths.sorted().joinToString(", ")}")
+            // A readable root relaxes a credential entry (the data root is on both lists), so the
+            // model must know which locations are still refused whatever it configures.
+            appendLine("  always refused    : ${ReadablePaths.ALWAYS_REFUSED.sorted().joinToString(", ")}")
             appendLine(
                 "  session policies  : " +
                     fs.protectedList().lines().joinToString("; ") { it.trim() }.ifBlank { "none" }
@@ -2258,7 +2269,7 @@ class CodingToolExecutor : AbstractToolExecutor() {
         val shellDecision = authorizer.decide(
             Request(
                 tool = "coding.${method ?: "shell"}",
-                effects = setOf(Effect.FS_READ, Effect.FS_WRITE),
+                effects = setOf(effect),
                 targets = listOf(CodingTarget.PathTarget(resolved)),
                 capabilityId = CodingComponents.CAP_SHELL_BOUNDARY,
             )

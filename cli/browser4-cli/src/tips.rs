@@ -318,10 +318,13 @@ const TIPS_AGENT: &[Tip] = &[
         text: "A step refused by `--access` is not a dead end: the agent calls `coding.requestAccess(effect, target)`, gets a pending requestId back immediately and keeps working; approve it via `POST api/agent/<taskId>/access/<requestId>/approve`. `denyTools`, protected paths and the workspace boundary are never approved away",
     },
     Tip {
+        text: "Reads are wider than writes: a task can read Browser4's own folders (the data root `~/.browser4` — logs, task data, tmp — the source checkout, and any `-Dbrowser4.agent.readPaths=<dirs>` folder) but cannot write them; OS credential stores such as `~/.ssh` stay refused. `coding.permissions` lists the roots",
+    },
+    Tip {
         text: "A run without a TTY cannot be watched, so it starts from `full` (network on) instead of the server-wide preset — `browser4.agent.access.unattended` (`deny`/`read`/`read-build`/`write`/`full`) overrides that; a watched `-i` session on a TTY keeps `browser4.agent.access`",
     },
     Tip {
-        text: "`agent run -i` keeps a session open — type a line while a task runs to steer it, /status and /cancel to inspect or stop it, /stats for the run's LLM rounds, token usage and tool calls",
+        text: "`agent run -i` keeps a session open — type a line while a task runs to steer it, /status and /cancel to inspect or stop it, /stats for the run's LLM rounds, token usage and tool calls, /result [--json] to re-print the finished task's payload as sections (or the raw envelope)",
     },
     Tip {
         text: "Every task runs in its own workspace — artifacts of an earlier run never show up in this run's `filesChanged`. `--resume <id>` reuses the interrupted task's workspace; `--shared-workspace` opts into the old shared directory",

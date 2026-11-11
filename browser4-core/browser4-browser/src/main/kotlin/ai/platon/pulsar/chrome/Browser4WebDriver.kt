@@ -172,6 +172,13 @@ open class Browser4WebDriver(
 ) {
 
     init {
+        // The injected `vi` scripts (vendored dom_rect.js + the base library's
+        // node_ops.js/__pulsar_utils__.js) must come from one generation. A
+        // half-wired or stale bundle otherwise reports perfectly valid-looking
+        // coordinates in the wrong space, which is the silent failure this
+        // project has already paid for; fail at driver creation instead.
+        RuntimeScriptContract.verify()
+
         // Claim the CDP event-listener slots before the base library's
         // NetworkManager registers them on first navigation: its event
         // dispatcher keeps only one listener per event key, so a listener
@@ -1003,11 +1010,24 @@ internal enum class DragDropPosition(val key: String) {
      * decided by the selected [InteractionHumanizer] (the default edition scales
      * the step count with the distance at a randomized 8-16 ms per step, so the
      * pointer crosses the viewport in a human-like 100-500 ms and the page
-     * observes a realistic `mousemove` trail). Like the upstream, an inactive
-     * driver skips the move silently.
+     * observes a realistic `mousemove` trail).
+     *
+     * Unlike the upstream — which skips the move silently when the driver is
+     * inactive, leaving the CLI to report a success that never happened — an
+     * inactive driver (closed session, detached page) fails loudly: a silent
+     * no-op is indistinguishable from a successful move, and callers cannot
+     * retry what they think already succeeded.
+     *
+     * @throws IllegalWebDriverStateException when the driver is not active
      */
     @Throws(WebDriverException::class)
     override suspend fun mouseMove(x: Double, y: Double) {
+        if (page.mouse.takeIf { isActive } == null) {
+            throw IllegalWebDriverStateException(
+                "Mouse not available: the driver is not active (session closed or page detached)",
+                driver = this
+            )
+        }
         movePointerTo(x, y)
     }
 
@@ -2841,10 +2861,11 @@ internal enum class DragDropPosition(val key: String) {
      * a document that cannot be annotated yet, it reports false instead of
      * failing the caller.
      *
-     * Note that computing the features is not read-only: the runtime stores its
-     * metadata elements in the document (`#PulsarMetaInformation`,
-     * `#PulsarScriptSection`) and settles the page (`window.stop()`), exactly as
-     * the fetch/capture pipeline already does for every page it captures.
+     * Note that computing the features does not touch the live DOM: the runtime keeps
+     * `vi`, `lz`/`tp`, `data-error`, `#PulsarMetaInformation` and `#PulsarScriptSection`
+     * in memory and emits them only through the serializer, so the page stays
+     * indistinguishable from its own markup while the captured HTML still carries every
+     * annotation its consumers expect.  The runtime also no longer calls `window.stop()`.
      *
      * @param normalizedUri The page URL to record, already normalized by the
      * session; when null the driver resolves it from the live document URL

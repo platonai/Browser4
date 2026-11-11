@@ -54,6 +54,138 @@ class TaskInputsTest {
     }
 
     @Test
+    @DisplayName("a quoted reference keeps the spaces in its path")
+    fun extractCandidatesKeepsQuotedSpaces() {
+        val path = """D:\My Docs\asin field description.xlsx"""
+        listOf("'$path'", "\"$path\"", "“$path”", "‘$path’").forEach { quoted ->
+            val candidates = TaskInputs.extractCandidates("字段在 $quoted 里")
+            assertTrue(candidates.contains(path), "$quoted → $candidates")
+        }
+    }
+
+    @Test
+    @DisplayName("a local file: URL is reduced to the path it names")
+    fun extractCandidatesHandlesFileUrls() {
+        assertTrue(
+            TaskInputs.extractCandidates("字段在 file:///D:/Backup/字段表.xlsx").contains("D:/Backup/字段表.xlsx"),
+            "a Windows file URL must yield the drive path",
+        )
+        assertTrue(
+            TaskInputs.extractCandidates("spec: file:///home/me/fields.xlsx").contains("/home/me/fields.xlsx"),
+            "a POSIX file URL must yield the absolute path",
+        )
+        assertTrue(
+            TaskInputs.extractCandidates("see file://server/share/x.xlsx").isEmpty(),
+            "a remote host is not a local file",
+        )
+    }
+
+    @Test
+    @DisplayName("~/ is expanded to the home directory; ~user is left alone")
+    fun expandHomeHandlesHomeReferences() {
+        val home = System.getProperty("user.home")
+
+        assertEquals("$home/fields.xlsx", TaskInputs.expandHome("~/fields.xlsx"))
+        assertEquals(home, TaskInputs.expandHome("~"))
+        assertEquals("~someone/fields.xlsx", TaskInputs.expandHome("~someone/fields.xlsx"))
+        assertEquals("/abs/fields.xlsx", TaskInputs.expandHome("/abs/fields.xlsx"))
+    }
+
+    @Test
+    @DisplayName("a relative path survives both trailing prose and punctuation inside the name")
+    fun extractCandidatesKeepsRelativePaths() {
+        // No space between the path and the following Chinese prose: the sentence split ends it.
+        assertTrue(
+            TaskInputs.extractCandidates("读取 docs/config.md，然后总结要点").contains("docs/config.md"),
+            "trailing CJK prose must not be glued to the path",
+        )
+        // A full-width comma *inside* the name: the path-level split keeps it whole.
+        assertTrue(
+            TaskInputs.extractCandidates("读取 docs/a，b.md 然后总结").contains("docs/a，b.md"),
+            "a full-width comma inside a name must not end the path",
+        )
+        // A UNC share is a path reference even though it has no drive letter.
+        assertTrue(
+            TaskInputs.extractCandidates("""spec \\fileserver\specs\fields.xlsx""")
+                .contains("""\\fileserver\specs\fields.xlsx"""),
+            "a UNC share must be a candidate",
+        )
+    }
+
+    @Test
+    @DisplayName("a quoted path containing spaces is copied")
+    fun copiesQuotedPathWithSpaces(@TempDir tmp: Path) {
+        val workspace = Files.createDirectories(tmp.resolve("workspace"))
+        val external = writeFile(tmp, "My Docs/fields.xlsx", "BINARY")
+
+        val result = TaskInputs.materialize("字段表在 '$external' 里", workspace, emptyList())
+
+        assertEquals(1, result.inputs.size, result.inputs.toString())
+        assertEquals(".b4inputs/fields.xlsx", result.inputs.single().workspacePath)
+        assertTrue(Files.isRegularFile(workspace.resolve(".b4inputs/fields.xlsx")))
+    }
+
+    @Test
+    @DisplayName("a path glued to CJK punctuation or an ideographic space is still a candidate")
+    fun extractCandidatesHandlesCjkPunctuation() {
+        val windows = """D:\Backup\Data\20260719\asin_field_description.xlsx"""
+        val instructions = listOf(
+            // The 2026-11-09 shape: no space after the full-width colon.
+            "需要提取以下字段：$windows",
+            "需要提取以下字段（$windows）",
+            "字段表：“$windows”",
+            "需要提取以下字段：\u3000$windows",
+            "字段：$windows。",
+        )
+
+        instructions.forEach { instruction ->
+            val candidates = TaskInputs.extractCandidates(instruction)
+            assertTrue(candidates.contains(windows), "$instruction → $candidates")
+        }
+    }
+
+    @Test
+    @DisplayName("non-ASCII segments and an embedded absolute path are recovered")
+    fun extractCandidatesHandlesNonAsciiAndEmbeddedPaths() {
+        // Non-ASCII path segments survive the whole pipeline.
+        assertTrue(
+            TaskInputs.extractCandidates("""字段表：D:\资料\字段表.xlsx""").contains("""D:\资料\字段表.xlsx"""),
+            "non-ASCII segments must not be split",
+        )
+        // A separator nobody listed: the fallback pass still finds the absolute path.
+        assertTrue(
+            TaskInputs.extractCandidates("""见§D:\Backup\a.xlsx""").contains("""D:\Backup\a.xlsx"""),
+            "an embedded absolute path must be recovered",
+        )
+        // A full-width mark *inside* a file name is not a sentence boundary: the broad splitter
+        // cuts it, the narrow embedded scan puts the path back together.
+        assertTrue(
+            TaskInputs.extractCandidates("""表格在 D:\资料\a，b.xlsx 里""").contains("""D:\资料\a，b.xlsx"""),
+            "a full-width comma inside a file name must not end the path",
+        )
+        // …while the conservative rules still hold for what the fallback finds.
+        assertTrue(TaskInputs.extractCandidates("""见§D:\Backup\*.xlsx""").isEmpty())
+        assertTrue(TaskInputs.extractCandidates("""见§https://example.com/a/b.csv""").isEmpty())
+    }
+
+    @Test
+    @DisplayName("a CJK-punctuated instruction copies the named file")
+    fun copiesInputGluedToCjkPunctuation(@TempDir tmp: Path) {
+        val workspace = Files.createDirectories(tmp.resolve("workspace"))
+        val external = writeFile(tmp, "外部/asin_field_description.xlsx", "BINARY")
+
+        val result = TaskInputs.materialize("需要提取以下字段：$external", workspace, emptyList())
+
+        assertEquals(1, result.inputs.size, result.inputs.toString())
+        assertEquals(".b4inputs/asin_field_description.xlsx", result.inputs.single().workspacePath)
+        assertTrue(Files.isRegularFile(workspace.resolve(".b4inputs/asin_field_description.xlsx")))
+        assertTrue(
+            result.instruction.contains("`.b4inputs/asin_field_description.xlsx`"),
+            result.instruction,
+        )
+    }
+
+    @Test
     @DisplayName("a repository-relative reference is copied and the note names the workspace path")
     fun copiesRepoRelativeInput(@TempDir tmp: Path) {
         val repo = Files.createDirectories(tmp.resolve("repo"))
@@ -143,6 +275,25 @@ class TaskInputsTest {
         )
         assertEquals("first", Files.readString(workspace.resolve(".b4inputs/data.csv")))
         assertEquals("second", Files.readString(workspace.resolve(".b4inputs/data-2.csv")))
+    }
+
+    @Test
+    @DisplayName("the same file named twice is copied once")
+    fun copiesARepeatedReferenceOnce(@TempDir tmp: Path) {
+        val workspace = Files.createDirectories(tmp.resolve("workspace"))
+        val repo = Files.createDirectories(tmp.resolve("repo"))
+        val relative = "data/fields.xlsx"
+        writeFile(repo, relative, "BINARY")
+        val absolute = repo.resolve(relative)
+
+        val result = TaskInputs.materialize("fields in $relative and also in $absolute", workspace, listOf(repo))
+
+        assertEquals(1, result.inputs.size, result.inputs.toString())
+        assertEquals(".b4inputs/fields.xlsx", result.inputs.single().workspacePath)
+        assertFalse(
+            Files.exists(workspace.resolve(".b4inputs/fields-2.xlsx")),
+            "a second spelling must not become a second copy",
+        )
     }
 
     @Test

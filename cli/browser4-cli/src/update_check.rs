@@ -4,13 +4,13 @@
 //! `BROWSER4_AUTO_UPGRADE` environment variable:
 //!
 //! - `off` — never check, never notify.
-//! - `notify` (default) — once per TTL, resolve the latest release tag and
-//!   print a one-line hint on stderr when a newer version exists.
+//! - `notify` — once per TTL, resolve the latest release tag and print a
+//!   one-line hint on stderr when a newer version exists.
 //! - `runtime` — additionally pre-download the newer runtime bundle in a
 //!   detached background process; the download is activated the next time the
 //!   backend starts.
-//! - `full` — additionally self-upgrade the CLI binary in the same background
-//!   pass.
+//! - `full` (default) — additionally self-upgrade the CLI binary in the same
+//!   background pass.
 //!
 //! State lives in `<runtime-data-dir>/update-check.json`.  All network and
 //! process-spawning side effects stay in `main.rs`; this module is pure
@@ -39,6 +39,11 @@ pub const FAILURE_BLACKLIST_THRESHOLD: u32 = 3;
 /// How long a blacklisted tag stays blacklisted (7 days).
 pub const FAILURE_BLACKLIST_SECS: i64 = 7 * 24 * 3600;
 
+/// An outstanding prefetch whose agent never reported back within this window is
+/// presumed dead (killed with the parent's process tree, crashed, or the machine
+/// went offline) and the attempt counts as a failure.
+pub const STALE_PREFETCH_SECS: i64 = 2 * 3600;
+
 /// Budget for resolving the latest tag from the network, in seconds.
 pub const RESOLVE_TIMEOUT_SECS: u64 = 3;
 
@@ -47,11 +52,11 @@ pub const RESOLVE_TIMEOUT_SECS: u64 = 3;
 pub enum AutoUpgradePolicy {
     /// Never check, never notify.
     Off,
-    /// Check and print a hint (default).
+    /// Check and print a hint.
     Notify,
     /// Notify + background runtime pre-download, activated on next launch.
     Runtime,
-    /// Runtime + background CLI self-upgrade.
+    /// Runtime + background CLI self-upgrade (default).
     Full,
 }
 
@@ -67,13 +72,13 @@ impl AutoUpgradePolicy {
         }
     }
 
-    /// Resolve the effective policy: the env var wins; default is `notify`.
-    /// Unrecognised values fall back to `notify` (never silently to `off`).
+    /// Resolve the effective policy: the env var wins; default is `full`.
+    /// Unrecognised values fall back to `full` (never silently to `off`).
     pub fn from_env() -> Self {
         std::env::var(AUTO_UPGRADE_ENV)
             .ok()
             .and_then(|v| Self::parse(&v))
-            .unwrap_or(Self::Notify)
+            .unwrap_or(Self::Full)
     }
 
     pub fn as_str(&self) -> &'static str {
@@ -124,6 +129,14 @@ pub struct UpdateCheckState {
     /// Last prefetch attempt (rate-limited per tag).
     #[serde(default)]
     pub last_prefetch_attempt: Option<PrefetchAttempt>,
+    /// A prefetch whose agent has not reported an outcome yet.
+    ///
+    /// The spawning CLI parks the attempt here and the agent refreshes `at`
+    /// when it starts, so [`reap_stale_attempt`] can tell "still downloading"
+    /// from "the agent died".  While an attempt is outstanding no new prefetch
+    /// is launched, which keeps two commands from downloading the same bundle.
+    #[serde(default)]
+    pub outstanding_prefetch: Option<PrefetchAttempt>,
     /// Per-tag download failures; ≥ threshold blacklists the tag for 7 days.
     #[serde(default)]
     pub failures: HashMap<String, FailureRecord>,
@@ -205,8 +218,9 @@ pub struct UpdateDecision {
 /// - A major-version jump is only ever *notified*, never prefetched — crossing
 ///   a major boundary unattended is how broken installs happen.
 /// - Prefetch (runtime/full only) is skipped when the tag is already pending,
-///   already on disk, blacklisted (≥3 failures within 7 days), or when the
-///   same tag was attempted within the last hour.
+///   already on disk, blacklisted (≥3 failures within 7 days), when the same tag
+///   was attempted within the last hour, or while a previous prefetch is still
+///   outstanding.
 pub fn decide(
     policy: AutoUpgradePolicy,
     current_tag: &str,
@@ -240,7 +254,13 @@ pub fn decide(
             a.tag == latest_tag && now - a.at < PREFETCH_RETRY_INTERVAL_SECS
         });
         let already_pending = state.pending_tag.as_deref() == Some(latest_tag);
-        if !blacklisted && !rate_limited && !already_pending && !latest_already_on_disk {
+        let attempt_in_flight = state.outstanding_prefetch.is_some();
+        if !blacklisted
+            && !rate_limited
+            && !already_pending
+            && !attempt_in_flight
+            && !latest_already_on_disk
+        {
             decision.prefetch = Some(PrefetchPlan {
                 tag: latest_tag.to_string(),
                 self_upgrade: policy == AutoUpgradePolicy::Full,
@@ -256,6 +276,45 @@ pub fn record_prefetch_failure(state: &mut UpdateCheckState, tag: &str, now: i64
     let record = state.failures.entry(tag.to_string()).or_default();
     record.count = record.count.saturating_add(1);
     record.last_failed_at = now;
+}
+
+/// Outcome of [`reap_stale_attempt`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReapedPrefetch {
+    /// No outstanding attempt, or it is still inside its grace window.
+    Nothing,
+    /// An orphaned attempt resolved without a failure: the download had actually
+    /// completed and was adopted as pending.
+    Cleared,
+    /// The agent never reported back and nothing usable is on disk — the
+    /// attempt is recorded as a failure (retries back off and blacklist).
+    Failed(String),
+}
+
+/// Reap a prefetch whose agent never reported back.
+///
+/// A background updater can be killed together with the parent's process tree
+/// (or crash, or lose the machine) before it writes any outcome.  Without this
+/// pass the attempt would look "in flight" forever and the tag would be retried
+/// once per hour with no failure ever recorded — an unbounded, silent retry
+/// loop.  An attempt older than [`STALE_PREFETCH_SECS`] is therefore resolved
+/// here: adopted as pending when the bundle did finish downloading (the install
+/// directory is the source of truth), otherwise counted as a failed attempt.
+pub fn reap_stale_attempt(state: &mut UpdateCheckState, now: i64) -> ReapedPrefetch {
+    let Some(attempt) = state.outstanding_prefetch.clone() else {
+        return ReapedPrefetch::Nothing;
+    };
+    if now - attempt.at < STALE_PREFETCH_SECS {
+        return ReapedPrefetch::Nothing;
+    }
+    state.outstanding_prefetch = None;
+    let install_dir = crate::daemon::versioned_install_dir(&attempt.tag);
+    if crate::daemon::install_dir_contains_runtime(&install_dir) {
+        state.pending_tag = Some(attempt.tag);
+        return ReapedPrefetch::Cleared;
+    }
+    record_prefetch_failure(state, &attempt.tag, now);
+    ReapedPrefetch::Failed(attempt.tag)
 }
 
 /// Activate a runtime the background updater finished downloading.
@@ -336,21 +395,21 @@ mod tests {
     }
 
     #[test]
-    fn policy_from_env_defaults_to_notify_and_ignores_garbage() {
+    fn policy_from_env_defaults_to_full_and_ignores_garbage() {
         let _lock = crate::test_env::lock();
         unsafe {
             std::env::remove_var(AUTO_UPGRADE_ENV);
         }
-        assert_eq!(AutoUpgradePolicy::from_env(), AutoUpgradePolicy::Notify);
-        unsafe {
-            std::env::set_var(AUTO_UPGRADE_ENV, "full");
-        }
         assert_eq!(AutoUpgradePolicy::from_env(), AutoUpgradePolicy::Full);
+        unsafe {
+            std::env::set_var(AUTO_UPGRADE_ENV, "notify");
+        }
+        assert_eq!(AutoUpgradePolicy::from_env(), AutoUpgradePolicy::Notify);
         unsafe {
             std::env::set_var(AUTO_UPGRADE_ENV, "not-a-policy");
         }
-        // Unknown values fall back to notify — never silently to off.
-        assert_eq!(AutoUpgradePolicy::from_env(), AutoUpgradePolicy::Notify);
+        // Unknown values fall back to full — never silently to off.
+        assert_eq!(AutoUpgradePolicy::from_env(), AutoUpgradePolicy::Full);
         unsafe {
             std::env::remove_var(AUTO_UPGRADE_ENV);
         }
@@ -637,6 +696,134 @@ mod tests {
         // The versioned install dir does not exist → marker must be cleared.
         commit_pending_tag_if_ready();
         assert_eq!(load_state().pending_tag, None);
+        unsafe {
+            std::env::remove_var("BROWSER4_RUNTIME_DIR");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Outstanding / orphaned prefetch attempts
+    // -----------------------------------------------------------------------
+
+    /// Create the minimum files `daemon::install_dir_contains_runtime` accepts.
+    fn fake_installed_runtime(tag: &str) {
+        let dir = crate::daemon::versioned_install_dir(tag);
+        fs::create_dir_all(dir.join("lib")).unwrap();
+        fs::write(dir.join("lib").join("browser4.jar"), "jar").unwrap();
+        let java = crate::java::java_in_install_dir(&dir);
+        fs::create_dir_all(java.parent().unwrap()).unwrap();
+        fs::write(&java, "java").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&java).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&java, perms).unwrap();
+        }
+        fs::write(
+            dir.join("browser4-installation.json"),
+            format!(
+                r#"{{"tag":"{tag}","asset_name":"bundle.tar.gz","download_url":"https://example.com/bundle.tar.gz","installed_at":"2026-01-01T00:00:00Z"}}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn decide_skips_prefetch_while_an_attempt_is_outstanding() {
+        let now = 1_000_000;
+        let in_flight = UpdateCheckState {
+            outstanding_prefetch: Some(PrefetchAttempt {
+                tag: "v4.16.0".to_string(),
+                at: now - 60,
+            }),
+            ..Default::default()
+        };
+        let d = decide(AutoUpgradePolicy::Runtime, "v4.15.0", "v4.16.0", &in_flight, now, false);
+        assert_eq!(d.prefetch, None, "one background download at a time");
+        // The user is still told about the release.
+        assert_eq!(d.notify.as_deref(), Some("v4.16.0"));
+    }
+
+    #[test]
+    fn reap_ignores_an_attempt_inside_its_grace_window() {
+        let _lock = crate::test_env::lock();
+        let temp = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("BROWSER4_RUNTIME_DIR", temp.path());
+        }
+        let now = 1_000_000;
+        let mut state = UpdateCheckState {
+            outstanding_prefetch: Some(PrefetchAttempt {
+                tag: "v4.16.0".to_string(),
+                at: now - STALE_PREFETCH_SECS + 1,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(reap_stale_attempt(&mut state, now), ReapedPrefetch::Nothing);
+        assert!(state.outstanding_prefetch.is_some());
+        assert!(state.failures.is_empty());
+        unsafe {
+            std::env::remove_var("BROWSER4_RUNTIME_DIR");
+        }
+    }
+
+    #[test]
+    fn reap_counts_a_dead_agent_as_a_failure_and_blacklists_after_three() {
+        let _lock = crate::test_env::lock();
+        let temp = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("BROWSER4_RUNTIME_DIR", temp.path());
+        }
+        let tag = "v4.16.0";
+        let mut state = UpdateCheckState::default();
+
+        // Nothing on disk → every orphaned attempt is a failure, so a silently
+        // killed updater cannot retry once per hour forever.
+        for round in 1..=FAILURE_BLACKLIST_THRESHOLD {
+            state.outstanding_prefetch = Some(PrefetchAttempt {
+                tag: tag.to_string(),
+                at: 0,
+            });
+            assert_eq!(
+                reap_stale_attempt(&mut state, 10_000 * i64::from(round)),
+                ReapedPrefetch::Failed(tag.to_string())
+            );
+            assert!(state.outstanding_prefetch.is_none());
+            assert_eq!(state.failures[tag].count, round);
+        }
+
+        let d = decide(AutoUpgradePolicy::Runtime, "v4.15.0", tag, &state, 50_000, false);
+        assert_eq!(d.prefetch, None, "repeated silent deaths blacklist the tag");
+        unsafe {
+            std::env::remove_var("BROWSER4_RUNTIME_DIR");
+        }
+    }
+
+    #[test]
+    fn reap_adopts_a_download_that_finished_before_the_agent_died() {
+        let _lock = crate::test_env::lock();
+        let temp = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("BROWSER4_RUNTIME_DIR", temp.path());
+        }
+        let tag = "v4.16.0";
+        fake_installed_runtime(tag);
+        let mut state = UpdateCheckState {
+            outstanding_prefetch: Some(PrefetchAttempt {
+                tag: tag.to_string(),
+                at: 0,
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            reap_stale_attempt(&mut state, STALE_PREFETCH_SECS),
+            ReapedPrefetch::Cleared
+        );
+        assert_eq!(state.pending_tag.as_deref(), Some(tag), "finished download is adopted");
+        assert!(state.outstanding_prefetch.is_none());
+        assert!(state.failures.is_empty(), "a finished download is not a failure");
         unsafe {
             std::env::remove_var("BROWSER4_RUNTIME_DIR");
         }

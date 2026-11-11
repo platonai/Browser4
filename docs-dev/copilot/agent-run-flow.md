@@ -68,7 +68,8 @@ browser4-cli (Rust)                       browser4-rest (Kotlin)                
    - 超时默认 600s，可被 `--wait-timeout` 或 `BROWSER4_CLI_AGENT_WAIT_TIMEOUT_SECS` 覆盖；
      超时后任务仍在服务端运行，本地状态标记 `processing`；
    - `processState == "done" | "completed"` → 再调 `command_result` 打印结果
-     （`src/main.rs:10880-10904`）；
+     （`src/main.rs:10880-10904`）；结果先经 `agent_result::render_result_text`
+     渲染成段落（`Summary`/`Key findings`/…），不再整段倾倒原始 JSON；
    - `processState == "failed" | "error"` → 报错退出（`src/main.rs:10906`）；
    - 其他状态每 5s 打印一次进度（`[Ns] <message>`）。
 
@@ -205,7 +206,8 @@ browser4-cli (Rust)                       browser4-rest (Kotlin)                
 - `AgentTaskStatus.toCommandStatus()`（`CommandStatus.kt:199`）：内部 `"done"` 映射为
   用户面 **`"completed"`**，`statusCode=200`，`commandResult.summary` 取 agentHistory
   末态 summary（失败时优先 failureReason）；
-- `command_result` → `getResult` → `commandResult` JSON；CLI 打印结果 / `agent status`
+- `command_result` → `getResult` → `commandResult` JSON；CLI 把它渲染为段落后打印
+  （原始信封只在 `--json` / `/result --json` 下出现）/ `agent status`
   显示进度 / `agent list` 汇总（本地缓存 + 服务端刷新）。
 
 ---

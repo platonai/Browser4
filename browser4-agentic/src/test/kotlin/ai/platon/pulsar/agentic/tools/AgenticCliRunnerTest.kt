@@ -94,6 +94,18 @@ class AgenticCliRunnerTest {
             "evaluateValue" to ToolSpec("tab", "evaluateValue", listOf(ToolSpec.Arg("expression", "String")), description = "Evaluate"),
             "resize" to ToolSpec("tab", "resize", listOf(ToolSpec.Arg("width", "Int"), ToolSpec.Arg("height", "Int")), description = "Resize"),
             "mouseMove" to ToolSpec("tab", "mouseMove", listOf(ToolSpec.Arg("x", "Double"), ToolSpec.Arg("y", "Double")), description = "Mouse move"),
+            "mouseMoveAt" to ToolSpec(
+                "tab",
+                "mouseMoveAt",
+                listOf(
+                    ToolSpec.Arg("x", "Double"),
+                    ToolSpec.Arg("y", "Double"),
+                    ToolSpec.Arg("space", "String"),
+                    ToolSpec.Arg("steps", "Int"),
+                    ToolSpec.Arg("durationMillis", "Long"),
+                ),
+                description = "Mouse move with coordinate space and pacing",
+            ),
             "mouseDown" to ToolSpec("tab", "mouseDown", listOf(ToolSpec.Arg("button", "String")), description = "Mouse down"),
             "mouseUp" to ToolSpec("tab", "mouseUp", listOf(ToolSpec.Arg("button", "String")), description = "Mouse up"),
             "mouseWheel" to ToolSpec("tab", "mouseWheel", listOf(ToolSpec.Arg("deltaX", "Double"), ToolSpec.Arg("deltaY", "Double")), description = "Mouse wheel"),
@@ -293,6 +305,54 @@ class AgenticCliRunnerTest {
             assertEquals("resize", name)
             assertEquals(1280, args["w"])
             assertEquals(900, args["h"])
+        }
+
+        @Test
+        @DisplayName("rejects a non-numeric mousemove coordinate instead of moving to (0,0)")
+        fun rejectsNonNumericMousemoveCoordinate() {
+            // M4 in the coordinate issue list: the runner used to turn "abc"
+            // into 0, so the pointer silently jumped to the viewport's top-left
+            // corner. The Rust CLI rejects the same input with the same wording.
+            val message = try {
+                runner.parseCommand("mousemove abc 200")
+                null
+            } catch (e: IllegalArgumentException) {
+                e.message
+            }
+            assertNotNull(message, "a non-numeric coordinate must be rejected")
+            assertTrue(
+                message!!.contains("Invalid x for mousemove"),
+                "unexpected message: $message"
+            )
+        }
+
+        @Test
+        @DisplayName("rejects a non-numeric resize dimension instead of resizing to 0x0")
+        fun rejectsNonNumericResizeDimension() {
+            val message = try {
+                runner.parseCommand("resize 1280 abc")
+                null
+            } catch (e: IllegalArgumentException) {
+                e.message
+            }
+            assertNotNull(message, "a non-numeric dimension must be rejected")
+            assertTrue(
+                message!!.contains("Invalid h for resize"),
+                "unexpected message: $message"
+            )
+        }
+
+        @Test
+        @DisplayName("execute() reports a bad coordinate as a failed result, not an exception")
+        fun executeReportsBadCoordinateAsResult() = runBlocking {
+            val result = runner.execute("mousemove abc 200")
+
+            assertFalse(result.success, "a bad coordinate must not execute")
+            assertTrue(
+                result.error.orEmpty().contains("Invalid x for mousemove"),
+                "unexpected error: ${result.error}"
+            )
+            assertNull(result.toolCall, "no tool call may be dispatched for a usage error")
         }
 
         @Test
@@ -691,6 +751,24 @@ class AgenticCliRunnerTest {
             assertEquals("type", result.toolCall.method)
             assertEquals("hello world", result.toolCall.arguments["text"])
             assertEquals("#search", result.toolCall.arguments["selector"])
+        }
+
+        @Test
+        @DisplayName("forwards mousemove coordinate space and pacing options")
+        fun forwardsMousemoveCoordinateSpaceAndPacingOptions() = runBlocking {
+            coEvery { toolManager.execute(any()) } returns toolCallResult(null)
+
+            val result = runner.execute("mousemove 100 1200 --space document --steps 8 --duration 750")
+
+            assertTrue(result.success)
+            assertNotNull(result.toolCall)
+            assertEquals("tab", result.toolCall!!.domain)
+            assertEquals("mouseMoveAt", result.toolCall.method)
+            assertEquals(100, result.toolCall.arguments["x"])
+            assertEquals(1200, result.toolCall.arguments["y"])
+            assertEquals("document", result.toolCall.arguments["space"])
+            assertEquals(8, result.toolCall.arguments["steps"])
+            assertEquals(750, result.toolCall.arguments["durationMillis"])
         }
 
         @Test

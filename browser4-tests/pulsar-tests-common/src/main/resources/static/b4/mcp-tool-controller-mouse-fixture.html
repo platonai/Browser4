@@ -154,7 +154,7 @@
     <!-- Hover Zone -->
     <section id="hover-section">
       <h2>Hover Zone</h2>
-      <div id="hover-zone">Hover over me</div>
+      <div id="hover-zone" tabindex="0">Hover over me</div>
     </section>
 
     <!-- Context Menu -->
@@ -178,6 +178,15 @@
 
     <!-- State Log -->
     <pre id="state-log"></pre>
+
+    <!--
+      Page-level pointer log for the coordinate-space / pointer-state e2e
+      scenarios.  #state-log only records pointer events inside
+      #mouse-track-area; this one records what the PAGE saw at any coordinate,
+      which is what the "viewport vs document space" and "no stale replay"
+      assertions need.
+    -->
+    <pre id="pointer-log"></pre>
   </main>
 
   <script>
@@ -467,6 +476,73 @@
       S.cornerBRClicks += 1;
       syncState();
     });
+
+    // ── Page-level pointer log ────────────────────────────────────
+    // What the page actually received, at any coordinate. The requested
+    // `mousemove` point can be clamped (out of view) or converted by the engine
+    // (document space); only the page can report the resulting event, and
+    // `moves`/`first` also reveal whether the CLI replayed a stale position
+    // after a navigation.
+    window.__browser4Pointer = {
+      viewport: [window.innerWidth || 0, window.innerHeight || 0],
+      scroll: [window.scrollX || 0, window.scrollY || 0],
+      moves: 0,
+      first: null,
+      last: null,
+      maxClientX: -1,
+      maxClientY: -1,
+      leaveCount: 0,
+      down: null,
+      up: null,
+    };
+
+    function syncPointer() {
+      var el = document.getElementById('pointer-log');
+      if (el) {
+        el.textContent = JSON.stringify(window.__browser4Pointer);
+      }
+    }
+
+    document.addEventListener('mousemove', function(e) {
+      var P = window.__browser4Pointer;
+      var point = [Math.round(e.clientX), Math.round(e.clientY)];
+      P.moves += 1;
+      if (!P.first) P.first = point;
+      P.last = point;
+      P.maxClientX = Math.max(P.maxClientX, point[0]);
+      P.maxClientY = Math.max(P.maxClientY, point[1]);
+      syncPointer();
+    }, true);
+
+    document.addEventListener('mousedown', function(e) {
+      window.__browser4Pointer.down = {
+        x: Math.round(e.clientX),
+        y: Math.round(e.clientY),
+        target: (e.target && e.target.id) || '',
+      };
+      syncPointer();
+    }, true);
+
+    document.addEventListener('mouseup', function(e) {
+      window.__browser4Pointer.up = {
+        x: Math.round(e.clientX),
+        y: Math.round(e.clientY),
+        target: (e.target && e.target.id) || '',
+      };
+      syncPointer();
+    }, true);
+
+    document.documentElement.addEventListener('mouseleave', function() {
+      window.__browser4Pointer.leaveCount += 1;
+      syncPointer();
+    });
+
+    window.addEventListener('scroll', function() {
+      window.__browser4Pointer.scroll = [window.scrollX || 0, window.scrollY || 0];
+      syncPointer();
+    }, true);
+
+    syncPointer();
 
     // ── Initial sync ──────────────────────────────────────────────
 

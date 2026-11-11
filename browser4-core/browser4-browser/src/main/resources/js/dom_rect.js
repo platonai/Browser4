@@ -128,6 +128,10 @@ __pulsar_utils__.queryClientRects = function(selector) {
 /**
  * Get the formatted client rect for an element matching the selector.
  *
+ * The rect is relative to the viewport (the same space as
+ * `getBoundingClientRect()`); use `getDocumentRect()` when absolute page
+ * coordinates are needed.
+ *
  * @param selector {string} The selector to get the element from.
  * @return {DOMRect|String|Boolean}
  * */
@@ -137,13 +141,16 @@ __pulsar_utils__.queryClientRect = function(selector) {
         return null;
     }
 
-    let rect = NodeOps.getRect(ele)
+    let rect = this.getClientRect(ele)
     return this.formatDOMRect(rect)
 };
 
 /**
  * Get the client rect for any node type.
  * Dispatches to the appropriate handler based on node type.
+ *
+ * The returned rect is relative to the viewport (the same space as
+ * `getBoundingClientRect()`), so it changes with the scroll position.
  *
  * @param node {Node|Element|Text}
  * @return {DOMRect|Boolean|null}
@@ -159,9 +166,8 @@ __pulsar_utils__.getClientRect = function(node) {
 };
 
 /**
- * Get the client rect of an element, relative to the body.
- *
- * Properties other than width and height are relative to the top-left of the viewport.
+ * Get the viewport (client) rect of an element, exactly as reported by
+ * `getBoundingClientRect()`.
  *
  * @see https://idiallo.com/javascript/element-postion
  * @see https://stackoverflow.com/questions/442404/retrieve-the-position-x-y-of-an-html-element
@@ -170,28 +176,22 @@ __pulsar_utils__.getClientRect = function(node) {
  * @return {DOMRect|Boolean}
  * */
 __pulsar_utils__.getElementClientRect = function(ele) {
-    let bodyRect = this.bodyRect || (__pulsar_utils__.bodyRect = document.body.getBoundingClientRect());
     let r = ele.getBoundingClientRect();
 
     if (r.width <= 0 || r.height <= 0) {
         return false
     }
 
-    let top = r.top - bodyRect.top;
-    let left = r.left - bodyRect.left;
-
-    return new DOMRect(left, top, r.width, r.height);
+    return new DOMRect(r.left, r.top, r.width, r.height);
 };
 
 /**
- * Get the client rect of a text node.
+ * Get the viewport (client) rect of a text node.
  *
  * @param node {Node|Text}
  * @return {DOMRect|null}
  * */
 __pulsar_utils__.getTextNodeClientRect = function(node) {
-    let bodyRect = this.bodyRect || (__pulsar_utils__.bodyRect = document.body.getBoundingClientRect());
-
     let rect = null;
     let text = this.getTextContent(node);
     if (text.length > 0) {
@@ -201,12 +201,36 @@ __pulsar_utils__.getTextNodeClientRect = function(node) {
         if (rects.length > 0) {
             let r = rects[0];
             if (r.width > 0 && r.height > 0) {
-                let top = r.top - bodyRect.top;
-                let left = r.left - bodyRect.left;
-                rect = new DOMRect(left, top, r.width, r.height);
+                rect = new DOMRect(r.left, r.top, r.width, r.height);
             }
         }
     }
 
     return rect;
+};
+
+/**
+ * Get the rect of any node in document (absolute page) coordinates:
+ * the client rect plus the current scroll offsets.
+ *
+ * Document coordinates are independent of the scroll position, which is what
+ * `vi` needs: the feature data can be computed at any scroll position and is
+ * still comparable across captures.  `false` (zero-size element) and `null`
+ * (unsupported node) are passed through unchanged.
+ *
+ * @param node {Node|Element|Text}
+ * @return {DOMRect|Boolean|null}
+ * */
+__pulsar_utils__.getDocumentRect = function(node) {
+    let rect = this.getClientRect(node);
+    if (!rect) {
+        return rect
+    }
+
+    // `scrollX`/`scrollY` are the standard properties; pageXOffset/pageYOffset
+    // are the legacy aliases kept for older embedded browsers.
+    const scrollX = window.scrollX || window.pageXOffset || 0;
+    const scrollY = window.scrollY || window.pageYOffset || 0;
+
+    return new DOMRect(rect.left + scrollX, rect.top + scrollY, rect.width, rect.height);
 };

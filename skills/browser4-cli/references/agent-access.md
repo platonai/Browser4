@@ -66,6 +66,33 @@ platform's input sandbox, not the user's files or project. `read` still means "n
 to user files or the project" — the copies are task-scoped inputs the model can only read,
 and a read-only task that could not receive its inputs would simply fail.
 
+### Readable roots — Browser4's own folders
+
+The presets bound workspace **power**. Reading is wider on purpose: Browser4's own folders are
+readable even though they live outside the task workspace, because that is where the agent's
+logs, task data, temp files and checkout are.
+
+| Root | Default |
+|---|---|
+| Browser4 data root (`app.data.dir`, else `~/.browser4`) | readable — `logs/`, `data/`, `memory/`, the per-task `agent/…/workspace.<id>` trees and Browser4's own `tmp/` |
+| Source checkout the backend runs from | readable when one is detected (a packaged runtime has none) |
+| `browser4.agent.readPaths` | operator-added folders: `;`-separated, `~` expanded |
+
+```bash
+# Add folders for every task on this backend
+BROWSER4_SERVER_OPTS="-Dbrowser4.agent.readPaths=D:/corpus;%TEMP%" browser4-cli open
+```
+
+These roots are **read-only**. Writes, deletes, copies and moves still happen only in the workspace
+and its mirrored modules; a write into a readable root is refused and counted as `READ_ONLY`. The
+access preset does not change them — `read` and `full` see the same readable roots, because reading
+logs is not workspace power — and `coding.permissions` prints the list in effect while
+`coding.explain(path=…)` dry-runs one path.
+
+A readable root that also sits on the sensitive list (the data root does — it is `~/.browser4`) is
+readable by design: that is the relaxation. The OS credential stores stay refused whatever is
+configured — adding `$HOME` as a readable root does **not** expose `~/.ssh`.
+
 ### Refusal codes
 
 A denied call fails like any other failed step (the task still ends whatever its own
@@ -156,7 +183,8 @@ Rails that an approval can never cross:
 - `denyTools` (embedder-level) — an explicit denial is a rail, not a capability. A refusal
   names it: `detail=excluded by denyTools under access preset 'full'`.
 - Protected paths (governance files, `.browser4`, `.github/workflows`) and sensitive paths
-  (credentials) are never approved.
+  (credentials) are never approved. The Browser4 data root is already readable through the
+  readable roots (below) — an approval cannot widen anything else on the sensitive list.
 - The workspace boundary while `allowExternalAccess=false`: a target outside the workspace
   is refused at approval time.
 - The shell's command whitelist (safe commands plus `DEV_COMMANDS`): an approval can pick

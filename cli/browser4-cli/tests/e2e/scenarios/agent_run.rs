@@ -68,9 +68,15 @@ pub(super) fn test_agent_run_follow_streams_steps(ctx: &mut E2ECtx) {
         stdout.contains("#1 b4.run"),
         "expected the first tool call to stream in:\n{stdout}"
     );
+    // P0-3: the arguments are rendered by key, not as one JSON blob.
     assert!(
-        stdout.contains("ok in 2.5s"),
-        "a slow tool reports its completion:\n{stdout}"
+        stdout.contains(r#"#1 b4.run(args="goto https://example.com")"#),
+        "the call line must show the argument a reader can act on:\n{stdout}"
+    );
+    // P0-2: a slow tool's result line names the call it answers.
+    assert!(
+        stdout.contains("↳ #1 b4.run ok in 2.5s"),
+        "a slow tool reports its completion under its call index:\n{stdout}"
     );
     assert!(
         stdout.contains("I have the release notes now."),
@@ -250,6 +256,8 @@ pub(super) fn test_agent_run_follow_reports_failure(ctx: &mut E2ECtx) {
             "isDone": true,
             "error": "the page was blocked",
             "message": "the page was blocked",
+            "errorCode": "PAGE_BLOCKED",
+            "resumable": true,
         }),
     );
 
@@ -267,6 +275,23 @@ pub(super) fn test_agent_run_follow_reports_failure(ctx: &mut E2ECtx) {
     assert!(
         failure.stdout.contains("✖ failed"),
         "the follower prints its own failure line:\n{}",
+        failure.stdout
+    );
+    // P1-5: the failure line names the machine code, and the way out is printed
+    // under it when the backend says the task can be resumed.
+    assert!(
+        failure
+            .stdout
+            .contains("✖ failed · agent-task-1 · ")
+            && failure.stdout.contains("— page_blocked: the page was blocked"),
+        "the failure line carries the task id and the error code:\n{}",
+        failure.stdout
+    );
+    assert!(
+        failure
+            .stdout
+            .contains("resume: agent run --resume agent-task-1"),
+        "a resumable failure shows how to continue:\n{}",
         failure.stdout
     );
 }
@@ -392,11 +417,182 @@ pub(super) fn test_agent_run_interactive_reports_run_statistics(ctx: &mut E2ECtx
         stdout.contains("39 call(s) · 2 failed (b4.run 12, browser_snapshot 8)"),
         "/stats must report tool calls and their breakdown:\n{stdout}"
     );
-    assert_eq!(
-        mock_server.command_stats_calls(),
-        vec!["agent-task-1".to_string()],
-        "the report must come from the stats endpoint for the running (or last) task"
+    // The completion line asks the same endpoint for its compact cost chain, so
+    // the task id shows up once per query (completion line, then /stats).
+    assert!(
+        stdout.contains("· 3 round(s) · 39 tool(s) · 54.4k tokens"),
+        "the completion line must carry the run's cost chain:\n{stdout}"
     );
+    let stats_calls = mock_server.command_stats_calls();
+    assert!(
+        stats_calls.len() >= 2 && stats_calls.iter().all(|id| id == "agent-task-1"),
+        "both the completion line and /stats must query the stats endpoint for \
+         agent-task-1, got {stats_calls:?}"
+    );
+}
+
+/// A finished task's payload is rendered as human sections, not dumped as the
+/// raw `command_result` JSON — `-i` used to print one multi-KB line.
+pub(super) fn test_agent_run_interactive_renders_the_result_sections(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+    mock_server.set_command_result_response(
+        "agent-task-1",
+        &result_envelope().to_string(),
+    );
+    // The completion line carries the run's cost when the backend serves counters.
+    mock_server.set_command_stats(
+        "agent-task-1",
+        serde_json::json!({"rounds": 3, "toolCalls": 12, "totalTokens": 54351}),
+    );
+
+    // Submitting polls the task once immediately, so a task that is already
+    // finished renders before the session reads the next stdin line.
+    let run_result = run_command_with_stdin(
+        ctx,
+        &["agent", "run", "-i"],
+        "Summarize the page\n/quit\n",
+    );
+
+    let stdout = &run_result.stdout;
+    assert!(
+        stdout.contains("✔ Agent completed in"),
+        "the completion line names the verdict and the elapsed time:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("· agent-task-1 · 3 round(s) · 12 tool(s) · 54.4k tokens"),
+        "the completion line carries the task id and the cost chain:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Summary"),
+        "the payload must be rendered as a summary section:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Fixed the module build."),
+        "the summary text must be printed:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Key findings (2)"),
+        "the findings must be listed with their count:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Files written (1) · workspace: /tmp/workspace.agent-task-1"),
+        "the files section must name the workspace:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Problems (1)"),
+        "the problems must be listed:\n{stdout}"
+    );
+    for plumbing in ["statusTool", "resultTool", "cancelTool", "\"summary\""] {
+        assert!(
+            !stdout.contains(plumbing),
+            "the envelope plumbing ({plumbing}) must not reach a human:\n{stdout}"
+        );
+    }
+}
+
+/// `/result --json` stays the machine escape hatch: the raw envelope, not the
+/// rendered sections.
+pub(super) fn test_agent_run_interactive_result_json_prints_the_raw_envelope(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+    mock_server.set_command_result_response(
+        "agent-task-1",
+        &result_envelope().to_string(),
+    );
+
+    let run_result = run_command_with_stdin(
+        ctx,
+        &["agent", "run", "-i"],
+        "Summarize the page\n/result --json\n/quit\n",
+    );
+
+    let stdout = &run_result.stdout;
+    assert!(
+        stdout.contains("\"statusTool\":\"command_status\""),
+        "/result --json must print the raw `command_result` envelope:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("\"keyFindings\""),
+        "the raw envelope keeps the payload fields machines read:\n{stdout}"
+    );
+}
+
+/// The `command_result` body a real backend answers with: the shared task
+/// envelope plus the agent's completion report.
+fn result_envelope() -> serde_json::Value {
+    serde_json::json!({
+        "taskId": "agent-task-1",
+        "status": "done",
+        "processed": 12,
+        "statusCode": 200,
+        "statusTool": "command_status",
+        "resultTool": "command_result",
+        "cancelTool": "command_cancel",
+        "result": {
+            "summary": "Fixed the module build.",
+            "keyFindings": ["The BOM pinned an older zip4j", "No source change was needed"],
+            "filesChanged": ["browser4-dependencies/pom.xml"],
+            "problems": ["The CI gate was not run"],
+            "workspace": "/tmp/workspace.agent-task-1"
+        }
+    })
+}
+
+/// `agent result` renders the payload exactly like `-i` does: sections once, no
+/// raw envelope. It used to dump the JSON and then print the same findings a
+/// second time from a separate helper.
+pub(super) fn test_agent_result_renders_the_payload_sections_once(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+    mock_server.set_command_result_response("agent-task-1", &result_envelope().to_string());
+
+    let run_result = run_command(ctx, &["agent", "result", "agent-task-1"]);
+    let stdout = &run_result.stdout;
+
+    assert!(
+        stdout.contains("Summary"),
+        "the payload must be rendered as a summary section:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Fixed the module build."),
+        "the summary text must be printed:\n{stdout}"
+    );
+    assert_eq!(
+        stdout.matches("Key findings").count(),
+        1,
+        "the completion report must be rendered once, not twice:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Key findings (2)"),
+        "the findings must be listed with their count:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Files written (1) · workspace: /tmp/workspace.agent-task-1"),
+        "the files section must name the workspace:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Problems (1)"),
+        "the problems must be listed:\n{stdout}"
+    );
+    for plumbing in ["statusTool", "resultTool", "cancelTool", "\"keyFindings\""] {
+        assert!(
+            !stdout.contains(plumbing),
+            "the envelope plumbing ({plumbing}) must not reach a human:\n{stdout}"
+        );
+    }
+
+    let snapshot = mock_server.snapshot();
+    assert_eq!(snapshot.result_queries, vec!["agent-task-1".to_string()]);
 }
 
 /// `/access`, `/approve` and `/deny` are answered by the session itself against
@@ -560,6 +756,10 @@ pub(super) fn test_agent_run_wait_completed_with_predefined_summary(ctx: &mut E2
         "agent-task-1",
         r#"{"summary":"Release notes: browser4-cli now supports agent run --wait."}"#,
     );
+    mock_server.set_command_stats(
+        "agent-task-1",
+        serde_json::json!({"rounds": 2, "toolCalls": 5, "totalTokens": 12345}),
+    );
 
     let run_result = run_command(ctx, &["agent", "run", task, "--wait"]);
     assert!(
@@ -572,11 +772,33 @@ pub(super) fn test_agent_run_wait_completed_with_predefined_summary(ctx: &mut E2
         "Expected wait mode to report completion timing in:\n{}",
         run_result.stdout
     );
+    // The same terminal line `-i` prints: verdict, id, cost chain.
+    assert!(
+        run_result
+            .stdout
+            .contains("✔ Agent completed in")
+            && run_result
+                .stdout
+                .contains("· agent-task-1 · 2 round(s) · 5 tool(s) · 12.3k tokens"),
+        "wait mode must print the shared terminal line with the task id and its cost:\n{}",
+        run_result.stdout
+    );
     assert!(
         run_result
             .stdout
             .contains("browser4-cli now supports agent run --wait"),
         "Expected pre-designed summary in wait-mode output:\n{}",
+        run_result.stdout
+    );
+    // `--wait` shares the `-i` renderer: sections, not one line of raw JSON.
+    assert!(
+        run_result.stdout.contains("Summary"),
+        "Expected the rendered Summary section in wait-mode output:\n{}",
+        run_result.stdout
+    );
+    assert!(
+        !run_result.stdout.contains("\"summary\""),
+        "wait mode must not dump the raw command_result JSON:\n{}",
         run_result.stdout
     );
 

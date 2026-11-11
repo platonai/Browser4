@@ -643,7 +643,15 @@ internal fun viDataStatusJs(): String =
       var links = u._captureMetaLinks || {};
       var stored = links['${Browser4WebDriver.CAPTURE_META_LINK_REL}'] || '';
       var status;
-      if (u._viDataComputed === true) {
+      // "Computed once" is not "still valid": the runtime tracks a layout
+      // fingerprint (DOM mutation count + scroll/viewport size + URL) and
+      // reports staleness, so an SPA/lazy-loaded/re-laid-out page recomputes
+      // instead of returning the first layout's boxes forever (M14). A runtime
+      // without isLayoutStale() (older base) falls back to the old guard.
+      var stale = typeof u.isLayoutStale === 'function'
+        ? u.isLayoutStale()
+        : u._viDataComputed !== true;
+      if (!stale) {
         status = '${Browser4WebDriver.VI_DATA_COMPUTED}';
       } else if (typeof u.compute !== 'function') {
         status = '${Browser4WebDriver.VI_DATA_UNAVAILABLE}';

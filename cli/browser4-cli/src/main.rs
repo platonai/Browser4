@@ -34,6 +34,7 @@ mod state;
 mod tips;
 mod update_check;
 mod agent_interactive;
+mod agent_result;
 
 use std::collections::{HashMap, HashSet};
 use std::io::{IsTerminal, Read};
@@ -12163,63 +12164,6 @@ fn x_sql_envelope_is_failure(parsed: &Value) -> bool {
     false
 }
 
-/// True when an X-SQL statement passes a PowerCSS `:expr(...)` filter as a
-/// selector ARGUMENT to a DOM_*_IMG function (e.g. `DOM_FIRST_IMG(DOM,
-/// 'img:expr(width > 250)')`).
-///
-/// The X-SQL engine evaluates such selectors through an img-scanning path
-/// that does not parse `:expr(...)`, so the filter silently matches nothing.
-/// Used to print a corrective tip after the query succeeds.
-///
-/// Only the IMG call's own argument span is considered: `:expr` in the FROM
-/// clause (`DOM_LOAD_AND_SELECT(@url, 'img:expr(...)')`) IS evaluated and must
-/// not trigger the warning, and neither should an unrelated `:expr` elsewhere
-/// in the statement.
-fn sql_uses_dom_first_img_expr(sql: &str) -> bool {
-    let upper = sql.to_ascii_uppercase();
-    let func_names = ["DOM_FIRST_IMG", "DOM_NTH_IMG", "DOM_ALL_IMGS"];
-    let mut search_from = 0;
-    while let Some(func_start) = func_names.iter().find_map(|name| {
-        upper[search_from..].find(name).map(|idx| (search_from + idx, name.len()))
-    }) {
-        let (start, name_len) = func_start;
-        let after_name = start + name_len;
-        // The selector argument is the second argument of DOM_FIRST_IMG/
-        // DOM_NTH_IMG and the second of DOM_ALL_IMGS — scan the whole
-        // argument list for ':expr(' so any argument placement is caught.
-        let Some(open_paren) = upper[after_name..].find('(') else {
-            break;
-        };
-        let args_start = after_name + open_paren + 1;
-        // Find the matching close paren, tracking nesting (PowerCSS expr
-        // blocks contain nested parens of their own).
-        let mut depth = 1usize;
-        let mut cursor = args_start;
-        let mut close_paren = None;
-        while cursor < upper.len() {
-            match upper.as_bytes()[cursor] {
-                b'(' => depth += 1,
-                b')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        close_paren = Some(cursor);
-                        break;
-                    }
-                }
-                _ => {}
-            }
-            cursor += 1;
-        }
-        let Some(close) = close_paren else { break };
-        let args_span = &upper[args_start..close];
-        if args_span.contains(":EXPR(") {
-            return true;
-        }
-        search_from = close + 1;
-    }
-    false
-}
-
 /// Whether to nudge the user toward `--format table`/`csv`/`--result-only`
 /// after a successful query: only when the default JSON output is going to an
 /// interactive terminal (piped output must stay machine-clean) and the user
@@ -12313,7 +12257,6 @@ async fn handle_html_snapshot_query(
     // naive string substitution would break on URLs containing quotes or other
     // special characters. Note: @url must appear UNQUOTED in the SQL
     // (e.g. `load_and_select(@url, ':root')` not `load_and_select('@url', ':root')`).
-    let sql_has_img_expr = sql_uses_dom_first_img_expr(&sql);
     let processed_sql = sql;
 
     let mut params = json!({ "sql": processed_sql });
@@ -12565,14 +12508,6 @@ async fn handle_html_snapshot_query(
             .ok()
             .and_then(|p| p.get("statusCode").and_then(|v| v.as_i64()))
             .map_or(false, |code| code == 200);
-
-        if envelope_ok && sql_has_img_expr {
-            emit_tip(
-                "\n⚠️  DOM_FIRST_IMG does not evaluate PowerCSS :expr(...) filters — a filtered \
-                 selector silently matches nothing (no error). Filter images with \
-                 DOM_FIRST_ATTR(DOM, sel, 'src') or DOM_SELECT_FIRST(DOM, sel) + DOM_ABS_SRC instead."
-            );
-        }
 
         if envelope_ok
             && should_suggest_query_output_format(&format, result_only, std::io::stdout().is_terminal())
@@ -13830,19 +13765,6 @@ async fn handle_html_snapshot_inspect(
                     _ => "  ",
                 };
 
-                // PowerCSS :expr(...) scope warning: works inside
-                // DOM_LOAD_AND_SELECT's FROM-clause selector and with
-                // htmlsnapshot get (live page evaluation), but is silently
-                // NOT evaluated when embedded as a DOM_* function's selector
-                // argument in X-SQL — it matches nothing there and returns
-                // empty columns with exit code 0. Tag it so users don't
-                // copy a starred :expr() suggestion into DOM_FIRST_TEXT.
-                let expr_scope_note = if sel.contains(":expr(") {
-                    "  ⚠ :expr() — works in FROM clause & get, NOT inside DOM_* X-SQL args"
-                } else {
-                    ""
-                };
-
                 // Value samples from textSamples (new) or fall back to textPreview (old)
                 let text_hint =
                     if let Some(samples) = sug.get("textSamples").and_then(|v| v.as_array()) {
@@ -13878,9 +13800,6 @@ async fn handle_html_snapshot_inspect(
                     sel,
                     text_hint
                 );
-                if !expr_scope_note.is_empty() {
-                    cli_println!("      {}", expr_scope_note);
-                }
             };
 
             cli_println!("");
@@ -15038,6 +14957,53 @@ fn parse_number_arg(tool_params: &Value, name: &str) -> Result<f64, String> {
         .ok_or_else(|| format!("Missing numeric parameter: {name}"))
 }
 
+/// Whether [command] leaves the CLI's recorded pointer position stale.
+///
+/// Two families:
+///
+/// - **Navigation / tab switches** (`goto`, `reload`, back/forward, tab
+///   switches, new windows) load a different document, so a coordinate
+///   recorded on the previous page must never be replayed onto the new one — the
+///   first `mousedown`/`mouseup`/`mousewheel` would otherwise emit a
+///   `mousemove` to a spot that no longer means anything (M7).
+/// - **Actions that move the real pointer themselves** (`hover`, `click`,
+///   `dblclick`, `drag`): the driver positioned the browser's pointer on the
+///   element/point it acted on, and that pointer is what the next
+///   `mousedown`/`mouseup`/`mousewheel` must use.  Restoring the *old*
+///   coordinate would bounce it away from the target first (M6).  Since the
+///   CLI cannot observe a better value than "wherever the driver left it",
+///   the record is dropped instead of rewritten — see [clear_mouse_position].
+fn invalidates_mouse_position(command: &str) -> bool {
+    matches!(
+        command,
+        "goto"
+            | "reload"
+            | "go-back"
+            | "go-forward"
+            | "tab-select"
+            | "tab-new"
+            | "tab-close"
+            | "window-new"
+            | "open"
+            | "hover"
+            | "click"
+            | "dblclick"
+            | "drag"
+    )
+}
+
+/// Drop the recorded pointer position, leaving the browser's real pointer as
+/// the only source of truth for the next positioned mouse command.
+///
+/// No-op (and no state write) when nothing is recorded, so this is safe to call
+/// after every command in the family above.
+fn clear_mouse_position(session_name: Option<&str>) {
+    let mut state = read_state(None, session_name);
+    if state.last_mouse_position.take().is_some() {
+        let _ = write_state(&state, None, session_name);
+    }
+}
+
 fn persist_mouse_position(
     base_url: &str,
     session_name: Option<&str>,
@@ -15082,12 +15048,45 @@ async fn restore_mouse_position(
     Ok(())
 }
 
+/// Read the viewport geometry as `(innerWidth, innerHeight, scrollX, scrollY)`.
+///
+/// Used by `mousemove` for two things the engine cannot report back today: the
+/// out-of-viewport hint (`--allow-outside` suppresses it) and the document→viewport
+/// conversion the CLI has to record for a document-space move. Best effort on
+/// purpose — a probe failure must not turn a successful move into an error.
+async fn read_viewport_geometry(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+) -> Option<(f64, f64, f64, f64)> {
+    let expression = "[window.innerWidth, window.innerHeight, window.scrollX || 0, window.scrollY || 0]";
+    let raw = call_session_tool(
+        client,
+        base_url,
+        session_name,
+        "browser_evaluate",
+        json!({ "expression": expression }),
+    )
+    .await
+    .ok()?;
+    let value: Value = serde_json::from_str(raw.trim()).ok()?;
+    let values = value.as_array()?;
+    let number = |index: usize| values.get(index).and_then(|v| v.as_f64());
+    Some((
+        number(0)?,
+        number(1)?,
+        number(2)?,
+        number(3)?,
+    ))
+}
+
 async fn handle_mouse_move(
     client: &Client,
     base_url: &str,
     tool_name: &str,
     tool_params: &Value,
     session_name: Option<&str>,
+    allow_outside: bool,
 ) -> Result<(), String> {
     handle_tool_command(
         client,
@@ -15098,9 +15097,63 @@ async fn handle_mouse_move(
         session_name,
     )
     .await?;
+
     let x = parse_number_arg(tool_params, "x")?;
     let y = parse_number_arg(tool_params, "y")?;
-    persist_mouse_position(base_url, session_name, MousePosition { x, y })?;
+    let space = tool_params
+        .get("space")
+        .and_then(|value| value.as_str())
+        .unwrap_or("viewport")
+        .trim()
+        .to_ascii_lowercase();
+    let document_space = !space.is_empty() && space != "viewport" && space != "client";
+
+    // Geometry is needed for the hint (unless suppressed) and to record the
+    // viewport point a document-space move became. A viewport-space move with
+    // `--allow-outside` therefore costs no extra round trip at all.
+    let geometry = if document_space || !allow_outside {
+        read_viewport_geometry(client, base_url, session_name).await
+    } else {
+        None
+    };
+
+    let viewport_point = if document_space {
+        // Without a scroll offset the converted point is unknown; leaving the
+        // record empty makes the next mousedown use the driver's real pointer,
+        // which is where the engine left it.
+        geometry.map(|(_, _, scroll_x, scroll_y)| (x - scroll_x, y - scroll_y))
+    } else {
+        Some((x, y))
+    };
+
+    let Some((viewport_x, viewport_y)) = viewport_point else {
+        clear_mouse_position(session_name);
+        return Ok(());
+    };
+
+    persist_mouse_position(
+        base_url,
+        session_name,
+        MousePosition { x: viewport_x, y: viewport_y },
+    )?;
+
+    if !allow_outside {
+        if let Some((viewport_width, viewport_height, _, _)) = geometry {
+            let outside = viewport_x < 0.0
+                || viewport_y < 0.0
+                || viewport_x > viewport_width
+                || viewport_y > viewport_height;
+            if outside {
+                eprintln!(
+                    "ℹ️  ({}, {}) is outside the {}×{} viewport: the page sees the pointer leave \
+                     (mouseleave), not a pointer outside the browser window. Pass --allow-outside \
+                     to silence this hint.",
+                    x as i64, y as i64, viewport_width as i64, viewport_height as i64
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -16174,8 +16227,39 @@ async fn handle_agent_run(
                         return Err(format!("Agent task failed: {message}"));
                     }
                     let result_text = get_command_result(client, base_url, &task_id).await?;
-                    cli_println!("Agent completed in {:.1}s:", start.elapsed().as_secs_f64());
-                    cli_println!("{}", result_text);
+                    // The same terminal line `-i` and `--follow` print: verdict word,
+                    // elapsed time, task id and (when the backend answers in time) the
+                    // run's cost chain.
+                    let cost =
+                        crate::agent_interactive::terminal_cost_chain(client, base_url, &task_id)
+                            .await;
+                    cli_println!(
+                        "{}",
+                        crate::agent_interactive::terminal_status_line(
+                            crate::agent_interactive::TerminalStatus::Completed,
+                            start.elapsed(),
+                            &task_id,
+                            &cost,
+                            None,
+                        )
+                    );
+                    // Same renderer as `agent run -i` / `--follow`: the payload is
+                    // the task envelope plus the agent's completion report, so a
+                    // human gets sections instead of one multi-KB JSON line.
+                    let lines = crate::agent_result::render_result_text(
+                        &task_id,
+                        &result_text,
+                        &crate::agent_result::RenderOptions::default()
+                            .with_color(crate::agent_interactive::color_enabled())
+                            .with_full(pretty_active())
+                            .with_json_hint(format!("agent result {task_id} --json")),
+                    );
+                    if !lines.is_empty() {
+                        cli_println!();
+                        for line in &lines {
+                            cli_println!("{}", line);
+                        }
+                    }
                     json_field(
                         "raw",
                         json!(serde_json::from_str::<Value>(&result_text)
@@ -16427,69 +16511,9 @@ fn agent_envelope_not_found_reason(parsed: &Value) -> Option<String> {
     )
 }
 
-/// Print where an agent task's deliverables live, when the payload names them.
-///
-/// `agent result` printed only the completion summary for a task whose whole point
-/// was returning data, and the artifact itself was reachable only by searching the
-/// backend's app-data tree by hand (issue 111443#1). The payload now carries the
-/// agent's own completion report (`keyFindings`, `filesChanged`, `problems`) and the
-/// workspace its tools wrote into.
-fn print_agent_deliverables(payload: &Value) {
-    let strings = |key: &str| -> Vec<String> {
-        payload
-            .get(key)
-            .and_then(|v| v.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|v| v.as_str())
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    let findings = strings("keyFindings");
-    let files = strings("filesChanged");
-    let problems = strings("problems");
-    let workspace = payload
-        .get("workspace")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty());
-
-    if findings.is_empty() && files.is_empty() && problems.is_empty() && workspace.is_none() {
-        return;
-    }
-
-    cli_println!("");
-    if !findings.is_empty() {
-        cli_println!("Key findings:");
-        for finding in findings.iter().take(20) {
-            cli_println!("  - {}", finding);
-        }
-        if findings.len() > 20 {
-            cli_println!("  ... and {} more", findings.len() - 20);
-        }
-    }
-    if !files.is_empty() {
-        cli_println!("Files the agent reported changing:");
-        for file in files.iter().take(20) {
-            cli_println!("  {}", file);
-        }
-        if files.len() > 20 {
-            cli_println!("  ... and {} more", files.len() - 20);
-        }
-    }
-    if !problems.is_empty() {
-        cli_println!("Unresolved problems reported by the agent:");
-        for problem in problems.iter().take(10) {
-            cli_println!("  - {}", problem);
-        }
-    }
-    if let Some(workspace) = workspace {
-        cli_println!("Task workspace: {}", workspace);
-        cli_println!("  (the agent's deliverables live here; `agent result --json` prints the same path in `workspace`)");
-    }
-}
+// `agent result`'s old `print_agent_deliverables` helper is gone: the completion
+// report (`keyFindings`, `filesChanged`, `problems`, `workspace`) is rendered by
+// `crate::agent_result`, shared with `agent run -i`, `--follow` and `--wait`.
 
 /// The status word a `command_result` payload reports (`failed`, `cancelled`, …).
 ///
@@ -16728,11 +16752,25 @@ async fn handle_agent_result(
         cli_println!("task workspace it wrote into.");
     }
 
-    cli_println!("{}", result);
     json_field("task_id", json!(id));
     json_field("raw", json!(&result));
     if !json_active() {
-        print_agent_deliverables(payload);
+        // The payload is the shared envelope plus the agent's completion report:
+        // render its sections (Summary / Key findings / Files written / Problems /
+        // Data) instead of dumping one multi-KB JSON line. The failed/cancelled
+        // verdict line stays — it carries reason, budget and `resume:` — and the
+        // sections name findings, files and problems exactly once.
+        let lines = crate::agent_result::render_result_text(
+            id,
+            &result,
+            &crate::agent_result::RenderOptions::default()
+                .with_color(crate::agent_interactive::color_enabled())
+                .with_full(pretty_active())
+                .with_json_hint(format!("agent result {id} --json")),
+        );
+        for line in &lines {
+            cli_println!("{}", line);
+        }
         if let Some(verdict) = format_agent_result_verdict(id, parsed_payload.as_ref().unwrap_or(&Value::Null)) {
             cli_println!("");
             cli_println!("{}", verdict);
@@ -21575,7 +21613,7 @@ async fn handle_crawl(
             parts.push("X-SQL".to_string());
         }
         if crawl_background {
-            parts.push("--bg".to_string());
+            parts.push("--background".to_string());
         }
         if refresh {
             parts.push("--refresh".to_string());
@@ -22335,7 +22373,10 @@ fn format_csv(rows: &[Value]) -> String {
 }
 
 /// Format extracted data as a human-readable aligned table.
-fn format_table(rows: &[Value]) -> String {
+///
+/// Shared with [`agent_result`], which renders a finished task's extracted rows
+/// with it instead of dumping the payload as JSON.
+pub(crate) fn format_table(rows: &[Value]) -> String {
     if rows.is_empty() {
         return "No data.".to_string();
     }
@@ -26121,8 +26162,9 @@ fn render_example_args(args: &serde_json::Map<String, Value>) -> String {
 
 /// Render the `examples` of a tool for `--help --examples`.
 ///
-/// Returns `None` when no example is renderable, so the caller prints its
-/// "no examples" line instead of a header with nothing under it.
+/// Returns the example bullets, or `None` when no example is renderable, so the
+/// caller prints its "no examples" line instead of a header with nothing under
+/// it.
 ///
 /// Executable examples render as `- <title>: <args>`; a runnable example that
 /// takes no arguments says so (`no arguments`) rather than rendering an empty
@@ -26130,8 +26172,8 @@ fn render_example_args(args: &serde_json::Map<String, Value>) -> String {
 /// indented fenced block. `notes` follow on an indented `- ` line, and an
 /// example flagged `expectsError` is marked as such — a failing call presented
 /// as a happy path would be a trap.
-fn render_tool_examples(label: &str, examples: &[ToolExampleSpec]) -> Option<String> {
-    let mut lines = vec![format!("Examples for {label}:")];
+fn render_tool_example_bullets(examples: &[ToolExampleSpec]) -> Option<Vec<String>> {
+    let mut lines: Vec<String> = Vec::new();
     let mut rendered = 0;
 
     for example in examples {
@@ -26173,7 +26215,7 @@ fn render_tool_examples(label: &str, examples: &[ToolExampleSpec]) -> Option<Str
         }
     }
 
-    (rendered > 0).then(|| lines.join("\n"))
+    (rendered > 0).then_some(lines)
 }
 
 /// Resolve the MCP tool a CLI command dispatches to.
@@ -26207,15 +26249,23 @@ fn resolve_command_tool(command: &str, args: &[String]) -> Option<String> {
 
 /// Build the `--help --examples` report for a CLI command.
 ///
-/// Sourcing, in order: the CLI's own `Examples:` block (shipped in the binary,
-/// so this works with no backend at all), then the richer tool-level examples
-/// read from `GET /mcp/tools/specs` — the same endpoint (and the same base URL /
-/// session-independent path) the CLI already uses to discover plugin-declared
-/// commands.
+/// Two sections, both printed when both exist:
 ///
-/// Never fails: an unreachable backend, an unknown command, a tool the backend
-/// does not advertise and a tool without examples each end in an explanatory
-/// line, and the command still exits 0.
+/// 1. `Runnable CLI examples` — the command's own `Examples:` block, shipped in
+///    the binary, so it works with no backend at all and is what a reader can
+///    paste into a shell;
+/// 2. `MCP tool arguments` — the examples the backend publishes for the tool
+///    the command maps to (the same `GET /mcp/tools/specs` the plugin-declared
+///    command discovery uses). These are wire-call arguments, not CLI commands
+///    (`sessionId` is injected by the CLI, values are JSON strings), but they
+///    are what `browser4-cli tool call <tool> --json` takes, they can carry
+///    parameters the CLI does not expose as flags, and they cannot drift from
+///    the tool they document.
+///
+/// A section that cannot be produced is replaced by one explanatory line — the
+/// report never invents examples, and never fails: an unreachable backend, an
+/// unknown command and a tool without examples all end in that line while the
+/// command still exits 0.
 async fn build_command_examples(base_url: &str, command: &str, args: &[String]) -> String {
     // A quoted spaced name (`--help "htmlsnapshot get" --examples`) arrives as
     // one argument; resolve it to the internal key its help page lives under
@@ -26238,9 +26288,35 @@ async fn build_command_examples(base_url: &str, command: &str, args: &[String]) 
     };
 
     match build_tool_examples(base_url, &tool).await {
-        Ok(report) => report,
+        Ok(examples) => cli_and_tool_examples(public, &local, &examples, &tool),
         Err(reason) => examples_or_reason(public, &local, &reason),
     }
+}
+
+/// Both example sections, CLI-runnable first.
+fn cli_and_tool_examples(
+    public: &str,
+    local: &[String],
+    examples: &ToolExamples,
+    tool: &str,
+) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    if !local.is_empty() {
+        lines.push(format!("Runnable CLI examples for browser4-cli {public}:"));
+        lines.extend(local.iter().cloned());
+        lines.push(String::new());
+    }
+    lines.push(format!("MCP tool arguments for {}:", examples.label));
+    lines.extend(examples.bullets.iter().cloned());
+    lines.push(String::new());
+    lines.push(format!(
+        "Pass them to `browser4-cli tool call {tool} --json`; the CLI fills in \
+         `sessionId` itself."
+    ));
+    lines.push(format!(
+        "Run `browser4-cli --help {public}` for arguments, options, and notes."
+    ));
+    lines.join("\n")
 }
 
 /// Render a command's built-in examples, or explain why there are none.
@@ -26248,12 +26324,10 @@ fn examples_or_reason(public: &str, local: &[String], reason: &str) -> String {
     if local.is_empty() {
         return format!("No examples available for '{public}' — {reason}");
     }
-    let mut lines = vec![format!(
-        "Examples for browser4-cli {public} (built into the CLI):"
-    )];
+    let mut lines = vec![format!("Runnable CLI examples for browser4-cli {public}:")];
     lines.extend(local.iter().cloned());
     lines.push(String::new());
-    lines.push(format!("Tool-level examples are unavailable: {reason}"));
+    lines.push(format!("MCP tool arguments are unavailable: {reason}"));
     lines.push(format!(
         "Run `browser4-cli --help {public}` for arguments, options, and notes."
     ));
@@ -26272,13 +26346,34 @@ fn no_tool_level_examples_reason() -> String {
         .to_string()
 }
 
+/// What a backend tool spec contributes to `--help --examples`: the heading
+/// label (`tab.click (browser_click)`) and the rendered argument bullets.
+///
+/// The CLI's own examples and the MCP tool arguments are printed as two
+/// sections — the first is runnable as a CLI command, the second documents the
+/// wire call the command maps to (and is what `tool call` takes), so neither
+/// audience is served by hiding the other.
+struct ToolExamples {
+    label: String,
+    bullets: Vec<String>,
+}
+
+impl ToolExamples {
+    /// Heading + bullets, the shape the plugin-declared command path prints.
+    fn rendered(&self) -> String {
+        let mut lines = vec![format!("Examples for {}:", self.label)];
+        lines.extend(self.bullets.iter().cloned());
+        lines.join("\n")
+    }
+}
+
 /// Like [build_command_examples] but for an already-resolved tool — used by
 /// plugin-declared commands (`ToolSpec.cliName`), whose tool name comes from the
 /// spec rather than from `CommandDef.tool_name_fn`.
 ///
 /// `Err` carries the reason as a phrase the caller drops into its own message,
 /// so both the one-line report and the built-in fallback can explain themselves.
-async fn build_tool_examples(base_url: &str, tool: &str) -> Result<String, String> {
+async fn build_tool_examples(base_url: &str, tool: &str) -> Result<ToolExamples, String> {
     let values = match probe_tool_specs_with_examples_within(base_url, std::time::Duration::from_secs(2)).await {
         // The request failed (unreachable, timeout, HTTP error, malformed body):
         // only here is "is the backend running?" the honest diagnosis.
@@ -26311,8 +26406,9 @@ async fn build_tool_examples(base_url: &str, tool: &str) -> Result<String, Strin
     };
 
     let label = format!("{}.{} ({})", spec.domain, spec.method, tool);
-    render_tool_examples(&label, &spec.examples)
-        .ok_or_else(|| format!("the tool '{tool}' declares no examples."))
+    let bullets = render_tool_example_bullets(&spec.examples)
+        .ok_or_else(|| format!("the tool '{tool}' declares no examples."))?;
+    Ok(ToolExamples { label, bullets })
 }
 
 /// `plugin commands` — list CLI commands declared by installed plugins via
@@ -28267,6 +28363,24 @@ async fn maybe_auto_update(command: &str, base_url: &str, global: &GlobalFlags) 
     let mut state = load_state();
     let now = Utc::now().timestamp();
 
+    // Reap a prefetch whose agent never reported back (killed together with this
+    // process tree, crashed, offline).  An agent that dies silently must still
+    // consume one of the tag's attempts, otherwise the tag is retried once per
+    // hour forever and never reaches the blacklist.
+    match reap_stale_attempt(&mut state, now) {
+        ReapedPrefetch::Nothing => {}
+        ReapedPrefetch::Cleared => save_state(&state),
+        ReapedPrefetch::Failed(ref stale_tag) => {
+            save_state(&state);
+            if !global.quiet {
+                eprintln!(
+                    "⚠  The background updater for {stale_tag} never reported back \
+                     (it may have been terminated); counting the attempt as failed."
+                );
+            }
+        }
+    }
+
     // Resolve the latest tag at most once per TTL.  A failed attempt counts
     // too, so an offline machine does not pay the resolve timeout on every
     // command; the stale cache (if any) keeps being served meanwhile.
@@ -28321,18 +28435,30 @@ async fn maybe_auto_update(command: &str, base_url: &str, global: &GlobalFlags) 
         // failure (deleted/moved executable) neither disappears silently nor
         // burns the one-hour retry window.
         if spawn_update_agent(plan) {
-            state.last_prefetch_attempt = Some(PrefetchAttempt {
+            let attempt = PrefetchAttempt {
                 tag: plan.tag.clone(),
                 at: now,
-            });
+            };
+            state.last_prefetch_attempt = Some(attempt.clone());
+            // Park the attempt as outstanding: the agent refreshes it when it
+            // starts and clears it when it finishes, so an agent that dies is
+            // detectable instead of being retried silently.
+            state.outstanding_prefetch = Some(attempt);
             save_state(&state);
-        } else if !global.quiet {
-            eprintln!(
-                "⚠  Could not start the background updater for {}; \
-                 run '{bin} upgrade' to update manually.",
-                plan.tag,
-                bin = cli_binary_name(),
-            );
+        } else {
+            // A spawn failure is an attempt failure too — count it so repeated
+            // failures back off and blacklist instead of warning on every
+            // command.
+            record_prefetch_failure(&mut state, &plan.tag, now);
+            save_state(&state);
+            if !global.quiet {
+                eprintln!(
+                    "⚠  Could not start the background updater for {}; \
+                     run '{bin} upgrade' to update manually.",
+                    plan.tag,
+                    bin = cli_binary_name(),
+                );
+            }
         }
     }
 }
@@ -28398,6 +28524,18 @@ async fn handle_update_agent(global: &GlobalFlags) -> Result<(), CliError> {
 /// the tag in `pending_tag` — activation happens on the next backend launch
 /// via `update_check::commit_pending_tag_if_ready`.
 async fn run_update_agent(tag: &str, self_upgrade: bool) {
+    // Announce liveness before anything slow.  The spawning CLI parked an
+    // outstanding attempt; refreshing its timestamp here is what tells the
+    // reaper that a long download is still alive rather than a dead agent.
+    {
+        let mut state = update_check::load_state();
+        state.outstanding_prefetch = Some(update_check::PrefetchAttempt {
+            tag: tag.to_string(),
+            at: Utc::now().timestamp(),
+        });
+        update_check::save_state(&state);
+    }
+
     let result: Result<(), String> = async {
         // `full` policy: self-upgrade the CLI binary first (best-effort).
         if self_upgrade {
@@ -28422,6 +28560,7 @@ async fn run_update_agent(tag: &str, self_upgrade: bool) {
             eprintln!("Auto-update prefetch of {tag} failed: {err}");
         }
     }
+    state.outstanding_prefetch = None;
     update_check::save_state(&state);
 }
 
@@ -31697,6 +31836,8 @@ enum BatchStepAction {
     MouseMove {
         tool_name: String,
         tool_params: Value,
+        /// `--allow-outside`: skip the out-of-viewport hint (dispatch unchanged).
+        allow_outside: bool,
     },
     /// `mousedown` / `mouseup` / `mousewheel` — restores the pointer position first.
     MousePositioned {
@@ -31708,6 +31849,9 @@ enum BatchStepAction {
 #[derive(Debug, Clone)]
 struct BatchStepPlan {
     display: String,
+    /// The resolved internal command name (`mousemove`, `goto`, …), used for
+    /// post-step bookkeeping such as invalidating the recorded pointer position.
+    command: String,
     action: BatchStepAction,
 }
 
@@ -31996,6 +32140,17 @@ fn compile_batch_step(
     let tool_name = (cmd_def.tool_name_fn)(&parsed);
     let mut tool_params = (cmd_def.tool_params_fn)(&parsed);
 
+    // A params builder reports a CLI-side argument error through this sentinel
+    // (see `commands::CLI_ERROR_SENTINEL`). In batch mode the step must fail
+    // before any tool call is sent — the same contract the standalone dispatch
+    // enforces, otherwise a bad `mousemove` argument becomes a backend call.
+    if let Some(message) = tool_params
+        .get(commands::CLI_ERROR_SENTINEL)
+        .and_then(|v| v.as_str())
+    {
+        return Err(message.to_string());
+    }
+
     let action = match nested_command.as_str() {
         "open" | "close" => {
             return Err(format!(
@@ -32086,6 +32241,10 @@ fn compile_batch_step(
             BatchStepAction::MouseMove {
                 tool_name,
                 tool_params,
+                allow_outside: parsed
+                    .get("allow-outside")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
             }
         }
         "mousedown" | "mouseup" | "mousewheel" => BatchStepAction::MousePositioned {
@@ -32106,6 +32265,7 @@ fn compile_batch_step(
 
     Ok(BatchStepPlan {
         display: spec.display.clone(),
+        command: nested_command,
         action,
     })
 }
@@ -32241,7 +32401,18 @@ async fn execute_batch_step(
         BatchStepAction::MouseMove {
             tool_name,
             tool_params,
-        } => handle_mouse_move(client, base_url, tool_name, tool_params, session_name).await,
+            allow_outside,
+        } => {
+            handle_mouse_move(
+                client,
+                base_url,
+                tool_name,
+                tool_params,
+                session_name,
+                *allow_outside,
+            )
+            .await
+        }
         BatchStepAction::MousePositioned {
             tool_name,
             tool_params,
@@ -32340,6 +32511,11 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
             if bail {
                 break;
             }
+        } else if invalidates_mouse_position(&plan.command) {
+            // Same bookkeeping the standalone dispatch does: a navigation or a
+            // pointer-moving action invalidates the recorded coordinate, so the
+            // next positioned mouse step cannot replay a stale point.
+            clear_mouse_position(global.session_name.as_deref());
         }
     }
 
@@ -32558,6 +32734,7 @@ fn main() {
                     let tool = format!("{}_{}", spec.domain, spec.method);
                     let report = build_tool_examples(&base_url, &tool)
                         .await
+                        .map(|examples| examples.rendered())
                         .unwrap_or_else(|reason| {
                             format!("No examples available for '{spaced}' — {reason}")
                         });
@@ -34161,12 +34338,17 @@ async fn run(
             .await?;
         }
         "mousemove" => {
+            let allow_outside = parsed
+                .get("allow-outside")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             handle_mouse_move(
                 &client,
                 &base_url,
                 &tool_name,
                 &tool_params,
                 global.session_name.as_deref(),
+                allow_outside,
             )
             .await?;
         }
@@ -35014,6 +35196,15 @@ async fn run(
         }
     }
 
+    // Pointer bookkeeping: navigation loads a new document and the
+    // hover/click/drag family leaves the real pointer where the driver put it,
+    // so a coordinate recorded earlier must not be replayed onto either.  The
+    // positioned mouse commands (`mousedown`/`mouseup`/`mousewheel`) then act at
+    // the browser's actual pointer instead of bouncing it back to an old spot.
+    if invalidates_mouse_position(command) {
+        clear_mouse_position(global.session_name.as_deref());
+    }
+
     // Post-command snapshot for commands that modify browser state.
     // Users can opt out with --no-snapshot on individual interaction commands.
     let no_snap = no_snapshot_commands();
@@ -35131,6 +35322,16 @@ fn classify_help_target(name: &str) -> HelpTarget {
         if !commands_in_category(canonical).is_empty() {
             return HelpTarget::Category(canonical);
         }
+    }
+    // A command whose public name differs from its registry key in more than
+    // `-`→space (`network har start` is registered as `har-start`): resolve it
+    // exactly, or `--help "network har start"` fell through to the prefix
+    // listing and printed a one-line list instead of the page.
+    if let Some(cmd) = cmd_map
+        .values()
+        .find(|cmd| public_command_name(cmd.name) == name)
+    {
+        return HelpTarget::Command(cmd.name.to_string());
     }
     if cmd_map
         .values()
@@ -39475,9 +39676,24 @@ mod tests {
             &example_args(&["e5", "--help", "--examples"]),
         ));
 
+        // Both sections: the CLI's own (runnable) block first, then the MCP
+        // argument examples the backend publishes for the tool.
         assert!(
-            report.starts_with("Examples for tab.click (browser_click):"),
+            report.starts_with("Runnable CLI examples for browser4-cli click:"),
             "report: {report}"
+        );
+        assert!(
+            report.contains("MCP tool arguments for tab.click (browser_click)"),
+            "the MCP section must name the tool it documents: {report}"
+        );
+        assert!(
+            report.contains("Pass them to `browser4-cli tool call browser_click --json`"),
+            "the MCP section must say how to call the tool: {report}"
+        );
+        assert!(
+            report.find("browser4-cli click e5").unwrap_or(usize::MAX)
+                < report.find("MCP tool arguments").unwrap_or(0),
+            "the runnable CLI examples come first: {report}"
         );
         assert!(
             report.contains("  - Click a snapshot ref: `{\"selector\": \"#submit\"}`"),
@@ -39519,7 +39735,7 @@ mod tests {
         ));
 
         assert!(
-            report.contains("Examples for tab.tabs (browser_tabs):"),
+            report.contains("MCP tool arguments for tab.tabs (browser_tabs)"),
             "report: {report}"
         );
         assert!(
@@ -39547,7 +39763,7 @@ mod tests {
         ));
 
         assert!(
-            report.contains("Examples for crawl.submit (crawl_submit):"),
+            report.contains("MCP tool arguments for crawl.submit (crawl_submit)"),
             "report: {report}"
         );
         assert!(
@@ -39645,7 +39861,7 @@ mod tests {
         ));
 
         assert!(
-            report.starts_with("Examples for browser4-cli batch (built into the CLI):"),
+            report.starts_with("Runnable CLI examples for browser4-cli batch:"),
             "report: {report}"
         );
         assert!(
@@ -39654,7 +39870,7 @@ mod tests {
         );
         assert!(
             report.contains(
-                "Tool-level examples are unavailable: the command maps to no single tool."
+                "MCP tool arguments are unavailable: the command maps to no single tool."
             ),
             "report: {report}"
         );
@@ -39662,18 +39878,22 @@ mod tests {
 
     /// A command that ships no examples of its own still gets the one-line
     /// explanation — the built-in fallback must not invent content.
+    ///
+    /// `code read` is a hidden command with no bundled example block (issue
+    /// #634 filled in every visible page), and it does map to a tool, so the
+    /// backend request is made and its failure is the reason reported.
     #[test]
     fn examples_without_builtin_examples_prints_one_line_message() {
         let report = block_on(build_command_examples(
             &unreachable_base_url(),
-            "mousemove",
-            &example_args(&["100", "200", "--help", "--examples"]),
+            "code-read",
+            &example_args(&["--help", "--examples"]),
         ));
 
         // A failed request is the one case where "is the backend running?" is
         // the honest diagnosis; the failing endpoint must be named.
         assert!(
-            report.starts_with("No examples available for 'mousemove' — is the backend running? ("),
+            report.starts_with("No examples available for 'code read' — is the backend running? ("),
             "report: {report}"
         );
         assert!(report.contains("/mcp/tools/specs"), "report: {report}");
@@ -39693,11 +39913,11 @@ mod tests {
         ));
 
         assert!(
-            report.starts_with("Examples for browser4-cli click (built into the CLI):"),
+            report.starts_with("Runnable CLI examples for browser4-cli click:"),
             "report: {report}"
         );
         assert!(
-            report.contains("Tool-level examples are unavailable: the backend is running"),
+            report.contains("MCP tool arguments are unavailable: the backend is running"),
             "report: {report}"
         );
         assert!(
@@ -39721,12 +39941,12 @@ mod tests {
         ));
 
         assert!(
-            report.starts_with("Examples for browser4-cli click (built into the CLI):"),
+            report.starts_with("Runnable CLI examples for browser4-cli click:"),
             "report: {report}"
         );
         assert!(report.contains("  browser4-cli click e5"), "report: {report}");
         assert!(
-            report.contains("Tool-level examples are unavailable: is the backend running?"),
+            report.contains("MCP tool arguments are unavailable: is the backend running?"),
             "report: {report}"
         );
         assert!(
@@ -39736,7 +39956,7 @@ mod tests {
     }
 
     #[test]
-    fn examples_report_missing_tool_and_missing_examples() {
+    fn examples_missing_tool_and_missing_examples() {
         // Reachable backend that does not advertise the tool at all: `click`
         // falls back to its built-in examples, and the reason is still stated.
         let without_click = spawn_status_mock_server(
@@ -39750,12 +39970,12 @@ mod tests {
             &example_args(&["e5", "--examples"]),
         ));
         assert!(
-            report.starts_with("Examples for browser4-cli click (built into the CLI):"),
+            report.starts_with("Runnable CLI examples for browser4-cli click:"),
             "report: {report}"
         );
         assert!(
             report.contains(
-                "Tool-level examples are unavailable: the backend does not advertise 'browser_click'."
+                "MCP tool arguments are unavailable: the backend does not advertise 'browser_click'."
             ),
             "report: {report}"
         );
@@ -39772,7 +39992,7 @@ mod tests {
         ));
         assert!(
             report.contains(
-                "Tool-level examples are unavailable: the tool 'browser_click' declares no examples."
+                "MCP tool arguments are unavailable: the tool 'browser_click' declares no examples."
             ),
             "report: {report}"
         );
@@ -39782,13 +40002,16 @@ mod tests {
     fn examples_resolve_a_plugin_declared_command_tool() {
         // `profile import` is not in commands_map: its tool name comes from the
         // declared spec (`profile_import` + `import`), which is why the declared
-        // path resolves the tool itself and calls build_tool_examples.
+        // path resolves the tool itself and calls build_tool_examples. Its
+        // examples are the arguments the declared command takes, so the block is
+        // rendered as `Examples for <label>:`.
         let base_url = spawn_status_mock_server("200 OK", TOOL_SPECS_FIXTURE);
         let report = block_on(build_tool_examples(&base_url, "profile_import_import"))
-            .expect("the fixture declares profile_import_import");
+            .expect("the fixture declares profile_import_import")
+            .rendered();
 
         assert!(
-            report.contains("Examples for profile_import.import (profile_import_import):"),
+            report.starts_with("Examples for profile_import.import (profile_import_import):"),
             "report: {report}"
         );
         assert!(
@@ -39797,18 +40020,42 @@ mod tests {
         );
     }
 
+    /// A command with no bundled example block (the hidden ones; #634 filled in
+    /// every visible page) still gets the MCP section when the backend
+    /// advertises the tool — without a dangling CLI heading or a leading blank
+    /// line.
     #[test]
-    fn render_tool_examples_returns_none_without_renderable_examples() {
+    fn cli_and_tool_examples_omits_the_cli_section_when_the_command_ships_none() {
+        let examples = ToolExamples {
+            label: "code.read (code_read)".to_string(),
+            bullets: vec!["  - Read a span: `{\"path\": \"a.kt\", \"start\": 1}`".to_string()],
+        };
+        let report = cli_and_tool_examples("code read", &[], &examples, "code_read");
+
+        assert_eq!(
+            report.lines().next(),
+            Some("MCP tool arguments for code.read (code_read):"),
+            "an empty CLI section must not leave a heading or a blank line: {report:?}"
+        );
+        assert!(
+            !report.contains("Runnable CLI examples"),
+            "there are no CLI examples to head: {report}"
+        );
+        assert!(
+            report.contains("browser4-cli tool call code_read --json"),
+            "the section must say how to call the tool: {report}"
+        );
+    }
+
+    #[test]
+    fn render_tool_example_bullets_returns_none_without_renderable_examples() {
         // Nothing callable and nothing to show → the caller prints its message
         // instead of a header with no bullets.
-        assert!(render_tool_examples("tab.click (click)", &[]).is_none());
-        assert!(render_tool_examples(
-            "tab.click (click)",
-            &[ToolExampleSpec {
-                title: Some("Not written yet".to_string()),
-                ..Default::default()
-            }]
-        )
+        assert!(render_tool_example_bullets(&[]).is_none());
+        assert!(render_tool_example_bullets(&[ToolExampleSpec {
+            title: Some("Not written yet".to_string()),
+            ..Default::default()
+        }])
         .is_none());
     }
 
@@ -44753,13 +45000,13 @@ linkGroups:
             "crawl".to_string(),
             "resume".to_string(),
             "task-id-606".to_string(),
-            "--bg".to_string(),
+            "--background".to_string(),
         ])
         .unwrap();
 
         assert_eq!(rewritten[0], "crawl-resume");
         assert_eq!(rewritten[1], "task-id-606");
-        assert_eq!(rewritten[2], "--bg");
+        assert_eq!(rewritten[2], "--background");
     }
 
     #[test]
@@ -45389,6 +45636,68 @@ linkGroups:
             error.contains("Invalid x for mousemove"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn invalidates_mouse_position_covers_navigation_and_pointer_actions() {
+        // M6/M7: after a navigation or an action that moved the real pointer,
+        // the recorded coordinate must not be replayed by the next
+        // mousedown/mouseup/mousewheel.
+        for command in [
+            "goto",
+            "reload",
+            "go-back",
+            "go-forward",
+            "tab-select",
+            "tab-new",
+            "tab-close",
+            "window-new",
+            "open",
+            "hover",
+            "click",
+            "dblclick",
+            "drag",
+        ] {
+            assert!(
+                invalidates_mouse_position(command),
+                "{command} must invalidate the recorded pointer position"
+            );
+        }
+    }
+
+    #[test]
+    fn invalidates_mouse_position_leaves_explicit_moves_and_reads_alone() {
+        // `mousemove` is the command that *establishes* the position; reads and
+        // unrelated actions must keep it (restoring it is their whole point).
+        for command in [
+            "mousemove",
+            "mousedown",
+            "mouseup",
+            "mousewheel",
+            "snapshot",
+            "get",
+            "eval",
+            "scroll",
+        ] {
+            assert!(
+                !invalidates_mouse_position(command),
+                "{command} must keep the recorded pointer position"
+            );
+        }
+    }
+
+    #[test]
+    fn batch_step_plan_records_the_resolved_command_name() {
+        for command in ["reload", "tab-new"] {
+            let spec = BatchCommandSpec {
+                display: command.to_string(),
+                tokens: vec![command.to_string()],
+            };
+
+            let plan = compile_batch_step(&spec, &commands_map(), true).unwrap();
+            assert_eq!(plan.command, command);
+            assert!(invalidates_mouse_position(&plan.command));
+        }
     }
 
     #[test]
@@ -49169,6 +49478,19 @@ linkGroups:
         assert_eq!(classify_help_target("experience"), HelpTarget::Prefix);
         assert_eq!(classify_help_target("webdb"), HelpTarget::Prefix);
         assert_eq!(classify_help_target("no-such-thing"), HelpTarget::Unknown);
+
+        // A public name whose internal key is not just the space→dash form
+        // (`network har start` is `har-start`): without an exact public-name
+        // match this fell through to the prefix listing, which printed a
+        // one-line list instead of the command's page.
+        assert_eq!(
+            classify_help_target("network har start"),
+            HelpTarget::Command("har-start".into())
+        );
+        assert_eq!(
+            classify_help_target("network har stop"),
+            HelpTarget::Command("har-stop".into())
+        );
     }
 
     /// Every category name and alias the help advertises must list commands —
@@ -49862,62 +50184,6 @@ linkGroups:
             reason.chars().count()
         );
         assert!(reason.ends_with('…'));
-    }
-
-    #[test]
-    fn sql_uses_dom_first_img_expr_detects_the_broken_pattern() {
-        assert!(sql_uses_dom_first_img_expr(
-            "SELECT DOM_FIRST_IMG(DOM, 'img.product-img:expr(width > 100 && height > 100)') AS img FROM DOM_LOAD_AND_SELECT(@url, '.product-card')"
-        ));
-        // lowercase function names are normalized
-        assert!(sql_uses_dom_first_img_expr(
-            "select dom_first_img(dom, 'img:expr(width >= 0)') from dom_load_and_select(@url, ':root')"
-        ));
-        // other members of the img family share the limitation
-        assert!(sql_uses_dom_first_img_expr(
-            "SELECT DOM_ALL_IMGS(DOM, 'img:expr(width > 0)') FROM DOM_LOAD_AND_SELECT(@url, ':root')"
-        ));
-    }
-
-    #[test]
-    fn sql_uses_dom_first_img_expr_leaves_working_uses_alone() {
-        // plain DOM_FIRST_IMG without :expr is fine
-        assert!(!sql_uses_dom_first_img_expr(
-            "SELECT DOM_FIRST_IMG(DOM, 'img.product-img') AS img FROM DOM_LOAD_AND_SELECT(@url, '.product-card')"
-        ));
-        // :expr through DOM_FIRST_ATTR / DOM_SELECT_FIRST is honored by the engine
-        assert!(!sql_uses_dom_first_img_expr(
-            "SELECT DOM_FIRST_ATTR(DOM, 'img.product-img:expr(width > 100)', 'src') FROM DOM_LOAD_AND_SELECT(@url, '.product-card')"
-        ));
-        assert!(!sql_uses_dom_first_img_expr(
-            "SELECT DOM_ABS_SRC(DOM_SELECT_FIRST(DOM, 'img:expr(width > 100 && height > 100)')) FROM DOM_LOAD_AND_SELECT(@url, '.product-card')"
-        ));
-        // :expr in the FROM table selector is fine
-        assert!(!sql_uses_dom_first_img_expr(
-            "SELECT DOM_FIRST_TEXT(DOM, '.t') FROM DOM_LOAD_AND_SELECT(@url, 'img:expr(width > 100)')"
-        ));
-        // Mixed case: DOM_FIRST_IMG with a PLAIN selector while :expr lives in
-        // the FROM clause — the warning must not fire (the FROM :expr IS
-        // evaluated and image_url is correctly populated).
-        assert!(!sql_uses_dom_first_img_expr(
-            "SELECT DOM_FIRST_IMG(DOM, 'img.product-img') AS image_url \
-             FROM DOM_LOAD_AND_SELECT(@url, '.product-card:expr(width >= 150 && height >= 200)')"
-        ));
-        // Nested :expr inside the IMG argument itself still fires, including
-        // when another (non-IMG) function appears before it in the statement.
-        assert!(sql_uses_dom_first_img_expr(
-            "SELECT DOM_FIRST_TEXT(DOM, 'h1') AS t, DOM_FIRST_IMG(DOM, 'img:expr(width > 200)') AS img \
-             FROM DOM_LOAD_AND_SELECT(@url, ':root')"
-        ));
-        // Multiple IMG calls: only the one carrying :expr triggers.
-        assert!(sql_uses_dom_first_img_expr(
-            "SELECT DOM_FIRST_IMG(DOM, 'img.a') AS a, DOM_FIRST_IMG(DOM, 'img.b:expr(width > 9)') AS b \
-             FROM DOM_LOAD_AND_SELECT(@url, ':root')"
-        ));
-        assert!(!sql_uses_dom_first_img_expr(
-            "SELECT DOM_FIRST_IMG(DOM, 'img.a') AS a, DOM_FIRST_IMG(DOM, 'img.b') AS b \
-             FROM DOM_LOAD_AND_SELECT(@url, 'div:expr(width > 9)')"
-        ));
     }
 
     #[test]

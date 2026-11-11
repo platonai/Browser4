@@ -388,7 +388,7 @@ browser4-cli wait --load networkidle
 |---|---|
 | `keydown <key>` | Press and hold a key. |
 | `keyup <key>` | Release a held key. |
-| `mousemove <x> <y>` | Move the mouse to screen/page coordinates. |
+| `mousemove <x> <y>` | Move the mouse to viewport CSS pixels `(x, y)`, relative to the main frame's viewport top-left corner. This is not a desktop/screen coordinate and it does not move the OS cursor; a coordinate outside the viewport means "leave the page", not "outside the browser window". Coordinates are stale after the page scrolls. |
 | `mousedown [button]` | Press a mouse button. |
 | `mouseup [button]` | Release a mouse button. |
 | `mousewheel <dx> <dy>` | Scroll using a wheel delta. |
@@ -522,7 +522,7 @@ These commands require an LLM key.
 | `chat-result <id>` | Retrieve the result of an async chat task. |
 | `agent run <task>` | Submit an autonomous browser task and immediately receive a task ID. Supports `--wait` (block for the result) and `--wait-timeout <seconds>` (default 600). `--follow` streams every step (tool calls, model text, slow/failed tools) and ends with the result — Ctrl+C cancels the task; `--ndjson` emits that stream as one JSON object per line. `-i` opens an interactive session where a line typed while a task runs steers it (never queued as a second task), and `/stats` reports the run's LLM rounds/requests, token usage and tool calls (`/help` lists the session commands). A backend hiccup or an unreadable step never ends the live view: `-i` keeps following a task that still runs and skips the one unreadable step. Task type is browser by default; `--coding` explicitly marks a pure file/build task (never auto-detected). `--access <preset>` (`full`/`write`/`read-build`/`read`) narrows that task's coding tools and is reset when the task ends; a refused step is not a dead end — `coding.requestAccess` files a non-blocking pending request and an operator approves it through `POST /api/agent/<taskId>/access/<requestId>/approve`, while `denyTools`, protected paths and sensitive paths are never approved; a job with no TTY (scripts, CI, submitted tasks) derives `full` with outbound network instead of the server-wide preset (`browser4.agent.access.unattended` narrows it) |
 | `agent status <id>` | Check a task — the shared status envelope (`status`: queued/running/done/failed/cancelled, plus `statusCode`, `message` and the agent's step count). |
-| `agent result <id>` | Fetch a completed task's result: its summary, `keyFindings`, `filesChanged` and the workspace its deliverables live in. |
+| `agent result <id>` | Fetch a completed task's result: its summary, `keyFindings`, `filesChanged` and the workspace its deliverables live in. Rendered as sections (`--json` prints the raw envelope). |
 | `agent list` | List tracked agent tasks with the same statuses (refreshed from the backend on every call); `--clear` untracks the finished ones. |
 
 ```bash

@@ -228,18 +228,25 @@ SELECT DOM_NTH_HREF(DOM, 'nav', 5) AS fifth_nav_link
 FROM DOM_LOAD_AND_SELECT('https://example.com', 'body');
 ```
 
-> **⚠ `:expr(...)` filters are not evaluated by the `DOM_*_IMG` functions.** A
+> **`:expr(...)` filters work in `DOM_*_IMG` selector arguments too.** A
 > selector like `'img:expr(width > 400)'` passed to `DOM_FIRST_IMG` /
-> `DOM_NTH_IMG` / `DOM_ALL_IMGS` silently returns **no match** (no error),
-> while plain selectors (`'img'`, `'.gallery img'`) work. For image work,
-> read the URL through an attribute call instead:
+> `DOM_NTH_IMG` / `DOM_ALL_IMGS` is parsed like any other PowerCSS selector, so
+> it returns the first / nth / all images whose computed width exceeds 400:
 >
 > ```sql
-> SELECT DOM_FIRST_ATTR(DOM, 'img:expr(width > 400 && height > 400)', 'src') AS hero_src
+> SELECT DOM_FIRST_IMG(DOM, 'img:expr(width > 400 && height > 400)') AS hero_src
 > FROM DOM_LOAD_AND_SELECT('https://example.com', 'body');
 > ```
 >
-> See [power-dom.md](power-dom.md) for where `:expr(...)` is evaluated.
+> When the filter is easier to express over an attribute, `DOM_FIRST_ATTR`
+> accepts the same `:expr(...)` selector:
+>
+> ```sql
+> SELECT DOM_FIRST_ATTR(DOM, 'img:expr(width > 400 && height > 400)', 'data-src') AS hero_src
+> FROM DOM_LOAD_AND_SELECT('https://example.com', 'body');
+> ```
+>
+> See [power-dom.md](power-dom.md) for the feature list and operators.
 
 ## 3.7 Node Labels
 

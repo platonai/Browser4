@@ -1263,13 +1263,28 @@ pub async fn get_command_stats(
     base_url: &str,
     task_id: &str,
 ) -> Result<RestResponse, String> {
-    let url = build_endpoint_url(base_url, &format!("/api/commands/{task_id}/stats"));
-    send_rest_response(
-        client
-            .get(url)
-            .timeout(std::time::Duration::from_secs(30)),
+    get_command_stats_with_timeout(
+        client,
+        base_url,
+        task_id,
+        std::time::Duration::from_secs(30),
     )
     .await
+}
+
+/// The same call with a caller-chosen budget.
+///
+/// The completion line asks for counters it can live without, so it uses a short
+/// timeout: a slow `stats` endpoint must not delay the end of a run (plan §四.7 —
+/// a value-add that fails is omitted, never waited for).
+pub async fn get_command_stats_with_timeout(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+    timeout: std::time::Duration,
+) -> Result<RestResponse, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/commands/{task_id}/stats"));
+    send_rest_response(client.get(url).timeout(timeout)).await
 }
 
 /// Queue a steering message for a running agent task:

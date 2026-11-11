@@ -93,8 +93,45 @@ workspace-relative path in the user message:
 
 Limits: regular files only, ≤20 files, ≤10 MB each, ≤25 MB total; credential locations
 are never copied; a path already readable from the workspace (including the coding
-mirror) is left alone; references that do not exist are ignored. The copies are inputs,
+mirror) is left alone; references that do not exist are ignored; a file named twice (in
+two spellings) is copied once. The copies are inputs,
 not deliverables — they must not be listed in `filesChanged`.
+
+**What counts as a reference.** The instruction is prose, not a command line, so the
+engine looks for path-shaped text instead of applying shell splitting rules. Tolerated:
+
+| Form | Example |
+|---|---|
+| Windows drive path (either separator) | `D:\Backup\Data\fields.xlsx`, `D:/Backup/fields.xlsx` |
+| Windows UNC share | `\\fileserver\specs\fields.xlsx` (resolves on Windows only) |
+| POSIX absolute path | `/home/me/fields.xlsx` |
+| `~` home shorthand | `~/fields.xlsx` (`~user/…` is **not** expanded) |
+| Relative to the repo / backend cwd | `docs/config.md`, `browser4-tests\…\fixture.xlsx` |
+| Local `file:` URL | `file:///D:/Backup/fields.xlsx`, `file:///home/me/fields.xlsx` |
+| Quoted — required for spaces | `'D:\My Docs\fields.xlsx'`, `"…"`, `“…”`, `‘…’` |
+| CJK punctuation around it | `字段：D:\Backup\fields.xlsx`, `字段（…）`, `读取 docs/config.md，然后总结` |
+
+A relative reference is resolved against the workspace mirror, then the repository root,
+then the backend's working directory — **not** the CLI's current directory.
+
+Not accepted, on purpose: a **bare file name** with no directory (`fields.xlsx` — give it
+a directory or an absolute path), a **directory** (only regular files are copied),
+environment variables (`%USERPROFILE%\…`, `$HOME/…`), a **remote** `file://host/…` URL,
+percent-encoded URLs (`%20` is not decoded), globs (`*.xlsx`), `@file` / `-flag`
+arguments, and anything under a credential location.
+
+Paths with spaces need the quotes *inside* the task text — the shell strips its own
+quoting before the CLI sees the argument:
+
+```bash
+browser4-cli agent run "字段表在 'D:\My Docs\fields.xlsx'，读取并总结"
+```
+
+When nothing was copied the backend logs one `No task input materialized: N candidate
+reference(s)` line, and a `Task input skipped/refused` line for each reference that hit a
+limit or a credential location (per-reference misses stay at `debug`). That line is the
+first thing to check when the model reports `PERMISSION_DENIED | code=PATH_DENIED` for a
+file the task did name.
 
 ### The boundary applies to the shell and the browser too
 

@@ -193,7 +193,7 @@ The `htmlsnapshot` capture prints each interactive element as
 
 | Extra | Meaning |
 |-------|---------|
-| `box=<x> <y> <width> <height>` | Bounding box, printed verbatim from the runtime's `vi` data |
+| `box=<x> <y> <width> <height>` | Bounding box, printed verbatim from the runtime's `vi` data. **Document-absolute** CSS pixels (origin = the page's top-left corner), the same space as `snapshot`'s `[box=…]` — **not** the viewport space `mousemove` and `get box` use, and not body-relative (the pre-4.11.31 `vi` was). The serialized document states this: `<input id="PulsarMetaInformation" … box-space="document">`. A capture without `box-space` predates the change and its boxes are body-relative. |
 | `w=<n>` | Visual-prominence weight — `1 000 000 + area` for controls, group area for links |
 
 The list is ordered by weight descending, and the renderer keeps that order inside each printed
@@ -424,7 +424,7 @@ Scalar functions (input: DOM + selector string, output: scalar)
 > **string** in the resultSet — see
 > [Machine-readable numeric output](#machine-readable-numeric-output).
 
-> **Where `:expr(...)` is evaluated:** PowerCSS `:expr()` visual filters ARE evaluated in the `DOM_LOAD_AND_SELECT` selector (the `FROM` clause) and in `htmlsnapshot get` / `get all` / `inspect` selectors, which run over a fresh snapshot of the active page (the tab is captured first, so they filter the page as it is now). Inside **`DOM_FIRST_*`/`DOM_ALL_*` UDF selector arguments** `:expr` is **not reliably evaluated and can silently match nothing** (no error) — in particular the image helpers `DOM_FIRST_IMG`/`DOM_NTH_IMG`/`DOM_ALL_IMGS` ignore `:expr(...)` entirely. Keep UDF selector arguments to plain CSS (e.g. `'img'`) and move visual filters to the `FROM` clause (`DOM_LOAD_AND_SELECT(@url, 'img:expr(width > 250)')`) or to `htmlsnapshot get`/`inspect`; to read image URLs, use `DOM_FIRST_ATTR(DOM, 'img', 'src')`. See [power-dom.md](power-dom.md).
+> **Where `:expr(...)` is evaluated:** PowerCSS `:expr()` visual filters are evaluated in the `DOM_LOAD_AND_SELECT` selector (the `FROM` clause), in `DOM_FIRST_*`/`DOM_ALL_*` UDF selector arguments (including the image helpers `DOM_FIRST_IMG`/`DOM_NTH_IMG`/`DOM_ALL_IMGS`), and in `htmlsnapshot get` / `get all` / `inspect` selectors, which run over a fresh snapshot of the active page (the tab is captured first, so they filter the page as it is now). See [power-dom.md](power-dom.md).
 
 ### STR Namespace
 

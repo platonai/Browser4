@@ -38,8 +38,10 @@ import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.skeleton.PulsarSettings
+import ai.platon.browser4.common.model.Box
+import ai.platon.browser4.common.model.BoxContract
+import ai.platon.browser4.common.model.BoxSpace
 import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryIndexService
-import ai.platon.pulsar.skeleton.workflow.parse.html.ViBox
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonSetter
@@ -2583,8 +2585,14 @@ internal fun autoDiscoverRepeatingSelector(document: FeaturedDocument, topN: Int
             // are more likely to be primary content. Navigation tends to sit
             // in a narrow band at the very top; product cards span the
             // main content area below.
+            //
+            // The bands below (<100 / 100..800 / >2500) are **document**
+            // coordinates: on base 4.11.31+ `vi` is document-absolute, so the
+            // space is stated here instead of assumed. A schema-1 capture
+            // (body-relative) is off by the body offset (8–16 px on default
+            // pages), which only shifts band edges.
             val yPositions = members.mapNotNull { member ->
-                ViBox.parse(member.attr("vi"))?.y
+                Box.parse(member.attr("vi"), BoxSpace.DOCUMENT)?.y
             }.take(5)
             if (yPositions.isNotEmpty()) {
                 val avgY = yPositions.average()
@@ -2731,6 +2739,10 @@ internal fun inspectDocument(
         return pulsarObjectMapper().createObjectNode().apply {
             put("matchCount", 0)
             put("selector", effectiveSelector)
+            // Same coordinate contract as a capture payload: every sample/box
+            // derived from `vi` in this response is document-absolute.
+            put(BoxContract.FIELD_SCHEMA_VERSION, BoxContract.SCHEMA_VERSION)
+            put(BoxContract.FIELD_SPACE, BoxSpace.DOCUMENT.wireName)
             if (autoDiscovered) {
                 put("autoDiscovered", true)
                 put("originalSelector", selector)
@@ -2903,10 +2915,10 @@ internal fun inspectDocument(
             }
 
             // 4. PowerCSS :expr() selectors from visual features (vi attribute)
-            val viBox = ViBox.parse(desc.attr("vi"))
+            val viBox = Box.parse(desc.attr("vi"), BoxSpace.DOCUMENT)
             if (viBox != null) {
-                val viWidth = viBox.w.toInt()
-                val viHeight = viBox.h.toInt()
+                val viWidth = viBox.width.toInt()
+                val viHeight = viBox.height.toInt()
 
                 // Large elements are likely meaningful content blocks
                 if (viWidth >= 200) {
@@ -3088,6 +3100,10 @@ internal fun inspectDocument(
         put("matchCount", matchCount)
         put("selector", effectiveSelector)
         put("analyzed", matches.size)
+        // The samples' `box` values come from `vi` (document-absolute); label
+        // the space so a consumer never has to guess between document/viewport.
+        put(BoxContract.FIELD_SCHEMA_VERSION, BoxContract.SCHEMA_VERSION)
+        put(BoxContract.FIELD_SPACE, BoxSpace.DOCUMENT.wireName)
         if (autoDiscovered) {
             put("autoDiscovered", true)
             put("originalSelector", selector)
@@ -3350,15 +3366,16 @@ internal fun computeInteractiveWeights(
             "pointer-events:none" in style.replace(" ", "")
         ) continue
 
-        // ---- parse vi rect ----
-        val box = ViBox.parse(el.attr("vi")) ?: continue
-        if (box.w <= 0 || box.h <= 0) continue
+        // ---- parse vi rect (document-absolute on base 4.11.31+; width/height and
+        // same-space comparisons below are unaffected by the origin) ----
+        val box = Box.parse(el.attr("vi"), BoxSpace.DOCUMENT) ?: continue
+        if (box.width <= 0 || box.height <= 0) continue
 
-        val area = box.w * box.h
+        val area = box.width * box.height
         val tag = el.tagName().lowercase()
         val role = el.attr("role").takeIf { it.isNotBlank() }?.lowercase()
 
-        infos.add(BoxInfo(el, box.x, box.y, box.w, box.h, area, tag, role))
+        infos.add(BoxInfo(el, box.x, box.y, box.width, box.height, area, tag, role))
     }
 
     // ---- classify ----

@@ -60,7 +60,8 @@ Every node line has the same shape, so line-based readers and `grep` see a unifo
 
 - `<role>` is the accessibility role (`generic`, `button`, `link`, `textbox`, `heading`, `listitem`, …).
 - The accessible name is always a **double-quoted scalar**; a name containing `: ` or `"` no longer switches the whole line to a different YAML shape, and a `"` inside a name stays escaped as `\"`.
-- `[ref=…]` is the handle `click` / `fill` / `type` accept; `[box=…]` is the bounding box in CSS pixels (`--no-boxes` drops it).
+- `[ref=…]` is the handle `click` / `fill` / `type` accept; `[box=…]` is the bounding box (`--no-boxes` drops it).
+- **`[box=…]` space:** `x,y` are **document-absolute** CSS pixels (origin = the page's top-left corner, unaffected by scrolling), not the viewport coordinates `mousemove` consumes. They do not become stale when the page scrolls, but they do go stale when the layout changes — take a fresh snapshot. Add `--viewport-boxes` to print viewport coordinates instead (the engine subtracts the current `scrollY` at render time); a coordinate outside the viewport means the pointer leaves the page, not that it moved outside the browser window.
 - Property lines (`- /url: …`, `- /value: …`) and text children (`- text: …`) are indented under the node they belong to.
 
 ## Choosing a Mode

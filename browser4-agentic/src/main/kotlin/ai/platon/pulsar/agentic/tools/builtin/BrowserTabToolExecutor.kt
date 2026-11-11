@@ -2,6 +2,8 @@ package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.browser4.behavior.BrowserBehavior
 import ai.platon.browser4.behavior.humanization.DelaySource
+import ai.platon.browser4.common.model.Box
+import ai.platon.browser4.common.model.BoxSpace
 import ai.platon.pulsar.chrome.Browser4WebDriver
 import ai.platon.pulsar.chrome.FrameManager
 import ai.platon.pulsar.chrome.PulsarWebDriver
@@ -571,6 +573,10 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 ToolSpec.Arg("depth", "Int?", "-1", "Maximum tree depth; -1 for unlimited."),
                 ToolSpec.Arg("selector", "String?", "null", "Root the snapshot at this selector."),
                 ToolSpec.Arg("boxes", "Boolean?", "true", "Include element bounding boxes."),
+                ToolSpec.Arg(
+                    "viewportBoxes", "Boolean?", "false",
+                    "Render [box=...] in viewport coordinates (subtract scrollX and scrollY) instead of document-absolute ones."
+                ),
                 ToolSpec.Arg("limit", "Int?", "-1", "Maximum number of nodes; -1 for unlimited."),
             ),
             returnType = "String",
@@ -2008,7 +2014,10 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "ariaSnapshot" -> {
                 validateArgs(
                     args,
-                    allowed("viewports", "interactive", "urls", "compact", "depth", "selector", "boxes", "limit"),
+                    allowed(
+                        "viewports", "interactive", "urls", "compact", "depth", "selector",
+                        "boxes", "limit", "viewportBoxes"
+                    ),
                     emptySet(),
                     functionName
                 )
@@ -2020,6 +2029,8 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 val selector = paramString(args, "selector", functionName, required = false)
                 val boxes = paramBool(args, "boxes", functionName, required = false) ?: true
                 val maxNodes = paramInt(args, "limit", functionName, required = false) ?: -1
+                val viewportBoxes =
+                    paramBool(args, "viewportBoxes", functionName, required = false) ?: false
 
                 // Fail loudly when the requested CSS selector matches nothing —
                 // the downstream AX renderer would otherwise silently return the
@@ -2045,7 +2056,8 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     boxes = boxes,
                     maxNodes = maxNodes
                 )
-                driver.ariaSnapshot(options)
+                val snapshot = driver.ariaSnapshot(options)
+                if (viewportBoxes) boxesAsViewportCoordinates(snapshot, driver) else snapshot
             }
 
             "title" -> {
@@ -2334,6 +2346,28 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                         driver.mouseWheel(deltaX, deltaY)
                     }
                 }
+            }
+
+            "mouseMoveAt" -> {
+                // Coordinate-space-aware form of mouseMove: the driver converts
+                // `document` coordinates to viewport pixels right before the
+                // dispatch, so a box from a snapshot can be fed in directly
+                // without the caller subtracting a possibly stale scrollY.
+                // `steps`/`durationMillis` (both optional, 0 = driver default)
+                // give explicit control over the movement pace.
+                validateArgs(
+                    args,
+                    allowed("x", "y", "space", "steps", "durationMillis"),
+                    setOf("x", "y"),
+                    functionName
+                )
+                driver.mouseMoveAt(
+                    paramDouble(args, "x", functionName)!!,
+                    paramDouble(args, "y", functionName)!!,
+                    paramString(args, "space", functionName, required = false) ?: "viewport",
+                    paramInt(args, "steps", functionName, required = false, default = 0)!!,
+                    paramLong(args, "durationMillis", functionName, required = false, default = 0L)!!,
+                )
             }
 
             "mouseMove" -> {
@@ -2741,13 +2775,13 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 // MCP serializer can only render as {type, description}, so
                 // `get box` printed an opaque Java toString instead of the
                 // documented {x, y, width, height}. A miss stays null.
+                //
+                // The numbers are viewport CSS pixels (DOM.getBoxModel space) —
+                // the space `mousemove` consumes and the opposite of the
+                // document-absolute `vi` a snapshot reports. `boxSpace` states
+                // which one this is instead of leaving the caller to guess.
                 driver.boundingBox(paramString(args, "selector", functionName)!!)?.let { rect ->
-                    mapOf(
-                        "x" to rect.x,
-                        "y" to rect.y,
-                        "width" to rect.width,
-                        "height" to rect.height,
-                    )
+                    Box(BoxSpace.VIEWPORT, rect.x, rect.y, rect.width, rect.height).toWireMap()
                 }
             }
 
@@ -2986,5 +3020,51 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         lastActionAtMillis.set(System.currentTimeMillis())
         lastActionAffectsDom.set(functionName in DOM_AFFECTING_ACTIONS)
         return result
+    }
+}
+
+/**
+ * Rewrite a rendered snapshot's `[box=x,y,w,h]` values from document-absolute
+ * to viewport coordinates (`x - scrollX`, `y - scrollY`), which is the space
+ * `mousemove` and `click` consume.
+ *
+ * The renderer emits document-space bounds because that is what the CDP layout
+ * snapshot reports; converting here keeps the conversion engine-side and uses
+ * the scroll offset at render time instead of one a caller read earlier.
+ *
+ * Returns the snapshot unchanged when it carries no boxes or both offsets are
+ * zero. An unreadable offset fails the tool call rather than silently returning
+ * document coordinates under the requested viewport-coordinate contract.
+ */
+private suspend fun boxesAsViewportCoordinates(snapshot: String, driver: WebDriver): String {
+    if (!snapshot.contains("[box=")) {
+        return snapshot
+    }
+    val scroll = runCatching {
+        driver.evaluateValue(
+            "(() => { const s = document.scrollingElement || document.documentElement; " +
+                "return [window.scrollX || (s && s.scrollLeft) || 0, " +
+                "window.scrollY || (s && s.scrollTop) || 0]; })()"
+        )
+    }.getOrElse {
+        throw IllegalStateException("viewportBoxes could not read the current scroll offset", it)
+    }
+    val offsets = scroll as? List<*>
+        ?: throw IllegalStateException("viewportBoxes expected [scrollX, scrollY], got: $scroll")
+    val scrollX = (offsets.getOrNull(0) as? Number)?.toDouble()
+        ?: throw IllegalStateException("viewportBoxes received a non-numeric scrollX: $scroll")
+    val scrollY = (offsets.getOrNull(1) as? Number)?.toDouble()
+        ?: throw IllegalStateException("viewportBoxes received a non-numeric scrollY: $scroll")
+    if (scrollX == 0.0 && scrollY == 0.0) {
+        return snapshot
+    }
+
+    // Rendered boxes are integers ("x,y,w,h"); decimals are tolerated so a
+    // rounding change in the renderer cannot silently disable the conversion.
+    val boxPattern = Regex("""\[box=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)]""")
+    return boxPattern.replace(snapshot) { match ->
+        val viewportX = (match.groupValues[1].toDouble() - scrollX).toInt()
+        val viewportY = (match.groupValues[2].toDouble() - scrollY).toInt()
+        "[box=$viewportX,$viewportY,${match.groupValues[3]},${match.groupValues[4]}]"
     }
 }

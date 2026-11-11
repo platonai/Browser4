@@ -93,7 +93,14 @@ class AgenticCliRunner(
             return AgenticCliResult.unsupported("(empty)")
         }
 
-        val (commandName, args) = parseCommand(trimmed)
+        val (commandName, args) = try {
+            parseCommand(trimmed)
+        } catch (e: IllegalArgumentException) {
+            // A non-numeric coordinate/viewport argument is a usage error the
+            // caller must see; it used to be parsed as 0 and executed.
+            logger.warn("CLI command rejected: {}", e.message)
+            return AgenticCliResult(success = false, error = e.message)
+        }
         return execute(commandName, args)
     }
 
@@ -115,8 +122,16 @@ class AgenticCliRunner(
             return AgenticCliResult.ignored(commandName)
         }
 
-        // 3. Build the MCP tool parameters
-        val frontendArgs = resolver.resolveParams(args)
+        // 3. Build the MCP tool parameters. A pre-parsed argument map can carry
+        //    a non-numeric value (the agent built the map directly); that is the
+        //    same usage error `parseCommand` reports, and it must not reach the
+        //    tool as a default/zero coordinate.
+        val frontendArgs = try {
+            resolver.resolveParams(args)
+        } catch (e: IllegalArgumentException) {
+            logger.warn("CLI command '{}' rejected: {}", commandName, e.message)
+            return AgenticCliResult(success = false, error = e.message)
+        }
 
         // 4. Normalize the frontend tool call (composite tools, aliases)
         val normalized = normalizeFrontendToolCall(frontendToolName, frontendArgs)
@@ -363,8 +378,8 @@ class AgenticCliRunner(
             "mousemove" -> {
                 positional.forEachIndexed { index, value ->
                     when (index) {
-                        0 -> result.putIfAbsent("x", parseNumber(value))
-                        1 -> result.putIfAbsent("y", parseNumber(value))
+                        0 -> result.putIfAbsent("x", parseNumber("mousemove", "x", value))
+                        1 -> result.putIfAbsent("y", parseNumber("mousemove", "y", value))
                     }
                 }
                 return result
@@ -372,8 +387,8 @@ class AgenticCliRunner(
             "mousewheel" -> {
                 positional.forEachIndexed { index, value ->
                     when (index) {
-                        0 -> result.putIfAbsent("dx", parseNumber(value))
-                        1 -> result.putIfAbsent("dy", parseNumber(value))
+                        0 -> result.putIfAbsent("dx", parseNumber("mousewheel", "dx", value))
+                        1 -> result.putIfAbsent("dy", parseNumber("mousewheel", "dy", value))
                     }
                 }
                 return result
@@ -381,8 +396,8 @@ class AgenticCliRunner(
             "resize" -> {
                 positional.forEachIndexed { index, value ->
                     when (index) {
-                        0 -> result.putIfAbsent("w", parseNumber(value))
-                        1 -> result.putIfAbsent("h", parseNumber(value))
+                        0 -> result.putIfAbsent("w", parseNumber("resize", "w", value))
+                        1 -> result.putIfAbsent("h", parseNumber("resize", "h", value))
                     }
                 }
                 return result
@@ -401,13 +416,13 @@ class AgenticCliRunner(
             }
             "tab-select" -> {
                 if (positional.isNotEmpty()) {
-                    result.putIfAbsent("index", parseNumber(positional.first()))
+                    result.putIfAbsent("index", parseNumber(commandName, "index", positional.first()))
                 }
                 return result
             }
             "tab-close" -> {
                 if (positional.isNotEmpty()) {
-                    result.putIfAbsent("index", parseNumber(positional.first()))
+                    result.putIfAbsent("index", parseNumber(commandName, "index", positional.first()))
                 }
                 return result
             }
@@ -526,8 +541,29 @@ class AgenticCliRunner(
         }
     }
 
-    private fun parseNumber(raw: String): Number {
-        return raw.toIntOrNull() ?: raw.toDoubleOrNull() ?: 0
+    /**
+     * Parse a numeric positional argument, or fail loudly.
+     *
+     * This used to return `0` for anything unparseable, so `mousemove abc def`
+     * silently became a move to the viewport's top-left corner and `resize x`
+     * became `0×0` — both a violation of the project's "no silent failures"
+     * rule. The Rust CLI fixed the same class of bug for its own `mousemove`
+     * argument parsing (M4 in
+     * `docs-dev/copilot/20261109-mouse-pointer-issues-and-pitfalls.md`); both
+     * entry points now use the same wording, so an agent that echoes either
+     * message learns the same thing: the value is not a number.
+     *
+     * @param command The command being built (`mousemove`), for the message.
+     * @param name The argument name (`x`, `y`, `dx`, …), for the message.
+     * @param raw The user-supplied token.
+     * @throws IllegalArgumentException when [raw] is neither an integer nor a decimal.
+     */
+    private fun parseNumber(command: String, name: String, raw: String): Number {
+        return raw.toIntOrNull()
+            ?: raw.toDoubleOrNull()
+            ?: throw IllegalArgumentException(
+                "Invalid $name for $command: expected a number, got '$raw'."
+            )
     }
 
     // =========================================================================
@@ -708,8 +744,25 @@ class AgenticCliRunner(
                 params["doubleClick"] = true
                 params
             },
-            "mousemove" to FixedCommandResolver("browser_mouse_move_xy") { args ->
-                mapOf("x" to (args["x"] ?: 0), "y" to (args["y"] ?: 0))
+            "mousemove" to object : CommandResolver {
+                override fun resolveToolName(args: Map<String, Any?>): String {
+                    return if (listOf("space", "steps", "duration").any { args.containsKey(it) }) {
+                        "mouse_move_at"
+                    } else {
+                        "browser_mouse_move_xy"
+                    }
+                }
+
+                override fun resolveParams(args: Map<String, Any?>): Map<String, Any?> {
+                    val params = mutableMapOf<String, Any?>(
+                        "x" to (args["x"] ?: 0),
+                        "y" to (args["y"] ?: 0),
+                    )
+                    args["space"]?.let { params["space"] = it }
+                    args["steps"]?.let { params["steps"] = it }
+                    args["duration"]?.let { params["durationMillis"] = it }
+                    return params
+                }
             },
             "mousedown" to FixedCommandResolver("browser_mouse_down") { args ->
                 val params = mutableMapOf<String, Any?>()

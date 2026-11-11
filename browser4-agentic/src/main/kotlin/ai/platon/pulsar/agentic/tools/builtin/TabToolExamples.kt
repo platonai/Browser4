@@ -109,6 +109,16 @@ internal object TabToolExamples {
         "mouseMove" to listOf(
             ToolExample(title = "Move the pointer", args = mapOf("x" to "320", "y" to "180")),
         ),
+        "mouseMoveAt" to listOf(
+            ToolExample(
+                title = "Move to a document-space box from a snapshot",
+                args = mapOf("x" to "320", "y" to "2400", "space" to "document"),
+            ),
+            ToolExample(
+                title = "Flick the pointer over in three steps",
+                args = mapOf("x" to "10", "y" to "10", "steps" to "3", "durationMillis" to "60"),
+            ),
+        ),
         "mouseDown" to listOf(ToolExample(title = "Press and hold the left button", args = mapOf("button" to "left"))),
         "mouseUp" to listOf(ToolExample(title = "Release the left button", args = mapOf("button" to "left"))),
         "drag" to listOf(

@@ -1,5 +1,7 @@
 package ai.platon.pulsar.agent.tool
 
+import ai.platon.browser4.common.model.BoxContract
+import ai.platon.browser4.common.model.BoxSpace
 import ai.platon.pulsar.agentic.model.ToolExample
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
@@ -414,6 +416,13 @@ class HTMLSnapshotToolExecutor(
             val page = captureActivePage(managed, address)
             val document = parseSnapshotPage(managed, page, noCache = true)
 
+            // The capture itself must not scroll the page (base 4.11.31+), so this
+            // is the offset the boxes were annotated at. Best effort by design: a
+            // transport hiccup on this read must not fail a capture that worked.
+            val scrollTopAtCapture = runCatching {
+                (managed.driver.evaluateValue("window.scrollY") as? Number)?.toDouble()
+            }.getOrNull()
+
             htmlSnapshotMetadataJson(
                 document = document,
                 url = page.url,
@@ -421,6 +430,7 @@ class HTMLSnapshotToolExecutor(
                 sizeBytes = page.contentLength.toLong(),
                 capturedAt = page.prevFetchTime.toString(),
                 contentType = page.contentType,
+                scrollTopAtCapture = scrollTopAtCapture,
             )
         }
     }
@@ -554,12 +564,10 @@ class HTMLSnapshotToolExecutor(
      * Parse a page into a [FeaturedDocument] for a read, after dropping the Pulsar runtime's
      * text-analysis markers (`lz`/`tp`).
      *
-     * The runtime's visual-information pass writes those attributes onto the LIVE DOM, so a
-     * captured/serialized document carries them even though they are not the page's own markup:
-     * they would otherwise leak into every `get html` / `export` payload derived from a live
-     * capture (issue: 20261004-161445-html-snapshot-extraction).  The `vi` boxes and the
-     * `normalizedURI` link, by contrast, are wanted annotations and stay — see
-     * [stripRuntimeTextMarkers].
+     * The runtime now emits those attributes only into the serialized HTML (they never exist
+     * on the live DOM), but they are still runtime bookkeeping rather than the site's markup,
+     * so the html snapshot family strips them at parse time — the `vi` boxes and the
+     * `normalizedURI` link are wanted annotations and stay.
      */
     private fun parseSnapshotPage(
         managed: ManagedSession,
@@ -800,22 +808,6 @@ class HTMLSnapshotToolExecutor(
         // another page can never be answered with the tab's document.
         val processedSql = SQLTemplate(sql).createSQL(url)
         val response = scrapeService.executeQuery(ScrapeRequest(processedSql))
-
-        // DOM_FIRST_IMG (and the rest of the DOM_*_IMG family) evaluates its
-        // selector through an img-scanning path that does not parse PowerCSS
-        // :expr(...) pseudo-selectors — any :expr filter silently matches
-        // nothing (no error, no warning). DOM_FIRST_ATTR / DOM_SELECT_FIRST /
-        // FROM selectors do honor :expr. Log a warning so a silent no-match
-        // is not mistaken for a page without images. (Engine parity fix is
-        // tracked upstream and lands with the pulsar-ql dependency bump.)
-        if (hasDomFirstImgExpr(processedSql)) {
-            logger.warn(
-                "X-SQL query uses a DOM_*_IMG function with a PowerCSS :expr(...) selector, which " +
-                    "the engine does not evaluate (matches nothing, silently). Filter images with " +
-                    "DOM_FIRST_ATTR(DOM, sel, 'src') or DOM_SELECT_FIRST(DOM, sel) + DOM_ABS_SRC " +
-                    "instead.\nSQL: $processedSql"
-            )
-        }
 
         // H2 reports errors through the response body (statusCode 417) rather
         // than an exception.  H2 treats double quotes as identifier quotes, so
@@ -1107,16 +1099,6 @@ class HTMLSnapshotToolExecutor(
         internal fun shouldAppendDomFirstFloatCastHint(message: String, sql: String): Boolean =
             message.contains("Hexadecimal string contains non-hex character") &&
                 Regex("""DOM_FIRST_(FLOAT|INTEGER)\s*\(""", RegexOption.IGNORE_CASE).containsMatchIn(sql)
-
-        /**
-         * True when the SQL feeds a DOM_*_IMG function (DOM_FIRST_IMG /
-         * DOM_NTH_IMG / DOM_ALL_IMGS) with a PowerCSS :expr(...) pseudo-selector.
-         * The img-scanning selector path ignores :expr, so such a query matches
-         * nothing without an error.
-         */
-        internal fun hasDomFirstImgExpr(sql: String): Boolean =
-            Regex("""(?:DOM_FIRST_IMG|DOM_NTH_IMG|DOM_ALL_IMGS)\s*\([^)]*:expr\s*\(""", RegexOption.IGNORE_CASE)
-                .containsMatchIn(sql)
 
         private val STANDARD_HTML_ATTRIBUTES: Set<String> = setOf(
             "accesskey", "autocapitalize", "autofocus", "class", "contenteditable",
@@ -1504,18 +1486,18 @@ private fun readSnapshotAttribute(
 
 /**
  * Text-analysis marker attributes the Pulsar browser runtime
- * (`js/__pulsar_utils__.js` in the pulsar-browser dependency) writes onto
- * LIVE DOM elements while computing visual information:
+ * (`js/__pulsar_utils__.js` in the pulsar-browser dependency) emits into the
+ * serialized HTML:
  *
  * - `lz` — `"1"` marks a text-bearing element whose type was first seen on a
  *   non-initial pass (i.e. the text appeared after load — "lazy").
  * - `tp` — `"st"` (short text) or `"nm"` (number-like short text), the
- *   element's classified text type.
+ *   element's classified text type.  Runtime-internal: the serializer does not
+ *   emit it, so it normally appears only if a caller hand-writes it.
  *
- * Unlike `vi` (which the serializer emits without touching the DOM), these
- * are real attributes on the live page and therefore leak into serialized
- * HTML and every read derived from it. They are runtime bookkeeping, not the
- * site's markup, so the html snapshot family strips them at parse time.
+ * These are runtime bookkeeping, not the site's markup, so the html snapshot
+ * family strips them at parse time.  The `vi` boxes and the `normalizedURI`
+ * link are wanted annotations and stay.
  */
 internal val RUNTIME_TEXT_MARKER_ATTRIBUTES: Set<String> = setOf("lz", "tp")
 
@@ -1541,11 +1523,26 @@ internal fun stripRuntimeTextMarkers(document: org.jsoup.nodes.Document) {
  * work on the same snapshot but return their own results — see the contract at the bottom of this
  * file).
  *
+ * ## Coordinate contract
+ *
+ * `interactiveElements[].box` is the runtime's `vi` value: a document-absolute box (origin = the
+ * document's top-left corner, unaffected by scrolling) on base 4.11.31+. The payload states this
+ * instead of leaving consumers to guess:
+ *
+ * - `boxSpace: "document"` — the space of every `box` in this payload;
+ * - `schemaVersion: 2` — the version that introduced the field. A payload **without** `boxSpace`
+ *   is schema 1, whose `vi` boxes were measured relative to the body border box ("body" space);
+ *   old data must be interpreted that way, never as the current document space.
+ * - `scrollTopAtCapture` — the scroll offset at capture time (when readable). Not needed to read a
+ *   document-space box, but it is what converts one to the viewport coordinates `mousemove`
+ *   expects, and it is the only record of the scroll position the capture saw.
+ *
  * @param url The document URL: the normalized url, which is the store identity.
  * @param href The browser-facing address of the document (the raw url, query and fragment included).
  * @param sizeBytes Serialized content length.
  * @param capturedAt Capture timestamp (ISO-8601).
  * @param contentType The document content type.
+ * @param scrollTopAtCapture The window's `scrollY` at capture time, or null when it could not be read.
  */
 internal fun htmlSnapshotMetadataJson(
     document: FeaturedDocument,
@@ -1554,6 +1551,7 @@ internal fun htmlSnapshotMetadataJson(
     sizeBytes: Long,
     capturedAt: String,
     contentType: String,
+    scrollTopAtCapture: Double? = null,
 ): String {
     val imageCount = document.select("img").size
     val linkCount = document.select("a").size
@@ -1593,6 +1591,11 @@ internal fun htmlSnapshotMetadataJson(
         put("title", document.title)
         put("imageCount", imageCount)
         put("linkCount", linkCount)
+        // Coordinate contract (see the KDoc): label the space of every `box`
+        // below, and keep the schema version so old payloads can be told apart.
+        put(BoxContract.FIELD_SCHEMA_VERSION, BoxContract.SCHEMA_VERSION)
+        put(BoxContract.FIELD_SPACE, BoxSpace.DOCUMENT.wireName)
+        scrollTopAtCapture?.let { put(BoxContract.FIELD_SCROLL_TOP, it) }
         putArray("interactiveElements").addAll(interactiveElements)
         if (linkGroups.isNotEmpty()) {
             set<ArrayNode>("linkGroups", linkGroupsToJson(linkGroups))

@@ -218,6 +218,29 @@ fn insert_arg(result: &mut HashMap<String, Value>, key: String, value: Value) {
     }
 }
 
+/// Resolve a `--flag` token that is really a documented short flag written with
+/// two dashes (`--bg` for `-bg`).
+///
+/// The reference docs shipped `browser4-cli crawl resume <task-id> --bg` for
+/// `--background`. A two-dash key never went through short-option resolution:
+/// it landed in the argument map as the key `bg`, which no command reads, so the
+/// run silently stayed in the foreground. Multi-character short names are
+/// unambiguous, so the double-dash spelling now binds the same option.
+///
+/// One-letter shorts are deliberately NOT rewritten (`--v` keeps the key `v`):
+/// turning every `--<letter>` typo into a bound flag would make a mistyped flag
+/// silently *change* behaviour instead of being ignored, and the two-dash
+/// spelling of a one-letter flag was never documented.
+fn double_dash_short_alias<'a>(
+    key: &'a str,
+    short_to_long: Option<&'a HashMap<String, String>>,
+) -> Option<&'a str> {
+    if key.chars().count() < 2 {
+        return None;
+    }
+    short_to_long?.get(key).map(String::as_str)
+}
+
 /// Parse raw CLI arguments into a map suitable for command dispatch.
 ///
 /// - Positional arguments go into `_` as a JSON array.
@@ -226,6 +249,9 @@ fn insert_arg(result: &mut HashMap<String, Value>, key: String, value: Value) {
 /// - `--flag` (followed by another `--` arg or end-of-args) → key: true (boolean)
 /// - Short options (`-x` / `-x=value` / `-x value`) are resolved through
 ///   `short_to_long` when provided.
+/// - A multi-character short whose name is written with two dashes (`--bg`,
+///   `--ol`) resolves through `short_to_long` too; see
+///   [`double_dash_short_alias`].
 /// - `bool_opts` contains the long names of boolean options; when a boolean
 ///   option (short or long) is encountered, the next argument is NOT consumed
 ///   as its value — it stays positional.
@@ -259,7 +285,10 @@ pub fn parse_raw_args(
             }
             if let Some(eq) = rest.find('=') {
                 // --key=value
-                let key = rest[..eq].to_string();
+                let raw_key = &rest[..eq];
+                let key = double_dash_short_alias(raw_key, short_to_long)
+                    .unwrap_or(raw_key)
+                    .to_string();
                 let val = &rest[eq + 1..];
                 let value = match val {
                     "true" => Value::Bool(true),
@@ -268,26 +297,28 @@ pub fn parse_raw_args(
                 };
                 insert_arg(&mut result, key, value);
             } else {
+                // A two-dash spelling of a multi-character short (`--bg`) is the
+                // same option as `-bg`; see `double_dash_short_alias`.
+                let key = double_dash_short_alias(rest, short_to_long).unwrap_or(rest);
                 // Check if this is a known boolean option — if so, don't consume
                 // the next argument as a value.
-                let is_bool = bool_opts.map_or(false, |b| b.contains(rest));
+                let is_bool = bool_opts.map_or(false, |b| b.contains(key));
                 // Look ahead: if the next argument does NOT start with `--`,
                 // treat it as this option's value rather than a positional.
                 // The long form already binds `--args "-nMaxRetry 5"` (a
                 // single-dash token); the short form needed the
                 // `allow_hyphen_values` exception applied below.
                 if !is_bool && i + 1 < raw_args.len() && !raw_args[i + 1].starts_with("--") {
-                    let key = rest.to_string();
                     let val = &raw_args[i + 1];
                     let value = match val.as_str() {
                         "true" => Value::Bool(true),
                         "false" => Value::Bool(false),
                         other => Value::String(other.to_string()),
                     };
-                    insert_arg(&mut result, key, value);
+                    insert_arg(&mut result, key.to_string(), value);
                     i += 1; // consume the value
                 } else {
-                    insert_arg(&mut result, rest.to_string(), Value::Bool(true));
+                    insert_arg(&mut result, key.to_string(), Value::Bool(true));
                 }
             }
         } else if let Some(rest) = arg.strip_prefix('-') {
@@ -1510,6 +1541,74 @@ mod tests {
         let commands = crate::commands::commands_map();
         let crawl = commands.get("crawl").expect("crawl command");
         build_short_option_map(crawl.options)
+    }
+
+    /// The reference docs shipped `crawl resume <task-id> --bg`; a two-dash key
+    /// skipped short-option resolution, landed as the key `bg` (which nothing
+    /// reads), and the run silently stayed in the foreground.
+    #[test]
+    fn test_parse_raw_args_double_dash_multi_character_short_binds_the_long_option() {
+        let (short_to_long, bool_opts) = crawl_short_option_maps();
+        let raw = vec!["--bg".to_string()];
+        let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
+        assert_eq!(map.get("background"), Some(&json!(true)));
+        assert!(
+            map.get("bg").is_none(),
+            "the short spelling must not survive as its own key: {map:?}"
+        );
+    }
+
+    /// The rewritten flag is a boolean, so it must not swallow the task id that
+    /// follows it (`crawl resume --bg <task-id>` keeps the id positional).
+    #[test]
+    fn test_parse_raw_args_double_dash_boolean_short_does_not_consume_the_next_arg() {
+        let commands = crate::commands::commands_map();
+        let resume = commands.get("crawl-resume").expect("crawl-resume command");
+        let (short_to_long, bool_opts) = build_short_option_map(resume.options);
+        let raw = vec!["--bg".to_string(), "crawl-job-1".to_string()];
+        let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
+        assert_eq!(map.get("background"), Some(&json!(true)));
+        assert_eq!(map["_"], json!(["crawl-job-1"]));
+    }
+
+    /// A value-taking multi-character short accepts both spellings and both
+    /// separators (`--tl=5`, `--tl 5`).
+    #[test]
+    fn test_parse_raw_args_double_dash_multi_character_short_binds_its_value() {
+        let (short_to_long, bool_opts) = crawl_short_option_maps();
+        for raw in [
+            vec!["--tl".to_string(), "7".to_string()],
+            vec!["--tl=7".to_string()],
+        ] {
+            let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
+            assert_eq!(
+                map.get("top-links"),
+                Some(&json!("7")),
+                "raw {raw:?} → {map:?}"
+            );
+        }
+    }
+
+    /// One-letter shorts keep their own key: rewriting every `--<letter>` typo
+    /// would bind a flag the user never named, and that spelling was never
+    /// documented.
+    #[test]
+    fn test_parse_raw_args_double_dash_single_character_short_is_not_rewritten() {
+        let (short_to_long, bool_opts) = crawl_short_option_maps();
+        let raw = vec!["--d".to_string(), "2".to_string()];
+        let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
+        assert_eq!(map.get("depth"), None);
+        assert_eq!(map.get("d"), Some(&json!("2")));
+    }
+
+    /// Without a command context (`short_to_long` is `None`) nothing is
+    /// rewritten: the key stays exactly what the user typed.
+    #[test]
+    fn test_parse_raw_args_double_dash_short_without_a_map_is_untouched() {
+        let raw = vec!["--bg".to_string()];
+        let map = parse_raw_args(&raw, None, None);
+        assert_eq!(map.get("bg"), Some(&json!(true)));
+        assert_eq!(map.get("background"), None);
     }
 
     #[test]

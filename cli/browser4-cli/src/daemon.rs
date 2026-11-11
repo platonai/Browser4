@@ -252,6 +252,8 @@ const CLI_TEMP_DIR_COMPONENTS: [&str; 2] = ["tmp", "cli"];
 const RUNTIME_VERSIONS_DIR_NAME: &str = "runtime";
 /// Symlink (or tag file on Windows) that points to the currently active version.
 const CURRENT_TAG_FILE_NAME: &str = "current.tag";
+/// How many versioned runtime installs to keep on disk after an update.
+const RETAINED_RUNTIME_VERSIONS: usize = 3;
 /// Name of the directory inside each versioned install that holds dependency JARs.
 const BROWSER4_LIB_DIR_NAME: &str = "lib";
 /// Name of the directory inside each versioned install that holds the bundled JRE.
@@ -2497,6 +2499,84 @@ pub(crate) fn write_current_tag(tag: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether a directory name looks like a runtime version tag (`v4.16.3`,
+/// `4.16.3`, `v4.16.3-rc.1`).  Guards the pruner against deleting unrelated
+/// entries such as `current`, `current.tag` or `.staging-*` directories.
+fn looks_like_version_tag(name: &str) -> bool {
+    let trimmed = name.trim_start_matches('v');
+    let mut parts = trimmed.split('.');
+    let major = parts.next().unwrap_or_default();
+    let minor = parts.next().unwrap_or_default();
+    !major.is_empty()
+        && !minor.is_empty()
+        && major.bytes().all(|b| b.is_ascii_digit())
+        && minor.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Delete superseded versioned runtime installs so repeated updates do not
+/// grow the user's disk usage without bound.
+///
+/// Keeps the newest `retain` versions plus the active `current.tag` and any
+/// pending tag (a pre-downloaded runtime waiting for activation), so updating
+/// can never delete the version that is about to be used.
+///
+/// Best-effort by design: on Windows a running backend keeps its JVM files
+/// open, so deleting that version fails and is silently retried on a later
+/// launch (see the call in `start_server`); a failed delete never fails an
+/// install.
+pub(crate) fn prune_old_runtime_versions(retain: usize) {
+    let versions_dir = runtime_versions_dir();
+    let Ok(entries) = fs::read_dir(&versions_dir) else {
+        return;
+    };
+
+    let active = fs::read_to_string(current_tag_file_path())
+        .ok()
+        .map(|raw| raw.trim().to_string())
+        .filter(|tag| !tag.is_empty());
+    let pending = crate::update_check::load_state().pending_tag;
+
+    let mut tags: Vec<String> = entries
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+        .filter(|name| looks_like_version_tag(name))
+        .collect();
+    // Newest first, so the first `retain` entries form the keep set.
+    tags.sort_by(|a, b| compare_semver_tags(b, a));
+
+    let mut keep: Vec<&str> = tags.iter().take(retain).map(String::as_str).collect();
+    if let Some(tag) = active.as_deref() {
+        keep.push(tag);
+    }
+    if let Some(tag) = pending.as_deref() {
+        keep.push(tag);
+    }
+
+    for tag in &tags {
+        if keep.contains(&tag.as_str()) {
+            continue;
+        }
+        if remove_path_if_exists(&versioned_install_dir(tag)).is_ok() {
+            eprintln!("Removed old Browser4 runtime {tag} to free disk space.");
+        }
+    }
+
+    // Cached archives for pruned versions are dead weight too: the runtime is
+    // already unpacked, so keeping the zip of a deleted version buys nothing.
+    if let Ok(entries) = fs::read_dir(browser4_download_cache_dir()) {
+        for entry in entries.flatten() {
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            if !looks_like_version_tag(&name) || keep.contains(&name.as_str()) {
+                continue;
+            }
+            let _ = remove_path_if_exists(&entry.path());
+        }
+    }
+}
+
 /// Resolve the currently active runtime install directory.
 ///
 /// Reads `current.tag`, validates the versioned directory exists, and returns
@@ -3893,6 +3973,10 @@ fn commit_installed_browser4_runtime(
     // to a complete (though not yet current) version rather than nothing.
     write_current_tag(&metadata.tag)?;
 
+    // Drop superseded installs now that the new version is active; anything
+    // still locked by a running backend is retried on the next launch.
+    prune_old_runtime_versions(RETAINED_RUNTIME_VERSIONS);
+
     Ok(materialize_installed_runtime(metadata, false))
 }
 
@@ -4309,6 +4393,29 @@ impl Drop for RuntimeInstallLock {
     }
 }
 
+/// Reuse a fully installed runtime for `tag` instead of downloading it again.
+///
+/// Marks `tag` as current on the way.  Called twice by [`install_browser4_runtime`]:
+/// before the install lock (the fast path) and again after acquiring it — a
+/// concurrent CLI may have installed the very same version while this process
+/// was queued, and without the second check two racing auto-updaters each
+/// re-download the ~200 MB bundle.
+fn reuse_installed_runtime(tag: Option<&str>, force: bool) -> Option<InstalledBrowser4Runtime> {
+    if force {
+        return None;
+    }
+    let tag = tag?;
+    let versioned_dir = versioned_install_dir(tag);
+    if !install_dir_contains_runtime(&versioned_dir) {
+        return None;
+    }
+    let metadata = read_installed_browser4_runtime_metadata_for(&versioned_dir)?;
+    if read_current_tag().as_deref() != Some(tag) {
+        let _ = write_current_tag(tag);
+    }
+    Some(materialize_installed_runtime(metadata, true))
+}
+
 pub async fn install_browser4_runtime(
     tag: Option<&str>,
     force: bool,
@@ -4351,21 +4458,8 @@ pub async fn install_browser4_runtime(
         }
     }
 
-    if !force {
-        if let Some(requested_tag) = requested_tag.as_deref() {
-            let versioned_dir = versioned_install_dir(requested_tag);
-            if install_dir_contains_runtime(&versioned_dir) {
-                if let Some(existing_metadata) =
-                    read_installed_browser4_runtime_metadata_for(&versioned_dir)
-                {
-                    // Ensure this version is also marked as current.
-                    if read_current_tag().as_deref() != Some(requested_tag) {
-                        let _ = write_current_tag(requested_tag);
-                    }
-                    return Ok(materialize_installed_runtime(existing_metadata, true));
-                }
-            }
-        }
+    if let Some(runtime) = reuse_installed_runtime(requested_tag.as_deref(), force) {
+        return Ok(runtime);
     }
 
     let asset_name = platform.asset_name();
@@ -4373,6 +4467,13 @@ pub async fn install_browser4_runtime(
     // from corrupting the versioned install directory.
     let _install_lock =
         RuntimeInstallLock::acquire(Duration::from_secs(INSTALL_LOCK_TIMEOUT_SECS))?;
+
+    // Re-check under the lock: the fast path above ran before this process
+    // queued behind another install, which may have completed this exact
+    // version in the meantime.
+    if let Some(runtime) = reuse_installed_runtime(requested_tag.as_deref(), force) {
+        return Ok(runtime);
+    }
 
     // Check available disk space before downloading.  We need at least
     // ~2 GB free (200 MB download + 200 MB extraction + headroom).
@@ -9795,6 +9896,9 @@ async fn start_server(
         eprint!("\r\x1b[K");
     }
     eprintln!("Server ready in {:.1}s", elapsed);
+    // The backend that used an older runtime is gone now, so versions that
+    // were locked during the install can finally be reclaimed.
+    prune_old_runtime_versions(RETAINED_RUNTIME_VERSIONS);
     Ok(())
 }
 
@@ -10841,14 +10945,149 @@ mod tests {
         );
     }
 
-    /// Hostile hosts (AI-agent shell tools, some CI wrappers) reap the whole
-    /// descendant tree by walking `ParentProcessId` when the command ends —
-    /// no job object involved, so `IsProcessInJob` reports 0 and the old
-    /// breakaway escape never fired. The backend must therefore be created by
+    /// Sets `BROWSER4_WINDOWS_BACKEND_SPAWN` for one test and restores the
+    /// previous value on drop (including panic unwinding), so the
+    /// process-global override cannot leak into a later test.  Hold
+    /// `lock_env_mutex` for as long as the guard lives.
+    #[cfg(windows)]
+    struct BackendSpawnOverride {
+        previous: Option<String>,
+    }
+
+    #[cfg(windows)]
+    impl BackendSpawnOverride {
+        /// Force the host class: `"wmi"` = tree-killing host, `"spawn"` = normal.
+        fn set(value: &str) -> Self {
+            let previous = env::var("BROWSER4_WINDOWS_BACKEND_SPAWN").ok();
+            unsafe { env::set_var("BROWSER4_WINDOWS_BACKEND_SPAWN", value) };
+            Self { previous }
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for BackendSpawnOverride {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => unsafe { env::set_var("BROWSER4_WINDOWS_BACKEND_SPAWN", value) },
+                None => unsafe { env::remove_var("BROWSER4_WINDOWS_BACKEND_SPAWN") },
+            }
+        }
+    }
+
+    /// Snapshots every environment input of
+    /// `windows_host_tree_kills_shell_descendants` and restores it on drop.
+    /// Hold `lock_env_mutex` for as long as it lives.
+    #[cfg(windows)]
+    struct SpawnDetectionEnv {
+        override_value: Option<String>,
+        toolhost_ipc: Option<std::ffi::OsString>,
+        toolhost_runtime: Option<std::ffi::OsString>,
+    }
+
+    #[cfg(windows)]
+    impl SpawnDetectionEnv {
+        fn capture() -> Self {
+            Self {
+                override_value: env::var("BROWSER4_WINDOWS_BACKEND_SPAWN").ok(),
+                toolhost_ipc: env::var_os("TOOLHOST_IPC_NAME"),
+                toolhost_runtime: env::var_os("TOOLHOST_RUNTIME_MODE"),
+            }
+        }
+
+        /// Start the test from a normal host: no override, no markers.
+        fn clear(&self) {
+            for key in [
+                "BROWSER4_WINDOWS_BACKEND_SPAWN",
+                "TOOLHOST_IPC_NAME",
+                "TOOLHOST_RUNTIME_MODE",
+            ] {
+                unsafe { env::remove_var(key) };
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for SpawnDetectionEnv {
+        fn drop(&mut self) {
+            match &self.override_value {
+                Some(value) => unsafe { env::set_var("BROWSER4_WINDOWS_BACKEND_SPAWN", value) },
+                None => unsafe { env::remove_var("BROWSER4_WINDOWS_BACKEND_SPAWN") },
+            }
+            match &self.toolhost_ipc {
+                Some(value) => unsafe { env::set_var("TOOLHOST_IPC_NAME", value) },
+                None => unsafe { env::remove_var("TOOLHOST_IPC_NAME") },
+            }
+            match &self.toolhost_runtime {
+                Some(value) => unsafe { env::set_var("TOOLHOST_RUNTIME_MODE", value) },
+                None => unsafe { env::remove_var("TOOLHOST_RUNTIME_MODE") },
+            }
+        }
+    }
+
+    /// The WMI decision gate: `BROWSER4_WINDOWS_BACKEND_SPAWN` wins over the
+    /// Trae toolhost markers, and a host with neither is a normal one.
+    ///
+    /// A GitHub runner is that normal host, which is why the process-level test
+    /// below pins the host class instead of trusting the ambient environment:
+    /// plain hosts keep the `CreateProcess` path (`LaunchedBackend::Child`) and
+    /// only tree-killing shells get the WMI provider.
+    #[cfg(windows)]
+    #[test]
+    fn windows_backend_spawn_override_selects_the_host_class() {
+        let _env_guard = lock_env_mutex();
+        let saved = SpawnDetectionEnv::capture();
+        saved.clear();
+
+        assert!(
+            !windows_host_tree_kills_shell_descendants(),
+            "a host with no override and no toolhost marker must keep the plain spawn path"
+        );
+
+        // The documented override forces a class whatever the markers say; the
+        // value is trimmed and matched case-insensitively.
+        let forced = BackendSpawnOverride::set(" WMI ");
+        assert!(windows_host_tree_kills_shell_descendants());
+        drop(forced);
+
+        // A Trae toolhost shell is detected from its markers...
+        unsafe { env::set_var("TOOLHOST_IPC_NAME", "toolhost-pipe") };
+        assert!(
+            windows_host_tree_kills_shell_descendants(),
+            "TOOLHOST_IPC_NAME marks a host that reaps its descendants"
+        );
+        // ...while `spawn` still beats them, for a user whose host does not.
+        let plain = BackendSpawnOverride::set("spawn");
+        assert!(
+            !windows_host_tree_kills_shell_descendants(),
+            "BROWSER4_WINDOWS_BACKEND_SPAWN=spawn must beat the toolhost marker"
+        );
+        drop(plain);
+
+        // An unrecognised override value is not a decision: the markers decide.
+        unsafe { env::remove_var("TOOLHOST_IPC_NAME") };
+        let unknown = BackendSpawnOverride::set("maybe");
+        assert!(!windows_host_tree_kills_shell_descendants());
+        unsafe { env::set_var("TOOLHOST_RUNTIME_MODE", "local") };
+        assert!(
+            windows_host_tree_kills_shell_descendants(),
+            "TOOLHOST_RUNTIME_MODE marks a host that reaps its descendants"
+        );
+        drop(unknown);
+    }
+
+    /// Hostile hosts (AI-agent shell tools) reap the whole descendant tree by
+    /// walking `ParentProcessId` when the command ends — no job object involved,
+    /// so `IsProcessInJob` reports 0 and the old breakaway escape never fired.
+    /// `spawn_backend_command` therefore creates the backend through
     /// `Win32_Process.Create` (parent = WmiPrvSE.exe, outside the caller's
-    /// tree) through `spawn_backend_command` itself — if anyone reverts it to
-    /// a plain `Command::spawn`, this test fails because the launch comes back
-    /// as [`LaunchedBackend::Child`].
+    /// tree) for exactly those hosts and takes the plain `Command::spawn` path
+    /// everywhere else — see `windows_host_tree_kills_shell_descendants`.
+    ///
+    /// The host class is pinned with the documented override rather than read
+    /// from the ambient environment: a GitHub Windows runner carries no toolhost
+    /// marker, so the gate correctly picks the plain path there — which is why
+    /// asserting an unconditional `Detached` used to fail on CI while the
+    /// production behaviour was right.
     ///
     /// Real processes, no Java needed: a `ping` plays the backend, another
     /// `ping` plays a plainly-spawned tree member, and `taskkill /T /F` plays
@@ -10857,11 +11096,14 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn wmi_spawned_backend_survives_a_hostile_process_tree_kill() {
+        let _env_guard = lock_env_mutex();
+        let _spawn_override = BackendSpawnOverride::set("wmi");
         let temp = tempfile::TempDir::new().expect("temp dir");
         let startup_log_path = temp.path().join("startup.log");
         std::fs::write(&startup_log_path, "").expect("startup log");
 
-        // 1. The production entry point must take the WMI path on Windows.
+        // 1. The production entry point must take the WMI path for a
+        //    tree-killing host.
         let mut backend_command = Command::new("ping");
         backend_command.args(["-n", "30", "127.0.0.1"]);
         let launched = spawn_backend_command(
@@ -11360,18 +11602,41 @@ mod tests {
     fn test_expected_runtime_tag_prefers_local_bundle_in_checkout() {
         // Mirrors expected_runtime_tag(): inside a checkout with a bundle
         // module the expected tag is "local", otherwise the installed tag.
-        if std::env::var("BROWSER4_CLI_FORCE_REMOTE_BUNDLE").as_deref() == Ok("1") {
-            assert_eq!(expected_runtime_tag(), read_current_tag());
-            return;
+        //
+        // `find_browser4_root()` reads the process-wide root-search env first and
+        // the process-wide CWD second, and sibling tests move both: a temp root
+        // without a bundle module (a `create_browser4_root` fixture) can be the
+        // answer for the first read while the real checkout answers the second,
+        // which failed this test with `local` != `v4.x.y` for no product reason.
+        // Pin the search to this crate's directory — inside the checkout — while
+        // holding the env lock, and restore the previous value before asserting
+        // so an early return cannot leak the pin into another test.
+        let _env_guard = lock_env_mutex();
+        let prev_search_start = env::var(ROOT_SEARCH_START_DIR_ENV).ok();
+        unsafe {
+            env::set_var(ROOT_SEARCH_START_DIR_ENV, env!("CARGO_MANIFEST_DIR"));
         }
-        let root = find_browser4_root();
-        if let Some(root) = &root {
-            if root.join("browser4-apps").join("browser4-bundle").is_dir() {
-                assert_eq!(expected_runtime_tag().as_deref(), Some("local"));
-                return;
+
+        let has_bundle_module = find_browser4_root().is_some_and(|root| {
+            root.join("browser4-apps").join("browser4-bundle").is_dir()
+        });
+        let expected = expected_runtime_tag();
+        let installed = read_current_tag();
+
+        unsafe {
+            match prev_search_start {
+                Some(value) => env::set_var(ROOT_SEARCH_START_DIR_ENV, value),
+                None => env::remove_var(ROOT_SEARCH_START_DIR_ENV),
             }
         }
-        assert_eq!(expected_runtime_tag(), read_current_tag());
+
+        if std::env::var("BROWSER4_CLI_FORCE_REMOTE_BUNDLE").as_deref() == Ok("1") {
+            assert_eq!(expected, installed);
+        } else if has_bundle_module {
+            assert_eq!(expected.as_deref(), Some("local"));
+        } else {
+            assert_eq!(expected, installed);
+        }
     }
 
     #[test]
@@ -13759,6 +14024,71 @@ mod tests {
         // may add \\?\ prefix on Windows — compare file names instead).
         assert!(resolved.ends_with(Path::new("runtime").join("v4.10.0")));
         assert!(resolved.join("lib").join("browser4.jar").exists());
+    }
+
+    #[test]
+    fn test_prune_old_runtime_versions_keeps_newest_three_and_active() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let _env = TestEnvGuard::lock(&tmp.path());
+
+        let versions = runtime_versions_dir();
+        create_dir_all(&versions).unwrap();
+        for tag in ["v4.10.0", "v4.11.0", "v4.12.0", "v4.13.0", "v4.14.0"] {
+            create_dir_all(versions.join(tag)).unwrap();
+        }
+        // Unrelated entries the pruner must never touch.
+        create_dir_all(versions.join(".staging-v4.15.0-123")).unwrap();
+        create_dir_all(versions.join("not-a-version")).unwrap();
+        write(current_tag_file_path(), "v4.10.0\n").unwrap();
+        // Download-cache entries for the same versions.
+        let cache = browser4_download_cache_dir();
+        for tag in ["v4.10.0", "v4.11.0", "v4.14.0"] {
+            create_dir_all(cache.join(tag)).unwrap();
+        }
+
+        prune_old_runtime_versions(3);
+
+        // The newest three survive ...
+        assert!(versions.join("v4.14.0").is_dir());
+        assert!(versions.join("v4.13.0").is_dir());
+        assert!(versions.join("v4.12.0").is_dir());
+        // ... plus the active tag, even though it is older than the cut-off.
+        assert!(versions.join("v4.10.0").is_dir());
+        // Everything older than the cut-off is gone.
+        assert!(!versions.join("v4.11.0").exists());
+        // Non-version entries are left alone.
+        assert!(versions.join(".staging-v4.15.0-123").is_dir());
+        assert!(versions.join("not-a-version").is_dir());
+        // Cached archives follow the same keep set.
+        assert!(cache.join("v4.14.0").is_dir());
+        assert!(cache.join("v4.10.0").is_dir(), "active version's cache stays");
+        assert!(!cache.join("v4.11.0").exists());
+    }
+
+    #[test]
+    fn test_prune_old_runtime_versions_keeps_pending_tag() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let _env = TestEnvGuard::lock(&tmp.path());
+
+        let versions = runtime_versions_dir();
+        create_dir_all(&versions).unwrap();
+        for tag in ["v4.10.0", "v4.11.0", "v4.12.0", "v4.13.0", "v4.14.0"] {
+            create_dir_all(versions.join(tag)).unwrap();
+        }
+        write(current_tag_file_path(), "v4.14.0\n").unwrap();
+        // A pre-downloaded runtime waiting for activation must never be pruned.
+        let mut state = crate::update_check::load_state();
+        state.pending_tag = Some("v4.10.0".to_string());
+        crate::update_check::save_state(&state);
+
+        prune_old_runtime_versions(3);
+
+        assert!(versions.join("v4.10.0").is_dir(), "pending tag must survive");
+        assert!(versions.join("v4.14.0").is_dir());
+        assert!(versions.join("v4.12.0").is_dir(), "newest three stay");
+        assert!(!versions.join("v4.11.0").exists());
     }
 
     #[test]

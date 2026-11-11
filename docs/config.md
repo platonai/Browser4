@@ -645,6 +645,34 @@ docker run -d -p 18182:18182 `
   BROWSER4_SERVER_OPTS="-Dbrowser4.agent.access=read-build" browser4-cli open
   ```
 
+* **`browser4.agent.readPaths`** *(JVM system property; default: the Browser4 data root + the
+  source checkout)*
+  Folders the coding tools may **read** although they are outside the task workspace. The built-in
+  roots already cover Browser4's own folders, which is what makes "read the previous task's log" or
+  "inspect the runtime temp files" work at all:
+
+  - the data root — `app.data.dir` when set, else `~/.browser4` (`logs/`, `data/`, `memory/`, the
+    per-task `agent/…/workspace.<id>` trees and Browser4's own `tmp/`);
+  - the source checkout the backend was started from, when there is one (a packaged runtime has
+    none; a task workspace mirrors the checkout, but the real tree also has `.git` and untracked
+    fixtures).
+
+  Add more folders with a separator-separated list (`;` on Windows, the platform path separator
+  elsewhere; `~` is expanded, blank entries are ignored):
+
+  ```bash
+  BROWSER4_SERVER_OPTS="-Dbrowser4.agent.readPaths=D:/corpus;%TEMP%" browser4-cli open
+  ```
+
+  The roots are **read-only**: `write`/`append`/`replace`/`delete`/`copy`/`move` stay confined to
+  the workspace and its mirrored module roots, and a write into a readable root is refused (the
+  audit counts it as `READ_ONLY`; the model gets `PERMISSION_DENIED | code=PATH_DENIED` with the
+  hint). Use `browser4.agent.allowExternalAccess=true` for a deliberate, audited write escape
+  hatch. Reading is independent of the preset — `--access read` narrows workspace *power*, not the
+  readable roots — and `coding.permissions` prints the roots in effect. The OS credential stores
+  (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) stay refused even when a readable root
+  contains them.
+
 * **`browser4.agent.workspace`** *(JVM system property; default: auto-detected)*
   Repository root the coding tools treat as the workspace. When unset, the backend walks up from
   its working directory looking for the `ROOT.md` + `pom.xml` pair; if that fails it uses the
@@ -695,6 +723,7 @@ All are JVM system properties (set with `BROWSER4_SERVER_OPTS` or `-D…` when y
 | `browser4.agent.sandbox` | Windows fresh install `windows-acl`; otherwise `off` | OS enforcement for `coding.shell`/`coding.runCode`. Unavailable backend, unknown id or unimplemented id → task fails (`SandboxUnavailableException`); never falls back. A denial becomes `code=SANDBOX_DENIED`. |
 | `browser4.agent.sandbox.account` | `browser4-agent` | Windows sandbox account. Missing account/credential or failed ACLs → hard failure at task start. |
 | `browser4.agent.access` | `full` | Access preset (`full` / `write` / `read-build` / `read`). Unknown backend value is logged and falls back to `full`; an unknown `--access` flag is rejected. |
+| `browser4.agent.readPaths` | data root + source checkout | Folders the coding tools may read outside the workspace, read-only (`;`-separated, `~` expanded). Credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) stay refused whatever the list says. |
 | `browser4.agent.access.unattended` | unset (`full` + network) | Preset derived for a task with no TTY. `deny` removes workspace power entirely; explicit `--access` wins; the derivation is audited `ACCESS_APPROVED(source=default)`. Unknown value warns once and stays `full`. |
 | `browser4.agent.shell.workspaceBoundary` | `on` | Advisory fast-fail: refuses literal absolute paths outside the workspace. Not an enforcement layer; the sandbox is. |
 | `browser4.agent.shell.pathGuard` | `on` | **Deprecated**, advisory: refuses command arguments naming credential locations. Does not relax protected subtrees; sandbox still enforces. |

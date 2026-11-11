@@ -99,6 +99,38 @@ object ToolDocGenerator {
     fun toJson(docs: List<Map<String, Any?>>): String =
         prettyPulsarObjectMapper().writeValueAsString(linkedMapOf("tools" to docs))
 
+    /**
+     * A JSON number literal, or `null` when [value] is not exactly one.
+     *
+     * JSON numbers may not carry a leading `+`, a leading zero, or a bare
+     * decimal point, so `BigDecimal` alone is too permissive (`+5` and `1.`
+     * parse there but are not valid JSON).
+     */
+    private val JSON_NUMBER = Regex("""-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?""")
+    private val NUMERIC_ARGUMENT_TYPES = setOf(
+        "byte", "short", "int", "integer", "long", "float", "double", "number", "bigdecimal", "biginteger"
+    )
+
+    /**
+     * Render one example argument as the JSON literal a caller should send.
+     *
+     * [ToolExample.args] stores every value as a `String` (KDoc has no types to
+     * harvest), so the declared argument type decides whether the value is a
+     * JSON string or a bare number/boolean. Literal text alone is insufficient:
+     * `"1"` and `"false"` are valid values for String parameters too.
+     */
+    private fun exampleArgumentValue(value: String, declaredType: String?): String {
+        val trimmed = value.trim()
+        val type = declaredType?.substringAfterLast('.')?.removeSuffix("?")?.lowercase()
+        if (trimmed == value) {
+            when (type) {
+                "boolean" -> if (trimmed == "true" || trimmed == "false") return trimmed
+                in NUMERIC_ARGUMENT_TYPES -> if (JSON_NUMBER.matches(trimmed)) return trimmed
+            }
+        }
+        return prettyPulsarObjectMapper().writeValueAsString(value)
+    }
+
     /** Human-readable artifact. */
     fun toMarkdown(docs: List<Map<String, Any?>>): String = buildString {
         appendLine("# Browser4 MCP tool reference")
@@ -206,13 +238,16 @@ object ToolDocGenerator {
         if (examples.isNotEmpty()) {
             out.appendLine("Examples:")
             out.appendLine()
+            val argumentTypes = args.associate { it["name"].toString() to it["type"]?.toString() }
             for (example in examples) {
                 val title = example["title"]?.toString()?.takeIf { it.isNotBlank() } ?: "example"
                 @Suppress("UNCHECKED_CAST")
-                val args = example["args"] as Map<String, String>? ?: emptyMap()
+                val exampleArgs = example["args"] as Map<String, String>? ?: emptyMap()
                 when {
-                    args.isNotEmpty() -> {
-                        val json = args.entries.joinToString(", ") { "\"${it.key}\": \"${it.value}\"" }
+                    exampleArgs.isNotEmpty() -> {
+                        val json = exampleArgs.entries.joinToString(", ") {
+                            "\"${it.key}\": ${exampleArgumentValue(it.value, argumentTypes[it.key])}"
+                        }
                         out.appendLine("- $title: `{$json}`")
                     }
                     // A no-argument call is a real call: say so instead of

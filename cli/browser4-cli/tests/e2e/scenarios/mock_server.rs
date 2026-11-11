@@ -3562,8 +3562,8 @@ pub(super) fn test_agent_result_not_null_for_failed_task(ctx: &mut E2ECtx) {
         result_output
     );
     assert!(
-        result_output.contains("summary"),
-        "Expected result to contain 'summary' field:\n{}",
+        result_output.contains("Summary"),
+        "Expected the rendered Summary section:\n{}",
         result_output
     );
 
@@ -3789,8 +3789,8 @@ pub(super) fn test_agent_full_lifecycle_with_mock(ctx: &mut E2ECtx) {
         result_output
     );
     assert!(
-        result_output.contains("summary"),
-        "Result should be a CommandResult JSON with 'summary' field:\n{}",
+        result_output.contains("Summary"),
+        "Result should be the rendered completion report with a Summary section:\n{}",
         result_output
     );
 
@@ -3922,8 +3922,8 @@ pub(super) fn test_agent_run_100th_prime(ctx: &mut E2ECtx) {
         result_output
     );
     assert!(
-        result_output.contains("summary"),
-        "agent result should be a CommandResult JSON with 'summary' field. Got:\n{}",
+        result_output.contains("Summary"),
+        "agent result should render the completion report with a Summary section. Got:\n{}",
         result_output
     );
     assert!(
@@ -4705,12 +4705,26 @@ pub(super) fn test_crawl_resume(ctx: &mut E2ECtx) {
         snapshot.crawl_resume_calls
     );
 
-    // --bg returns immediately; the task is tracked with `crawl status`.
-    let background = run_command(ctx, &["crawl", "resume", "crawl-job-bg", "--bg"]);
+    // --background returns immediately; the task is tracked with `crawl status`.
+    let background = run_command(ctx, &["crawl", "resume", "crawl-job-bg", "--background"]);
     assert!(
         background.stdout.contains("resumed (run 2)"),
         "Expected the background resume report in:\n{}",
         background.stdout
+    );
+
+    // `--bg` is the spelling the reference docs shipped: it must bind the same
+    // flag (a two-dash key used to skip short-option resolution and leave the
+    // run in the foreground), and it must not swallow the task id.
+    let background_short = run_command(ctx, &["crawl", "resume", "--bg", "crawl-job-bg-short"]);
+    let background_short_output = format!("{}\n{}", background_short.stdout, background_short.stderr);
+    assert!(
+        background_short_output.contains("resumed (run 2)"),
+        "Expected `--bg` to resume in the background:\n{background_short_output}"
+    );
+    assert!(
+        background_short_output.contains("browser4-cli crawl status crawl-job-bg-short"),
+        "Expected the background pointer for the task the positional named:\n{background_short_output}"
     );
 
     // A benign rejection (no checkpoint on disk) is still a failure to a
@@ -7039,6 +7053,50 @@ pub(super) fn test_htmlsnapshot_query(ctx: &mut E2ECtx) {
         Some(&serde_json::json!("1d")),
         "expected expires=1d in html_snapshot_query arguments, got: {:?}",
         flagged_call.arguments
+    );
+
+    // `-o` is the documented short form of `--output-file`, and the spelling the
+    // agent-facing `b4.run` guard already treats as a write destination. It used
+    // to be rejected with "unknown option -o … Did you mean --output-file?",
+    // which broke the documented CSV-to-file pipeline.
+    mock_server.set_html_snapshot_query_response(
+        r#"{"statusCode":200,"status":"OK","resultSet":[{"title":"Alpha","price":"$19.99"}]}"#,
+    );
+    let out_csv = ctx.workspace_dir.join("_e2e_query_out.csv");
+    let _ = fs::remove_file(&out_csv);
+    let out_arg = out_csv.to_string_lossy().into_owned();
+    let written = run_command(
+        ctx,
+        &[
+            "htmlsnapshot",
+            "query",
+            "--sql",
+            "SELECT * FROM page",
+            "--format",
+            "csv",
+            "-o",
+            &out_arg,
+        ],
+    );
+    assert_eq!(
+        written.exit_code, 0,
+        "`-o` must be accepted as --output-file:\n{}",
+        written.stderr
+    );
+    assert!(
+        !written.stderr.contains("unknown option"),
+        "`-o` must not be reported as an unknown option, got:\n{}",
+        written.stderr
+    );
+    let csv = fs::read_to_string(&out_csv)
+        .unwrap_or_else(|e| panic!("`-o {}` must write the payload: {e}", out_csv.display()));
+    assert!(
+        csv.contains("Alpha") && csv.contains("$19.99"),
+        "expected the CSV rows in the file, got:\n{csv}"
+    );
+    assert!(
+        !csv.contains("Tip:") && !csv.contains("rows returned"),
+        "the machine-readable file must stay parseable, got:\n{csv}"
     );
 }
 
