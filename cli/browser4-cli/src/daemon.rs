@@ -10945,14 +10945,149 @@ mod tests {
         );
     }
 
-    /// Hostile hosts (AI-agent shell tools, some CI wrappers) reap the whole
-    /// descendant tree by walking `ParentProcessId` when the command ends —
-    /// no job object involved, so `IsProcessInJob` reports 0 and the old
-    /// breakaway escape never fired. The backend must therefore be created by
+    /// Sets `BROWSER4_WINDOWS_BACKEND_SPAWN` for one test and restores the
+    /// previous value on drop (including panic unwinding), so the
+    /// process-global override cannot leak into a later test.  Hold
+    /// `lock_env_mutex` for as long as the guard lives.
+    #[cfg(windows)]
+    struct BackendSpawnOverride {
+        previous: Option<String>,
+    }
+
+    #[cfg(windows)]
+    impl BackendSpawnOverride {
+        /// Force the host class: `"wmi"` = tree-killing host, `"spawn"` = normal.
+        fn set(value: &str) -> Self {
+            let previous = env::var("BROWSER4_WINDOWS_BACKEND_SPAWN").ok();
+            unsafe { env::set_var("BROWSER4_WINDOWS_BACKEND_SPAWN", value) };
+            Self { previous }
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for BackendSpawnOverride {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => unsafe { env::set_var("BROWSER4_WINDOWS_BACKEND_SPAWN", value) },
+                None => unsafe { env::remove_var("BROWSER4_WINDOWS_BACKEND_SPAWN") },
+            }
+        }
+    }
+
+    /// Snapshots every environment input of
+    /// `windows_host_tree_kills_shell_descendants` and restores it on drop.
+    /// Hold `lock_env_mutex` for as long as it lives.
+    #[cfg(windows)]
+    struct SpawnDetectionEnv {
+        override_value: Option<String>,
+        toolhost_ipc: Option<std::ffi::OsString>,
+        toolhost_runtime: Option<std::ffi::OsString>,
+    }
+
+    #[cfg(windows)]
+    impl SpawnDetectionEnv {
+        fn capture() -> Self {
+            Self {
+                override_value: env::var("BROWSER4_WINDOWS_BACKEND_SPAWN").ok(),
+                toolhost_ipc: env::var_os("TOOLHOST_IPC_NAME"),
+                toolhost_runtime: env::var_os("TOOLHOST_RUNTIME_MODE"),
+            }
+        }
+
+        /// Start the test from a normal host: no override, no markers.
+        fn clear(&self) {
+            for key in [
+                "BROWSER4_WINDOWS_BACKEND_SPAWN",
+                "TOOLHOST_IPC_NAME",
+                "TOOLHOST_RUNTIME_MODE",
+            ] {
+                unsafe { env::remove_var(key) };
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for SpawnDetectionEnv {
+        fn drop(&mut self) {
+            match &self.override_value {
+                Some(value) => unsafe { env::set_var("BROWSER4_WINDOWS_BACKEND_SPAWN", value) },
+                None => unsafe { env::remove_var("BROWSER4_WINDOWS_BACKEND_SPAWN") },
+            }
+            match &self.toolhost_ipc {
+                Some(value) => unsafe { env::set_var("TOOLHOST_IPC_NAME", value) },
+                None => unsafe { env::remove_var("TOOLHOST_IPC_NAME") },
+            }
+            match &self.toolhost_runtime {
+                Some(value) => unsafe { env::set_var("TOOLHOST_RUNTIME_MODE", value) },
+                None => unsafe { env::remove_var("TOOLHOST_RUNTIME_MODE") },
+            }
+        }
+    }
+
+    /// The WMI decision gate: `BROWSER4_WINDOWS_BACKEND_SPAWN` wins over the
+    /// Trae toolhost markers, and a host with neither is a normal one.
+    ///
+    /// A GitHub runner is that normal host, which is why the process-level test
+    /// below pins the host class instead of trusting the ambient environment:
+    /// plain hosts keep the `CreateProcess` path (`LaunchedBackend::Child`) and
+    /// only tree-killing shells get the WMI provider.
+    #[cfg(windows)]
+    #[test]
+    fn windows_backend_spawn_override_selects_the_host_class() {
+        let _env_guard = lock_env_mutex();
+        let saved = SpawnDetectionEnv::capture();
+        saved.clear();
+
+        assert!(
+            !windows_host_tree_kills_shell_descendants(),
+            "a host with no override and no toolhost marker must keep the plain spawn path"
+        );
+
+        // The documented override forces a class whatever the markers say; the
+        // value is trimmed and matched case-insensitively.
+        let forced = BackendSpawnOverride::set(" WMI ");
+        assert!(windows_host_tree_kills_shell_descendants());
+        drop(forced);
+
+        // A Trae toolhost shell is detected from its markers...
+        unsafe { env::set_var("TOOLHOST_IPC_NAME", "toolhost-pipe") };
+        assert!(
+            windows_host_tree_kills_shell_descendants(),
+            "TOOLHOST_IPC_NAME marks a host that reaps its descendants"
+        );
+        // ...while `spawn` still beats them, for a user whose host does not.
+        let plain = BackendSpawnOverride::set("spawn");
+        assert!(
+            !windows_host_tree_kills_shell_descendants(),
+            "BROWSER4_WINDOWS_BACKEND_SPAWN=spawn must beat the toolhost marker"
+        );
+        drop(plain);
+
+        // An unrecognised override value is not a decision: the markers decide.
+        unsafe { env::remove_var("TOOLHOST_IPC_NAME") };
+        let unknown = BackendSpawnOverride::set("maybe");
+        assert!(!windows_host_tree_kills_shell_descendants());
+        unsafe { env::set_var("TOOLHOST_RUNTIME_MODE", "local") };
+        assert!(
+            windows_host_tree_kills_shell_descendants(),
+            "TOOLHOST_RUNTIME_MODE marks a host that reaps its descendants"
+        );
+        drop(unknown);
+    }
+
+    /// Hostile hosts (AI-agent shell tools) reap the whole descendant tree by
+    /// walking `ParentProcessId` when the command ends — no job object involved,
+    /// so `IsProcessInJob` reports 0 and the old breakaway escape never fired.
+    /// `spawn_backend_command` therefore creates the backend through
     /// `Win32_Process.Create` (parent = WmiPrvSE.exe, outside the caller's
-    /// tree) through `spawn_backend_command` itself — if anyone reverts it to
-    /// a plain `Command::spawn`, this test fails because the launch comes back
-    /// as [`LaunchedBackend::Child`].
+    /// tree) for exactly those hosts and takes the plain `Command::spawn` path
+    /// everywhere else — see `windows_host_tree_kills_shell_descendants`.
+    ///
+    /// The host class is pinned with the documented override rather than read
+    /// from the ambient environment: a GitHub Windows runner carries no toolhost
+    /// marker, so the gate correctly picks the plain path there — which is why
+    /// asserting an unconditional `Detached` used to fail on CI while the
+    /// production behaviour was right.
     ///
     /// Real processes, no Java needed: a `ping` plays the backend, another
     /// `ping` plays a plainly-spawned tree member, and `taskkill /T /F` plays
@@ -10961,11 +11096,14 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn wmi_spawned_backend_survives_a_hostile_process_tree_kill() {
+        let _env_guard = lock_env_mutex();
+        let _spawn_override = BackendSpawnOverride::set("wmi");
         let temp = tempfile::TempDir::new().expect("temp dir");
         let startup_log_path = temp.path().join("startup.log");
         std::fs::write(&startup_log_path, "").expect("startup log");
 
-        // 1. The production entry point must take the WMI path on Windows.
+        // 1. The production entry point must take the WMI path for a
+        //    tree-killing host.
         let mut backend_command = Command::new("ping");
         backend_command.args(["-n", "30", "127.0.0.1"]);
         let launched = spawn_backend_command(
