@@ -205,7 +205,7 @@ class EventBusObservabilityExample {
 
         // Register counters for multiple event types
         listOf(
-            AgenticEvents.PerceptiveAgent.ON_WILL_OBSERVE,
+            AgenticEvents.PerceptiveAgent.ON_WILL_RUN,
             AgenticEvents.PerceptiveAgent.ON_WILL_ACT,
             AgenticEvents.PerceptiveAgent.ON_WILL_EXTRACT
         ).forEach { eventType ->
@@ -217,11 +217,11 @@ class EventBusObservabilityExample {
         }
 
         // Simulate various events
-        EventBus.emit(AgenticEvents.PerceptiveAgent.ON_WILL_OBSERVE, mapOf("options" to "test"))
+        EventBus.emit(AgenticEvents.PerceptiveAgent.ON_WILL_RUN, mapOf("action" to "test"))
         Thread.sleep(50)
         EventBus.emit(AgenticEvents.PerceptiveAgent.ON_WILL_ACT, mapOf("action" to "test"))
         Thread.sleep(50)
-        EventBus.emit(AgenticEvents.PerceptiveAgent.ON_WILL_OBSERVE, mapOf("options" to "test2"))
+        EventBus.emit(AgenticEvents.PerceptiveAgent.ON_WILL_RUN, mapOf("action" to "test2"))
         Thread.sleep(50)
         EventBus.emit(AgenticEvents.PerceptiveAgent.ON_WILL_EXTRACT, mapOf("options" to "test"))
         Thread.sleep(100)
@@ -241,7 +241,7 @@ class EventBusObservabilityExample {
         listOf(
             AgenticEvents.PerceptiveAgent.ON_WILL_ACT,
             AgenticEvents.PerceptiveAgent.ON_DID_ACT,
-            AgenticEvents.PerceptiveAgent.ON_WILL_OBSERVE,
+            AgenticEvents.PerceptiveAgent.ON_WILL_RUN,
             AgenticEvents.PerceptiveAgent.ON_WILL_EXTRACT,
             AgenticEvents.ContextToAction.ON_WILL_GENERATE,
             AgenticEvents.ContextToAction.ON_DID_GENERATE
@@ -263,8 +263,6 @@ class EventLogger {
         listOf(
             AgenticEvents.PerceptiveAgent.ON_WILL_RUN,
             AgenticEvents.PerceptiveAgent.ON_DID_RUN,
-            AgenticEvents.PerceptiveAgent.ON_WILL_OBSERVE,
-            AgenticEvents.PerceptiveAgent.ON_DID_OBSERVE,
             AgenticEvents.PerceptiveAgent.ON_WILL_ACT,
             AgenticEvents.PerceptiveAgent.ON_DID_ACT,
             AgenticEvents.PerceptiveAgent.ON_WILL_EXTRACT,
@@ -286,8 +284,6 @@ class EventLogger {
         listOf(
             AgenticEvents.PerceptiveAgent.ON_WILL_RUN,
             AgenticEvents.PerceptiveAgent.ON_DID_RUN,
-            AgenticEvents.PerceptiveAgent.ON_WILL_OBSERVE,
-            AgenticEvents.PerceptiveAgent.ON_DID_OBSERVE,
             AgenticEvents.PerceptiveAgent.ON_WILL_ACT,
             AgenticEvents.PerceptiveAgent.ON_DID_ACT,
             AgenticEvents.PerceptiveAgent.ON_WILL_EXTRACT,
@@ -309,25 +305,25 @@ class MetricsCollector {
     private val operationStartTimes = ConcurrentHashMap<String, Long>()
 
     fun startCollecting() {
-        // Track observations
-        EventBus.register(AgenticEvents.PerceptiveAgent.ON_WILL_OBSERVE) { payload ->
+        // Track run start/end
+        EventBus.register(AgenticEvents.PerceptiveAgent.ON_WILL_RUN) { payload ->
             val map = payload as? Map<String, Any?> ?: return@register null
             val uuid = map["uuid"] as? String
             if (uuid != null) {
-                operationStartTimes["observe-$uuid"] = Instant.now().toEpochMilli()
+                operationStartTimes["run-$uuid"] = Instant.now().toEpochMilli()
             }
-            operationCounts.computeIfAbsent("observe") { AtomicInteger(0) }.incrementAndGet()
+            operationCounts.computeIfAbsent("run") { AtomicInteger(0) }.incrementAndGet()
             payload
         }
 
-        EventBus.register(AgenticEvents.PerceptiveAgent.ON_DID_OBSERVE) { payload ->
+        EventBus.register(AgenticEvents.PerceptiveAgent.ON_DID_RUN) { payload ->
             val map = payload as? Map<String, Any?> ?: return@register null
             val uuid = map["uuid"] as? String
             if (uuid != null) {
-                val startTime = operationStartTimes["observe-$uuid"]
+                val startTime = operationStartTimes["run-$uuid"]
                 if (startTime != null) {
                     val duration = Instant.now().toEpochMilli() - startTime
-                    operationDurations.computeIfAbsent("observe") { mutableListOf() }.add(duration)
+                    operationDurations.computeIfAbsent("run") { mutableListOf() }.add(duration)
                 }
             }
             payload
@@ -373,8 +369,8 @@ class MetricsCollector {
     }
 
     fun stopCollecting() {
-        EventBus.unregister(AgenticEvents.PerceptiveAgent.ON_WILL_OBSERVE)
-        EventBus.unregister(AgenticEvents.PerceptiveAgent.ON_DID_OBSERVE)
+        EventBus.unregister(AgenticEvents.PerceptiveAgent.ON_WILL_RUN)
+        EventBus.unregister(AgenticEvents.PerceptiveAgent.ON_DID_RUN)
         EventBus.unregister(AgenticEvents.PerceptiveAgent.ON_WILL_ACT)
         EventBus.unregister(AgenticEvents.PerceptiveAgent.ON_DID_ACT)
     }

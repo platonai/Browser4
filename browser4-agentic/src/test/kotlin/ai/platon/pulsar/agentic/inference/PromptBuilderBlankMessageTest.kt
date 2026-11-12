@@ -24,14 +24,14 @@ class PromptBuilderBlankMessageTest {
         val context = ExecutionContext(
             step = 1,
             instruction = "Find the download link",
-            event = "act",
+            event = "run",
             agentState = AgentState(1, "Find the download link", browserUseState = BrowserUseState.DUMMY),
             stateHistory = AgentHistory(),
             config = AgentConfig(),
             sessionId = UUID.randomUUID().toString(),
         )
 
-        val messages = builder.buildMultistepAgentMessageListAll(context)
+        val messages = builder.buildMultistepMessageListStart(context, context.stateHistory, AgentMessageList())
 
         assertFalse(
             messages.messages.any { it.role == "user" && it.content.isBlank() },

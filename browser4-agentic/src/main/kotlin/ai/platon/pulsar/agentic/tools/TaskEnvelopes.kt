@@ -173,8 +173,6 @@ object TaskEnvelopes {
         "queued" to "Task queued, waiting to start",
         "onWillRun" to "Agent starting up",
         "onDidRun" to "Agent run completed, finalizing",
-        "onWillObserve" to "Agent observing the page",
-        "onDidObserve" to "Agent observed the page",
         "onWillAct" to "Agent planning next action",
         "onDidAct" to "Agent completed an action",
         "onToolExecuted" to "Agent is working",

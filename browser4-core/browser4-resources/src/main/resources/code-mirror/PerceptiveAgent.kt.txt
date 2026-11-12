@@ -12,7 +12,7 @@ import java.util.*
  *
  * Contract / 行为约定:
  * - action: Required. A natural-language instruction or a tool expression to execute.
- * - multiAct: When true, each act() call creates a new step/context in a chain; when false, it reuses the last context.
+ * - multiAct: When true, each chained step creates a new step/context; when false, it reuses the last context.
  * - Timeouts are milliseconds. `domSettleTimeoutMs` waits for DOM to become stable; `timeoutMs` bounds the whole action.
  * - `resolve`: Internal flag indicating the action is triggered from the resolve loop (excluded from JSON).
  *
@@ -22,12 +22,12 @@ import java.util.*
  * - `additionalContext` is deprecated and will be removed in future versions.
  *
  * @property action The user's action command or tool expression. 必填，用户动作/工具表达式。
- * @property multiAct Whether each act forms a new chained context (true) or reuses the last one (false). 是否每次 act 新建上下文。
+ * @property multiAct Whether each chained step forms a new context (true) or reuses the last one (false). 是否每步新建上下文。
  * @property modelName Reserved: LLM/model name to use (e.g., "chatgpt-5.1"). 保留字段：模型名。
  * @property variables Reserved: Extra variables for prompt/tool. 保留字段：额外变量。
  * @property domSettleTimeoutMs Optional timeout in ms to wait for DOM settling. DOM 稳定等待超时（毫秒）。
  * @property timeoutMs Optional overall timeout in ms for this action. 动作总超时（毫秒）。
- * @property iframes Reserved: Whether to include iframes when observing/acting. 保留字段：是否包含 iframe。
+ * @property iframes Reserved: Whether to include iframes when acting. 保留字段：是否包含 iframe。
  * @property fromRunLoop Internal: true if invoked from resolve loop; excluded from JSON. 内部字段：是否由 resolve 驱动。
  */
 data class ActionOptions(
@@ -133,62 +133,6 @@ data class ExtractResult(
     }
 }
 
-@Deprecated("Use the CLI tool-loop engine path instead")
-data class ObserveOptions(
-    // the user's instruction
-    val instruction: String? = null,
-    val modelName: String? = null,
-    val modelClientOptions: Map<String, Any>? = null,
-    val domSettleTimeoutMs: Long? = null,
-    // if true, the LLM should return a tool call for the next action
-    val returnAction: Boolean? = null,
-
-    // highlight interactive elements or not
-    val drawOverlay: Boolean = true,
-    // reserved
-    val iframes: Boolean? = null,
-    // reserved
-    val frameId: String? = null,
-
-    // from `resolve` loop or not
-    val fromResolve: Boolean = false
-)
-
-@Deprecated("Use the CLI tool-loop engine path instead")
-data class ObserveResult constructor(
-    // the domain of the tool call, `browser`, `tab`, `fs`, `agent`, etc
-    val domain: String? = null,
-    // the tool call method, `click`, `type`, `scrollBy`, etc
-    val method: String? = null,
-    // the tool call arguments
-    val arguments: Map<String, Any?>? = null,
-    // the tool call description
-    val description: String? = null,
-
-    val backendNodeId: Int? = null,
-
-    val screenshotContentSummary: String? = null,
-    val currentPageContentSummary: String? = null,
-    val evaluationPreviousGoal: String? = null,
-    val nextGoal: String? = null,
-    val thinking: String? = null,
-
-    // AI: completion summary
-    var summary: String? = null,
-    // AI: completion key findings
-    var keyFindings: String? = null,
-    // AI: completion next suggestions
-    var nextSuggestions: List<String>? = null,
-
-    val observeElement: ObserveElement? = null,
-
-    // internal
-    val actionDescription: ActionDescription? = null,
-
-    // internal, always update before/after an action
-    val agentState: AgentState
-)
-
 interface PerceptiveAgent : AutoCloseable {
     val uuid: UUID
 
@@ -216,8 +160,8 @@ interface PerceptiveAgent : AutoCloseable {
     val lastRunSessionId: String? get() = null
 
     /**
-     * High-level problem resolution entry. Implementations should construct an [ActionOptions]
-     * from the raw problem string and delegate to [run] with the options.
+     * High-level problem resolution entry. Implementations drive the task to completion — the
+     * only engine is the CLI tool loop — and may apply retry, timeout and step-budget policies.
      *
      * This is an internal implementation detail of `command.run` and is deliberately NOT exposed
      * as an MCP tool. External callers must use `command.run` (`browser4-cli agent run`, MCP tool
@@ -229,41 +173,6 @@ interface PerceptiveAgent : AutoCloseable {
      * collected for this task, scoped by the run's execution session.
      */
     suspend fun run(task: String): AgentHistory
-
-    /**
-     * Run an autonomous loop (observe -> act -> ...) attempting to fulfill the user goal described
-     * in the provided [ActionOptions]. Implementations may apply retry and timeout strategies; they
-     * should record structured traces while keeping [stateHistory] focused on executed tool actions only.
-     *
-     * Reachable only through `command.run`.
-     *
-     * @param action The action options describing the user goal and context.
-     * @return The history of THIS run: a detached snapshot containing only the states
-     * collected for this task, scoped by the run's execution session.
-     */
-    suspend fun run(action: ActionOptions): AgentHistory
-
-    /**
-     * Convenience overload to observe by instruction string. Implementations typically create
-     * an [ObserveOptions] from the instruction and delegate to [observe].
-     *
-     * @param instruction The observation instruction from the user.
-     * @return Zero or more observation results describing candidate elements and potential actions.
-     */
-    @Deprecated("Use the CLI tool-loop engine path instead")
-    @MCP
-    suspend fun observe(instruction: String): List<ObserveResult>
-
-    /**
-     * Observe the page given an instruction and options, returning zero or more [ObserveResult]
-     * objects describing candidate elements and potential actions. When `returnAction=true`,
-     * implementations may include an actionable method/arguments in the result.
-     *
-     * @param options Observation options including the instruction and flags.
-     * @return A list of observation results; empty if nothing actionable is found.
-     */
-    @Deprecated("Use the CLI tool-loop engine path instead")
-    suspend fun observe(options: ObserveOptions): List<ObserveResult>
 
     /**
      * Summarize text captured from the current page or a specific element and return a natural-language synopsis.
@@ -278,35 +187,6 @@ interface PerceptiveAgent : AutoCloseable {
      */
     @MCP
     suspend fun summarize(instruction: String? = null, selector: String? = null): String
-
-    /**
-     * Convenience wrapper building [ActionOptions] from a raw action string and delegating to [act].
-     *
-     * @param action The action to execute.
-     * @return The result of executing the action.
-     */
-    @MCP
-    suspend fun act(action: String): ActResult
-
-    /**
-     * Execute a single observe->act cycle for the supplied [ActionOptions]. Implementations may
-     * apply a timeout to prevent indefinite hangs. Models may produce multiple candidate tool calls;
-     * only one successful execution should be recorded in [stateHistory].
-     *
-     * @param action The action options to execute.
-     * @return The action result for the attempted execution.
-     */
-    suspend fun act(action: ActionOptions): ActResult
-
-    /**
-     * Execute a tool call derived from a prior observation result. Implementations should perform
-     * any necessary validation and update [stateHistory] on success or failure.
-     *
-     * @param observe The observation result containing the candidate action.
-     * @return The result of executing the derived tool call.
-     */
-    @Deprecated("Use the CLI tool-loop engine path instead")
-    suspend fun act(observe: ObserveResult): ActResult
 
     /**
      * Convenience overload for structured extraction. When only an instruction string is provided,

@@ -40,38 +40,38 @@ class FusedActs {
 
         // Basic action examples (natural language instructions) - now operate on local mock page
         log.info("[STEP ${++step}] Action: search for 'browser'")
-        var result = agent.act("search for 'browser' (RESULTS will display in the same page)")
-        result("action result", result)
+        var history = agent.run("search for 'browser' (RESULTS will display in the same page)")
+        result("action history", history.finalResult)
 
         log.info("[STEP ${++step}] Capture body text in the live DOM after search (snippet)")
         var content = driver.selectFirstTextOrNull("body")
         result("body snippet", content?.take(160))
 
         log.info("[STEP ${++step}] Action: click the 3rd link")
-        result = agent.act("click the 3rd link")
-        result("action result", result)
+        history = agent.run("click the 3rd link")
+        result("action history", history.finalResult)
 
         log.info("[STEP ${++step}] Capture body text in the live DOM after clicking 3rd link (snippet)")
         content = driver.selectFirstTextOrNull("body")
         result("body snippet", content?.take(160))
 
         log.info("[STEP ${++step}] Action: go back")
-        result = agent.act("go back")
-        result("action result", result)
+        history = agent.run("go back")
+        result("action history", history.finalResult)
 
         log.info("[STEP ${++step}] Action: open the 4th link in new tab")
-        result = agent.act("open the 4th link in new tab")
-        result("action result", result)
+        history = agent.run("open the 4th link in new tab")
+        result("action history", history.finalResult)
 
         log.info("[STEP ${++step}] Action: switch to the newly open tab")
-        result = agent.act("switch to the newly open tab")
-        result("action result", result)
+        history = agent.run("switch to the newly open tab")
+        result("action history", history.finalResult)
 
         // More typical session.act() examples
 
         // 1) Use the page's search box (enter text and submit)
         log.info("[STEP ${++step}] Action: find the search box, type 'web scraping' and submit the form")
-        var history = agent.run("find the search box, type 'web scraping' and submit the form (RESULTS will display in the same page)")
+        history = agent.run("find the search box, type 'web scraping' and submit the form (RESULTS will display in the same page)")
         result("action history", history.finalResult)
 
         log.info("[STEP ${++step}] Captures the live page and parse after search form submission")
@@ -86,8 +86,8 @@ class FusedActs {
 
         // 2) Click a link by visible text (Show/Ask HN like titles in mock page)
         log.info("[STEP ${++step}] Action: click the first link that contains 'Show HN' or 'Ask HN'")
-        result = agent.act("click the first link that contains 'Show HN' or 'Ask HN'")
-        result("action result", result)
+        history = agent.run("click the first link that contains 'Show HN' or 'Ask HN'")
+        result("action history", history.finalResult)
 
         log.info("[STEP ${++step}] Capture body text after clicking Show/Ask HN link (snippet)")
         content = driver.selectFirstTextOrNull("body")
@@ -107,13 +107,13 @@ class FusedActs {
 
         // 5) Navigate back
         log.info("[STEP ${++step}] Action: navigate back")
-        result = agent.act("navigate back")
-        result("action result", result)
+        history = agent.run("navigate back")
+        result("action history", history.finalResult)
 
         // 5b) Navigate forward
         log.info("[STEP ${++step}] Action: navigate forward")
-        result = agent.act("navigate forward")
-        result("action result", result)
+        history = agent.run("navigate forward")
+        result("action history", history.finalResult)
 
         // 7) Extract specific data after interactions
         log.info("[STEP ${++step}] Action: extract article titles and their hrefs from the main list")
@@ -123,8 +123,8 @@ class FusedActs {
 
         // 5) Navigate back
         log.info("[STEP ${++step}] Action: navigate back")
-        result = agent.act("navigate back")
-        result("action result", result)
+        history = agent.run("navigate back")
+        result("action history", history.finalResult)
 
         log.info("[STEP ${++step}] Captures the live page as a local copy and parse for titles")
         page = session.capture(driver)

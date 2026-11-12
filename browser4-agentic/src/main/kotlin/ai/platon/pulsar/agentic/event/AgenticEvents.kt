@@ -26,19 +26,6 @@ object AgenticEvents {
         const val ON_DID_RUN = "PerceptiveAgent.onDidRun"
 
         /**
-         * Emitted before executing the observe method.
-         * Payload: Map containing "options" (ObserveOptions), "uuid" (UUID)
-         */
-        const val ON_WILL_OBSERVE = "PerceptiveAgent.onWillObserve"
-
-        /**
-         * Emitted after executing the observe method.
-         * Payload: Map containing "options" (ObserveOptions), "uuid" (UUID),
-         *          "observeResults" (List<ObserveResult>), "actionDescription" (ActionDescription)
-         */
-        const val ON_DID_OBSERVE = "PerceptiveAgent.onDidObserve"
-
-        /**
          * Emitted before executing the act method.
          * Payload: Map containing "action" (ActionOptions), "uuid" (UUID)
          */
@@ -88,18 +75,6 @@ object AgenticEvents {
      * Events emitted by InferenceEngine.
      */
     object InferenceEngine {
-        /**
-         * Emitted before observe inference in BasicBrowserAgent init block.
-         * Payload: Map containing "messages" (AgentMessageList)
-         */
-        const val ON_WILL_OBSERVE = "InferenceEngine.onWillObserve"
-
-        /**
-         * Emitted after observe inference in BasicBrowserAgent init block.
-         * Payload: Map containing "actionDescription" (ActionDescription)
-         */
-        const val ON_DID_OBSERVE = "InferenceEngine.onDidObserve"
-
         /**
          * Emitted before extract inference.
          * Payload: Map containing "params" (ExtractParams)
@@ -167,8 +142,6 @@ object AgenticEvents {
         // PerceptiveAgent events
         PerceptiveAgent.ON_WILL_RUN,
         PerceptiveAgent.ON_DID_RUN,
-        PerceptiveAgent.ON_WILL_OBSERVE,
-        PerceptiveAgent.ON_DID_OBSERVE,
         PerceptiveAgent.ON_WILL_ACT,
         PerceptiveAgent.ON_DID_ACT,
         PerceptiveAgent.ON_TOOL_EXECUTED,
@@ -177,8 +150,6 @@ object AgenticEvents {
         PerceptiveAgent.ON_WILL_SUMMARIZE,
         PerceptiveAgent.ON_DID_SUMMARIZE,
         // InferenceEngine events
-        InferenceEngine.ON_WILL_OBSERVE,
-        InferenceEngine.ON_DID_OBSERVE,
         InferenceEngine.ON_WILL_EXTRACT,
         InferenceEngine.ON_DID_EXTRACT,
         InferenceEngine.ON_WILL_SUMMARIZE,

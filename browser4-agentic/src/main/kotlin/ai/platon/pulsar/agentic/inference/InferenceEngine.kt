@@ -2,11 +2,6 @@ package ai.platon.pulsar.agentic.inference
 
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.inference.action.ContextToAction
-import ai.platon.pulsar.agentic.model.ActionDescription
-import ai.platon.pulsar.agentic.model.ExecutionContext
-import ai.platon.pulsar.agentic.model.ExtractionSchema
-import ai.platon.pulsar.api.AbstractWebDriver
-import ai.platon.pulsar.api.snapshot.SnapshotService
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -19,67 +14,9 @@ import java.time.Instant
 class InferenceEngine(
     private val agent: BasicBrowserAgent
 ) {
-    private val session = agent.session
     // Reuse the agent's ContextToAction so vision-support discovery is shared
     private val cta = agent.cta
     private val inferenceLogger = InferenceLogger(agent.uuid, agent.startTime)
-
-    val snapshotService: SnapshotService
-        get() = (session.getOrCreateBoundDriver() as? AbstractWebDriver)?.snapshotService
-            ?: throw IllegalStateException("Bound driver is not AbstractWebDriver")
-
-    @Deprecated("Use the CLI tool-loop engine path instead")
-    suspend fun observe(params: ObserveParams, context: ExecutionContext): ActionDescription {
-        val messages = InferencePromptBuilder.buildObserveMessages(params)
-
-        val startTime = Instant.now()
-        val actionType = if (params.fromAct) "act" else "observe"
-        val timestamp = AppPaths.fromNow()
-
-        val llmInputFile = inferenceLogger.log(
-            subdirectory = actionType,
-            filename = "$timestamp.request.json",
-            requestId = context.uuid,
-            messages = messages.messages
-        )
-
-        val actionDescription = cta.generate(messages, context)
-        requireNotNull(context.agentState.actionDescription) {
-            "Field should be set: context.agentState.actionDescription"
-        }
-        val modelResponse = requireNotNull(actionDescription.modelResponse) {
-            "Field should be set: actionDescription.modelResponse"
-        }
-
-        val inferenceTimeMillis = DateTimes.elapsedTime(startTime).toMillis()
-
-        val llmOutputFile = inferenceLogger.log(
-            subdirectory = actionType,
-            filename = "$timestamp.response.json",
-            payload = mapOf(
-                "requestId" to context.uuid,
-                "modelResponse" to modelResponse
-            )
-        )
-
-        inferenceLogger.logSummary(
-            filename = "$actionType.jsonl",
-            payload = mapOf(
-                "${actionType}InferenceType" to actionType,
-                "timestamp" to timestamp,
-                "llmInputFile" to llmInputFile,
-                "llmOutputFile" to llmOutputFile,
-                "inputToken" to modelResponse.tokenUsage.effectiveInputTokenCount,
-                "outputToken" to modelResponse.tokenUsage.outputTokenCount,
-                "totalToken" to modelResponse.tokenUsage.effectiveTotalTokenCount,
-                "cachedInputToken" to modelResponse.tokenUsage.cachedInputTokenCount,
-                "cacheWriteInputToken" to modelResponse.tokenUsage.cacheWriteInputTokenCount,
-                "inferenceTimeMillis" to DateTimes.elapsedTime(startTime).toMillis()
-            )
-        )
-
-        return actionDescription
-    }
 
     /**
      * Run the two-stage structured extraction pipeline and return an

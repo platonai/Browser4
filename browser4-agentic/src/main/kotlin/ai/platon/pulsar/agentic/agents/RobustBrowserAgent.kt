@@ -760,7 +760,7 @@ open class RobustBrowserAgent(
      * mutate this result.
      * @throws CancellationException if the agent is closed or the operation is canceled
      */
-    override suspend fun run(action: ActionOptions): AgentHistory {
+    private suspend fun run(action: ActionOptions): AgentHistory {
         _lastRunSessionId = null
         resetInnerToolExecutions()
         onWillRun(action)
@@ -796,46 +796,6 @@ open class RobustBrowserAgent(
     }
 
     /**
-     * Executes a single observe->act cycle for a supplied ActionOptions. Times out after actTimeoutMs
-     * to prevent indefinite hangs. Model may produce multiple candidate tool calls internally; only
-     * one successful execution is recorded in stateHistory.
-     *
-     * @param action The action to execute
-     * @return Result of the action execution
-     */
-    override suspend fun act(action: ActionOptions): ActResult {
-        return try {
-            val ctx = agentScope.coroutineContext.minusKey(Job)
-            withContext(ctx) {
-                super.act(action)
-            }
-        } catch (e: CancellationException) {
-            logger.info("🛑 act.cancelled action={}", action.action.take(50))
-            ActResultHelper.failed(e, action.action)
-        }
-    }
-
-    /**
-     * Executes a tool call derived from a prior observation result. Performs patching (selector/url),
-     * validation, and updates AgentState history on success or failure.
-     *
-     * @param observe The observation result containing the action to execute
-     * @return Result of the action execution
-     */
-    @Deprecated("Use the CLI tool-loop engine path instead")
-    override suspend fun act(observe: ObserveResult): ActResult {
-        return try {
-            val ctx = agentScope.coroutineContext.minusKey(Job)
-            withContext(ctx) {
-                super.act(observe)
-            }
-        } catch (e: CancellationException) {
-            logger.info("🛑 act.cancelled instruction={}", observe.agentState.instruction.take(50))
-            ActResultHelper.failed(e, action = observe.actionDescription?.instruction ?: "")
-        }
-    }
-
-    /**
      * Structured extraction: builds a rich prompt with DOM snapshot & optional JSON schema; performs
      * two-stage LLM calls (extract + metadata) and merges results with token/time metrics.
      *
@@ -858,39 +818,6 @@ open class RobustBrowserAgent(
                 data = JsonNodeFactory.instance.objectNode(),
                 completed = false
             )
-        }
-    }
-
-    /**
-     * Observes the page given an instruction, returning zero or more ObserveResult objects describing
-     * candidate elements and potential actions (if returnAction=true).
-     */
-    @Deprecated("Use the CLI tool-loop engine path instead")
-    override suspend fun observe(options: ObserveOptions): List<ObserveResult> {
-        val context = stateManager.getOrCreateActiveContext(options, "observe")
-
-        val ctx = agentScope.coroutineContext.minusKey(Job)
-
-        if (!options.fromResolve) {
-            return withContext(ctx) {
-                super.observe(options)
-            }
-        }
-
-        try {
-            val result = withContext(ctx) {
-                onWillObserve(options)
-                doObserve(options)
-            }
-
-            circuitBreaker.recordSuccess(CircuitBreaker.FailureType.LLM_FAILURE)
-
-            onDidObserve(options, result)
-
-            return result.observeResults
-        } catch (e: Exception) {
-            handleObserveException(e, context)
-            return emptyList()
         }
     }
 
@@ -2358,16 +2285,6 @@ open class RobustBrowserAgent(
     }
 
     // ─── Error handling ───────────────────────────────────────────────────────
-
-    private fun handleObserveException(e: Exception, context: ExecutionContext) {
-        val failures = try {
-            circuitBreaker.recordFailure(CircuitBreaker.FailureType.LLM_FAILURE)
-        } catch (cbError: CircuitBreakerTrippedException) {
-            throw PerceptiveAgentError.PermanentError(cbError.message ?: "Circuit breaker tripped", cbError)
-        }
-
-        logger.error("🤖❌ action.gen.fail sid={} failures={} msg={}", context.sid, failures, e.message, e)
-    }
 
     private fun handleResolutionFailure(
         e: Exception, context: ExecutionContext, startTime: Instant

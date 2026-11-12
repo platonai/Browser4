@@ -20,7 +20,7 @@ import kotlin.coroutines.CoroutineContext
  *
  * ## Architecture
  * ```
- * Agent Operation → Event Fired (e.g., onWillObserve)
+ * Agent Operation → Event Fired (e.g., onWillAct)
  *     ↓
  * AgentEventBus.serverSideAgentEventHandlers.onAgentEvent()
  *     ↓
@@ -36,12 +36,12 @@ import kotlin.coroutines.CoroutineContext
  * AgentEventBus.serverSideAgentEventHandlers = DefaultServerSideAgentEventHandlers()
  *
  * // Emit events during agent execution
- * AgentEventBus.emitAgentEvent("onWillObserve", "agent-123", "Starting observation")
+ * AgentEventBus.emitAgentEvent("onWillAct", "agent-123", "Starting action")
  *
  * // Use per-coroutine handlers for isolation
  * AgentEventBus.withServerSideAgentEventHandlers(customHandlers) {
  *     // Events in this block use customHandlers
- *     agent.observe(options)
+ *     agent.run(task)
  * }
  * ```
  *
@@ -104,7 +104,7 @@ object AgentEventBus {
      * Emits an agent-phase event to server-side event handlers in a non-blocking manner.
      * This method can be called from any thread without blocking.
      *
-     * @param eventType The type of the event (e.g., "onWillObserve", "onDidAct")
+     * @param eventType The type of the event (e.g., "onWillAct", "onDidAct")
      * @param agentId The unique identifier of the agent
      * @param message Optional message describing the event
      * @param metadata Additional metadata for the event

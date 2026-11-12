@@ -92,35 +92,6 @@ class EventBusObservabilityTest {
     }
 
     @Test
-    fun testPerceptiveAgentObserveEvents() {
-        val willEventType = AgenticEvents.PerceptiveAgent.ON_WILL_OBSERVE
-        val didEventType = AgenticEvents.PerceptiveAgent.ON_DID_OBSERVE
-
-        // Simulate observing
-        val options = mapOf("instruction" to "find button")
-        EventBus.emit(willEventType, mapOf("options" to options, "uuid" to "test-uuid"))
-
-        Thread.sleep(100)
-
-        val results = listOf(mapOf("locator" to "1,123"))
-        EventBus.emit(didEventType, mapOf(
-            "options" to options,
-            "uuid" to "test-uuid",
-            "observeResults" to results
-        ))
-
-        Thread.sleep(100)
-
-        val willEvents = capturedEvents[willEventType]
-        val didEvents = capturedEvents[didEventType]
-
-        assertTrue(willEvents != null, "Will events should be captured")
-        assertTrue(didEvents != null, "Did events should be captured")
-        assertTrue(willEvents!!.isNotEmpty())
-        assertTrue(didEvents!!.isNotEmpty())
-    }
-
-    @Test
     fun testPerceptiveAgentActEvents() {
         val willEventType = AgenticEvents.PerceptiveAgent.ON_WILL_ACT
         val didEventType = AgenticEvents.PerceptiveAgent.ON_DID_ACT
@@ -211,7 +182,7 @@ class EventBusObservabilityTest {
     }
 
     @Test
-    fun testInferenceEngineObserveEvents() {
+    fun testContextToActionGenerateEvents() {
         val willEventType = AgenticEvents.ContextToAction.ON_WILL_GENERATE
         val didEventType = AgenticEvents.ContextToAction.ON_DID_GENERATE
 

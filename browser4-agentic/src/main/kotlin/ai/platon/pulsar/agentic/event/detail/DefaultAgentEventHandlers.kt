@@ -8,11 +8,9 @@ import kotlinx.coroutines.flow.asSharedFlow
 /**
  * Default implementation of [AgentFlowEventHandlers].
  *
- * Provides event handlers for the observe/act flow in agent operations.
+ * Provides event handlers for the act flow in agent operations.
  */
 class DefaultAgentFlowEventHandlers : AgentFlowEventHandlers {
-    override val onWillObserve: ObserveEventHandler = ObserveEventHandler()
-    override val onDidObserve: ObserveEventHandler = ObserveEventHandler()
 
     override val onWillAct: ActEventHandler = ActEventHandler()
     override val onDidAct: ActEventHandler = ActEventHandler()
@@ -21,8 +19,6 @@ class DefaultAgentFlowEventHandlers : AgentFlowEventHandlers {
     override val onInferenceDidObserve: ExecutionContextAgentStateEventHandler = ExecutionContextAgentStateEventHandler()
 
     override fun chain(other: AgentFlowEventHandlers): AgentFlowEventHandlers {
-        onWillObserve.addLast(other.onWillObserve)
-        onDidObserve.addLast(other.onDidObserve)
         onWillAct.addLast(other.onWillAct)
         onDidAct.addLast(other.onDidAct)
         onInferenceWillObserve.addLast(other.onInferenceWillObserve)

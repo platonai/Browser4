@@ -3,7 +3,6 @@
 package ai.platon.pulsar.agentic.skills
 
 import ai.platon.pulsar.agentic.context.AgenticContexts
-import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.AgenticEvents
 import ai.platon.pulsar.agentic.model.ActionDescription
 import ai.platon.pulsar.agentic.model.AgentHistory
@@ -76,7 +75,6 @@ class SkillInstallE2ETest {
 
         private val capturedEvents = ConcurrentHashMap<String, MutableList<Map<String, Any?>>>()
         private val runStepCount = AtomicInteger(0)
-        private val observeCount = AtomicInteger(0)
         private val actCount = AtomicInteger(0)
         private val eventLogger = getLogger("SkillInstallE2ETest.EventLogger")
 
@@ -84,10 +82,6 @@ class SkillInstallE2ETest {
         @JvmStatic
         fun setupEventHandlers() {
             // Register event handlers for progress logging
-
-            AgentEventBus.agentEventHandlers?.agentFlowHandlers?.onWillObserve?.addLast { options ->
-                eventLogger.debug("👀 Will observe - instruction: {}", Strings.compactInline(options.instruction))
-            }
 
             // Log when run starts
             EventBus.register(AgenticEvents.PerceptiveAgent.ON_WILL_RUN) { payload ->
@@ -107,27 +101,6 @@ class SkillInstallE2ETest {
                 eventLogger.info("✅ Agent run completed - steps: {}, isDone: {}",
                     stateHistory?.totalSteps, stateHistory?.isDone)
                 capturedEvents.computeIfAbsent(AgenticEvents.PerceptiveAgent.ON_DID_RUN) {
-                    mutableListOf()
-                }.add(map)
-                payload
-            }
-
-            // Log observe events
-            EventBus.register(AgenticEvents.PerceptiveAgent.ON_WILL_OBSERVE) { payload ->
-                val map = payload as? Map<String, Any?> ?: return@register null
-                observeCount.incrementAndGet()
-                eventLogger.debug("👀 Observing... (count: {})", observeCount.get())
-                capturedEvents.computeIfAbsent(AgenticEvents.PerceptiveAgent.ON_WILL_OBSERVE) {
-                    mutableListOf()
-                }.add(map)
-                payload
-            }
-
-            EventBus.register(AgenticEvents.PerceptiveAgent.ON_DID_OBSERVE) { payload ->
-                val map = payload as? Map<String, Any?> ?: return@register null
-                val observeResults = map["observeResults"] as? List<Any>
-                eventLogger.debug("👀 Observed {} results", observeResults?.size ?: 0)
-                capturedEvents.computeIfAbsent(AgenticEvents.PerceptiveAgent.ON_DID_OBSERVE) {
                     mutableListOf()
                 }.add(map)
                 payload
@@ -183,8 +156,6 @@ class SkillInstallE2ETest {
             // Unregister all event handlers
             EventBus.unregister(AgenticEvents.PerceptiveAgent.ON_WILL_RUN)
             EventBus.unregister(AgenticEvents.PerceptiveAgent.ON_DID_RUN)
-            EventBus.unregister(AgenticEvents.PerceptiveAgent.ON_WILL_OBSERVE)
-            EventBus.unregister(AgenticEvents.PerceptiveAgent.ON_DID_OBSERVE)
             EventBus.unregister(AgenticEvents.PerceptiveAgent.ON_WILL_ACT)
             EventBus.unregister(AgenticEvents.PerceptiveAgent.ON_DID_ACT)
             EventBus.unregister(AgenticEvents.ContextToAction.ON_DID_GENERATE)
@@ -196,15 +167,14 @@ class SkillInstallE2ETest {
         // Clear captured events and counters before each test
         capturedEvents.clear()
         runStepCount.set(0)
-        observeCount.set(0)
         actCount.set(0)
     }
 
     @AfterEach
     fun tearDown() {
         // Log summary after each test
-        logger.info("Test completed - Total steps: {}, Observe count: {}, Act count: {}",
-            runStepCount.get(), observeCount.get(), actCount.get())
+        logger.info("Test completed - Total steps: {}, Act count: {}",
+            runStepCount.get(), actCount.get())
     }
 
     /**
@@ -290,7 +260,6 @@ class SkillInstallE2ETest {
         logger.info("  - ON_WILL_RUN: {} events", runWillEvents.size)
         logger.info("  - ON_DID_RUN: {} events", runDidEvents.size)
         logger.info("  - ON_DID_GENERATE: {} events", generateEvents.size)
-        logger.info("  - OBSERVE events: {}", observeCount.get())
         logger.info("  - ACT events: {}", actCount.get())
     }
 
@@ -337,7 +306,7 @@ class SkillInstallE2ETest {
             "ON_DID_RUN events should be captured")
 
         // Log final counts
-        logger.info("Final event counts - Steps: {}, Observe: {}, Act: {}",
-            runStepCount.get(), observeCount.get(), actCount.get())
+        logger.info("Final event counts - Steps: {}, Act: {}",
+            runStepCount.get(), actCount.get())
     }
 }

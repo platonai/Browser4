@@ -1,7 +1,6 @@
 package ai.platon.pulsar.agentic.inference
 
 import ai.platon.pulsar.api.model.DOMSerializer
-import ai.platon.pulsar.api.model.TabState
 import ai.platon.pulsar.agentic.inference.action.OBSERVE_RESPONSE_COMPLETE_SCHEMA
 import ai.platon.pulsar.agentic.inference.action.OBSERVE_RESPONSE_ELEMENT_SCHEMA
 import ai.platon.pulsar.agentic.inference.history.DefaultHistoryRenderStrategy
@@ -11,15 +10,10 @@ import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.agentic.model.ExecutionContext
 import ai.platon.pulsar.agentic.model.ToolOutcome
 import ai.platon.pulsar.agentic.prompts.buildMainSystemPromptV1
-import ai.platon.pulsar.agentic.prompts.buildToolUseSections
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecFormat
-import ai.platon.pulsar.agentic.tools.specs.ToolSpecification
 import ai.platon.pulsar.common.KStrings
 import ai.platon.pulsar.common.Strings
-import ai.platon.pulsar.common.ai.llm.PromptTemplate
-import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.serialize.json.Pson
-import kotlin.collections.isNotEmpty
 
 /**
  * Description:
@@ -208,84 +202,6 @@ Output format:
 
         """
 
-        val OBSERVE_GUIDE_OUTPUT_SCHEMA = """
-{
-  "elements": [
-    {
-      "ref": "Web page node reference, e.g., `e123`",
-      "description": "Description of the current node selected and tool selection",
-      "screenshotContentSummary": "Summary of the current screenshot content if provided",
-      "currentPageContentSummary": "Summary of the current web page text content, based on the aria snapshot or web content extraction results",
-      "memory": "1-3 specific sentences describing this step and the overall progress. This should include information helpful for future progress tracking, such as the number of pages visited or items found.",
-      "thinking": "A structured <think>-style reasoning block.",
-      "evaluationPreviousGoal": "A concise one-sentence analysis of the previous action, clearly stating success, failure, or uncertainty.",
-      "nextGoal": "A clear one-sentence statement of the next direct goal and action to take."
-    }
-  ]
-}
-        """.trimIndent()
-
-        val OBSERVE_GUIDE_OUTPUT_SCHEMA_RETURN_ACTIONS = """
-{
-  "elements": [
-    {
-      "ref": "Web page node reference",
-      "description": "Description of the current selected node and tool selection",
-      "domain": "Tool domain, such as `tab`",
-      "method": "Method name, such as `click`",
-      "arguments": [
-        {
-          "name": "Parameter name, such as `selector`",
-          "value": "Parameter value, such as `ref123`"
-        }
-      ],
-      "screenshotContentSummary": "Summary of the current screenshot content if provided",
-      "currentPageContentSummary": "Summary of the current web page text content, based on the aria snapshot or web content extraction results",
-      "memory": "1-3 specific sentences describing this step and the overall progress. This should include information helpful for future progress tracking, such as the number of pages visited or items found.",
-      "thinking": "A structured <think>-style reasoning block.",
-      "evaluationPreviousGoal": "A concise one-sentence analysis of the previous action, clearly stating success, failure, or uncertainty.",
-      "nextGoal": "A clear one-sentence statement of the next direct goal and action to take."
-    }
-  ]
-}
-        """.trimIndent()
-
-        val OBSERVE_GUIDE_SYSTEM_MESSAGE = """
-## Goal
-
-Identify the page elements that best match the observation request and support browser automation.
-
-You will receive:
-- an instruction describing the target element
-- a list of interactive page elements
-- a hierarchical accessibility tree that combines DOM and accessibility information
-
-Return an array of matching elements, or an empty array when no suitable match exists.
-
----
-
-## Browser State
-
-Browser state includes:
-- the current URL
-- all open tabs with their IDs
-
----
-
-## Output Requirements
-
-- Use the JSON format below exactly and output JSON only.
-- Return at most one element, and never leave `domain` or `method` empty.
-
-Output format:
-{{OUTPUT_SCHEMA_PLACEHOLDER}}
-
----
-
-${buildToolUseSections()}
-
-"""
-
         fun compactPromptForHuman(prompt: String, maxWidth: Int = 200): String {
             val boundaries = """
 Identify the page elements that best match the observation request
@@ -311,46 +227,6 @@ Return an array of matching elements
         return """
 ${buildMainSystemPromptV1(ToolSpecFormat.KOTLIN, includeToolList, codingTask, disclosure)}
         """.trimIndent()
-    }
-
-    fun buildMultistepAgentMessageListAll(
-        context: ExecutionContext,
-        codingMode: Boolean = false,
-    ): AgentMessageList {
-        // Prepare messages for model
-        val messages = AgentMessageList()
-
-        initObserveUserInstruction(context.instruction, messages)
-
-        buildMultistepMessageListStart(context, context.stateHistory, messages, codingMode)
-
-        if (codingMode) {
-            // Coding tasks get NO page info unless the model explicitly calls a
-            // page tool (design §3.5) — replace the Browser State / Viewport /
-            // ARIA sections with a single pointer line.
-            messages.addUser(
-                "## Browser State\n\n" +
-                    "No page context (coding task). To obtain web page information, explicitly call " +
-                    "tab.navigate / tab.ariaSnapshot / tab.textContent / tab.eval.\n\n---\n"
-            )
-        } else {
-            // browser state, viewport info, interactive elements, DOM
-            buildBrowserStateMessageForBrowserInteraction(messages, context)
-        }
-
-        return messages
-    }
-
-    fun buildSingleObserveMessageListAll(params: ObserveParams, context: ExecutionContext): AgentMessageList {
-        // Prepare messages for model
-        val messages = AgentMessageList()
-
-        // observe guide
-        buildSingleObserveSystemPrompt(messages, params)
-        // browser state, viewport info, interactive elements, DOM
-        buildBrowserStateMessageForBrowserInteraction(messages, context)
-
-        return messages
     }
 
     fun buildMultistepMessageListStart(
@@ -670,140 +546,6 @@ $extractedJson
 """.trim()
 
         return SimpleMessage(role = "user", content = content)
-    }
-
-    private fun buildSingleObserveSystemPrompt(messages: AgentMessageList, params: ObserveParams) {
-        val schema =
-            if (params.returnAction) OBSERVE_GUIDE_OUTPUT_SCHEMA_RETURN_ACTIONS else OBSERVE_GUIDE_OUTPUT_SCHEMA
-
-        val observeSystemPrompt = PromptTemplate(OBSERVE_GUIDE_SYSTEM_MESSAGE).render(
-            mapOf("OUTPUT_SCHEMA_PLACEHOLDER" to schema)
-        )
-
-        messages.addLast("system", observeSystemPrompt)
-
-        val extra = buildObserveGuideSystemExtraPrompt(params.userProvidedInstructions)?.content
-        if (extra != null) {
-            messages.addLast("system", extra)
-        }
-    }
-
-    fun initObserveUserInstruction(
-        instruction: String?,
-        messages: AgentMessageList = AgentMessageList()
-    ): AgentMessageList {
-        val instruction2 = when {
-            !instruction.isNullOrBlank() -> instruction
-            else -> """
-Based on the context and current progress, select the most appropriate tool to advance the task toward user completion.
-                """.trimIndent()
-        }
-
-        messages.addUser(instruction2, name = "user_request")
-        return messages
-    }
-
-    private fun buildBrowserStateMessageForBrowserInteraction(messages: AgentMessageList, context: ExecutionContext) {
-        val step = context.step
-        val lastToolCall = context.prevAgentState?.actionDescription?.toolCall
-        val lastDomain = lastToolCall?.domain
-        if (step > 1 && !ToolSpecification.isBrowserInteraction(lastDomain)) {
-            return
-        }
-
-        val prevBrowserState = context.agentState.prevState?.browserUseState?.browserState
-        val browserState = context.agentState.browserUseState.browserState
-
-        val prevTabs = prevBrowserState?.tabs ?: emptyList()
-        val currentTabs = browserState.tabs
-        val newTabs: List<TabState> = if (prevTabs.size != currentTabs.size) {
-            currentTabs - prevTabs.toSet()
-        } else emptyList()
-        val newTabsJson = if (newTabs.isNotEmpty()) DOMSerializer.toJson(newTabs) else null
-        val newTabsMessage = if (newTabs.isEmpty()) "" else {
-            """
-Tabs opened in the previous step:
-
-$newTabsJson
-
-            """.trimIndent()
-        }
-
-        val scrollState = browserState.scrollState
-        // Height in pixels of the page area above the current viewport.
-        val hiddenTopHeight = scrollState.hiddenTopHeight
-        val hiddenBottomHeight = scrollState.hiddenBottomHeight
-        val viewportHeight = scrollState.viewportHeight
-        val domState = context.agentState.browserUseState.domState
-
-        // The 0-based viewport to see.
-        val processingViewport = scrollState.processingViewport
-        val viewportsTotal = scrollState.viewportsTotal
-
-        // TODO: should we provide the interactive elements?
-        // val interactiveElements = context.agentState.browserUseState.getInteractiveElements()
-        val viewPortInfo = Pson.toJson(
-            "processingViewport" to processingViewport,
-            "viewportHeight" to viewportHeight,
-            "viewportsTotal" to viewportsTotal,
-            "hiddenTopHeight" to hiddenTopHeight,
-            "hiddenBottomHeight" to hiddenBottomHeight
-        )
-        val delta = viewportHeight * 0.5
-        val startY = (scrollState.y - delta).coerceAtLeast(0.0)
-        val endY = (scrollState.y + viewportHeight + delta).coerceAtLeast(0.0)
-        val nanoTree = domState.serializableTree.toNanoTreeInRange(startY, endY)
-
-        fun contentEN() = """
-## Browser State
-
-<browser_state>
-${browserState.lazyJson}
-</browser_state>
-
-$newTabsMessage
-
----
-
-## Viewport State
-
-$viewPortInfo
-
-- By default, inspect one viewport-height chunk of DOM nodes at a time.
-- Viewport position and numbering may change whenever the page content changes.
-- The provided accessibility tree focuses on viewport `i` and includes a small amount of nearby off-screen context.
-- To inspect the next viewport, call `scrollBy(viewportHeight)`.
-
----
-
-## ARIA Snapshot
-
-Focused on nodes in viewport ${processingViewport}.
-
-```yaml
-${nanoTree.ariaSnapshot}
-```
-
----
-"""
-
-        val content = contentEN()
-
-        messages.addLast("user", content)
-    }
-
-    fun buildObserveActToolUsePrompt(action: String): String {
-        val instruction =
-            """
-## User Request
-
-Choose one tool to execute this action: $action. Find the page element most relevant to the action, tool, and goal. Consider the expected result and likely impact after execution.
-
----
-
-"""
-
-        return instruction
     }
 
     fun buildSummaryPrompt(goal: String, agentHistory: AgentHistory): Pair<String, String> {

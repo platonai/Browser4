@@ -2,7 +2,6 @@ package ai.platon.pulsar.agentic.inference
 
 import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.agentic.ActionOptions
-import ai.platon.pulsar.agentic.ObserveOptions
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.inference.detail.PageStateTracker
 import ai.platon.pulsar.agentic.model.*
@@ -127,14 +126,6 @@ class AgentStateManager(
         return _activeContext!!
     }
 
-    suspend fun getOrCreateActiveContext(options: ObserveOptions, event: String): ExecutionContext {
-        if (_activeContext == null) {
-            _baseContext = buildInitExecutionContext(options, event)
-            setActiveContext(_baseContext)
-        }
-        return _activeContext!!
-    }
-
     /**
      * Get the currently active context.
      *
@@ -145,7 +136,7 @@ class AgentStateManager(
      * @throws IllegalArgumentException if actor not initialized
      */
     fun getActiveContext(): ExecutionContext {
-        val context = requireNotNull(_activeContext) { "Actor not initialized, call act(action: ActionOptions) first!" }
+        val context = requireNotNull(_activeContext) { "Actor not initialized, call run(action: ActionOptions) first!" }
         require(context == _contexts.last()) { "Active context should be the last context in the list. Context list size: ${_contexts.size}" }
         return context
     }
@@ -170,29 +161,13 @@ class AgentStateManager(
     }
 
     /**
-     * Build the initial execution context for an observe event. This is used when an observe event is triggered without a prior act context (e.g., from an external trigger or at the start of a session).
-     * The instruction is taken from the ObserveOptions, and the step is set to 1. The event name can be used to differentiate this context from act contexts. An optional base context can be provided for inheritance, but it's not required for the initial observe context.
-     * @param options The observe options containing the instruction and other parameters
-     * @param event The event name for this context (e.g., "observe-init")
-     * @return A new ExecutionContext instance initialized with the instruction from the options, step set to 1, and the provided event name.
-     * */
-    private suspend fun buildInitExecutionContext(
-        options: ObserveOptions,
-        event: String
-    ): ExecutionContext {
-        val instruction = options.instruction ?: ""
-        val context = buildExecutionContext(instruction, 1, event)
-        return context
-    }
-
-    /**
      * Build a new execution context based on the provided instruction, step, event, and optional base context.
      *
-     * The instruction should remain consistent across steps in the same session to maintain a clear goal. The step number should increment by 1 for each new context derived from the same base context. The event name can be used to differentiate between different types of contexts (e.g., "act", "observe", etc.) but should also follow a consistent naming convention for clarity.
+     * The instruction should remain consistent across steps in the same session to maintain a clear goal. The step number should increment by 1 for each new context derived from the same base context. The event name can be used to differentiate between different types of contexts (e.g., "run", "extract", etc.) but should also follow a consistent naming convention for clarity.
      *
      * @param instruction The user's instruction (should be the same for all steps in the session)
      * @param step The current step number (starting from 1)
-     * @param event The event name for this context (e.g., "act", "observe", "extract", etc.)
+     * @param event The event name for this context (e.g., "run", "extract", etc.)
      * @param baseContext An optional base context that the new context can inherit from. If provided, the new context will validate that the instruction is the same and the step is incremented by 1 compared to the base context.
      * @return A new ExecutionContext instance with the provided parameters and inherited properties from the base context if applicable.
      * */
@@ -231,7 +206,7 @@ class AgentStateManager(
      *
      * @param instruction The user's instruction (should be the same for all steps in the session)
      * @param step The current step number (starting from 1)
-     * @param event The event name for this context (e.g., "act", "observe", "extract", etc.)
+     * @param event The event name for this context (e.g., "run", "extract", etc.)
      * @param baseContext An optional base context that the new context can inherit from. If provided, the new context
      * will validate that the instruction is the same and the step is incremented by 1 compared to the base context.
      * */
