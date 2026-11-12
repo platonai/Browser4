@@ -159,6 +159,8 @@ bin/maintenance/state/*.lock
 /.claude/
 /.coworker/
 /.b4scratch/
+# Task inputs copied into a coding worktree by the agent engine (never deliverables)
+/.b4inputs/
 .build-state
 /.build/
 /.build-localappdata/
