@@ -93,9 +93,7 @@ A run is capped at `agent.token.budget.total` (**5M cache-miss tokens** by defau
 
 The first number is the **charged** amount (cache-miss prompt + output), not the raw token total — that is why the line says `budget`. The progress line is throttled (every 10 requests or 15s); the 80% warning appears once and the abort line names both numbers. The `cache` part is the run's prompt-cache hit ratio (cache-read tokens ÷ prompt tokens) and appears only when the provider reports cache details — a provider that reports none stays silent rather than claiming `0%`. `--ndjson` carries the same information as `effectiveTokenBudget` + `cumulativeTokens` on every `run.usage` line, plus `cachedInputTokens` / `cacheWriteInputTokens` when the provider disclosed them. `cumulativeTokens` is the **charged** amount (cache-miss prompt + output, what the budget enforces); `inputTokens` on the same line stays the raw prompt count, so the two differ exactly by the cache reads. `agent result --json` reports the budget as `result.effectiveTokenBudget`.
 
-#### After a budget abort: continue
-
-A budget abort is **resumable**: the run's workspace, files and progress are already on disk. In the interactive session (`-i`) the failure is followed by a numbered choice, and choosing *continue* resumes the task with a **doubled** cap:
+**A budget abort is resumable** — the run's workspace, files and progress are already on disk. In `-i` the failure is followed by a numbered choice that resumes the task with a **doubled** cap; typing `1` runs the command on the right, the resume re-uses the interrupted task's workspace and instruction, and the new task shows as `▶ resume <old> → task <new>`:
 
 ```text
 ✖ failed · 3b27930e · 12.1s — token_budget: Token budget exceeded (cache-miss accounting)…
@@ -105,26 +103,7 @@ next (type a number, or a new task):
   3) start a new task (fresh context)         /new
 ```
 
-Typing `1` runs the command on the right; the resume re-uses the interrupted task's workspace and instruction, and the new task shows as `▶ resume <old> → task <new>`. From a script or `--follow`/`--wait`, the same thing is one command (the failure line prints it with the doubled budget):
-
-```bash
-browser4-cli agent run --resume <task-id> --token-budget 10000000
-```
-
-`/resume [--budget <n>] [task-id]` is also a plain session command — useful for any resumable failure (`NOOP_LIMIT`, a cancellation), not just budget aborts.
-
-#### After every task: what next
-
-When a task ends in `-i`, the session offers 2–3 follow-ups, numbered and chosen by typing the number (any other input — a task, a `/command` — supersedes the block):
-
-| Outcome | Choices |
-|---|---|
-| `done` | full result as JSON (`/result --json`) · run statistics (`/stats`) · new task with a fresh context (`/new`) |
-| budget abort / resumable failure | continue with a doubled cache-miss budget (`/resume --budget <2×>`) · run statistics · new task |
-| cancelled | continue this task · full result as JSON · new task |
-| non-resumable failure | run statistics · new task |
-
-Piped stdin (no TTY) gets no menu: a numbered choice a script cannot answer would only be noise. The `resume:` hint line keeps carrying the exact command for those runs.
+Scripted runs use the one-liner the failure line prints — `browser4-cli agent run --resume <task-id> --token-budget 10000000` — and `/resume [--budget <n>] [task-id]` continues any resumable failure (`NOOP_LIMIT`, a cancellation), not just budget aborts. **After every task** the session offers 2–3 numbered follow-ups chosen by typing the number — `done` → result JSON (`/result --json`) / `/stats` / `/new`, resumable failure → continue with the doubled cap (`/resume --budget <2×>`) / `/stats` / `/new`, cancelled → continue / result JSON / `/new`, non-resumable → `/stats` / `/new` — and any other input (a task, a `/command`) supersedes the block. Piped stdin (no TTY) gets no menu — a numbered choice a script cannot answer would only be noise — and the `resume:` hint line keeps carrying the exact command.
 
 ### Permissions (`--access`)
 
@@ -137,19 +116,7 @@ sandbox is active, an OS denial reaches the model as `PERMISSION_DENIED | code=S
 
 ### Extra folders (`--add-dir`)
 
-A task's boundary is its own workspace (plus its mirrored module roots and the readable roots). To let a run work on a folder that lives somewhere else, grant it explicitly:
-
-```bash
-browser4-cli agent run "Port the helpers in ../shared-libs into this repo" --coding --add-dir ../shared-libs
-browser4-cli agent run "Summarize every file in the corpus" --coding --add-dir D:/corpus --add-dir D:/archive
-```
-
-- **Repeatable** — one `--add-dir` per folder. A relative path resolves against the directory you typed the command in, and a leading `~` is your home directory.
-- **It must already exist on the backend machine.** The grant is never created implicitly, and a missing path (or a file) fails the submission with the reason instead of starting a task whose grant means nothing.
-- **Scope, not power.** The agent may read, write and use it as a `coding.shell` working directory exactly like its workspace, but `--access` still decides what is allowed — `--access read` keeps an added folder read-only — and the OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) stay refused.
-- **Task-scoped.** The grant is reset when the task ends and `--resume <id>` inherits it. `coding.permissions` lists the folders and the task prompt names them (absolute paths, as given), so the model does not have to guess.
-- **Available mid-session too.** In `agent run -i`, `/add-dir <dir>` grants the following tasks a folder without restarting the session (`/dirs` lists the grants, `/dirs clear` drops them). The session banner shows the grants it started with.
-- **The sandbox agrees.** With `-Dbrowser4.agent.sandbox=windows-acl` the sandbox account is granted the same folders, so an OS denial cannot contradict a step the boundary allowed.
+A task's boundary is its own workspace (plus its mirrored module roots and the readable roots). A folder that lives somewhere else is granted per task — repeatable, must already exist, task-scoped, `--access` still bounds it and the OS sandbox agrees; `-i` adds `/add-dir`. See [agent-workspace.md](agent-workspace.md#extra-folders-granted-with---add-dir).
 
 ## Patterns
 
@@ -319,10 +286,7 @@ browser4-cli agent run "Collect the top 5 products" --follow --ndjson | jq -c 's
 {"taskId":"…","type":"task.result","status":"done","elapsedMs":41300,"result":{"summary":"…"}}
 ```
 
-`run.usage` is one line per model request, carrying the provider's token counts (`inputTokens`/`outputTokens`/`totalTokens`, omitted when the provider reports none) — the same numbers `/stats` sums — plus the prompt-cache breakdown when the provider discloses it:
-
-- `cachedInputTokens` — prompt tokens served from the provider's prompt cache (cache *read*), `null`/absent when the provider reported no cache details (unknown, not `0`);
-- `cacheWriteInputTokens` — prompt tokens written into the prompt cache (Anthropic-style APIs; `0`/absent elsewhere).
+`run.usage` is one line per model request, carrying the provider's token counts (`inputTokens`/`outputTokens`/`totalTokens`, omitted when the provider reports none) — the same numbers `/stats` sums — plus, when the provider discloses it, the prompt-cache breakdown: `cachedInputTokens` are the prompt tokens served from its cache (cache *read*; `null`/absent when it reported no cache details — unknown, not `0`), `cacheWriteInputTokens` the tokens written into that cache (Anthropic-style APIs; `0`/absent elsewhere).
 
 `inputTokens` is **cache-inclusive across protocols**: OpenAI-compatible APIs (DeepSeek, OpenRouter, …) already count cache hits inside `prompt_tokens`, while Anthropic reports them separately and Browser4 folds them in. `cachedInputTokens / inputTokens` is therefore a comparable hit ratio, and `totalTokens` is `inputTokens` + output.
 

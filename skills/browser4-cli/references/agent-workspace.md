@@ -160,6 +160,22 @@ the operator's explicit opt-in, not something a task can grant itself, and it is
 (`browser4.agent.sandbox`). The `code` / `tool call` / `plugin` rule is driven by the
 preset instead: only `access=full` allows them.
 
+### Extra folders granted with `--add-dir`
+
+A task's boundary is its own workspace (plus its mirrored module roots and the readable roots). To let a run work on a folder that lives somewhere else, grant it explicitly:
+
+```bash
+browser4-cli agent run "Port the helpers in ../shared-libs into this repo" --coding --add-dir ../shared-libs
+browser4-cli agent run "Summarize every file in the corpus" --coding --add-dir D:/corpus --add-dir D:/archive
+```
+
+- **Repeatable** — one `--add-dir` per folder. A relative path resolves against the directory you typed the command in, and a leading `~` is your home directory.
+- **It must already exist on the backend machine.** The grant is never created implicitly, and a missing path (or a file) fails the submission with the reason instead of starting a task whose grant means nothing.
+- **Scope, not power.** The agent may read, write and use it as a `coding.shell` working directory exactly like its workspace, but `--access` still decides what is allowed — `--access read` keeps an added folder read-only — and the OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) stay refused.
+- **Task-scoped.** The grant is reset when the task ends and `--resume <id>` inherits it. `coding.permissions` lists the folders and the task prompt names them (absolute paths, as given), so the model does not have to guess.
+- **Available mid-session too.** In `agent run -i`, `/add-dir <dir>` grants the following tasks a folder without restarting the session (`/dirs` lists the grants, `/dirs clear` drops them). The session banner shows the grants it started with.
+- **The sandbox agrees.** With `-Dbrowser4.agent.sandbox=windows-acl` the sandbox account is granted the same folders, so an OS denial cannot contradict a step the boundary allowed.
+
 ### Deliverable format
 
 There is **no spreadsheet writer**, and `.xlsx` output is out of scope by decision. A
