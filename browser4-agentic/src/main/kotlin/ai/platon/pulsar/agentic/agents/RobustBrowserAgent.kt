@@ -744,12 +744,6 @@ open class RobustBrowserAgent(
     /**
      * High-level problem resolution entry. Builds an ActionOptions and delegates to resolve(ActionOptions).
      */
-    @Suppress("DEPRECATION")
-    @Deprecated(
-        message = "PerceptiveAgent.run is an internal implementation detail of command.run and is " +
-            "not exposed as an MCP tool. Use command.run (MCP tool `command_run`, CLI " +
-            "`browser4-cli agent run`) instead; external code must not call it.",
-    )
     override suspend fun run(task: String): AgentHistory {
         val opts = ActionOptions(action = task)
         return run(opts)
@@ -766,11 +760,6 @@ open class RobustBrowserAgent(
      * mutate this result.
      * @throws CancellationException if the agent is closed or the operation is canceled
      */
-    @Suppress("DEPRECATION")
-    @Deprecated(
-        message = "PerceptiveAgent.run is an internal implementation detail of command.run. Use " +
-            "command.run (MCP tool `command_run`, CLI `browser4-cli agent run`) instead.",
-    )
     override suspend fun run(action: ActionOptions): AgentHistory {
         _lastRunSessionId = null
         resetInnerToolExecutions()
@@ -954,10 +943,6 @@ open class RobustBrowserAgent(
 
     // ─── Resolution pipeline ──────────────────────────────────────────────────
 
-    @Suppress("DEPRECATION")
-    @Deprecated(
-        message = "Only PerceptiveAgent.run reaches this; run is deprecated in favour of command.run.",
-    )
     private suspend fun resolveProblemInCoroutine(action: ActionOptions): ResolveResult {
         val instruction = action.action
         val baseContext = stateManager.buildBaseExecutionContext(action, "resolve-init")
@@ -1018,10 +1003,6 @@ open class RobustBrowserAgent(
         }
     }
 
-    @Suppress("DEPRECATION")
-    @Deprecated(
-        message = "Only PerceptiveAgent.run reaches this; run is deprecated in favour of command.run.",
-    )
     private suspend fun resolveProblemWithRetry(action: ActionOptions, context: ExecutionContext): ResolveResult {
         var lastError: Exception? = null
         val sid = context.sid
@@ -1071,10 +1052,6 @@ open class RobustBrowserAgent(
         return ResolveResult(activeContext, actResult)
     }
 
-    @Suppress("DEPRECATION")
-    @Deprecated(
-        message = "Only PerceptiveAgent.run reaches this; run is deprecated in favour of command.run.",
-    )
     private suspend fun doRunAgentLoop(
         initActionOptions: ActionOptions, initContext: ExecutionContext, attempt: Int
     ): ResolveResult {
@@ -1090,10 +1067,6 @@ open class RobustBrowserAgent(
      * `b4.run`, following the bundled SKILL.md. Completion is signalled by the
      * model calling `system.taskComplete` (no JSON parsing anywhere).
      */
-    @Suppress("DEPRECATION")
-    @Deprecated(
-        message = "Only PerceptiveAgent.run reaches this; run is deprecated in favour of command.run.",
-    )
     private suspend fun doRunCliAgentLoop(
         initActionOptions: ActionOptions, initContext: ExecutionContext
     ): ResolveResult {
@@ -2370,9 +2343,6 @@ open class RobustBrowserAgent(
         append(CliAgentPrompt.hygiene(codingMode, agentWorkspaceDir, agentToolManager.accessPolicy))
     }
 
-    @Deprecated(
-        message = "Only PerceptiveAgent.run reaches this; run is deprecated in favour of command.run.",
-    )
     private suspend fun initializeResolution(initContext: ExecutionContext, attempt: Int) {
         val sid = initContext.sid
         logger.info(
@@ -2419,14 +2389,8 @@ open class RobustBrowserAgent(
 
     private fun classifyError(e: Exception, step: Int) = retryStrategy.classifyError(e, "step $step")
 
-    @Deprecated(
-        message = "Only PerceptiveAgent.run reaches this; run is deprecated in favour of command.run.",
-    )
     private fun calculateRetryDelay(attempt: Int) = retryStrategy.calculateDelay(attempt)
 
-    @Deprecated(
-        message = "Only PerceptiveAgent.run reaches this; run is deprecated in favour of command.run.",
-    )
     private fun cleanupPartialState(context: ExecutionContext) {
         try {
             logger.info("🧹 cleanup.partial sid={} step={}", context.sid, context.step)
