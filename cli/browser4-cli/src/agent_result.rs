@@ -588,10 +588,10 @@ fn strings_of(value: Option<&Value>) -> Vec<String> {
 /// A table row set rendered by the CLI's existing aligned-table formatter, with
 /// cells capped so a long value cannot push the table off a narrow terminal.
 ///
-/// In full mode the cap rises to the render width (the cells of one row still
-/// share it) and the assembled lines are not clipped again: a table is a layout,
-/// so "show everything" means "stop hiding the tail of a value", not "stop
-/// aligning columns".
+/// Full mode caps nothing: `--full` is the explicit "show me everything" switch,
+/// so a value wider than its column widens the table instead of losing its tail.
+/// The lines are then left unclipped for the same reason — a table is a layout,
+/// not a summary.
 fn table(rows: &[Value], options: &RenderOptions) -> Vec<String> {
     let columns = rows
         .iter()
@@ -599,12 +599,12 @@ fn table(rows: &[Value], options: &RenderOptions) -> Vec<String> {
         .unwrap_or(0)
         .max(1);
     let per_column = options.width.saturating_sub(4) / columns;
-    let max_cell = if options.full {
-        per_column.max(8)
+    let capped: Vec<Value> = if options.full {
+        rows.to_vec()
     } else {
-        per_column.clamp(8, CELL_PREVIEW)
+        let max_cell = per_column.clamp(8, CELL_PREVIEW);
+        rows.iter().map(|row| cap_cells(row, max_cell)).collect()
     };
-    let capped: Vec<Value> = rows.iter().map(|row| cap_cells(row, max_cell)).collect();
     crate::format_table(&capped)
         .lines()
         .map(|line| options.clip(line, options.width))
@@ -1002,6 +1002,30 @@ mod tests {
         for line in render(body, 60) {
             assert!(line.chars().count() <= 60, "line too wide: {line:?}");
         }
+    }
+
+    /// `--full` must not cap a table cell either: a long field value is a
+    /// deliverable, so its tail is content, not layout.
+    #[test]
+    fn full_rendering_keeps_long_table_cells_whole() {
+        let long = "x".repeat(300);
+        let body = json!({"result": {"fields": {"title": long}}}).to_string();
+
+        let default = rendered(body.clone(), 60);
+        assert!(
+            default.contains('…'),
+            "the default path caps a wide cell: {default}"
+        );
+
+        let full = render_result_text("task-1", &body, &options(60).with_full(true)).join("\n");
+        assert!(
+            !full.contains('…'),
+            "full rendering must not truncate a cell: {full}"
+        );
+        assert!(
+            full.contains(&long),
+            "full rendering must carry the whole value: {full}"
+        );
     }
 
     #[test]

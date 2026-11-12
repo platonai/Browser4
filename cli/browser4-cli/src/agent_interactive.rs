@@ -3088,6 +3088,12 @@ impl Repl {
         self.last_digest = crate::agent_result::ResultDigest::default();
         let extra = self.payload();
         let task_id = crate::submit_agent_task(&self.client, &self.base_url, &task, extra).await?;
+        // The follow-up menu describes THIS task, so its text and coding flag have
+        // to travel with the submission: left at their defaults, a `--coding`
+        // session offered browse-shaped follow-ups and a non-resumable failure
+        // lost its "try the same task again" entry.
+        self.last_task_text = Some(task.clone());
+        self.last_task_coding = self.coding;
         // A blank line separates two tasks, and the line names the task: a session
         // that runs several tasks used to be one undifferentiated stream of steps
         // (format plan P1-6). `▶ task <id>` stays as the leading substring.
