@@ -210,6 +210,14 @@
             </exclusions>
         </dependency>
 
+        <!-- The HTTP layer runs on Jackson 3 (`tools.jackson`), Spring Boot 4's
+             default: `browser4-rest` brings `spring-boot-starter-websocket` →
+             `spring-boot-starter-jackson`, and it also declares the Jackson 3 Kotlin
+             module that makes Kotlin `@RequestBody` DTOs bindable. Application-side
+             serialization additionally uses Jackson 2 (`com.fasterxml.jackson`,
+             provided by browser4-browser). Excluding `spring-boot-starter-jackson`
+             here did not remove Jackson 3 (the websocket starter re-introduced it) and
+             would now also strip the Kotlin module — do not reinstate it. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
@@ -217,13 +225,6 @@
                 <exclusion>
                     <groupId>org.springframework.boot</groupId>
                     <artifactId>spring-boot-starter-tomcat</artifactId>
-                </exclusion>
-                <!-- Exclude Jackson 3.x (tools.jackson) — browser4 uses Jackson 2.x
-                     (com.fasterxml.jackson) which is provided by browser4-browser and
-                     browser4-rest modules. -->
-                <exclusion>
-                    <groupId>org.springframework.boot</groupId>
-                    <artifactId>spring-boot-starter-jackson</artifactId>
                 </exclusion>
             </exclusions>
         </dependency>

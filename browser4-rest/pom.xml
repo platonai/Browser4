@@ -100,10 +100,6 @@
                     <groupId>org.springframework.boot</groupId>
                     <artifactId>spring-boot-starter-tomcat</artifactId>
                 </exclusion>
-                <exclusion>
-                    <groupId>org.springframework.boot</groupId>
-                    <artifactId>spring-boot-starter-jackson</artifactId>
-                </exclusion>
             </exclusions>
         </dependency>
         <dependency>
@@ -123,12 +119,6 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webflux</artifactId>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.springframework.boot</groupId>
-                    <artifactId>spring-boot-starter-jackson</artifactId>
-                </exclusion>
-            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.jetbrains.kotlinx</groupId>
@@ -143,10 +133,30 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
-        <!-- Jackson module for Kotlin support (Jackson 2.x; Jackson 3.x kotlin module
-             is not yet available. The core Jackson 3.x comes from Spring Boot BOM.) -->
+        <!--
+            Two Jackson stacks are on the classpath, each with its own Kotlin module:
+
+            * the HTTP layer uses Jackson 3 (`tools.jackson`), because Spring Boot 4
+              auto-configures its `JsonMapper` and `spring-boot-starter-websocket`
+              brings `spring-boot-starter-jackson` in transitively. Spring's
+              `find-and-add-modules` default (`true`) discovers modules through the
+              ServiceLoader, so `tools.jackson.module:jackson-module-kotlin` is what
+              makes Kotlin `@RequestBody` DTOs with required constructor parameters
+              (`PromptRequest`, `PageVisitRequest` / `CommandRequest`) bindable.
+              Without it every such endpoint answers 500 "Cannot construct instance …".
+            * application-side serialization uses Jackson 2 through
+              `pulsarObjectMapper()`, so its Kotlin module stays as well.
+
+            Do not add a `spring-boot-starter-jackson` exclusion to "use Jackson 2":
+            Jackson 3 is the Boot 4 HTTP default and has no Jackson 2 auto-config to
+            fall back to.
+         -->
         <dependency>
             <groupId>com.fasterxml.jackson.module</groupId>
+            <artifactId>jackson-module-kotlin</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>tools.jackson.module</groupId>
             <artifactId>jackson-module-kotlin</artifactId>
         </dependency>
 

@@ -113,9 +113,11 @@ class CommandToolExecutor(
                 ),
                 ToolSpec.Arg(
                     "tokenBudget", "Long?", "null",
-                    "Token budget for THIS task (`agent run --token-budget`), overriding " +
+                    "**Cache-miss** token budget for THIS task (`agent run --token-budget`), overriding " +
                         "`agent.token.budget.total` for this run only — a per-run override, never a " +
-                        "process-wide config write. 0 means unlimited. Omit to use the configured default.",
+                        "process-wide config write. The charge is uncached prompt + output; prompt-cache " +
+                        "reads do not count, and a provider that reports no cache details charges its " +
+                        "whole prompt. 0 means unlimited. Omit to use the configured default.",
                 ),
                 ToolSpec.Arg(
                     "addDirs", "List<String>?", "null",

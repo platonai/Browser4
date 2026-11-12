@@ -263,6 +263,10 @@
         </dependency>
 
 
+        <!-- Jackson 3 (`tools.jackson`) is the Spring Boot 4 HTTP default and arrives
+             transitively (browser4-rest → spring-boot-starter-websocket →
+             spring-boot-starter-jackson). Excluding the starter here neither removed it
+             nor removed the Kotlin module that Kotlin `@RequestBody` DTOs need. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
@@ -270,10 +274,6 @@
                 <exclusion>
                     <groupId>org.springframework.boot</groupId>
                     <artifactId>spring-boot-starter-tomcat</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.springframework.boot</groupId>
-                    <artifactId>spring-boot-starter-jackson</artifactId>
                 </exclusion>
             </exclusions>
         </dependency>
