@@ -108,7 +108,15 @@ open class BasicBrowserAgent constructor(
         }
     }
 
-    /** Reset the inner execution registry; invoked at the start of each run. */
+    /**
+     * Reset the inner execution registry; invoked at the start of each run.
+     *
+     * Deprecated: only [RobustBrowserAgent.run] calls this, and `run` is itself
+     * deprecated in favour of `command.run`.
+     */
+    @Deprecated(
+        message = "Only PerceptiveAgent.run calls this; run is deprecated in favour of command.run.",
+    )
     fun resetInnerToolExecutions() {
         innerToolExecutions.clear()
         lastInnerVerdictJson = null
@@ -166,6 +174,11 @@ open class BasicBrowserAgent constructor(
         }
     }
 
+    @Suppress("DEPRECATION")
+    @Deprecated(
+        message = "PerceptiveAgent.run is an internal implementation detail of command.run. Use " +
+            "command.run (MCP tool `command_run`, CLI `browser4-cli agent run`) instead.",
+    )
     override suspend fun run(action: ActionOptions): AgentHistory {
         _lastRunSessionId = null
         onWillRun(action)
@@ -189,6 +202,12 @@ open class BasicBrowserAgent constructor(
         return stateHistory.snapshotFor(_lastRunSessionId)
     }
 
+    @Suppress("DEPRECATION")
+    @Deprecated(
+        message = "PerceptiveAgent.run is an internal implementation detail of command.run and is " +
+            "not exposed as an MCP tool. Use command.run (MCP tool `command_run`, CLI " +
+            "`browser4-cli agent run`) instead; external code must not call it.",
+    )
     override suspend fun run(task: String): AgentHistory {
         val actionOptions = ActionOptions(action = task, multiAct = true)
         return run(actionOptions)
@@ -462,6 +481,9 @@ open class BasicBrowserAgent constructor(
 
     }
 
+    @Deprecated(
+        message = "Only PerceptiveAgent.run calls this; run is deprecated in favour of command.run.",
+    )
     protected fun onWillRun(action: ActionOptions) {
         val agentId = this.uuid.toString()
         // Emit AgentEventBus event for SSE streaming
@@ -481,6 +503,9 @@ open class BasicBrowserAgent constructor(
         )
     }
 
+    @Deprecated(
+        message = "Only PerceptiveAgent.run calls this; run is deprecated in favour of command.run.",
+    )
     protected fun onDidRun(action: ActionOptions, result: ActResult) {
         val agentId = this.uuid.toString()
 

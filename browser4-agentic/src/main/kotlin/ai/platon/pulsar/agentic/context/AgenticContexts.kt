@@ -236,7 +236,16 @@ object AgenticContexts {
 
     /**
      * A shorthand to get or create the companion agent and run a [task].
+     *
+     * Deprecated together with `PerceptiveAgent.run`: external code must use `command.run`
+     * (`browser4-cli agent run`, MCP tool `command_run`) instead of driving the companion
+     * agent directly.
      * */
+    @Suppress("DEPRECATION")
+    @Deprecated(
+        message = "PerceptiveAgent.run is an internal implementation detail of command.run. Use " +
+            "command.run (MCP tool `command_run`, CLI `browser4-cli agent run`) instead.",
+    )
     suspend fun run(task: String) = getOrCreateAgent().run(task)
 
     /**

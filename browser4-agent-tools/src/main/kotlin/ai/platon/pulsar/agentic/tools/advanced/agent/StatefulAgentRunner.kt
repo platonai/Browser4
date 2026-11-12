@@ -1034,6 +1034,7 @@ open class StatefulAgentRunner(
      * This method is extracted to allow the event handlers to be properly bound
      * to the execution context via PulsarEventBus.withServerSideEventHandlers.
      */
+    @Suppress("DEPRECATION")
     private suspend fun executeAgentCommand(
         plainCommand: String,
         status: AgentTaskStatus,

@@ -219,11 +219,20 @@ interface PerceptiveAgent : AutoCloseable {
      * High-level problem resolution entry. Implementations should construct an [ActionOptions]
      * from the raw problem string and delegate to [run] with the options.
      *
+     * Deprecated: this is an internal implementation detail of `command.run` and is deliberately
+     * NOT exposed as an MCP tool any more. External callers must use `command.run`
+     * (`browser4-cli agent run`, MCP tool `command_run`), which owns task lifecycle, status,
+     * wait/resume, workspace isolation and the access policy.
+     *
      * @param task The user goal or instruction to fulfill.
      * @return The history of THIS run: a detached snapshot containing only the states
      * collected for this task, scoped by the run's execution session.
      */
-    @MCP
+    @Deprecated(
+        message = "PerceptiveAgent.run is an internal implementation detail of command.run and is " +
+            "not exposed as an MCP tool. Use command.run (MCP tool `command_run`, CLI " +
+            "`browser4-cli agent run`) instead; external code must not call it.",
+    )
     suspend fun run(task: String): AgentHistory
 
     /**
@@ -231,10 +240,16 @@ interface PerceptiveAgent : AutoCloseable {
      * in the provided [ActionOptions]. Implementations may apply retry and timeout strategies; they
      * should record structured traces while keeping [stateHistory] focused on executed tool actions only.
      *
+     * Deprecated together with [run]: reachable only through `command.run`.
+     *
      * @param action The action options describing the user goal and context.
      * @return The history of THIS run: a detached snapshot containing only the states
      * collected for this task, scoped by the run's execution session.
      */
+    @Deprecated(
+        message = "PerceptiveAgent.run is an internal implementation detail of command.run. Use " +
+            "command.run (MCP tool `command_run`, CLI `browser4-cli agent run`) instead.",
+    )
     suspend fun run(action: ActionOptions): AgentHistory
 
     /**

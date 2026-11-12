@@ -1,20 +1,5 @@
 [ {
   "domain" : "agent",
-  "method" : "run",
-  "arguments" : [ {
-    "name" : "task",
-    "type" : "String",
-    "description" : "The user goal or instruction to fulfill.",
-    "expression" : "task: String",
-    "cliOptions" : "--task=<String>"
-  } ],
-  "returnType" : "AgentHistory",
-  "description" : "High-level problem resolution entry. Implementations should construct an [ActionOptions] from the raw problem string and delegate to [run] with the options.\n\ncollected for this task, scoped by the run's execution session.",
-  "help" : "High-level problem resolution entry. Implementations should construct an [ActionOptions] from the raw problem string and delegate to [run] with the options.\n\ncollected for this task, scoped by the run's execution session.",
-  "expression" : "agent.run(task: String)",
-  "cli" : "browser4-cli agent run --task=<String>"
-}, {
-  "domain" : "agent",
   "method" : "observe",
   "arguments" : [ {
     "name" : "instruction",

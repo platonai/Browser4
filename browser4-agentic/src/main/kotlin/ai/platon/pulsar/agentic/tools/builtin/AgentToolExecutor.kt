@@ -84,7 +84,7 @@ class AgentToolExecutor : AbstractToolExecutor() {
     /**
      * Execute agent.* expressions against a PerceptiveAgent target using named args.
      */
-    @Suppress("UNUSED_PARAMETER")
+    @Suppress("UNUSED_PARAMETER", "DEPRECATION")
     @Throws(IllegalArgumentException::class)
     override suspend fun callFunctionOn(
         domain: String, functionName: String, args: Map<String, Any?>, receiver: Any
@@ -113,6 +113,11 @@ class AgentToolExecutor : AbstractToolExecutor() {
                     agent.extract(paramString(args, "instruction", functionName)!!)
                 }
             }
+            // Kept for backward compatibility only: `PerceptiveAgent.run` (and this
+            // branch) is deprecated in favour of `command.run`, and `agent.run` is no
+            // longer advertised as an MCP tool (`@MCP` was removed), so new callers
+            // cannot discover it. Retained so a client that still spells `agent_run`
+            // keeps working instead of hitting "Unsupported agent method".
             "run" -> {
                 requireLLMConfigured(agent)
                 validateArgs(args, allowed = setOf("task"), required = setOf("task"), functionName)
