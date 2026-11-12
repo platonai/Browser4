@@ -308,7 +308,7 @@ object CodingComponents {
             allowExecutionProvider = { policy.allowsExec() },
             commandAllowedProvider = { policy.allowsCommandExecution(it) },
             sensitivePaths = policy.sensitivePaths,
-            protectedDirs = policy.protectedDirs,
+            protectedDirs = policy.protectedDirs + extraProtectedEntries(),
             boundaryAuthorizer = boundary,
             initialSessionEnv = sessionEnv,
             readableRoots = ReadablePaths.roots().toSet(),
@@ -388,8 +388,8 @@ object CodingComponents {
             readOnly = !policy.allowsFileMutation(),
             readOnlyProvider = { !policy.allowsFileMutation() },
             writeAllowedProvider = { policy.allowsMutationOf(it) },
-            protectedFiles = policy.protectedFiles,
-            protectedDirs = policy.protectedDirs,
+            protectedFiles = policy.protectedFiles + extraProtectedEntries(),
+            protectedDirs = policy.protectedDirs + extraProtectedEntries(),
             sensitivePaths = policy.sensitivePaths,
             persistSnapshots = persistSnapshots,
             boundaryAuthorizer = boundary,
@@ -397,4 +397,20 @@ object CodingComponents {
             additionalDirs = policy.additionalDirs,
         )
     }
+
+    /**
+     * Operator additions to the protected set:
+     * `-Dbrowser4.agent.protected.extra=<path>[,<path>…]`, workspace-relative.
+     *
+     * One property for both files and directories — the caller's intent is "this path
+     * is launch/build infrastructure", not "a file" or "a folder". Entries are
+     * normalised to forward slashes and no leading slash so they match the
+     * workspace-relative form the file system compares against.
+     */
+    internal fun extraProtectedEntries(): Set<String> =
+        System.getProperty("browser4.agent.protected.extra", "")
+            .split(',')
+            .map { it.trim().replace('\\', '/').trimStart('/').trimEnd('/') }
+            .filter { it.isNotEmpty() }
+            .toSet()
 }

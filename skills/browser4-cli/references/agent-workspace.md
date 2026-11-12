@@ -45,7 +45,7 @@ backend `<agent data>` is `~/.browser4/workspaces/<workspace-id>/app-data`.
 | Command | Root |
 |---|---|
 | `agent run "<task>"` | `…/<agent-uuid>/workspace.<task-id>` — this task only |
-| `agent run "<task>" --coding` | the same per-task directory, provisioned as a **mirror** of the checkout (source files; `.git` is absent) |
+| `agent run "<task>" --coding` | an isolated **git worktree** of the checkout: `<repo>/.browser4/worktrees/<task-id>` (it has `.git`; the change is merged back as a patch) |
 | `agent run --resume <task-id>` | the **interrupted** task's workspace, so the rows/files it already wrote are what the new run continues from |
 | `agent run --shared-workspace` | the old shared `…/<agent-uuid>/workspace`, which holds earlier tasks' files |
 | `--fresh-workspace` | accepted for compatibility; a per-task workspace is now the default |
@@ -53,7 +53,17 @@ backend `<agent data>` is `~/.browser4/workspaces/<workspace-id>/app-data`.
 Why isolation is the default: files from an earlier run must never appear in this run's
 `filesChanged` (a 2026-10-28 run reported a CSV written 36 minutes earlier and another
 agent's report as its own deliverables), and a task that lists its workspace must not
-wade through a previous task's hundreds of helper scripts.
+wade through a previous task's hundreds of helper scripts. For `--coding` the same
+requirement is met with a git worktree instead of a copy: every write is disposable,
+`git status`/`git diff` work, and a change that does not pass `coding.verify` is never
+merged into the checkout.
+
+**Where a coding task's change lands.** `agent result` reports `workspace` = the
+**main repository** (the checkout the patch was applied to), `isolatedWorkspace` = the
+worktree, and `merge` = `applied` | `refused` | `pending`. `refused` means nothing was
+applied — the run's files exist only in `isolatedWorkspace` — so a client must not read
+`workspace` as containing the work. A refused merge also fails the task, with the reason
+in `problems`/the failure message.
 
 `agent result <task-id>` names the directory (`workspace`) and lists the files **this
 run** reported (`filesChanged`); a run that aborted without reporting them still lists
@@ -233,7 +243,7 @@ Credential locations stay refused. `--access` never widens paths.
 
 | Flag / property | Applies to | Effect |
 |---|---|---|
-| `--coding` | `agent run` | mirror the checkout into the per-task workspace (repo-relative paths become readable) |
+| `--coding` | `agent run` | run in an isolated **git worktree** of the checkout (has `.git`); the change is merged into the main repository as a patch only when `coding.verify` passes |
 | `--shared-workspace` | `agent run` | use the shared `<agent data>/workspace` (earlier tasks' files are visible) instead of this task's own directory |
 | `--resume <task-id>` | `agent run` | reuse the interrupted task's workspace (its files are what the new run continues from) |
 | `--fresh-workspace` | `agent run` | accepted for compatibility; per-task isolation is the default now |
