@@ -375,6 +375,19 @@ class CodingAgentShell(
         /** Redirection introduced by an argument (`>file`, `>>file`, `2>file`, `&>file`). */
         private val REDIRECTION_PREFIX = Regex("""^(?:\d+|&)?>>?""")
 
+        /**
+         * POSIX device sinks: a redirection such as `2>/dev/null` is shell hygiene, not filesystem
+         * access, so it must not trip the workspace boundary. Compared exactly — device names are
+         * case-sensitive on POSIX.
+         */
+        private val POSIX_DEVICE_SINKS = setOf(
+            "/dev/null", "/dev/zero", "/dev/stdout", "/dev/stderr", "/dev/tty",
+        )
+
+        /** Windows reserved device names (case-insensitive), also reachable as `\\.\NUL`. */
+        private val WINDOWS_DEVICE_NAMES: Set<String> =
+            setOf("nul", "con", "prn", "aux") + (1..9).flatMap { listOf("com$it", "lpt$it") }
+
         private val logger = LoggerFactory.getLogger(CodingAgentShell::class.java)
 
         private val PS_ENV_VAR = Regex("""\${'$'}env:([A-Za-z_][A-Za-z0-9_]*)""", RegexOption.IGNORE_CASE)
@@ -1610,6 +1623,7 @@ class CodingAgentShell(
         if (!pathGuardEnabled) return null
         for (token in tokens) {
             val candidate = pathCandidate(token) ?: continue
+            if (isDeviceSink(candidate)) continue
             val expanded = expandVariables(candidate)
             if (expanded == null) {
                 if (SENSITIVE_PATH_KEYWORDS.any { candidate.lowercase().contains(it) }) {
@@ -1681,6 +1695,7 @@ class CodingAgentShell(
         for (token in tokens) {
             if (isWindowsSwitch(token)) continue
             val candidate = pathCandidate(token) ?: continue
+            if (isDeviceSink(candidate)) continue
             val expanded = expandVariables(candidate) ?: continue
             val ported = portableSeparators(expanded)
             val path = runCatching { Path.of(ported) }.getOrNull() ?: continue
@@ -1828,6 +1843,7 @@ class CodingAgentShell(
         if (writeTargets.isEmpty()) return null
         for (token in writeTargets) {
             val candidate = pathLikeValue(token) ?: continue
+            if (isDeviceSink(candidate)) continue
             val hit = protectedRootOf(candidate) ?: continue
             return PROTECTED_PATH_PREFIX +
                 "'$token' is inside protected directory '${canonicalBaseDir.relativize(hit).toString().replace('\\', '/')}' — " +
@@ -1921,6 +1937,23 @@ class CodingAgentShell(
         val looksLikePath = value.startsWith("~") || value.startsWith("%") || value.startsWith("$") ||
             value.contains('/') || value.contains('\\')
         return if (looksLikePath) value else null
+    }
+
+    /**
+     * Whether [candidate] names an OS device sink rather than a real filesystem location.
+     *
+     * A redirection like `2>/dev/null` reached the boundary guard as the token `2>/dev/null`, had
+     * its redirection prefix stripped to `/dev/null`, and was refused as "outside the workspace"
+     * (a live run lost the redirection to COMMAND_PATH_DENIED). Device sinks belong to no
+     * workspace, so no boundary decision applies; ordinary absolute paths such as `/dev/sda` stay
+     * guarded. `NUL` is matched for Windows command lines, where it is legal without a directory.
+     */
+    private fun isDeviceSink(candidate: String): Boolean {
+        val ported = portableSeparators(candidate.trim()).trimEnd('/')
+        if (ported in POSIX_DEVICE_SINKS) return true
+        // `\\.\NUL` becomes `//./NUL` after separator normalisation.
+        val windowsName = ported.removePrefix("//./")
+        return windowsName.lowercase() in WINDOWS_DEVICE_NAMES
     }
 
     /**
