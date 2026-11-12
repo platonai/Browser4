@@ -218,6 +218,21 @@ class CliAgentPromptTest {
     }
 
     @Test
+    @DisplayName("an isolated coding run is told it has git, and that unverified work is not merged")
+    fun isolatedCodingRoleDescribesWorktreeMerge() {
+        val prompt = CliAgentPrompt.role(
+            codingMode = true, repairMaxRounds = 3, workspaceDir = workspace, windows = true, isolated = true,
+        )
+
+        assertTrue(prompt.contains("isolated git worktree"), prompt)
+        assertTrue(prompt.contains("HAS `.git`"), prompt)
+        assertFalse(prompt.contains("NO `.git`"), prompt)
+        assertTrue(prompt.contains("NOTHING is merged"), prompt)
+        assertTrue(prompt.contains("b4w build"), prompt)
+        assertTrue(prompt.contains(workspace.toString()), prompt)
+    }
+
+    @Test
     @DisplayName("a folder granted with --add-dir is named in the prompt so the model uses it")
     fun permissionsBlockNamesAddedFolders() {
         val added = Path.of("/corpus").toAbsolutePath().normalize()

@@ -239,6 +239,14 @@ class AgentToolManager constructor(
         if (!agent.codingMode) return
         val root = workspaceRoot.toAbsolutePath().normalize()
         if (root == ai.platon.pulsar.coding.CodingWorkspace.workspaceRoot.toAbsolutePath().normalize()) return
+        // A git work tree is already repository-shaped (every module is right
+        // there), and an isolated worktree is exactly that. Mirroring it would link
+        // modules onto the checkout itself — the isolation plan runs coding tasks
+        // in a worktree, so this is the normal path now, not an edge case.
+        if (ai.platon.pulsar.coding.WorkspaceIsolation.resolveRepoRoot(root) != null) {
+            logger.debug("workspace {} is already a git work tree; skipping the coding mirror", root)
+            return
+        }
         runCatching {
             val report = ai.platon.pulsar.coding.WorkspaceMirror.ensure(root)
             if (report.sourceRepo != null) {
@@ -274,19 +282,31 @@ class AgentToolManager constructor(
      * Safe to call for non-coding tasks too: it only resets the mutation log and
      * records `coding=false` in the manifest.
      */
-    fun beginTask(taskId: String, instruction: String, coding: Boolean): String? {
+    fun beginTask(
+        taskId: String,
+        instruction: String,
+        coding: Boolean,
+        isolation: String? = null,
+        worktree: String? = null,
+        baseline: String? = null,
+        sourceRepo: java.nio.file.Path? = null,
+    ): String? {
         val root = workspaceRoot.toAbsolutePath().normalize()
         val store = ai.platon.pulsar.coding.WorkspaceManifestStore()
         val lifecycle = ai.platon.pulsar.coding.WorkspaceTaskLifecycle()
         val existing = runCatching { store.read(root) }.getOrNull()
-        val sourceRepo = existing?.sourceRepo?.let { java.nio.file.Path.of(it) }
+        // The checkout a worktree was created from. Recorded explicitly because a
+        // worktree has no manifest of its own until this write point, and the
+        // task-end Δgit computation must look at the MAIN repository, not the
+        // isolated tree.
+        val repo = existing?.sourceRepo?.let { java.nio.file.Path.of(it) } ?: sourceRepo
         // Write point 2: rotate leftover currentTask (crash recovery) then set active.
         runCatching {
             val base = existing ?: ai.platon.pulsar.coding.WorkspaceManifest(
                 workspaceId = agent.uuid.toString(),
                 agentUuid = agent.uuid.toString(),
                 engine = "cli",
-                sourceRepo = sourceRepo?.toString(),
+                sourceRepo = repo?.toString(),
             )
             val rotatedLast = base.currentTask ?: base.lastTask
             val current = ai.platon.pulsar.coding.TaskSnapshot(
@@ -294,16 +314,20 @@ class AgentToolManager constructor(
                 instruction = instruction.take(ai.platon.pulsar.coding.WorkspaceManifest.MAX_INSTRUCTION_LEN),
                 coding = coding,
                 startedAt = java.time.Instant.now(),
-                baselineCaptured = sourceRepo != null,
+                baselineCaptured = repo != null,
+                isolation = isolation,
+                worktree = worktree,
+                baseline = baseline,
             )
             store.write(root, base.copy(
                 state = ai.platon.pulsar.coding.WorkspaceState.ACTIVE,
                 currentTask = current,
                 lastTask = rotatedLast,
+                sourceRepo = base.sourceRepo ?: repo?.toString(),
             ))
             // Capture the git baseline for Δgit at task end.
-            if (sourceRepo != null) {
-                gitBaseline = lifecycle.captureGitBaseline(sourceRepo)
+            if (repo != null) {
+                gitBaseline = lifecycle.captureGitBaseline(repo)
             }
         }.onFailure { logger.warn("beginTask manifest write failed: {}", it.message) }
         return runCatching { lifecycle.beginTask(root, taskId, instruction, coding, codingFs) }
@@ -319,7 +343,13 @@ class AgentToolManager constructor(
      * Must be called from a `finally` (non-cancellable) so cancelled tasks are
      * still recorded.
      */
-    fun endTask(taskId: String, status: ai.platon.pulsar.coding.TaskStatus) {
+    fun endTask(
+        taskId: String,
+        status: ai.platon.pulsar.coding.TaskStatus,
+        merge: String? = null,
+        patch: String? = null,
+        preRef: String? = null,
+    ) {
         val root = workspaceRoot.toAbsolutePath().normalize()
         val store = ai.platon.pulsar.coding.WorkspaceManifestStore()
         val lifecycle = ai.platon.pulsar.coding.WorkspaceTaskLifecycle()
@@ -335,6 +365,9 @@ class AgentToolManager constructor(
                 endedAt = java.time.Instant.now(),
                 filesChanged = filesChanged,
                 mutations = mutations,
+                merge = merge ?: cur.merge,
+                patch = patch ?: cur.patch,
+                preRef = preRef ?: cur.preRef,
             )
             store.write(root, m.copy(
                 state = when (status) {

@@ -91,15 +91,18 @@ object CodingWorkspace {
         get() = AgentAccessPolicy.serverDefault.allowDestructive
 
     /**
-     * Transactional workspace mode (plan P2.1): `off` (default) runs a dev task
-     * directly in the workspace; `worktree` runs it in an isolated git worktree
-     * and merges back on success (rolling back by discarding the worktree).
+     * Transactional workspace mode: `worktree` (default) runs a coding task in an
+     * isolated git worktree and merges the change back on success; `off` runs it
+     * directly in the workspace (the pre-2026-11 behaviour, kept as a rollback).
      *
-     * Off by default on purpose: isolation changes where build artifacts land and
-     * needs observing before it becomes the default (plan Q3(b)).
+     * The default changed with the self-development isolation plan
+     * (`docs-dev/copilot/20261113-self-dev-worktree-isolation-plan.md` §D1): a
+     * worktree makes every write disposable, restores `git` as the audit surface
+     * and stops a failed task from leaving the user's checkout dirty. Non-git
+     * workspaces are unaffected — the caller falls back to running in place.
      */
     val isolationMode: String
-        get() = System.getProperty("browser4.agent.workspace.isolation", "off").trim().lowercase()
+        get() = System.getProperty("browser4.agent.workspace.isolation", "worktree").trim().lowercase()
 
     /** Whether [isolationMode] asks for an isolated worktree. */
     fun isIsolationEnabled(): Boolean = isolationMode in setOf("worktree", "on", "true", "isolated")
