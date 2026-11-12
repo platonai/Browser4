@@ -1663,6 +1663,9 @@ open class RobustBrowserAgent(
                                     isDecidedComplete = true,
                                     summary = completion.summary,
                                     keyFindings = completion.keyFindings,
+                                    // The model's own follow-up proposals reach the CLI's
+                                    // "likely next steps" menu through the command result.
+                                    nextSuggestions = completion.nextSuggestions,
                                     filesChanged = completion.filesChanged,
                                     problems = completion.problems,
                                 )

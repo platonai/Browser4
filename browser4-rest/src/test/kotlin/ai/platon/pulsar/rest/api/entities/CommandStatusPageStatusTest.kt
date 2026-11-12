@@ -1,6 +1,8 @@
 package ai.platon.pulsar.rest.api.entities
 
 import ai.platon.browser4.common.B4Constants.PAGE_STATUS_UNKNOWN
+import ai.platon.pulsar.agentic.model.AgentHistory
+import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskStatus
 import ai.platon.pulsar.common.ResourceStatus
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -131,5 +133,23 @@ class CommandStatusPageStatusTest {
         assertTrue(summary.contains("wrote 1 file(s)"), summary)
         assertTrue(summary.contains("amazon_microwaves.csv"), summary)
         assertTrue(summary.contains("agent run --resume abc-123"), summary)
+    }
+
+    @Test
+    @DisplayName("the agent's own nextSuggestions reach the payload")
+    fun nextSuggestionsReachThePayload() {
+        val agentStatus = AgentTaskStatus(statusCode = ResourceStatus.SC_OK, processState = "done")
+        val state = AgentState(step = 1, instruction = "fix the build")
+        state.isComplete = true
+        state.summary = "Fixed."
+        state.nextSuggestions = listOf("run the browser4-rest tests", "commit the change")
+        agentStatus.agentHistory = AgentHistory(mutableListOf(state))
+
+        val result = agentStatus.toCommandStatus().commandResult!!
+
+        assertEquals(
+            listOf("run the browser4-rest tests", "commit the change"),
+            result.nextSuggestions,
+        )
     }
 }

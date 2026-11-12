@@ -267,6 +267,22 @@ class SystemToolExecutorTest {
         assertTrue(completion.keyFindings == listOf("k1"), "keyFindings: ${completion.keyFindings}")
         assertTrue(completion.filesChanged == listOf("f1"), "filesChanged: ${completion.filesChanged}")
         assertTrue(completion.problems == listOf("p1"), "problems: ${completion.problems}")
+        assertNull(completion.nextSuggestions)
+    }
+
+    @Test
+    @DisplayName("TaskCompletion carries the model's own next suggestions")
+    fun taskCompletionParsesNextSuggestions() {
+        // The interactive session's "likely next steps" menu starts from these, so a
+        // dropped field would silently degrade the menu to the heuristics.
+        val completion = TaskCompletion.fromJson(
+            """{"summary":"done","nextSuggestions":["run the tests","commit the change"]}"""
+        )
+
+        assertTrue(
+            completion.nextSuggestions == listOf("run the tests", "commit the change"),
+            "nextSuggestions: ${completion.nextSuggestions}",
+        )
     }
 
     @Test

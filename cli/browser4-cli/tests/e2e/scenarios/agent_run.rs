@@ -494,8 +494,8 @@ pub(super) fn test_agent_run_interactive_renders_the_result_sections(ctx: &mut E
     }
 }
 
-/// `/result --json` stays the machine escape hatch: the raw envelope, not the
-/// rendered sections.
+/// `/result --json` stays the machine escape hatch — but pretty-printed, because a
+/// human reads it too and the whole envelope used to arrive as one 5 KB line.
 pub(super) fn test_agent_run_interactive_result_json_prints_the_raw_envelope(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     let started_at = Instant::now();
@@ -515,12 +515,21 @@ pub(super) fn test_agent_run_interactive_result_json_prints_the_raw_envelope(ctx
 
     let stdout = &run_result.stdout;
     assert!(
-        stdout.contains("\"statusTool\":\"command_status\""),
-        "/result --json must print the raw `command_result` envelope:\n{stdout}"
+        stdout.contains("\"statusTool\": \"command_status\""),
+        "/result --json must print the `command_result` envelope, indented:\n{stdout}"
     );
     assert!(
         stdout.contains("\"keyFindings\""),
-        "the raw envelope keeps the payload fields machines read:\n{stdout}"
+        "the envelope keeps the payload fields machines read:\n{stdout}"
+    );
+    // One line per field: the pretty form is what makes the envelope readable.
+    let indented = stdout
+        .lines()
+        .filter(|line| line.starts_with("  \""))
+        .count();
+    assert!(
+        indented >= 3,
+        "/result --json must indent its fields, got {indented} indented line(s):\n{stdout}"
     );
 }
 

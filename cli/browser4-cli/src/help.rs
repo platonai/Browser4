@@ -1883,7 +1883,25 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    written / Problems / Data) instead of one line of raw JSON; /result --json prints".to_string(),
         );
         lines.push(
-            "    the raw envelope. --ndjson stays machine-only and is unaffected.".to_string(),
+            "    the envelope as pretty JSON and /result --full shows every entry. After each task".to_string(),
+        );
+        lines.push(
+            "    the session predicts 2-3 next steps - the model's own nextSuggestions first, then".to_string(),
+        );
+        lines.push(
+            "    what the payload left open - so type the number, or your own task.".to_string(),
+        );
+        lines.push(
+            "  - Every task of a session inherits a compacted `## Session context` block (the".to_string(),
+        );
+        lines.push(
+            "    earlier tasks, their files, open problems and your corrections - a revised goal".to_string(),
+        );
+        lines.push(
+            "    wins), so /new is only for a deliberately".to_string(),
+        );
+        lines.push(
+            "    fresh context. --ndjson stays machine-only and is unaffected.".to_string(),
         );
         lines.push(
             "  - -i, --follow and --wait end with the same line: `✔ Agent completed in 41.3s ·".to_string(),
@@ -1948,7 +1966,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    offers 2-3 numbered next steps (type the number, or a new task).".to_string(),
+            "    offers 2-3 numbered next TASKS predicted from what the run produced (type the".to_string(),
+        );
+        lines.push(
+            "    number, or your own task).".to_string(),
         );
         lines.push(
             "  - A step the CLI cannot parse is skipped (one notice line) instead of ending the"

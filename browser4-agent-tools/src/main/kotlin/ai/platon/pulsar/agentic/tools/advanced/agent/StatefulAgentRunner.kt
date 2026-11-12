@@ -121,6 +121,22 @@ open class StatefulAgentRunner(
     private val inputLock = Any()
 
     /**
+     * The session's cross-task conversation: a compacted record of the tasks this
+     * runner already finished, prepended to the next task's instruction.
+     *
+     * Every task used to start from zero, so a session of ten related tasks had the
+     * user restating the same background ten times. This is the memory that fixes
+     * it; [SessionConversation] also owns its budget-driven compression, which is
+     * what keeps a long session's prompt from growing without bound.
+     *
+     * `null` when `browser4.agent.session.contextEnabled=false`.
+     */
+    private val conversation: SessionConversation? =
+        runCatching { SessionConversation.fromConf(session.sessionConfig) }
+            .onFailure { logger.warn("session conversation disabled: {}", it.message) }
+            .getOrNull()
+
+    /**
      * Shared per process: all runners write the same global JSONL file, so they
      * must share ONE persistence instance — separate instances would interleave
      * unsynchronized appends and each compaction would drop the other runners'
@@ -671,6 +687,12 @@ open class StatefulAgentRunner(
             }
         }
         val instruction = resume?.let { resumeInstruction(plainCommand, it) } ?: plainCommand
+        // What this session already did, as a compacted `## Session context` block.
+        // Empty for the first task of a session (so a one-shot `agent run` is
+        // byte-identical to before) and whenever the feature is switched off.
+        val sessionBlock = conversation?.renderBlock().orEmpty()
+        val effectiveInstruction =
+            if (sessionBlock.isEmpty()) instruction else "$instruction\n\n$sessionBlock"
         val codingMode = coding ?: resume?.codingMode ?: false
         val accessPreset = access ?: resume?.accessPreset?.let { AccessPreset.parse(it) }
         // Extra folders granted to THIS task (`agent run --add-dir`). Explicit values win; an
@@ -803,7 +825,16 @@ open class StatefulAgentRunner(
                 // below: the companion agent outlives the task and is shared by
                 // every other caller of the session.
                 it.runEventListener = { event -> recordRunEvent(status.id, event) }
-                it.steeringSource = { drainInputs(status.id) }
+                it.steeringSource = {
+                    val drained = drainInputs(status.id)
+                    // A line typed into a running task is a user instruction — often a
+                    // correction ("no, use CSV not XLSX"). It used to die with the run it
+                    // steered; the session keeps it so later tasks still honour it.
+                    if (drained.isNotEmpty()) {
+                        conversation?.noteUserInput(drained)
+                    }
+                    drained
+                }
             }
 
             // Create and wire up ServerSideAgentEventHandlers for this command
@@ -845,10 +876,10 @@ open class StatefulAgentRunner(
                     AgentEventBus.withServerSideAgentEventHandlers(serverSideAgentEventHandlers) {
                         if (runDispatcher != null) {
                             withContext(runDispatcher) {
-                                executeAgentCommand(instruction, status, agent, runHasReturned, startIndex, codingMode, freshWorkspace)
+                                executeAgentCommand(effectiveInstruction, status, agent, runHasReturned, startIndex, codingMode, freshWorkspace)
                             }
                         } else {
-                            executeAgentCommand(instruction, status, agent, runHasReturned, startIndex, codingMode, freshWorkspace)
+                            executeAgentCommand(effectiveInstruction, status, agent, runHasReturned, startIndex, codingMode, freshWorkspace)
                         }
                     }
                 } finally {
@@ -939,6 +970,10 @@ open class StatefulAgentRunner(
                 null
             }
             status.done()
+            // The record must not carry the prompt prelude: the session block that ran
+            // is a few KB and would otherwise multiply into every published snapshot.
+            runCatching { stripSessionBlockFromHistory(status.agentHistory) }
+                .onFailure { logger.debug("stripping the session block failed for {}: {}", status.id, it.message) }
             onStatusChanged(status)
             // Close the live feed: the terminal step is what makes a follower
             // stop, and the steering queue can never be drained after this point.
@@ -948,6 +983,14 @@ open class StatefulAgentRunner(
             } else {
                 recordLifecycle(status, AgentTaskEvent.TYPE_DONE, status.message)
             }
+            // Remember this task for the rest of the session: the next task's
+            // instruction carries a compacted version of it (see [SessionConversation]),
+            // so a multi-task session builds on what it already did instead of
+            // restarting from zero. Recorded here, in the terminal path, so cancelled
+            // and failed runs are remembered too — "that attempt failed this way" is
+            // exactly the context the next task needs.
+            runCatching { conversation?.record(status) }
+                .onFailure { logger.warn("Recording the session conversation failed for {}: {}", status.id, it.message) }
         }
     }
 
@@ -1002,10 +1045,11 @@ open class StatefulAgentRunner(
     ) {
         // Record the submitted instruction so callers can verify they're
         // getting results for the right task (prevents cross-talk confusion).
-        // A resumed run's prompt carries a `## Resume context` block that is not
-        // part of what the user submitted, so store the task text without it —
-        // otherwise a second resume would nest blocks.
-        status.submittedTask = stripResumeBlock(plainCommand)
+        // The prompt may carry blocks this runner appended — a `## Resume context`
+        // block and/or this session's `## Session context` — and neither is part of
+        // what the user submitted: storing them would nest blocks on a later resume
+        // and misreport the task in `agent status`.
+        status.submittedTask = stripResumeBlock(stripSessionBlock(plainCommand))
 
         // Record where this task's tools may write, so a finished task can point its
         // caller at the deliverables instead of leaving them to search app-data.

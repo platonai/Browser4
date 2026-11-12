@@ -1174,56 +1174,82 @@ fn continued_budget(budget: Option<u64>) -> Option<u64> {
 
 /// One suggested follow-up, offered as a numbered choice after a task ends.
 ///
-/// The `command` is what selecting it runs — a REPL command (`/stats`,
-/// `/result --json`, `/resume --budget N`, `/new`) — so a choice and a typed
-/// command share one code path.
+/// The `command` is what selecting it runs: either a REPL command (`/resume
+/// --budget N` — the one "continue" that is not a new task) or the **task text**
+/// of a predicted follow-up, which goes through exactly the path a typed task
+/// takes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NextAction {
-    /// Short label shown to the user ("continue with a 10.0M cache-miss budget").
+    /// Short intent shown to the user ("review the 2 changed file(s)").
     label: String,
-    /// The REPL command that performs it.
+    /// What selecting it runs.
     command: String,
 }
 
 /// What the interactive session knows about a finished task when it decides what
 /// to offer next.
-#[derive(Debug, Clone, Copy, Default)]
-struct TaskOutcome<'a> {
+///
+/// The follow-ups are built from what the run actually produced — the files it
+/// changed, the problems it left open, and the next steps the model proposed in
+/// its own completion report — not from the CLI's command list. That is the whole
+/// difference between "here are three commands you could type" (which the user
+/// already had to know) and "here is what you probably want to do next".
+#[derive(Debug, Clone, Default)]
+struct TaskOutcome {
     /// `done`, `failed`, `cancelled` (the terminal status word).
-    status: &'a str,
+    status: String,
     /// Machine failure code (`TOKEN_BUDGET`, `NOOP_LIMIT`, …).
-    error_code: Option<&'a str>,
+    error_code: Option<String>,
     /// Whether `agent run --resume <id>` can continue it.
     resumable: bool,
     /// The cache-miss budget the run enforced (`None` = unknown, `0` = unlimited).
     budget: Option<u64>,
+    /// The task text the user typed.
+    task: Option<String>,
+    /// Whether this task ran as a coding task.
+    coding: bool,
+    /// The payload facts (files, findings, problems, the model's suggestions).
+    digest: crate::agent_result::ResultDigest,
 }
 
-impl TaskOutcome<'_> {
+impl TaskOutcome {
     fn can_continue(&self) -> bool {
-        self.resumable || self.error_code == Some(ERROR_TOKEN_BUDGET)
+        self.resumable || self.error_code.as_deref() == Some(ERROR_TOKEN_BUDGET)
+    }
+
+    /// The failure line's reason, for a "diagnose it" follow-up.
+    fn reason(&self) -> Option<&str> {
+        self.digest
+            .summary
+            .as_deref()
+            .map(str::trim)
+            .filter(|reason| !reason.is_empty())
     }
 }
 
-/// The 2–3 follow-ups worth offering after a task ends.
-///
-/// Deliberately static and outcome-driven: a list derived from the *result* (a
-/// budget abort wants `continue`, a finished run wants the result, a failure
-/// wants the counters) is what makes the numbers useful instead of decorative.
-fn next_actions(outcome: TaskOutcome<'_>) -> Vec<NextAction> {
-    let result_json = NextAction {
-        label: "full result as JSON".to_string(),
-        command: "/result --json".to_string(),
-    };
-    let stats = NextAction {
-        label: "run statistics".to_string(),
-        command: "/stats".to_string(),
-    };
-    let fresh = NextAction {
-        label: "start a new task (fresh context)".to_string(),
-        command: "/new".to_string(),
-    };
+/// How many follow-ups the block offers.
+const NEXT_ACTIONS: usize = 3;
 
+/// Upper bound on a rendered follow-up label.
+const NEXT_LABEL_MAX: usize = 72;
+
+/// The follow-ups worth offering after a task ends: **tasks the user is likely to
+/// want next**, in priority order.
+///
+/// Three sources, most-predictive first:
+/// 1. the model's own `nextSuggestions` from its completion report (it just did the
+///    work, so it knows what is left);
+/// 2. an open `problems` entry — the most actionable thing a run can leave behind;
+/// 3. deterministic intents derived from the outcome: review the diff, run the
+///    tests, commit, dig into a finding, diagnose a failure.
+///
+/// The list never falls back to `/stats` / `/new`: the user can type either, and a
+/// menu slot spent on the CLI's own bookkeeping is a slot not spent on the work.
+fn next_actions(outcome: &TaskOutcome) -> Vec<NextAction> {
+    let mut actions: Vec<NextAction> = Vec::new();
+
+    // The one action that is not a new task: continuing an interrupted run is what
+    // a resumable failure (a budget abort, a cancel) is FOR.
     if outcome.can_continue() {
         let budget = continued_budget(outcome.budget);
         let label = match budget {
@@ -1237,39 +1263,220 @@ fn next_actions(outcome: TaskOutcome<'_>) -> Vec<NextAction> {
             Some(budget) => format!("/resume --budget {budget}"),
             None => "/resume".to_string(),
         };
-        let mut actions = vec![NextAction { label, command }];
-        // A cancelled task may still have produced a payload (files, findings);
-        // a failed one is better served by its counters.
-        actions.push(if outcome.status == "cancelled" {
-            result_json
-        } else {
-            stats
-        });
-        actions.push(fresh);
-        return actions;
+        actions.push(NextAction { label, command });
     }
 
-    if outcome.status == "done" {
-        return vec![result_json, stats, fresh];
+    for (label, task) in predicted_tasks(outcome) {
+        if actions.len() >= NEXT_ACTIONS {
+            break;
+        }
+        push_task(&mut actions, &label, &task);
     }
-    vec![stats, fresh]
+
+    actions
 }
 
-/// The numbered choice block: one header plus one aligned line per action.
+/// Add a task-shaped follow-up unless it duplicates one already offered.
+///
+/// Deduplication is on the task text, not the label: the model's suggestions and
+/// the deterministic ones routinely say the same thing in different words ("run
+/// the tests" vs "run the tests for browser4-rest"), and two menu entries that
+/// start the same task are worse than one.
+fn push_task(actions: &mut Vec<NextAction>, label: &str, task: &str) {
+    let task = task.trim();
+    let label = one_line(label);
+    if task.is_empty() || label.is_empty() {
+        return;
+    }
+    let normalized = |text: &str| one_line(text).to_lowercase();
+    let candidate = normalized(task);
+    if actions
+        .iter()
+        .any(|action| normalized(&action.command) == candidate)
+    {
+        return;
+    }
+    actions.push(NextAction {
+        label: truncate(&label, NEXT_LABEL_MAX),
+        command: task.to_string(),
+    });
+}
+
+/// The task-shaped follow-ups of [outcome], most useful first.
+fn predicted_tasks(outcome: &TaskOutcome) -> Vec<(String, String)> {
+    let mut tasks: Vec<(String, String)> = Vec::new();
+    let files = &outcome.digest.files;
+    let findings = &outcome.digest.findings;
+    let problems = &outcome.digest.problems;
+    let listing = summary_of(files, 6);
+
+    // The model's own proposal is the best predictor there is: it just did the
+    // work and its completion report says what it could not finish.
+    for suggestion in &outcome.digest.next_suggestions {
+        let suggestion = one_line(suggestion);
+        if suggestion.is_empty() {
+            continue;
+        }
+        tasks.push((suggestion.clone(), suggestion));
+    }
+
+    if let Some(problem) = problems.first() {
+        let problem = one_line(problem);
+        tasks.push((
+            format!("fix what it left open: {problem}"),
+            format!("Fix the problem the previous task left open: {problem}"),
+        ));
+    }
+
+    if outcome.status == "failed" {
+        let reason = outcome
+            .reason()
+            .map(one_line)
+            .unwrap_or_else(|| "the run failed without a recorded reason".to_string());
+        tasks.push((
+            "find out why it failed".to_string(),
+            format!(
+                "Investigate why the previous task failed and report the root cause with \
+                 evidence: {reason}"
+            ),
+        ));
+        // A failure that cannot be resumed is still worth another attempt: the common
+        // causes (a flaky browser, a provider hiccup) are not the instruction's fault.
+        if !outcome.can_continue() {
+            if let Some(task) = outcome.task.as_deref().map(one_line).filter(|t| !t.is_empty()) {
+                tasks.push(("try the same task again".to_string(), task));
+            }
+        }
+    }
+
+    if outcome.coding {
+        if !files.is_empty() {
+            tasks.push((
+                format!("review the {} changed file(s)", files.len()),
+                format!(
+                    "Review the changes the previous task made ({listing}) and flag risky, \
+                     incomplete or inconsistent edits."
+                ),
+            ));
+            if let Some(module) = files.first().and_then(|file| module_of(file)) {
+                tasks.push((
+                    format!("run the {module} tests"),
+                    format!("Run the tests covering {module} and fix anything that fails."),
+                ));
+            }
+            tasks.push((
+                "commit the change".to_string(),
+                format!(
+                    "Commit the changes from the previous task ({listing}) with a descriptive \
+                     message."
+                ),
+            ));
+        } else {
+            tasks.push((
+                "check the build and tests".to_string(),
+                "Run the project build and its tests, and report exactly what fails.".to_string(),
+            ));
+            tasks.push((
+                "add tests for the change".to_string(),
+                "Add tests covering the change the previous task made, then run them.".to_string(),
+            ));
+        }
+    } else if let Some(finding) = findings.first() {
+        let finding = one_line(finding);
+        tasks.push((
+            format!("dig into: {finding}"),
+            format!(
+                "Go deeper on this finding from the previous task and report the underlying \
+                 details with sources: {finding}"
+            ),
+        ));
+    }
+
+    if outcome.status == "cancelled" && !files.is_empty() {
+        tasks.push((
+            format!("review what it produced ({} file(s))", files.len()),
+            format!(
+                "Review what the interrupted task already produced ({listing}) and say what is \
+                 still missing."
+            ),
+        ));
+    }
+
+    // A browser run's deliverable is data, so the useful next step is turning the
+    // conversation into a file (or confirming the other findings hold). A FAILED run
+    // has no result to save — offering it there would point at nothing.
+    if !outcome.coding && outcome.status != "failed" {
+        tasks.push((
+            "save the result to a file".to_string(),
+            "Write the previous task's result to a Markdown file in the workspace, with the \
+             sources it came from."
+                .to_string(),
+        ));
+        if findings.len() > 1 {
+            tasks.push((
+                format!("check the other {} finding(s)", findings.len() - 1),
+                format!(
+                    "Verify the remaining findings of the previous task and report which ones no \
+                     longer hold: {}",
+                    summary_of(&findings[1..], 4)
+                ),
+            ));
+        }
+    }
+
+    tasks
+}
+
+/// At most [max] entries, joined for a prompt line.
+fn summary_of(items: &[String], max: usize) -> String {
+    let shown: Vec<&str> = items.iter().take(max).map(String::as_str).collect();
+    let mut text = shown.join(", ");
+    if items.len() > max {
+        text.push_str(&format!(", … ({} more)", items.len() - max));
+    }
+    text
+}
+
+/// The module a changed file belongs to: the segment before `/src/`
+/// (`browser4-rest/src/main/...` → `browser4-rest`), else the first segment.
+fn module_of(file: &str) -> Option<String> {
+    let normalized = file.replace('\\', "/");
+    let parts: Vec<&str> = normalized
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect();
+    let candidate = match parts.iter().position(|part| *part == "src") {
+        Some(index) if index > 0 => parts[index - 1],
+        _ if parts.len() >= 2 => parts[0],
+        _ => return None,
+    };
+    let looks_like_a_name = !candidate.is_empty()
+        && !candidate.contains('.')
+        && !candidate.contains(':')
+        && candidate
+            .chars()
+            .all(|ch| ch.is_alphanumeric() || ch == '-' || ch == '_');
+    looks_like_a_name.then(|| candidate.to_string())
+}
+
+/// One line, whitespace collapsed and length bounded — the shape every label and
+/// task text in the block takes.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The numbered choice block: one header plus one line per predicted next step.
+///
+/// The block shows the **intent**, never the command behind it: `▸ 1) run the
+/// browser4-rest tests` is what the user is choosing between, and the exact task
+/// text appears as `▶ task <id> — …` when it starts.
 fn format_next_actions(actions: &[NextAction]) -> Vec<String> {
     if actions.is_empty() {
         return Vec::new();
     }
-    let width = actions.iter().map(|action| action.label.len()).max().unwrap_or(0);
-    let mut lines = vec!["next (type a number, or a new task):".to_string()];
+    let mut lines = vec!["likely next steps (type a number, or your own task):".to_string()];
     for (index, action) in actions.iter().enumerate() {
-        lines.push(format!(
-            "  {}) {:<width$}  {}",
-            index + 1,
-            action.label,
-            action.command,
-            width = width
-        ));
+        lines.push(format!("  {}) {}", index + 1, action.label));
     }
     lines
 }
@@ -2407,6 +2614,15 @@ struct Repl {
     /// Suggested follow-ups of the last task, shown as a numbered block. A bare
     /// number typed at the prompt selects one; any other input clears the block.
     next_actions: Vec<NextAction>,
+    /// The task text the last task was started with, so a predicted follow-up can
+    /// refer to the work the user actually asked for.
+    last_task_text: Option<String>,
+    /// Whether the last task ran as a coding task (decides which follow-ups fit: a
+    /// browsing run leaves findings, a coding run leaves files).
+    last_task_coding: bool,
+    /// What the last task's payload said (files, findings, problems, the model's own
+    /// suggested next steps) — the evidence the follow-up block is predicted from.
+    last_digest: crate::agent_result::ResultDigest,
 }
 
 impl Repl {
@@ -2466,6 +2682,9 @@ impl Repl {
             tasks_json: Vec::new(),
             prompt_pending: true,
             next_actions: Vec::new(),
+            last_task_text: None,
+            last_task_coding: false,
+            last_digest: crate::agent_result::ResultDigest::default(),
         }
     }
 
@@ -2605,6 +2824,7 @@ impl Repl {
                             // A cancelled run is resumable: offer the continue
                             // choice instead of leaving the user to reconstruct
                             // the resume command.
+                            self.last_digest = self.fetch_digest(&task_id).await;
                             let progress =
                                 status_failure_progress(&self.client, &self.base_url, &task_id).await;
                             self.offer_next_after("cancelled", progress.as_ref());
@@ -2714,12 +2934,12 @@ impl Repl {
     ///
     /// Piped stdin gets nothing: a numbered menu a script cannot answer would only
     /// add noise, and a bare `1` must keep meaning "a task called 1".
-    fn offer_next(&mut self, outcome: TaskOutcome<'_>) {
+    fn offer_next(&mut self, outcome: TaskOutcome) {
         self.next_actions.clear();
         if !self.tty || !human_output_enabled(self.quiet) {
             return;
         }
-        let actions = next_actions(outcome);
+        let actions = next_actions(&outcome);
         if actions.is_empty() {
             return;
         }
@@ -2732,20 +2952,41 @@ impl Repl {
 
     /// Offer the follow-ups of a task that just ended, filling the failure
     /// semantics from [progress] (and the session's budget when the envelope has
-    /// none).
+    /// none) and the predicted work from the payload digest.
     fn offer_next_after(&mut self, status: &str, progress: Option<&StatusProgress>) {
         let budget = progress
             .and_then(|progress| progress.effective_budget)
             .or_else(|| self.token_budget.map(|budget| budget.max(0) as u64));
         let outcome = TaskOutcome {
-            status,
-            error_code: progress.and_then(|progress| progress.error_code.as_deref()),
+            status: status.to_string(),
+            error_code: progress.and_then(|progress| progress.error_code.clone()),
             resumable: progress
                 .and_then(|progress| progress.resumable)
                 .unwrap_or(status == "cancelled"),
             budget,
+            task: self.last_task_text.clone(),
+            coding: self.last_task_coding,
+            digest: self.last_digest.clone(),
         };
         self.offer_next(outcome);
+    }
+
+    /// What a finished task's payload says about the work, for the follow-up menu.
+    ///
+    /// The status envelope carries counters, not the payload: `filesChanged`,
+    /// `problems` and the model's `nextSuggestions` only exist on
+    /// `command_result`. Asking for it is therefore only worth doing when the menu
+    /// will actually be shown — piped stdin and `/quiet` never make the request.
+    async fn fetch_digest(&self, task_id: &str) -> crate::agent_result::ResultDigest {
+        if !self.tty || !human_output_enabled(self.quiet) {
+            return crate::agent_result::ResultDigest::default();
+        }
+        match get_command_result(&self.client, &self.base_url, task_id).await {
+            Ok(body) => crate::agent_result::digest(&body),
+            // The menu is a convenience: an unreachable result endpoint must not
+            // turn a finished task into an error.
+            Err(_) => crate::agent_result::ResultDigest::default(),
+        }
     }
     ///
     /// The follower is the normal source of that knowledge, but it must not be
@@ -2841,6 +3082,10 @@ impl Repl {
 
     async fn start_task(&mut self, task: String) -> Result<(), String> {
         self.next_actions.clear();
+        // A new task starts from a clean slate: the previous task's evidence must not
+        // shape the follow-ups offered after THIS one. (Set only once the task is
+        // accepted: a rejected submission must not clobber the previous task's.)
+        self.last_digest = crate::agent_result::ResultDigest::default();
         let extra = self.payload();
         let task_id = crate::submit_agent_task(&self.client, &self.base_url, &task, extra).await?;
         // A blank line separates two tasks, and the line names the task: a session
@@ -2934,6 +3179,11 @@ impl Repl {
         match crate::submit_agent_task(&self.client, &self.base_url, "", extra).await {
             Ok(task_id) => {
                 self.next_actions.clear();
+                // A resume is a new task too: the follow-up evidence starts over, and
+                // the predictions describe the continued work, not the old task.
+                self.last_digest = crate::agent_result::ResultDigest::default();
+                self.last_task_text = Some(format!("resume {resume_id}"));
+                self.last_task_coding = self.coding;
                 self.out("");
                 self.out(&format!("▶ resume {resume_id} → task {task_id}"));
                 crate::json_field("task_id", json!(&task_id));
@@ -3102,9 +3352,12 @@ impl Repl {
                     &cost,
                     None,
                 ));
-                self.print_payload(&task_id, &result);
+                self.print_payload(&task_id, &result, crate::pretty_active());
                 crate::json_field("raw", crate::json_text_or_value(&result));
                 let _ = crate::state::update_async_task_status(&task_id, "completed", None);
+                // The payload is already here: read the follow-up evidence out of it
+                // instead of asking the backend a second time.
+                self.last_digest = crate::agent_result::digest(&result);
                 self.offer_next_after("done", None);
             }
             "cancelled" => {
@@ -3123,10 +3376,12 @@ impl Repl {
                 let _ = crate::state::update_async_task_status(&task_id, "cancelled", None);
                 // The envelope still knows the budget and the resume flag; ask it
                 // instead of guessing from the session's `--token-budget`.
+                self.last_digest = self.fetch_digest(&task_id).await;
                 let progress = status_failure_progress(&self.client, &self.base_url, &task_id).await;
                 self.offer_next_after("cancelled", progress.as_ref());
             }
             _ => {
+                self.last_digest = self.fetch_digest(&task_id).await;
                 let progress = status_failure_progress(&self.client, &self.base_url, &task_id).await;
                 let detail = failure_detail(progress.as_ref())
                     .unwrap_or_else(|| "the task reported failure".to_string());
@@ -3371,7 +3626,8 @@ impl Repl {
         self.out("Commands:");
         self.out("  /help              this list");
         self.out("  /status            status of the running (or last) task");
-        self.out("  /result [--json]   print the last finished task's result (--json: raw envelope)");
+        self.out("  /result [--json] [--full]");
+        self.out("                     re-print the last finished task's result (--json: pretty envelope, --full: everything)");
         self.out("  /resume [--budget <n>] [task-id]");
         self.out("                     continue an interrupted/stalled task (a budget abort needs a bigger --budget)");
         self.out("  /cancel            cancel the running task (same as Ctrl+C)");
@@ -3505,27 +3761,42 @@ impl Repl {
         crate::json_field("stats", payload);
     }
 
-    /// `/result [--json]`: the last finished task's payload.
+    /// `/result [--json] [--full]`: the last finished task's payload.
     ///
-    /// Human sections by default (`agent_result`), or the raw `command_result`
-    /// envelope with `--json` — the escape hatch for a consumer that wants the
-    /// machine form without re-running the task.
+    /// Human sections by default (`agent_result`), or the `command_result`
+    /// envelope as pretty-printed JSON with `--json` — the escape hatch for a
+    /// consumer that wants the machine form without re-running the task.
+    ///
+    /// `--full` keeps the human layout but stops hiding content: no fold line and no
+    /// per-section cap (`/result` printed 10 of 25 findings and said "and 15 more",
+    /// which is a dead end for the one command that exists to re-read the result).
     async fn print_result(&mut self, argument: &str) {
-        let raw = match argument.trim() {
-            "" => false,
-            "--json" => true,
-            other => {
-                self.out(&format!("usage: /result [--json] (got '{other}')"));
-                return;
+        let mut raw = false;
+        let mut full = crate::pretty_active();
+        for token in argument.split_whitespace() {
+            match token {
+                "--json" | "-j" => raw = true,
+                "--full" | "-f" => full = true,
+                other => {
+                    self.out(&format!("usage: /result [--json] [--full] (got '{other}')"));
+                    return;
+                }
             }
-        };
+        }
         let Some(task_id) = self.last_task.clone() else {
             self.out("no finished task yet");
             return;
         };
         match get_command_result(&self.client, &self.base_url, &task_id).await {
-            Ok(result) if raw => self.out(&result),
-            Ok(result) => self.print_payload(&task_id, &result),
+            Ok(result) if raw => {
+                // Pretty-printed, not one 5 KB line: a human reads this too, and the
+                // text stays valid JSON for the script that pipes it onward.
+                self.out("");
+                for line in crate::agent_result::pretty_json(&result).lines() {
+                    self.out(line);
+                }
+            }
+            Ok(result) => self.print_payload(&task_id, &result, full),
             Err(error) => self.out(&format!("could not read result of {task_id}: {error}")),
         }
     }
@@ -3536,14 +3807,18 @@ impl Repl {
     /// printed verbatim it is one multi-KB line of JSON. [`crate::agent_result`]
     /// renders the same data as Summary / Key findings / Files / Data sections,
     /// keeping the envelope's plumbing out of the human path. `/result --json`
-    /// still hands a caller the raw text.
-    fn print_payload(&self, task_id: &str, body: &str) {
+    /// still hands a caller the machine form (pretty-printed).
+    ///
+    /// The model's own `nextSuggestions` are suppressed here: the session prints
+    /// them as its numbered follow-up menu right after the payload.
+    fn print_payload(&self, task_id: &str, body: &str, full: bool) {
         let lines = crate::agent_result::render_result_text(
             task_id,
             body,
             &crate::agent_result::RenderOptions::default()
                 .with_color(color_enabled())
-                .with_full(crate::pretty_active()),
+                .with_full(full)
+                .with_suggestions(false),
         );
         if lines.is_empty() {
             return;
@@ -3566,6 +3841,7 @@ impl Repl {
         // backend when it has counters, from this session otherwise).
         self.release_current(follower, "cancelled", true);
         self.prompt_pending = true;
+        self.last_digest = self.fetch_digest(&task_id).await;
         let progress = status_failure_progress(&self.client, &self.base_url, &task_id).await;
         self.offer_next_after("cancelled", progress.as_ref());
     }
@@ -4618,100 +4894,257 @@ mod tests {
 
     // ---- next actions after a task ends -------------------------------------
 
+    fn outcome(status: &str) -> TaskOutcome {
+        TaskOutcome {
+            status: status.to_string(),
+            ..TaskOutcome::default()
+        }
+    }
+
     #[test]
     fn a_budget_abort_offers_continue_with_a_doubled_budget() {
-        let actions = next_actions(TaskOutcome {
-            status: "failed",
-            error_code: Some("TOKEN_BUDGET"),
-            resumable: true,
-            budget: Some(5_000_000),
-        });
+        let mut outcome = outcome("failed");
+        outcome.error_code = Some("TOKEN_BUDGET".to_string());
+        outcome.resumable = true;
+        outcome.budget = Some(5_000_000);
+        outcome.digest.summary = Some("Token budget exceeded".to_string());
 
-        assert_eq!(actions.len(), 3);
+        let actions = next_actions(&outcome);
+
         assert_eq!(actions[0].command, "/resume --budget 10000000");
         assert!(actions[0].label.contains("10.00M"), "{:?}", actions[0]);
-        assert_eq!(actions[1].command, "/stats");
-        assert_eq!(actions[2].command, "/new");
+        // The second slot is the human question the abort raises, not a command.
+        assert_eq!(actions[1].label, "find out why it failed");
+        assert!(
+            actions[1].command.starts_with("Investigate why the previous task failed"),
+            "{:?}",
+            actions[1]
+        );
+        assert!(actions.iter().all(|action| action.command != "/stats"));
     }
 
     #[test]
     fn a_budget_abort_without_a_known_cap_still_offers_continue() {
-        let actions = next_actions(TaskOutcome {
-            status: "failed",
-            error_code: Some("TOKEN_BUDGET"),
-            resumable: false,
-            budget: None,
-        });
+        let mut outcome = outcome("failed");
+        outcome.error_code = Some("TOKEN_BUDGET".to_string());
+        outcome.resumable = false;
+
+        let actions = next_actions(&outcome);
 
         assert_eq!(actions[0].command, "/resume");
         assert_eq!(actions[0].label, "continue this task");
     }
 
+    /// The whole point of the block: after a coding task that changed files, the
+    /// three offers are the next *tasks*, not the CLI's own commands.
     #[test]
-    fn a_finished_run_offers_result_stats_and_a_fresh_task() {
-        let actions = next_actions(TaskOutcome {
-            status: "done",
-            ..Default::default()
-        });
+    fn a_finished_coding_task_predicts_review_tests_and_commit() {
+        let mut outcome = outcome("done");
+        outcome.coding = true;
+        outcome.task = Some("fix the failing build".to_string());
+        outcome.digest.files = vec![
+            "browser4-rest/src/main/kotlin/A.kt".to_string(),
+            "browser4-rest/src/test/kotlin/B.kt".to_string(),
+        ];
 
-        assert_eq!(actions.len(), 3);
-        assert_eq!(actions[0].command, "/result --json");
-        assert_eq!(actions[1].command, "/stats");
-        assert_eq!(actions[2].command, "/new");
+        let actions = next_actions(&outcome);
+        let labels: Vec<&str> = actions.iter().map(|a| a.label.as_str()).collect();
+
+        assert_eq!(actions.len(), 3, "{actions:?}");
+        assert_eq!(labels[0], "review the 2 changed file(s)");
+        assert_eq!(labels[1], "run the browser4-rest tests");
+        assert_eq!(labels[2], "commit the change");
+        // Every offer is a task the REPL can start, and each one names the work.
+        for action in &actions {
+            assert!(!action.command.starts_with('/'), "{action:?}");
+        }
+        assert!(
+            actions[0].command.contains("browser4-rest/src/main/kotlin/A.kt"),
+            "{:?}",
+            actions[0]
+        );
+        assert!(
+            actions[1].command.contains("browser4-rest"),
+            "{:?}",
+            actions[1]
+        );
+    }
+
+    /// The model's own completion report is the best predictor: it just did the
+    /// work. Its suggestions lead, and a deterministic one that says the same
+    /// thing is dropped instead of filling a second slot.
+    #[test]
+    fn the_models_own_suggestions_lead_and_duplicates_are_dropped() {
+        let mut outcome = outcome("done");
+        outcome.coding = true;
+        outcome.digest.files = vec!["browser4-rest/src/main/kotlin/A.kt".to_string()];
+        outcome.digest.next_suggestions = vec![
+            "Add a regression test for the budget accounting".to_string(),
+            "commit the change".to_string(),
+        ];
+
+        let actions = next_actions(&outcome);
+
+        assert_eq!(
+            actions[0].command,
+            "Add a regression test for the budget accounting"
+        );
+        assert_eq!(actions[1].command, "commit the change");
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|action| action.command.eq_ignore_ascii_case("commit the change"))
+                .count(),
+            1,
+            "the deterministic commit offer must not repeat the model's: {actions:?}"
+        );
+        assert_eq!(actions.len(), 3, "{actions:?}");
     }
 
     #[test]
-    fn a_cancelled_run_offers_continue_result_and_a_fresh_task() {
-        let actions = next_actions(TaskOutcome {
-            status: "cancelled",
-            resumable: true,
-            budget: Some(5_000_000),
-            ..Default::default()
-        });
+    fn an_open_problem_is_offered_before_the_generic_review() {
+        let mut outcome = outcome("done");
+        outcome.coding = true;
+        outcome.digest.problems = vec!["the CI gate was not run".to_string()];
+        outcome.digest.files = vec!["browser4-rest/src/main/kotlin/A.kt".to_string()];
 
-        assert_eq!(actions[0].command, "/resume --budget 10000000");
-        assert_eq!(actions[1].command, "/result --json");
-        assert_eq!(actions[2].command, "/new");
+        let actions = next_actions(&outcome);
+
+        assert_eq!(actions[0].label, "fix what it left open: the CI gate was not run");
+        assert!(
+            actions[0].command.contains("the CI gate was not run"),
+            "{:?}",
+            actions[0]
+        );
     }
 
     #[test]
-    fn a_non_resumable_failure_offers_no_continue() {
-        let actions = next_actions(TaskOutcome {
-            status: "failed",
-            error_code: Some("INFRASTRUCTURE"),
-            resumable: false,
-            budget: None,
-        });
+    fn a_browsing_task_offers_to_dig_into_its_findings() {
+        let mut outcome = outcome("done");
+        outcome.digest.findings = vec![
+            "Born 31 January 1956 in The Hague".to_string(),
+            "Wrote the Python language".to_string(),
+        ];
+
+        let actions = next_actions(&outcome);
+
+        assert_eq!(actions[0].label, "dig into: Born 31 January 1956 in The Hague");
+        assert!(
+            actions[0].command.contains("Born 31 January 1956 in The Hague"),
+            "{:?}",
+            actions[0]
+        );
+        assert_eq!(actions[1].label, "save the result to a file");
+        assert_eq!(actions[2].label, "check the other 1 finding(s)");
+    }
+
+    #[test]
+    fn a_non_resumable_failure_offers_no_continue_but_does_offer_a_retry() {
+        let mut outcome = outcome("failed");
+        outcome.error_code = Some("INFRASTRUCTURE".to_string());
+        outcome.task = Some("extract the pricing table".to_string());
+
+        let actions = next_actions(&outcome);
+        let labels: Vec<&str> = actions.iter().map(|a| a.label.as_str()).collect();
 
         assert!(
-            actions.iter().all(|action| action.command != "/resume"),
+            actions.iter().all(|action| !action.command.starts_with("/resume")),
             "a non-resumable failure must not offer continue: {actions:?}"
         );
-        assert_eq!(actions[0].command, "/stats");
-        assert_eq!(actions[1].command, "/new");
+        assert_eq!(labels, vec!["find out why it failed", "try the same task again"]);
+        assert_eq!(actions[1].command, "extract the pricing table");
+    }
+
+    /// A resumed/cancelled run can still have produced files: offering "continue"
+    /// alone would hide the artifacts the user already paid for.
+    #[test]
+    fn a_cancelled_run_offers_continue_and_a_review_of_what_it_produced() {
+        let mut outcome = outcome("cancelled");
+        outcome.resumable = true;
+        outcome.budget = Some(5_000_000);
+        outcome.coding = true;
+        outcome.digest.files = vec!["browser4-rest/src/main/kotlin/A.kt".to_string()];
+
+        let actions = next_actions(&outcome);
+
+        assert_eq!(actions[0].command, "/resume --budget 10000000");
+        assert_eq!(actions[1].label, "review the 1 changed file(s)");
+        assert_eq!(actions[2].label, "run the browser4-rest tests");
+    }
+
+    /// A failed browsing run has no result to save: the "save it to a file" offer
+    /// must not appear where it would point at nothing.
+    #[test]
+    fn a_failed_run_is_not_offered_a_result_to_save() {
+        let mut outcome = outcome("failed");
+        outcome.error_code = Some("NOOP_LIMIT".to_string());
+        outcome.resumable = true;
+
+        let actions = next_actions(&outcome);
+
+        assert!(
+            !actions
+                .iter()
+                .any(|action| action.label.contains("save the result")),
+            "{actions:?}"
+        );
+    }
+
+    /// The block shows intents only: the commands behind them are the CLI's
+    /// business, and printing them was exactly the "three internal commands"
+    /// problem this replaced.
+    #[test]
+    fn the_block_shows_intents_not_commands() {
+        let mut outcome = outcome("failed");
+        outcome.error_code = Some("TOKEN_BUDGET".to_string());
+        outcome.resumable = true;
+        outcome.budget = Some(5_000_000);
+        outcome.coding = true;
+        outcome.digest.files = vec!["browser4-rest/src/main/kotlin/A.kt".to_string()];
+
+        let lines = format_next_actions(&next_actions(&outcome));
+
+        assert_eq!(
+            lines[0],
+            "likely next steps (type a number, or your own task):"
+        );
+        assert!(lines[1].starts_with("  1) continue with a 10.00M cache-miss budget"), "{lines:?}");
+        for line in &lines[1..] {
+            for command in ["/resume", "/result", "/stats", "/new"] {
+                assert!(!line.contains(command), "{command} leaked into {line:?}");
+            }
+        }
+        assert_eq!(lines.len(), 4, "header + at most three offers: {lines:?}");
+        assert!(format_next_actions(&[]).is_empty());
     }
 
     #[test]
-    fn next_actions_are_numbered_and_aligned() {
-        let lines = format_next_actions(&next_actions(TaskOutcome {
-            status: "failed",
-            error_code: Some("TOKEN_BUDGET"),
-            resumable: true,
-            budget: Some(5_000_000),
-        }));
+    fn never_more_than_three_offers() {
+        let mut outcome = outcome("failed");
+        outcome.error_code = Some("TOKEN_BUDGET".to_string());
+        outcome.resumable = true;
+        outcome.coding = true;
+        outcome.digest.problems = vec!["p".to_string()];
+        outcome.digest.files = vec!["browser4-rest/src/main/kotlin/A.kt".to_string()];
+        outcome.digest.next_suggestions = vec!["s1".to_string(), "s2".to_string()];
 
-        assert_eq!(lines[0], "next (type a number, or a new task):");
-        assert!(
-            lines[1].starts_with("  1) continue with a 10.00M cache-miss budget"),
-            "{lines:?}"
+        assert_eq!(next_actions(&outcome).len(), NEXT_ACTIONS);
+    }
+
+    #[test]
+    fn module_of_reads_the_segment_before_src() {
+        assert_eq!(
+            module_of("browser4-rest/src/main/kotlin/A.kt").as_deref(),
+            Some("browser4-rest")
         );
-        assert!(lines[1].contains("/resume --budget 10000000"), "{lines:?}");
-        assert!(lines[2].starts_with("  2) run statistics"), "{lines:?}");
-        assert!(
-            lines[3].starts_with("  3) start a new task (fresh context)"),
-            "{lines:?}"
+        assert_eq!(
+            module_of("cli/browser4-cli/src/main.rs").as_deref(),
+            Some("browser4-cli")
         );
-        assert!(format_next_actions(&[]).is_empty());
+        assert_eq!(module_of("docs/agent.md").as_deref(), Some("docs"));
+        // A bare file name has no module, and a Windows drive letter is not one.
+        assert_eq!(module_of("build.gradle.kts"), None);
+        assert_eq!(module_of("C:/x/src/y.kt").as_deref(), Some("x"));
     }
 
     #[test]
@@ -5922,11 +6355,22 @@ mod tests {
     async fn a_number_picks_a_suggested_next_action() {
         let client = Client::builder().build().expect("client");
         let mut repl = Repl::new(&client, "http://127.0.0.1:1", &json!({}), None);
-        repl.next_actions = next_actions(TaskOutcome {
-            status: "done",
-            ..Default::default()
-        });
-        assert_eq!(repl.next_actions.len(), 3);
+        // Three offers, the last one a command that needs no backend: the point here
+        // is the selection path, not what the prediction chose.
+        repl.next_actions = vec![
+            NextAction {
+                label: "review the change".to_string(),
+                command: "Review the change".to_string(),
+            },
+            NextAction {
+                label: "run the tests".to_string(),
+                command: "Run the tests".to_string(),
+            },
+            NextAction {
+                label: "start a fresh session".to_string(),
+                command: "/new".to_string(),
+            },
+        ];
 
         repl.handle_line("3".to_string())
             .await
@@ -5945,10 +6389,16 @@ mod tests {
         // Nothing listens: the submission fails, which the session reports and
         // survives. The menu must be gone either way, and the generation unchanged.
         let mut repl = Repl::new(&client, "http://127.0.0.1:1", &json!({}), None);
-        repl.next_actions = next_actions(TaskOutcome {
-            status: "done",
-            ..Default::default()
-        });
+        repl.next_actions = vec![
+            NextAction {
+                label: "review the change".to_string(),
+                command: "Review the change".to_string(),
+            },
+            NextAction {
+                label: "run the tests".to_string(),
+                command: "Run the tests".to_string(),
+            },
+        ];
 
         repl.handle_line("9".to_string())
             .await

@@ -271,3 +271,60 @@ browser4-cli (Rust)                       browser4-rest (Kotlin)                
 - `--follow` 默认**不设超时**（`--wait` 仍默认 600s）；`--wait-timeout` 可给 `--follow` 封顶；
 - Ctrl+C 在 `--follow` / `-i` 中会 **cancel 任务**，不再把任务遗留在服务端；
 - `-s <name>` 现在会作为 `sessionId` 透传给 `command.run`（原先被忽略，任务一律落到 DEFAULT session）。
+
+## 9. 多轮会话上下文与下一步预测（2026-11-12 新增）
+
+### 9.1 跨任务会话上下文（`SessionConversation`）
+
+问题：`agent.run(instruction)` 每次都是**全新对话**，所以 `-i` 中第 N 个任务完全不知道第
+N-1 个任务做过什么——用户必须反复复述背景，只有 `--resume`（进程已死）才有连续性。
+
+实现（`browser4-agent-tools/.../advanced/agent/SessionConversation.kt` + `StatefulAgentRunner`）：
+
+| 环节 | 位置 | 说明 |
+|---|---|---|
+| 记录 | `StatefulAgentRunner.executeSerialized` 的 `finally` | 每个进入终态的任务追加一条 `SessionTaskRecord`：指令单行 120 字、终态词、summary 240 字、keyFindings/ filesChanged / problems（各取前 3/5/3 条，单条 100/80 字）、耗时。环形上限 `MAX_RECORDS=12`。数据来自 `status.agentHistory.finalResult`；中止的任务回退到 `status.deliverables`。 |
+| 注入 | 同上，`instruction` 之后 | 拼成 `## Session context` 块附在指令末尾（resume 块之后），随 `agent.run(instruction)` 进入模型；首任务为空 ⇒ 单次 `agent run` 行为不变。 |
+| 剥离 | `executeAgentCommand` | `status.submittedTask = stripResumeBlock(stripSessionBlock(plainCommand))`——两个块都是 runner 追加的，不属于用户提交的文本；不剥离会在再次 resume 时嵌套、并让 `agent status` 误报任务。 |
+| 压缩 | `SessionConversation.renderBlock()` | 块随每次 prompt 发送，因此按 `browser4.agent.session.contextTokens`（默认 1200 token ≈ 4.8KB）**自动压缩**：最新 3 个任务保留明细，更早的折成一行 `N earlier task(s), compacted: "…" (done), …`；仍超预算则减少明细条数（最老的先折），最后退化为 digest 形态；再有最小形态 `minimal()`。 |
+
+**失焦（忘记原始任务）防护** —— 朴素的"越旧越先丢"策略一定会先丢掉会话的原始目标（第一条记录就是立项目的），因此有三条硬约束：
+
+1. **目标锚定**：`goal` 取「第一条记录的任务指令」，`record()` 只在 `goal == null` 时设置，之后不再改写；`renderBlock()` 在首个任务不再处于明细区（`older.isNotEmpty()`）起，每块都以 `Session goal (set by the first task; later corrections supersede it)` 原样输出，**不参与折叠、不被 MAX_RECORDS 淘汰**。只有 1–3 个任务时明细 bullet 已承载该指令，不重复输出。
+2. **未解决遗留问题不被折掉**：被折出明细区的任务，其 `problems` 会以 `Problems earlier tasks reported as unresolved` 单独重列（最多 3 条、每条 120 字）；仍在明细区的任务只在自己的 bullet 里列出（不重复）。
+3. **降级绝不"保陈旧、丢最新"**：`renderBlock` 的降级链是 `明细减少 → digest → minimal()`；`minimal()` = 标题 + 2 行提示 + **最新方向** + 最新任务（不含 summary）。旧实现用的是"从顶部按行截断"，会保留 header 与陈旧 rollup、恰好切掉最新那条 bullet——已删除。`budgetChars` 有 600 字符下限：低于此值无法同时容纳目标与最新任务，宁可抬高预算也不产出"看似压缩实则丢焦"的块。
+
+**目标可被中途修正（对称风险）** —— 只锚定不修改是另一种失焦：用户改方向后，块还在复述旧目标，等于对抗当前指令。因此：
+
+| 环节 | 行为 |
+|---|---|
+| 判定 | `looksLikeCorrection()`：小型保守线索表（`actually` / `instead` / `no longer` / `forget about` / `改用` / `改成` / `不要` / `先不` / `重新定义` …）。假阳性无害（该行本来就是用户指示，只占 1 行预算），假阴性只意味着修正停留在"当前指令"这个天然最优位置。 |
+| 采集 | ① `record()`：第 2 个任务起，指令命中线索 → `Correction(afterTask=N)`；② `noteUserInput()`：`steeringSource` 抽出的每一行（用户在任务运行中键入）→ `Correction(duringTask=N)`。这条路径原先**完全丢失**（drain 完就没了）。 |
+| 顺序 | 渲染在 goal **上方**：`User corrections (they supersede the goal below where they conflict):` + `- task 3: "actually, …"` / `- during task 4: "no, CSV not XLSX"`；块头声明 "The instruction … is the task to perform NOW — if it contradicts anything below, it wins."；goal 行不再声称自己是当前目标。 |
+| 边界 | 最多 3 条、每条 160 字，按文本去重；`minimal()` 在极小预算下优先保留**最新修正**而非旧 goal。 |
+
+刻意**不**携带：超出 12 条记录窗口的任务明细（仅目标锚点保留其意图）、以及第 4 条以后的历史修正。
+
+配置：`browser4.agent.session.contextEnabled`（默认 true）、`browser4.agent.session.contextTokens`
+（默认 1200，`0`/负值即关闭）。作用域是 **session**：`-i` 的 `/new` 递增 generation 得到新
+sessionId ⇒ 新 runner ⇒ 新上下文，语义正好对齐。
+
+### 9.2 下一步预测（`nextSuggestions` → 编号菜单）
+
+旧行为是三个内部指令（`/result --json`、`/stats`、`/new`）。现在换成**用户可能想做的后续任务**：
+
+| 环节 | 位置 | 说明 |
+|---|---|---|
+| 模型产出 | `system.taskComplete(nextSuggestions=[...])` | tool spec + `TaskCompletion` + `ActionDescription` 携带；提示词要求"最多 3 条、写成指令、不是状态描述"。 |
+| 透传 | `CommandResult.nextSuggestions` | `AgentTaskStatus.toCommandStatus()` 从 `agentState.nextSuggestions` 填充，`command_result` 随之返回。 |
+| 消费 | `cli/browser4-cli/src/agent_interactive.rs` | `next_actions()`：① 可续跑任务先给 `continue`（`/resume --budget 2×`）；② 模型自己的 `nextSuggestions` 作为**任务文本**逐条入选；③ 再按 payload 推导：未解决 `problems` → 修复；coding 且改过文件 → review / run tests / commit；浏览任务 → 深挖 finding / 存档；失败 → 定位原因 / 重试。去重按任务文本，最多 3 条。 |
+| 展示 | `format_next_actions()` | 只显示意图（`1) run the browser4-rest tests`），**不显示命令**；选中后走 `start_task`，与手打任务同一条路径。 |
+
+`-i` 自然排版时不重复打印 `Suggested next steps`（菜单即同一份列表，`with_suggestions(false)`）；
+一次性路径（`agent result` / `--wait` / `--follow`）把它作为末尾小节渲染。
+
+### 9.3 `/result` 的两个改进
+
+- `--json`：`agent_result::pretty_json()` 缩进输出（仍是合法 JSON），不再是一条 5KB 单行；
+- `--full`：自然排版下不再折叠（去掉 40 行 fold 与各 section 的 10/10/5/5/20 条上限）。
+

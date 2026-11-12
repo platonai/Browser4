@@ -128,12 +128,16 @@ internal object CliAgentPrompt {
           memory_read() with no arguments shows this task's events.
         - When the task is finished, call system.taskComplete(
           summary=..., keyFindings=[...], filesChanged=[...], deletedFiles=[...],
-          problems=[...]).
+          problems=[...], nextSuggestions=[...]).
           The report is checked against a trace of what actually happened:
           coding.changeSummary returns exactly the files this run wrote — list
           EVERY one of them in filesChanged and every deletion in deletedFiles;
           an omitted file is rejected (and repeated omissions are amended by the
           engine from that trace).
+          nextSuggestions is up to three concrete follow-up TASKS the user would
+          plausibly want next (e.g. "run the <module> tests", "add a regression
+          test for <case>"), phrased as an instruction — not a status remark. The
+          interactive session shows them as its numbered next-step menu.
           When you ran coding.verify, paste its exact VERDICT_JSON line
           verbatim into the summary; a cited verdict must match the recorded one.
         """.trimIndent()
@@ -196,11 +200,15 @@ internal object CliAgentPrompt {
         - When the task is finished, run coding.changeSummary — it lists exactly the
           files this run wrote — then call system.taskComplete(
           summary=..., keyFindings=[...], filesChanged=[...], deletedFiles=[...],
-          problems=[...]).
+          problems=[...], nextSuggestions=[...]).
           The report is checked against a trace of what actually happened: copy the
           changeSummary files into filesChanged and every deletion into
           deletedFiles. A file the run wrote but the report omits is rejected (and
           repeated omissions are amended by the engine from that trace).
+          nextSuggestions is up to three concrete follow-up TASKS the user would
+          plausibly want next ("save the same table as CSV", "check the other
+          listings for the same field"), phrased as an instruction — not a status
+          remark. The interactive session shows them as its numbered next-step menu.
           When you ran coding.verify, paste its exact VERDICT_JSON line
           verbatim into the summary; a cited verdict must match the recorded one.
         """.trimIndent()

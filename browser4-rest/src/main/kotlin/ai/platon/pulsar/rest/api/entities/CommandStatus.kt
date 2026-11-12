@@ -353,6 +353,10 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     val lastState = status.agentState
     val result = status.ensureCommandResult()
     result.keyFindings = lastState?.keyFindings?.takeIf { it.isNotEmpty() }
+    // What the agent proposes NEXT. The interactive CLI shows it as the numbered
+    // "likely next steps" block: the model just finished the work, so its own view
+    // of what is left beats anything inferred from the payload.
+    result.nextSuggestions = lastState?.nextSuggestions?.takeIf { it.isNotEmpty() }
     // A run that aborted before `system.taskComplete` (token budget, step cap,
     // cancellation) still wrote its artifacts; the runner snapshots them into
     // `deliverables`. Without this fallback the data looked lost although it was on

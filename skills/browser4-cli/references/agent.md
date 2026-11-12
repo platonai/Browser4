@@ -97,13 +97,17 @@ The first number is the **charged** amount (cache-miss prompt + output), not the
 
 ```text
 ✖ failed · 3b27930e · 12.1s — token_budget: Token budget exceeded (cache-miss accounting)…
-next (type a number, or a new task):
-  1) continue with a 10.0M cache-miss budget  /resume --budget 10000000
-  2) run statistics                           /stats
-  3) start a new task (fresh context)         /new
+likely next steps (type a number, or your own task):
+  1) continue with a 10.00M cache-miss budget
+  2) find out why it failed
+  3) review the 1 changed file(s)
 ```
 
-Scripted runs use the one-liner the failure line prints — `browser4-cli agent run --resume <task-id> --token-budget 10000000` — and `/resume [--budget <n>] [task-id]` continues any resumable failure (`NOOP_LIMIT`, a cancellation), not just budget aborts. **After every task** the session offers 2–3 numbered follow-ups chosen by typing the number — `done` → result JSON (`/result --json`) / `/stats` / `/new`, resumable failure → continue with the doubled cap (`/resume --budget <2×>`) / `/stats` / `/new`, cancelled → continue / result JSON / `/new`, non-resumable → `/stats` / `/new` — and any other input (a task, a `/command`) supersedes the block. Piped stdin (no TTY) gets no menu — a numbered choice a script cannot answer would only be noise — and the `resume:` hint line keeps carrying the exact command.
+Scripted runs use the one-liner the failure line prints — `browser4-cli agent run --resume <task-id> --token-budget 10000000` — and `/resume [--budget <n>] [task-id]` continues any resumable failure (`NOOP_LIMIT`, a cancellation), not just budget aborts.
+
+**After every task the session predicts what you want next** and prints 2–3 numbered *tasks*, not internal commands — type the number to run one, or type your own task. The offers come from what the run actually produced, most-predictive first: the model's own `nextSuggestions` from its completion report (`system.taskComplete` — it just did the work and knows what is left); an open `problems` entry (`fix what it left open: …`); and deterministic intents derived from the payload — a coding run that changed files offers `review the N changed file(s)`, `run the <module> tests`, `commit the change`, a browsing run offers `dig into: <finding>` and `save the result to a file`, a failure offers `find out why it failed` and (when it cannot be resumed) `try the same task again`, and a resumable one offers `continue with a … budget` first.
+
+The block never spends a slot on `/stats`, `/result` or `/new`: those are in `/help`, and a menu slot spent on the CLI's own bookkeeping is a slot not spent on the work. Piped stdin (no TTY) gets no menu — a numbered choice a script cannot answer would only be noise — and the `resume:` hint line keeps carrying the exact command.
 
 ### Permissions (`--access`)
 
@@ -321,12 +325,13 @@ Data (3 rows × 3 columns)
   Business | 89    | 25
 ```
 
-- A section appears only when the payload carries it, and every list states its total (`Key findings (7)`) — a capped list ends with `… and N more`.
+- A section appears only when the payload carries it, and every list states its total (`Key findings (7)`) — a capped list (10 findings, 10 files, 5 problems, 5 links, 20 rows) ends with `… and N more`. `/result --full` lifts both the fold and those per-section caps, so "show me everything" really means everything.
 - `fields` and `xsqlResultSet` become aligned tables; a string payload is printed as text, without JSON quotes.
 - The envelope's transport fields (`taskId`, `status`, `statusTool`, `resultTool`, `cancelTool`, `processed`, `statusCode`) are never printed.
 - A payload field this renderer does not know yet stays visible under `Other (N field(s))`, so a backend addition is never silently dropped.
-- Lines wrap to `COLUMNS` (default 100); a payload longer than 40 lines is folded with `… N more line(s) — /result --json prints the whole envelope`. The hint names the command that exists where you are: `/result --json` inside `-i`, `agent result <id> --json` for `agent result`, `--wait` and `--follow`. `--pretty` turns the fold off for the whole payload.
-- Machines are unaffected: `--ndjson` is byte-identical, `-i` ignores `--ndjson` (it says so on stderr), and the raw envelope is available through `agent result <id> --json`, `/result --json`, or the `--json` envelope's `raw` field.
+- The model's own `nextSuggestions` render as a trailing `Suggested next steps` section in one-shot runs (`agent result`, `--wait`, `--follow`). Inside `-i` they are the numbered menu instead, so they are not printed twice.
+- Lines wrap to `COLUMNS` (default 100); a payload longer than 40 lines is folded with `… N more line(s) — /result --full shows everything`. The hint names the command that exists where you are: `/result --full` (or the global `--pretty`) inside `-i`, `agent result <id> --pretty` everywhere else. `agent result` with the global `--json` flag still emits the machine envelope.
+- Machines are unaffected: `--ndjson` is byte-identical, `-i` ignores `--ndjson` (it says so on stderr), and the envelope is available through `agent result <id> --json`, `/result --json` (pretty-printed, still valid JSON), or the `--json` envelope's `raw` field.
 
 ### The completion line
 
@@ -367,7 +372,11 @@ Files written (1) · workspace: ~/.browser4/agent/workspace.5b0c…
 agent> now compare it with the enterprise page
 ```
 
-The payload is rendered as sections (see [Result rendering](#result-rendering)), and `/result` re-prints it at any time without re-running the task — `/result --json` prints the raw `command_result` envelope instead.
+The payload is rendered as sections (see [Result rendering](#result-rendering)), and `/result` re-prints it at any time without re-running the task: `--json` prints the `command_result` envelope as pretty-printed JSON (still valid JSON for a script), `--full` keeps the section layout but lifts the fold and the per-section caps.
+
+#### Session context: the tasks of one session build on each other
+
+Every task of a session is a new agent run, so the backend hands it a compacted `## Session context` block — what the earlier tasks asked, how they ended, the files they changed and the problems they left open — and the run continues from there instead of starting from zero. `/new` starts a new session (and a new context); two `agent run -i` invocations against the same session share one. The block is compressed automatically because it rides in every prompt: the newest 3 tasks keep their details, older ones roll up into one compacted line, and the whole block stays under `browser4.agent.session.contextTokens` (default 1200 tokens) — over budget it compacts further, oldest first, rather than growing. Compression never loses the thread: the session's **goal** (the instruction of its first task) is anchored verbatim once that task stops being detailed, `problems` reported by folded tasks are re-listed as unresolved, the newest task is never the one dropped, and **a goal can be revised** — a later task that redirects ("actually…", "instead…", "改用…") or a line you typed into the running task is recorded as a correction, shown above the goal as superseding it, with the current instruction winning over both. `browser4.agent.session.contextEnabled=false` turns the block off; a one-shot `agent run` is unaffected either way (a session's first task has nothing to remember).
 
 What the session's own chrome says:
 
@@ -381,17 +390,12 @@ What the session's own chrome says:
 `-i --json` keeps the scalars `task_id` / `raw` / `stats` describing the **last** task (unchanged, so existing readers keep working) and adds `tasks[]`, one entry per task of the session in order:
 
 ```json
-{"task_id":"…","raw":{…},"stats":{…},
- "tasks":[{"taskId":"5b0c3f2a","status":"done","isDone":true,"elapsedMs":18400,"steps":39},
-          {"taskId":"7f21ab9c","status":"cancelled","isDone":true,"elapsedMs":2100,"steps":4}]}
+{"task_id":"…","raw":{…},"stats":{…},"tasks":[{"taskId":"5b0c3f2a","status":"done","isDone":true,"elapsedMs":18400,"steps":39},{"taskId":"7f21ab9c","status":"cancelled","isDone":true,"elapsedMs":2100,"steps":4}]}
 ```
 
 A line typed while a task is running is **steering**, not a new task: it is sent to the running task and injected into the agent as a user message at its next model round-trip. A backend hiccup does not end the session either — the live view keeps following a task that is still running (see [When the step stream fails](#when-the-step-stream-fails)).
 
-Steering is chosen whenever this session's task is still running — the CLI asks the backend rather than trusting its own bookkeeping, so a line can never be queued as a second task behind a live one (`↪ steering queued` confirms it). If the session had stopped following the task, accepting the line re-attaches the live view (`… following task <id> again`). To start a *different* task, `/cancel` the running one first; after `/new` the previous task belongs to the old agent context, so a later
-line is a new task.
-
-Steering is best-effort by design: it lands at the next model round (immediately for browser tasks that call a tool per round; possibly after a long tool round for coding tasks). If the task finished while you were typing, the CLI says so and keeps the session open.
+Steering is chosen whenever this session's task is still running — the CLI asks the backend rather than trusting its own bookkeeping, so a line can never be queued as a second task behind a live one (`↪ steering queued` confirms it). If the session had stopped following the task, accepting the line re-attaches the live view (`… following task <id> again`). To start a *different* task, `/cancel` the running one first; after `/new` the previous task belongs to the old agent context, so a later line is a new task. Steering is best-effort by design: it lands at the next model round (immediately for browser tasks that call a tool per round; possibly after a long tool round for coding tasks). If the task finished while you were typing, the CLI says so and keeps the session open.
 
 Session commands:
 
@@ -400,11 +404,11 @@ Session commands:
 | `/help` | List the commands |
 | `/status` | Status of the running (or last) task |
 | `/stats [task-id]` | Run statistics: LLM rounds and requests, token usage (prompt-cache reads/writes and hit ratio included when the provider reports them), tool calls |
-| `/result [--json]` | Print the last finished task's result as sections (`--json`: the raw envelope) |
+| `/result [--json] [--full]` | Print the last finished task's result as sections (`--json`: the envelope as pretty JSON; `--full`: no fold, no per-section caps) |
 | `/resume [--budget <n>] [task-id]` | Continue an interrupted/stalled task with its workspace and files. After a budget abort pass a larger `--budget` (the numbered continue choice does this with a doubled cap) |
 | `/cancel` | Cancel the running task (same as Ctrl+C) |
 | `/new` | Start a new session — the next task gets a fresh agent context |
-| `1` / `2` / `3` | Pick a suggested follow-up while the "next" block is on screen (any other input, a task or a `/command`, supersedes it) |
+| `1` / `2` / `3` | Run one of the predicted next steps while the numbered block is on screen (any other input, a task or a `/command`, supersedes it) |
 | `/session` | Print the current session id |
 | `/coding [on\|off]` | Treat following tasks as coding tasks |
 | `/quiet [on\|off]` | Silence the session's human lines — the same effect as the global `-q`, for the rest of this session (bare `/quiet` flips it) |

@@ -324,7 +324,13 @@ const TIPS_AGENT: &[Tip] = &[
         text: "A run without a TTY cannot be watched, so it starts from `full` (network on) instead of the server-wide preset — `browser4.agent.access.unattended` (`deny`/`read`/`read-build`/`write`/`full`) overrides that; a watched `-i` session on a TTY keeps `browser4.agent.access`",
     },
     Tip {
-        text: "`agent run -i` keeps a session open — type a line while a task runs to steer it, /status and /cancel to inspect or stop it, /stats for the run's LLM rounds, token usage and tool calls, /result [--json] to re-print the finished task's payload as sections (or the raw envelope)",
+        text: "`agent run -i` keeps a session open — type a line while a task runs to steer it, /status and /cancel to inspect or stop it, /stats for the run's LLM rounds, token usage and tool calls, /result [--json] [--full] to re-print the finished task's payload as sections (--json: pretty envelope, --full: nothing folded)",
+    },
+    Tip {
+        text: "After every task `-i` predicts 2-3 next steps as numbered TASKS — the model's own `nextSuggestions` first, then the files/problems it left behind — so type the number instead of reconstructing the next task",
+    },
+    Tip {
+        text: "Tasks of one `-i` session are not independent: each new task carries a compacted `## Session context` block (earlier tasks, their files, open problems, and any mid-session correction), auto-compressed under `browser4.agent.session.contextTokens`; `/new` starts a deliberately fresh context",
     },
     Tip {
         text: "Every task runs in its own workspace — artifacts of an earlier run never show up in this run's `filesChanged`. `--resume <id>` reuses the interrupted task's workspace; `--shared-workspace` opts into the old shared directory",

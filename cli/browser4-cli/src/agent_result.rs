@@ -32,6 +32,8 @@ const FILES_SHOWN: usize = 10;
 const PROBLEMS_SHOWN: usize = 5;
 const LINKS_SHOWN: usize = 5;
 const ROWS_SHOWN: usize = 20;
+/// The model's proposed follow-ups are a menu hint, not a report.
+const SUGGESTIONS_SHOWN: usize = 3;
 
 /// Cap on one table cell, so a long value cannot blow up the layout.
 const CELL_PREVIEW: usize = 80;
@@ -70,6 +72,7 @@ const RESULT_KEYS: &[&str] = &[
     "links",
     "xsqlResultSet",
     "keyFindings",
+    "nextSuggestions",
     "filesChanged",
     "problems",
     "workspace",
@@ -87,9 +90,21 @@ pub(crate) struct RenderOptions {
     /// Emit ANSI bold around section titles.
     color: bool,
     /// The command the fold line tells the reader to run for the whole
-    /// envelope. It differs per entry point: `/result --json` inside `-i`,
-    /// `agent result <id> --json` everywhere else.
+    /// payload. It differs per entry point: `/result --full` inside `-i`,
+    /// `agent result <id> --pretty` everywhere else.
     json_hint: String,
+    /// `--full`: no folding and no per-section caps.
+    ///
+    /// A separate flag from [`Self::max_lines`] because the caps are a second,
+    /// independent way of hiding content: a payload with 40 findings fits in 60
+    /// lines and was still cut to 10 unless this is set.
+    full: bool,
+    /// Render the model's own `nextSuggestions` as a trailing section.
+    ///
+    /// Off inside `agent run -i`: the session prints the same list as its numbered
+    /// follow-up menu immediately after, and showing it twice reads as two
+    /// different offers.
+    show_suggestions: bool,
 }
 
 impl Default for RenderOptions {
@@ -98,7 +113,9 @@ impl Default for RenderOptions {
             width: width_from_columns(std::env::var("COLUMNS").ok().as_deref()),
             max_lines: DEFAULT_MAX_LINES,
             color: false,
-            json_hint: "/result --json".to_string(),
+            json_hint: "/result --full".to_string(),
+            full: false,
+            show_suggestions: true,
         }
     }
 }
@@ -109,12 +126,15 @@ impl RenderOptions {
         self
     }
 
-    /// `--pretty`: keep every line instead of folding the payload.
+    /// `--full` (or the global `--pretty`): keep every line *and* every entry
+    /// instead of folding the payload.
     ///
-    /// Folding is a convenience of the default human path; `--pretty` is the
-    /// explicit "show me everything" switch, so it must not hide anything.
+    /// Folding is a convenience of the default human path; this is the explicit
+    /// "show me everything" switch, so it must not hide anything — neither the
+    /// tail of the payload nor the 11th finding.
     pub(crate) fn with_full(mut self, full: bool) -> Self {
         if full {
+            self.full = true;
             self.max_lines = usize::MAX;
         }
         self
@@ -124,6 +144,46 @@ impl RenderOptions {
     pub(crate) fn with_json_hint(mut self, hint: impl Into<String>) -> Self {
         self.json_hint = hint.into();
         self
+    }
+
+    /// Render (or suppress) the model's own suggested next steps.
+    pub(crate) fn with_suggestions(mut self, show: bool) -> Self {
+        self.show_suggestions = show;
+        self
+    }
+
+    /// How many entries of a section to show: [cap] by default, all in full mode.
+    fn limit(&self, cap: usize) -> usize {
+        if self.full {
+            usize::MAX
+        } else {
+            cap
+        }
+    }
+
+    /// Truncate one rendered value to [max_chars], or keep it whole in full mode.
+    fn clip(&self, text: &str, max_chars: usize) -> String {
+        if self.full {
+            text.to_string()
+        } else {
+            clip(text, max_chars)
+        }
+    }
+}
+
+/// The pretty-printed form of a JSON payload, or the input unchanged when it is
+/// not JSON.
+///
+/// `/result --json` is the machine escape hatch of the interactive session, but a
+/// human reads it too: a 5 KB `command_result` envelope printed as one line was
+/// unusable — no wrapping, no structure, and re-formatting it meant piping through
+/// an external tool. The text stays valid JSON, so a script's `jq`/`serde` parse is
+/// unchanged; only the whitespace differs.
+pub(crate) fn pretty_json(text: &str) -> String {
+    match serde_json::from_str::<Value>(text) {
+        Ok(value) => serde_json::to_string_pretty(&value).unwrap_or_else(|_| text.to_string()),
+        // A plain-text payload (a mock, an older backend) is already human text.
+        Err(_) => text.to_string(),
     }
 }
 
@@ -171,6 +231,61 @@ pub(crate) fn render_result_text(
     lines
 }
 
+/// The payload facts a session uses to predict the next step.
+///
+/// The interactive session's follow-up menu has to be about the work that just
+/// happened — the files it changed, the problems it left open, the next steps the
+/// model itself proposed — not about the CLI's own commands. Reading the same
+/// envelope the renderer reads keeps one definition of "where the payload lives".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ResultDigest {
+    pub(crate) summary: Option<String>,
+    pub(crate) findings: Vec<String>,
+    pub(crate) files: Vec<String>,
+    pub(crate) problems: Vec<String>,
+    /// The model's own follow-ups from its completion report (`system.taskComplete`).
+    pub(crate) next_suggestions: Vec<String>,
+}
+
+impl ResultDigest {
+    /// True when the payload said nothing usable (no summary, findings, files,
+    /// problems or suggestions).
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        *self == ResultDigest::default()
+    }
+}
+
+/// Read the follow-up facts out of a `command_result` body.
+///
+/// Tolerant by design: an unparseable body, a bare payload object and the usual
+/// envelope all yield a digest, and an empty body yields the empty one.
+pub(crate) fn digest(body: &str) -> ResultDigest {
+    let Ok(value) = serde_json::from_str::<Value>(body.trim()) else {
+        return ResultDigest::default();
+    };
+    let Some(payload) = payload_object(&value) else {
+        return ResultDigest::default();
+    };
+    ResultDigest {
+        summary: string_of(payload.get("summary")).or_else(|| string_of(payload.get("pageSummary"))),
+        findings: strings_of(payload.get("keyFindings")),
+        files: strings_of(payload.get("filesChanged")),
+        problems: strings_of(payload.get("problems")),
+        next_suggestions: strings_of(payload.get("nextSuggestions")),
+    }
+}
+
+/// The object that holds the agent's payload: `result` of the envelope, or the
+/// body itself when the caller passed a bare payload.
+fn payload_object(value: &Value) -> Option<&serde_json::Map<String, Value>> {
+    let map = value.as_object()?;
+    match map.get("result") {
+        Some(Value::Object(result)) => Some(result),
+        _ => Some(map),
+    }
+}
+
 fn render_value(task_id: &str, value: &Value, options: &RenderOptions) -> Vec<String> {
     match value {
         Value::Null => missing_payload(task_id),
@@ -215,12 +330,13 @@ fn render_sections(
 
     let findings = strings_of(result.get("keyFindings"));
     if !findings.is_empty() {
+        let shown = options.limit(FINDINGS_SHOWN);
         let mut body = Vec::new();
-        for finding in findings.iter().take(FINDINGS_SHOWN) {
+        for finding in findings.iter().take(shown) {
             body.extend(icon_bullet("•", finding, options.width));
         }
-        if findings.len() > FINDINGS_SHOWN {
-            body.push(format!("  … and {} more", findings.len() - FINDINGS_SHOWN));
+        if findings.len() > shown {
+            body.push(format!("  … and {} more", findings.len() - shown));
         }
         section(
             &mut lines,
@@ -240,31 +356,36 @@ fn render_sections(
             ),
             None => format!("Files written ({})", files.len()),
         };
+        let shown = options.limit(FILES_SHOWN);
         let mut body = Vec::new();
-        for file in files.iter().take(FILES_SHOWN) {
-            body.push(format!("  {}", clip(file, options.width.saturating_sub(2))));
+        for file in files.iter().take(shown) {
+            body.push(format!("  {}", options.clip(file, options.width.saturating_sub(2))));
         }
-        if files.len() > FILES_SHOWN {
-            body.push(format!("  … and {} more", files.len() - FILES_SHOWN));
+        if files.len() > shown {
+            body.push(format!("  … and {} more", files.len() - shown));
         }
         section(&mut lines, &title, body, options);
     } else if let Some(workspace) = workspace {
         section(
             &mut lines,
             "Workspace",
-            vec![format!("  {}", clip(&workspace, options.width.saturating_sub(2)))],
+            vec![format!(
+                "  {}",
+                options.clip(&workspace, options.width.saturating_sub(2))
+            )],
             options,
         );
     }
 
     let problems = strings_of(result.get("problems"));
     if !problems.is_empty() {
+        let shown = options.limit(PROBLEMS_SHOWN);
         let mut body = Vec::new();
-        for problem in problems.iter().take(PROBLEMS_SHOWN) {
+        for problem in problems.iter().take(shown) {
             body.extend(icon_bullet("⚠", problem, options.width));
         }
-        if problems.len() > PROBLEMS_SHOWN {
-            body.push(format!("  … and {} more", problems.len() - PROBLEMS_SHOWN));
+        if problems.len() > shown {
+            body.push(format!("  … and {} more", problems.len() - shown));
         }
         section(
             &mut lines,
@@ -301,10 +422,10 @@ fn render_sections(
                 .iter()
                 .find_map(|row| row.as_object().map(|object| object.len()))
                 .unwrap_or(0);
-            let shown: Vec<Value> = rows.iter().take(ROWS_SHOWN).cloned().collect();
+            let shown: Vec<Value> = rows.iter().take(options.limit(ROWS_SHOWN)).cloned().collect();
             let mut body = table(&shown, options);
-            if rows.len() > ROWS_SHOWN {
-                body.push(format!("  … {} more row(s)", rows.len() - ROWS_SHOWN));
+            if rows.len() > shown.len() {
+                body.push(format!("  … {} more row(s)", rows.len() - shown.len()));
             }
             section(
                 &mut lines,
@@ -317,13 +438,14 @@ fn render_sections(
 
     let links = strings_of(result.get("links"));
     if !links.is_empty() {
+        let shown = options.limit(LINKS_SHOWN);
         let mut body: Vec<String> = links
             .iter()
-            .take(LINKS_SHOWN)
-            .map(|link| format!("  {}", clip(link, options.width.saturating_sub(2))))
+            .take(shown)
+            .map(|link| format!("  {}", options.clip(link, options.width.saturating_sub(2))))
             .collect();
-        if links.len() > LINKS_SHOWN {
-            body.push(format!("  … and {} more", links.len() - LINKS_SHOWN));
+        if links.len() > shown {
+            body.push(format!("  … and {} more", links.len() - shown));
         }
         section(&mut lines, &format!("Links ({})", links.len()), body, options);
     }
@@ -339,10 +461,11 @@ fn render_sections(
     }
     if !others.is_empty() {
         let mut body = pretty(&Value::Object(others.clone()), options);
-        if body.len() > OTHERS_LINES_SHOWN {
+        let shown = options.limit(OTHERS_LINES_SHOWN);
+        if body.len() > shown {
             let total = body.len();
-            body.truncate(OTHERS_LINES_SHOWN);
-            body.push(format!("  … {} more line(s)", total - OTHERS_LINES_SHOWN));
+            body.truncate(shown);
+            body.push(format!("  … {} more line(s)", total - shown));
         }
         section(
             &mut lines,
@@ -352,9 +475,26 @@ fn render_sections(
         );
     }
 
+    // The completion report's own forward-looking field. It is a suggestion, not a
+    // result, so it goes last — and the interactive session suppresses it (its
+    // numbered menu carries the same list).
+    let suggestions = strings_of(result.get("nextSuggestions"));
+    if options.show_suggestions && !suggestions.is_empty() {
+        let shown = options.limit(SUGGESTIONS_SHOWN);
+        let mut body = Vec::new();
+        for suggestion in suggestions.iter().take(shown) {
+            body.extend(icon_bullet("→", suggestion, options.width));
+        }
+        if suggestions.len() > shown {
+            body.push(format!("  … and {} more", suggestions.len() - shown));
+        }
+        section(&mut lines, "Suggested next steps", body, options);
+    }
+
     if lines.is_empty() {
         lines.extend(missing_payload(task_id));
     }
+
     lines
 }
 
@@ -368,15 +508,15 @@ fn render_array(items: &[Value], options: &RenderOptions) -> Vec<String> {
         .iter()
         .find_map(|item| item.as_object().map(|object| object.len()))
         .unwrap_or(0);
-    let shown: Vec<Value> = items.iter().take(ROWS_SHOWN).cloned().collect();
+    let shown: Vec<Value> = items.iter().take(options.limit(ROWS_SHOWN)).cloned().collect();
     let mut lines = vec![format!(
         "Data ({} rows × {} columns)",
         items.len(),
         columns
     )];
     lines.extend(table(&shown, options));
-    if items.len() > ROWS_SHOWN {
-        lines.push(format!("  … {} more row(s)", items.len() - ROWS_SHOWN));
+    if items.len() > shown.len() {
+        lines.push(format!("  … {} more row(s)", items.len() - shown.len()));
     }
     lines
 }
@@ -394,7 +534,7 @@ fn section(lines: &mut Vec<String>, title: &str, body: Vec<String>, options: &Re
 }
 
 /// Fold a payload that would flood the terminal, and say how to see the rest.
-fn fold(lines: &mut Vec<String>, max_lines: usize, json_hint: &str) {
+fn fold(lines: &mut Vec<String>, max_lines: usize, hint: &str) {
     let max_lines = max_lines.max(4);
     if lines.len() <= max_lines {
         return;
@@ -403,7 +543,7 @@ fn fold(lines: &mut Vec<String>, max_lines: usize, json_hint: &str) {
     let keep = max_lines - 1;
     lines.truncate(keep);
     lines.push(format!(
-        "  … {} more line(s) — {json_hint} prints the whole envelope",
+        "  … {} more line(s) — {hint} shows everything",
         total - keep
     ));
 }
@@ -447,17 +587,27 @@ fn strings_of(value: Option<&Value>) -> Vec<String> {
 
 /// A table row set rendered by the CLI's existing aligned-table formatter, with
 /// cells capped so a long value cannot push the table off a narrow terminal.
+///
+/// In full mode the cap rises to the render width (the cells of one row still
+/// share it) and the assembled lines are not clipped again: a table is a layout,
+/// so "show everything" means "stop hiding the tail of a value", not "stop
+/// aligning columns".
 fn table(rows: &[Value], options: &RenderOptions) -> Vec<String> {
     let columns = rows
         .iter()
         .find_map(|row| row.as_object().map(|object| object.len()))
         .unwrap_or(0)
         .max(1);
-    let max_cell = (options.width.saturating_sub(4) / columns).clamp(8, CELL_PREVIEW);
+    let per_column = options.width.saturating_sub(4) / columns;
+    let max_cell = if options.full {
+        per_column.max(8)
+    } else {
+        per_column.clamp(8, CELL_PREVIEW)
+    };
     let capped: Vec<Value> = rows.iter().map(|row| cap_cells(row, max_cell)).collect();
     crate::format_table(&capped)
         .lines()
-        .map(|line| clip(line, options.width))
+        .map(|line| options.clip(line, options.width))
         .collect()
 }
 
@@ -487,9 +637,9 @@ fn cell_text(value: &Value, max: usize) -> String {
 /// A JSON block for payloads this renderer cannot present as sections.
 fn pretty(value: &Value, options: &RenderOptions) -> Vec<String> {
     let text = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
-    let text = clip(&text, OTHERS_PREVIEW_CHARS);
+    let text = options.clip(&text, OTHERS_PREVIEW_CHARS);
     text.lines()
-        .map(|line| clip(line, options.width))
+        .map(|line| options.clip(line, options.width))
         .collect()
 }
 
@@ -779,7 +929,7 @@ mod tests {
     }
 
     #[test]
-    fn folds_beyond_the_line_cap_and_points_at_the_machine_output() {
+    fn folds_beyond_the_line_cap_and_points_at_the_full_output() {
         let findings: Vec<String> = (0..10).map(|index| format!("finding {index}")).collect();
         let body = json!({"result": {"summary": "s", "keyFindings": findings}}).to_string();
         let lines = render_result_text(
@@ -789,20 +939,21 @@ mod tests {
                 width: 100,
                 max_lines: 6,
                 color: false,
-                json_hint: "/result --json".to_string(),
+                json_hint: "/result --full".to_string(),
+                ..RenderOptions::default()
             },
         );
 
         assert_eq!(lines.len(), 6, "{lines:?}");
         let last = lines.last().expect("a folded payload has a tail line");
         assert!(last.contains("more line(s)"), "{last}");
-        assert!(last.contains("/result --json"), "{last}");
+        assert!(last.contains("/result --full"), "{last}");
     }
 
     /// The fold line must name the command the reader can actually run: only
     /// `-i` has `/result`, every other entry point wants `agent result <id>`.
     #[test]
-    fn the_fold_line_names_the_json_command_of_its_entry_point() {
+    fn the_fold_line_names_the_command_of_its_entry_point() {
         let findings: Vec<String> = (0..10).map(|index| format!("finding {index}")).collect();
         let body = json!({"result": {"summary": "s", "keyFindings": findings}}).to_string();
         let lines = render_result_text(
@@ -812,13 +963,14 @@ mod tests {
                 width: 100,
                 max_lines: 6,
                 color: false,
-                json_hint: "agent result task-1 --json".to_string(),
+                json_hint: "agent result task-1 --pretty".to_string(),
+                ..RenderOptions::default()
             },
         );
 
         let last = lines.last().expect("a folded payload has a tail line");
-        assert!(last.contains("agent result task-1 --json"), "{last}");
-        assert!(!last.contains("/result --json"), "{last}");
+        assert!(last.contains("agent result task-1 --pretty"), "{last}");
+        assert!(!last.contains("/result --full"), "{last}");
     }
 
     /// `--pretty` is the explicit "show me everything" switch: the same payload
@@ -832,6 +984,7 @@ mod tests {
             max_lines: 6,
             color: false,
             json_hint: "/result --json".to_string(),
+            ..RenderOptions::default()
         }
         .with_full(true);
         let lines = render_result_text("task-1", &body, &options);
@@ -862,6 +1015,7 @@ mod tests {
                 max_lines: DEFAULT_MAX_LINES,
                 color: true,
                 json_hint: "/result --json".to_string(),
+                ..RenderOptions::default()
             },
         );
 
@@ -899,5 +1053,130 @@ mod tests {
         assert_eq!(width_from_columns(Some("10")), MIN_WIDTH);
         assert_eq!(width_from_columns(Some("9999")), MAX_WIDTH);
         assert_eq!(width_from_columns(Some("wide")), DEFAULT_WIDTH);
+    }
+
+    // ---- `--full`, pretty JSON and the follow-up digest ---------------------
+
+    /// `--full` must lift the *section* caps too: a payload that fits the line
+    /// budget was still cut to 10 findings, so "show me everything" hid 15 of 25.
+    #[test]
+    fn full_rendering_lifts_the_section_caps() {
+        let findings: Vec<String> = (0..25).map(|index| format!("finding {index}")).collect();
+        let body = json!({"result": {"summary": "s", "keyFindings": findings}}).to_string();
+
+        let default = render_result_text("task-1", &body, &options(100));
+        assert!(
+            default.iter().any(|line| line.contains("and 15 more")),
+            "the default path folds the tail of a long section: {default:?}"
+        );
+        assert!(
+            !default.iter().any(|line| line.contains("finding 24")),
+            "the folded entry must not be listed: {default:?}"
+        );
+
+        let full = render_result_text(
+            "task-1",
+            &body,
+            &options(100).with_full(true),
+        );
+        for index in 0..25 {
+            assert!(
+                full.iter().any(|line| line.contains(&format!("finding {index}"))),
+                "full rendering must list finding {index}: {full:?}"
+            );
+        }
+        assert!(
+            !full.iter().any(|line| line.contains("more line(s)") || line.contains("and 15 more")),
+            "a full render must not claim there is more: {full:?}"
+        );
+    }
+
+    /// The completion report's own follow-ups are a section — and the interactive
+    /// session switches them off because its numbered menu carries the same list.
+    #[test]
+    fn next_suggestions_are_rendered_last_and_can_be_suppressed() {
+        let body = json!({
+            "result": {
+                "summary": "Fixed the build.",
+                "nextSuggestions": ["run the module tests", "commit the change"]
+            }
+        })
+        .to_string();
+
+        let lines = render_result_text("task-1", &body, &options(100));
+        let title = lines
+            .iter()
+            .position(|line| line == "Suggested next steps")
+            .unwrap_or_else(|| panic!("no suggestions section: {lines:?}"));
+        assert!(
+            lines[title + 1].contains("run the module tests"),
+            "{lines:?}"
+        );
+        assert_eq!(
+            lines.last().map(String::as_str),
+            Some("  → commit the change"),
+            "the suggestions must be the last section: {lines:?}"
+        );
+
+        let suppressed = render_result_text(
+            "task-1",
+            &body,
+            &options(100).with_suggestions(false),
+        );
+        assert!(
+            !suppressed.iter().any(|line| line.contains("Suggested next steps")),
+            "{suppressed:?}"
+        );
+        // Suppressing the section must not hide the payload from the "Other" block
+        // either — `nextSuggestions` is a known key.
+        assert!(
+            !suppressed.iter().any(|line| line.contains("Other (")),
+            "{suppressed:?}"
+        );
+    }
+
+    #[test]
+    fn the_digest_reads_the_envelope_and_a_bare_payload() {
+        let envelope = json!({
+            "taskId": "task-1",
+            "status": "done",
+            "result": {
+                "summary": "Fixed the module build.",
+                "keyFindings": ["BOM pinned an old zip4j"],
+                "filesChanged": ["browser4-dependencies/pom.xml"],
+                "problems": ["CI gate not run"],
+                "nextSuggestions": ["run the tests"]
+            }
+        })
+        .to_string();
+
+        let facts = digest(&envelope);
+        assert_eq!(facts.summary.as_deref(), Some("Fixed the module build."));
+        assert_eq!(facts.findings, vec!["BOM pinned an old zip4j"]);
+        assert_eq!(facts.files, vec!["browser4-dependencies/pom.xml"]);
+        assert_eq!(facts.problems, vec!["CI gate not run"]);
+        assert_eq!(facts.next_suggestions, vec!["run the tests"]);
+        assert!(!facts.is_empty());
+
+        // A backend (or a mock) that answers with the payload itself.
+        let bare = digest(r#"{"summary":"done","filesChanged":["a.kt"]}"#);
+        assert_eq!(bare.summary.as_deref(), Some("done"));
+        assert_eq!(bare.files, vec!["a.kt"]);
+
+        // Nothing usable: an unparseable body, a null payload, an empty one.
+        for body in ["", "not json", "null", r#"{"result":null}"#, "{}"] {
+            assert!(digest(body).is_empty(), "{body} → {:?}", digest(body));
+        }
+    }
+
+    #[test]
+    fn pretty_json_indents_and_leaves_non_json_alone() {
+        let pretty = pretty_json(r#"{"a":1,"b":[1,2]}"#);
+        assert_eq!(pretty, "{\n  \"a\": 1,\n  \"b\": [\n    1,\n    2\n  ]\n}");
+
+        // A plain-text payload is already human text.
+        assert_eq!(pretty_json("result for agent-task-1"), "result for agent-task-1");
+        // Whitespace-only or broken JSON stays as it came.
+        assert_eq!(pretty_json("{broken"), "{broken");
     }
 }

@@ -649,6 +649,54 @@ docker run -d -p 18182:18182 `
   Related: `browser4.agent.workspace.isolation=worktree` runs `coding.devTask(execute=true)` inside
   a `git worktree` under `.browser4/worktrees/` and merges back only on success (default `off`).
 
+* **`browser4.agent.session.contextEnabled`** *(default: `true`)* and
+  **`browser4.agent.session.contextTokens`** *(default: `1200`)*
+  Tasks of one agent session are separate runs, so each new task receives a compacted
+  `## Session context` block: what the earlier tasks of that session asked, how they ended
+  (`done` / `failed` / `cancelled`), the files they changed and the problems they left open.
+  That is what makes `agent run -i` — and any client that submits several tasks under one
+  `sessionId` — build on what it already did instead of restarting from zero.
+
+  The block is **compressed automatically**, because it is part of every prompt of the next run:
+  the newest 3 tasks keep their details, older ones collapse into one summary line, the whole
+  block stays under `contextTokens` (estimated at 4 characters per token), and over budget it
+  compacts further — oldest first — instead of growing.
+
+  **Compaction never loses the thread.** A recency-biased summary is exactly how a long session
+  forgets what it set out to do: the first record *is* the founding task, so it is the first thing
+  folded and the first evicted. Four guarantees prevent that:
+
+  - **The session goal is anchored** — the instruction of the session's first task is rendered
+    verbatim (`Session goal …`) in every block once that task stops being detailed, and it is never
+    rolled up or evicted. Later tasks are steps toward it, not new goals.
+  - **The goal can be revised, and the revision wins** — a user who changes direction mid-session is
+    recorded as a *correction*, not mistaken for another sub-step: a later task instruction that
+    reads like a redirection ("actually…", "instead…", "改用…", "不要…") and any line typed into a
+    running task (`POST /api/commands/{id}/input`, i.e. `-i` steering) are kept (newest 3, 160
+    chars each) and rendered **above** the goal as superseding it. The block also says the
+    instruction at the top of the message wins over everything below, and the goal line no longer
+    claims to be current — an anchor that insisted on the abandoned direction would fight the
+    instruction the user just typed. Steering text used to die with the run it steered; it now
+    survives the session.
+  - **Unresolved problems survive the fold** — `problems` reported by an older (undetailed) task are
+    re-listed in their own section, so "the CI gate was not run" is still actionable several tasks
+    later. Problems belonging to a task that is still detailed are left in its bullet (no
+    duplication).
+  - **The newest task is never dropped** — the degradation chain ends at *newest direction +
+    newest task* (bounded per field), never at a top-down truncation that would keep stale titles
+    while cutting the bullet the next instruction refers to. A budget below ~150 tokens is raised to
+    that floor rather than silently producing a block that says nothing.
+
+  What is deliberately **not** carried: the details of tasks older than the 12-record window (only
+  their goal/status line survives through the goal anchor), and corrections beyond the newest 3.
+  Set `contextTokens` to `0` (or `contextEnabled=false`) to disable the injection; a one-shot
+  `agent run` is unaffected either way, because the first task of a session has nothing to
+  remember. `agent run -i`'s `/new` starts a fresh context on purpose.
+
+  ```bash
+  BROWSER4_SERVER_OPTS="-Dbrowser4.agent.session.contextTokens=3000" browser4-cli open
+  ```
+
 * **`browser4.agent.copyTaskInputs`** *(default: `true`)*
   Before a task runs, copy the files its instruction references but that live outside the agent
   workspace into `<workspace>/.b4inputs/`, and tell the model the workspace-relative paths in the

@@ -16294,7 +16294,7 @@ async fn handle_agent_run(
                         &crate::agent_result::RenderOptions::default()
                             .with_color(crate::agent_interactive::color_enabled())
                             .with_full(pretty_active())
-                            .with_json_hint(format!("agent result {task_id} --json")),
+                            .with_json_hint(format!("agent result {task_id} --pretty")),
                     );
                     if !lines.is_empty() {
                         cli_println!();
@@ -16808,7 +16808,7 @@ async fn handle_agent_result(
             &crate::agent_result::RenderOptions::default()
                 .with_color(crate::agent_interactive::color_enabled())
                 .with_full(pretty_active())
-                .with_json_hint(format!("agent result {id} --json")),
+                .with_json_hint(format!("agent result {id} --pretty")),
         );
         for line in &lines {
             cli_println!("{}", line);
