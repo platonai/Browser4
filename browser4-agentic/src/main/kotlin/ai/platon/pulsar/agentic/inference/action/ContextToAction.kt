@@ -1,19 +1,13 @@
 package ai.platon.pulsar.agentic.inference.action
 
-import ai.platon.pulsar.agentic.event.AgentEventBus
-import ai.platon.pulsar.agentic.event.AgenticEvents
 import ai.platon.pulsar.agentic.inference.*
 import ai.platon.pulsar.agentic.inference.chat.*
-import ai.platon.pulsar.agentic.model.ActionDescription
-import ai.platon.pulsar.agentic.model.ExecutionContext
 import ai.platon.pulsar.agentic.observability.InferenceMetrics
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.ExperimentalApi
-import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.common.event.EventBus
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.external.BrowserChatModel
 import ai.platon.pulsar.external.ChatModelFactory
@@ -43,8 +37,6 @@ open class ContextToAction(
 
     val chatModel: BrowserChatModel
         get() = TestChatModelFactory.getOrCreate(chatModelConf) ?: ChatModelFactory.getOrCreate(chatModelConf)
-
-    val tta = TextToAction(conf)
 
     /**
      * Per-agent token budget, enforced on every LLM call that flows through
@@ -638,55 +630,5 @@ open class ContextToAction(
             val name = modelName?.lowercase()?.trim() ?: return true
             return TEXT_ONLY_MODEL_PREFIXES.none { name.startsWith(it) }
         }
-    }
-
-    private fun onWillGenerate(context: ExecutionContext, messages: AgentMessageList) {
-        // Emit AgentEventBus inference event
-        AgentEventBus.emitInferenceEvent(
-            eventType = AgenticEvents.ContextToAction.ON_WILL_GENERATE,
-            agentId = context.uuid,
-            message = "Starting LLM inference",
-            metadata = mapOf(
-                "context" to context.sid,
-                "step" to context.step
-            )
-        )
-
-        EventBus.emit(
-            AgenticEvents.ContextToAction.ON_WILL_GENERATE, mapOf(
-                "context" to context,
-                "messages" to messages
-            )
-        )
-    }
-
-    private fun onDidGenerate(
-        context: ExecutionContext,
-        messages: AgentMessageList,
-        actionDescription: ActionDescription
-    ) {
-        val modelResponse = actionDescription.modelResponse!!
-
-        // Emit AgentEventBus inference event
-        AgentEventBus.emitInferenceEvent(
-            eventType = AgenticEvents.ContextToAction.ON_DID_GENERATE,
-            agentId = context.uuid,
-            message = "LLM inference completed,",
-            metadata = mapOf(
-                "context" to context.sid,
-                "step" to context.step,
-                "inputToken" to modelResponse.tokenUsage.inputTokenCount,
-                "outputToken" to modelResponse.tokenUsage.outputTokenCount,
-                "totalToken" to modelResponse.tokenUsage.totalTokenCount
-            )
-        )
-
-        EventBus.emit(
-            AgenticEvents.ContextToAction.ON_DID_GENERATE, mapOf(
-                "context" to context,
-                "messages" to messages,
-                "actionDescription" to actionDescription
-            )
-        )
     }
 }

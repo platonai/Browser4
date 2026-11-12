@@ -182,39 +182,6 @@ class EventBusObservabilityTest {
     }
 
     @Test
-    fun testContextToActionGenerateEvents() {
-        val willEventType = AgenticEvents.ContextToAction.ON_WILL_GENERATE
-        val didEventType = AgenticEvents.ContextToAction.ON_DID_GENERATE
-
-        val context = mapOf("step" to 1)
-        val messages = mapOf("content" to "test message")
-
-        EventBus.emit(willEventType, mapOf(
-            "context" to context,
-            "messages" to messages
-        ))
-
-        Thread.sleep(100)
-
-        val actionDescription = mapOf("method" to "click")
-        EventBus.emit(didEventType, mapOf(
-            "context" to context,
-            "messages" to messages,
-            "actionDescription" to actionDescription
-        ))
-
-        Thread.sleep(100)
-
-        val willEvents = capturedEvents[willEventType]
-        val didEvents = capturedEvents[didEventType]
-
-        assertTrue(willEvents != null)
-        assertTrue(didEvents != null)
-        assertTrue(willEvents!!.isNotEmpty())
-        assertTrue(didEvents!!.isNotEmpty())
-    }
-
-    @Test
     fun testInferenceEngineExtractEvents() {
         val willEventType = AgenticEvents.InferenceEngine.ON_WILL_EXTRACT
         val didEventType = AgenticEvents.InferenceEngine.ON_DID_EXTRACT

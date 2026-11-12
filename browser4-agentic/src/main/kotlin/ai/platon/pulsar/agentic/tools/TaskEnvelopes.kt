@@ -176,8 +176,6 @@ object TaskEnvelopes {
         "onWillAct" to "Agent planning next action",
         "onDidAct" to "Agent completed an action",
         "onToolExecuted" to "Agent is working",
-        "onWillGenerate" to "Agent generating response",
-        "onDidGenerate" to "Agent response generated",
         "onWillExtract" to "Agent extracting page data",
         "onDidExtract" to "Agent extracted page data",
         "onWillSummarize" to "Agent summarizing the page",

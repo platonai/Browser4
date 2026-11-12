@@ -1,17 +1,11 @@
 package ai.platon.pulsar.agentic.skills
 
 import ai.platon.pulsar.agentic.context.StaticAgenticContext
-import ai.platon.pulsar.agentic.event.AgenticEvents
-import ai.platon.pulsar.agentic.model.ActionDescription
 import ai.platon.pulsar.agentic.model.ToolCall
-import ai.platon.pulsar.common.event.EventBus
 import ai.platon.pulsar.core.api.ImmutableConfig
 import ai.platon.pulsar.external.ChatModelFactory
-import kotlinx.coroutines.delay
 import org.junit.jupiter.api.*
 import org.junit.jupiter.api.Assertions.assertTrue
-import java.util.concurrent.ConcurrentHashMap
-import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * End-to-end test for skill registration and invocation.
@@ -21,13 +15,11 @@ import kotlin.time.Duration.Companion.milliseconds
  * 2. Wiring the skill to CustomToolRegistry via SkillToolExecutor
  * 3. Creating an agent that can use the skill
  * 4. Running a task that invokes the skill
- * 5. Capturing the ON_DID_GENERATE event to verify the skill was called
+ * 5. Reading the step action descriptions back from the run history
  * 6. Validating that the actionDescription.toolCall is skill-related
  *
- * The test follows the pattern specified in the problem statement:
- * - Startup: skill.debug.scraping should be preloaded at system startup (no manual registration)
- * - Verification: Inject AgenticEvents.ContextToAction.ON_DID_GENERATE event listener
- * - Assertion: Ensure actionDescription.toolCall is skill-related
+ * The run history is the source of truth: the removed `ContextToAction` inference
+ * events no longer exist, so the tool calls are read from `history.states` instead.
  */
 @Tag("E2ETest")
 @Tag("skills")
@@ -35,7 +27,6 @@ import kotlin.time.Duration.Companion.milliseconds
 class SkillRegistrationAndInvocationE2ETest {
 
     companion object {
-        private val capturedEvents = ConcurrentHashMap<String, MutableList<Map<String, Any?>>>()
         private val conf = ImmutableConfig()
 
         @BeforeAll
@@ -43,39 +34,11 @@ class SkillRegistrationAndInvocationE2ETest {
         fun checkLLM() {
             Assumptions.assumeTrue(ChatModelFactory.isModelConfigured(conf))
         }
-
-        @BeforeAll
-        @JvmStatic
-        fun setupEventHandlers() {
-            // Register event handler for ON_DID_GENERATE
-            EventBus.register(AgenticEvents.ContextToAction.ON_DID_GENERATE) { payload ->
-                val map = payload as? Map<String, Any?> ?: return@register null
-
-                capturedEvents.computeIfAbsent(AgenticEvents.ContextToAction.ON_DID_GENERATE) {
-                    mutableListOf()
-                }.add(map)
-
-                val actionDescription = map["actionDescription"] as? ActionDescription ?: return@register payload
-                actionDescription.complete("Completed by test handler")
-
-                payload
-            }
-        }
-
-        @AfterAll
-        @JvmStatic
-        fun cleanup() {
-            // Unregister event handler
-            EventBus.unregister(AgenticEvents.ContextToAction.ON_DID_GENERATE)
-        }
     }
 
     @BeforeEach
     fun setup() {
         Assumptions.assumeTrue(ChatModelFactory.isModelConfigured(conf))
-
-        // Clear captured events
-        capturedEvents.clear()
     }
 
     @AfterEach
@@ -99,20 +62,12 @@ class SkillRegistrationAndInvocationE2ETest {
 
         val history = agent.run(task)
 
-        // Allow time for event processing
-        delay(500.milliseconds)
-
         // Step 5: Verify the agent ran and completed
         assertNotNull(history, "History should not be null")
         assertTrue(history.size > 0, "History should contain at least one execution")
 
-        // Step 6: Verify ON_DID_GENERATE event was captured
-        val events = capturedEvents[AgenticEvents.ContextToAction.ON_DID_GENERATE]
-        assertNotNull(events, "ON_DID_GENERATE events should be captured")
-        assertTrue(events.isNotEmpty(), "At least one ON_DID_GENERATE event should be captured")
-
-        // Step 7: Extract actionDescription from the captured events
-        val actionDescriptions = events.mapNotNull { it["actionDescription"] as? ActionDescription }
+        // Step 6: Read the step action descriptions back from the run history
+        val actionDescriptions = history.states.mapNotNull { it.actionDescription }
         assertTrue(actionDescriptions.isNotEmpty(), "At least one ActionDescription should be present")
 
         // Step 8: Verify that at least one actionDescription contains a skill-related toolCall

@@ -143,6 +143,8 @@
 审查文档里这些项不属于"下线 act"，本轮刻意不动：
 
 1. `ContextToAction.generate(messages, context)` 没有生产调用方（`RobustBrowserAgent` 只用它的 `chatModel` / `requestTokenLimiter`，`InferenceEngine` 只用 `generateResponseRaw`）。因此 `modelResponseToActionDescription` 目前实质是"仅测试可达"——删它要连 `TextToAction` 与解析测试一起处理。
+   → **已清理（2026-11-12）**：`generate` 连同两个推理事件常量（`ON_WILL_GENERATE` / `ON_DID_GENERATE`）、`ContextToAction.tta`、整个 `TextToAction` 与它的解析测试、`ModelObserveResponse*` DTO 一起删除，见
+   `20261112-inference-generate-event-and-tta-removal.md`。
 2. `TestChatModelFactory` 仍在生产路径上（`ContextToAction.chatModel` 先查测试工厂，只看进程环境变量）。
 3. `ToolCallResult.isSuccess` 语义取反（`Models.kt`，目前无生产调用方）。
 4. `SessionActExecutor` 删除后，`LoadService` / `ScrapeService` 里的页面动作是**每条一次 tool loop**，成本高于原来的"一次翻译"；如果这些回调在实践中变成热点，应改成一次 run 处理整个 action 列表（而不是 `forEach` 逐条 run）。

@@ -104,24 +104,6 @@ object AgenticEvents {
     }
 
     /**
-     * Events emitted by ContextToAction during action generation.
-     */
-    object ContextToAction {
-        /**
-         * Emitted before generating action from context.
-         * Payload: Map containing "context" (ExecutionContext), "messages" (AgentMessageList)
-         */
-        const val ON_WILL_GENERATE = "ContextToAction.onWillGenerate"
-
-        /**
-         * Emitted after generating action from context.
-         * Payload: Map containing "context" (ExecutionContext), "messages" (AgentMessageList),
-         *          "actionDescription" (ActionDescription)
-         */
-        const val ON_DID_GENERATE = "ContextToAction.onDidGenerate"
-    }
-
-    /**
      * AgentEventBus event type constants for skill execution events.
      * Used with AgentEventBus.emitSkillEvent().
      */
@@ -153,9 +135,6 @@ object AgenticEvents {
         InferenceEngine.ON_WILL_EXTRACT,
         InferenceEngine.ON_DID_EXTRACT,
         InferenceEngine.ON_WILL_SUMMARIZE,
-        InferenceEngine.ON_DID_SUMMARIZE,
-        // ContextToAction events
-        ContextToAction.ON_WILL_GENERATE,
-        ContextToAction.ON_DID_GENERATE
+        InferenceEngine.ON_DID_SUMMARIZE
     )
 }
