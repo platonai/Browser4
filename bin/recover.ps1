@@ -49,6 +49,21 @@
 .PARAMETER CheckBuild
     Also probe whether the checkout still builds (slow: runs Maven). Opt-in.
 
+.PARAMETER Prune
+    Reclaim stale isolated worktrees using the same rule as the backend
+    (`browser4.agent.isolation.keep` / `maxAgeDays`): keep the newest -Keep and
+    anything younger than -MaxAgeDays, remove the rest with `git worktree remove`.
+    Refuses while a coding task holds the checkout lock.
+
+.PARAMETER Keep
+    Worktrees always retained by -Prune (default 3).
+
+.PARAMETER MaxAgeDays
+    Worktrees younger than this are never pruned (default 7).
+
+.PARAMETER DryRun
+    With -Prune: report what would be removed without removing it.
+
 .PARAMETER Yes
     Skip the confirmation for destructive actions (-Hard).
 
@@ -70,6 +85,10 @@ param(
     [switch]$Remote,
     [switch]$CheckBuild,
     [switch]$Yes,
+    [switch]$Prune,
+    [int]$Keep = 3,
+    [int]$MaxAgeDays = 7,
+    [switch]$DryRun,
     # Explicit checkout root. Defaults to the script's own checkout (`b4w recover`
     # always runs from one); tests and cross-checkout use point it elsewhere.
     [string]$Repo,
@@ -91,6 +110,10 @@ for ($i = 0; $i -lt $Rest.Count; $i++) {
         '^--?use-?last-?good$' { $UseLastGood = $true }
         '^--?remote$' { $Remote = $true }
         '^--?check-?build$' { $CheckBuild = $true }
+        '^--?prune$' { $Prune = $true }
+        '^--?keep$' { $i++; if ($i -lt $Rest.Count) { $Keep = [int]$Rest[$i] } }
+        '^--?max-?age-?days$' { $i++; if ($i -lt $Rest.Count) { $MaxAgeDays = [int]$Rest[$i] } }
+        '^--?dry-?run$' { $DryRun = $true }
         '^--?yes$' { $Yes = $true }
         default {
             Write-Host "recover: unknown option '$token'" -ForegroundColor Red
@@ -235,6 +258,9 @@ function Show-Status {
             Write-Host '    b4w recover -UseLastGood            # start from the previously built bundle'
         }
         Write-Host '    b4w recover -Remote                 # start from the released runtime'
+        if ($worktrees.Count -gt $Keep) {
+            Write-Host '    b4w recover -Prune [-DryRun]        # reclaim old worktrees now'
+        }
     }
     return 0
 }
@@ -338,6 +364,65 @@ function Invoke-Remote {
     return 0
 }
 
+<#
+    Reclaim stale isolated worktrees with the same rule the backend applies
+    (`browser4.agent.isolation.keep` / `.maxAgeDays`), but on demand: the backend
+    only sweeps at the start of a coding task.
+#>
+function Invoke-Prune {
+    param([string]$RepoRoot, [int]$Keep, [int]$MaxAgeDays, [switch]$DryRun)
+
+    $lockFile = Join-Path $RepoRoot '.git/b4-coding.lock'
+    if (Test-Path $lockFile) {
+        Write-Host "recover: refusing to prune while a coding task may be running ($lockFile exists)." -ForegroundColor Red
+        Write-Host "         Re-run after the task finishes, or delete that file if the process is gone." -ForegroundColor DarkGray
+        return $script:ExitNeedsHuman
+    }
+
+    $managed = Join-Path $RepoRoot '.browser4/worktrees'
+    if (-not (Test-Path $managed)) {
+        Write-Host 'recover: no managed worktrees'
+        return 0
+    }
+    $managedFull = (Resolve-Path $managed).Path
+    $entries = @(Get-ChildItem -LiteralPath $managedFull -Directory | Sort-Object LastWriteTime -Descending)
+    if ($entries.Count -eq 0) {
+        Write-Host 'recover: no managed worktrees'
+        return 0
+    }
+
+    $now = Get-Date
+    $kept = 0
+    $removed = 0
+    $errors = 0
+    for ($i = 0; $i -lt $entries.Count; $i++) {
+        $entry = $entries[$i]
+        if ($i -lt $Keep) { $kept++; continue }
+        $ageDays = ($now - $entry.LastWriteTime).TotalDays
+        if ($ageDays -lt $MaxAgeDays) { $kept++; continue }
+        if (-not $entry.FullName.StartsWith($managedFull)) { continue }
+
+        if ($DryRun) {
+            Write-Host "  would remove $($entry.FullName) (age $([math]::Round($ageDays,1))d)" -ForegroundColor DarkGray
+            $kept++
+            continue
+        }
+        $remove = Invoke-Git $RepoRoot @('worktree', 'remove', '--force', $entry.FullName)
+        if ($remove.ExitCode -eq 0) {
+            $removed++
+            Write-Host "  removed $($entry.Name) (age $([math]::Round($ageDays,1))d)" -ForegroundColor DarkGray
+        } else {
+            $errors++
+            Write-Host "  could not remove $($entry.Name): $($remove.Output)" -ForegroundColor Yellow
+        }
+    }
+    if (-not $DryRun) { Invoke-Git $RepoRoot @('worktree', 'prune') | Out-Null }
+
+    Write-Host "worktree prune$(if ($DryRun) { ' (dry-run)' }): kept=$kept removed=$removed errors=$errors"
+    if ($errors -gt 0) { return $script:ExitNeedsHuman }
+    return 0
+}
+
 try {
     $repoRoot = Get-RepoRoot
 } catch {
@@ -351,6 +436,7 @@ if ($Revert -and $Hard) {
 }
 
 try {
+    if ($Prune) { exit (Invoke-Prune $repoRoot $Keep $MaxAgeDays -DryRun:$DryRun) }
     if ($Revert) { exit (Invoke-Revert $repoRoot $Revert) }
     if ($Hard) { exit (Invoke-HardReset $repoRoot $Hard) }
     if ($UseLastGood) { exit (Invoke-UseLastGood $repoRoot) }

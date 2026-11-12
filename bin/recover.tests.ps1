@@ -64,6 +64,22 @@ BeforeAll {
             & git update-ref "refs/b4/baseline/$TaskId" HEAD
         } finally { Pop-Location }
     }
+
+    function New-ManagedWorktree {
+        param([string]$Repo, [string]$Id, [int]$AgeDays)
+        $path = Join-Path $Repo ".browser4/worktrees/$Id"
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
+        & git -C $Repo worktree add --detach --force $path HEAD 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "could not create worktree $Id" }
+        (Get-Item -LiteralPath $path).LastWriteTime = (Get-Date).AddDays(-$AgeDays)
+        return $path
+    }
+
+    function Get-ManagedWorktreeCount {
+        param([string]$Repo)
+        $out = & git -C $Repo worktree list --porcelain | Out-String
+        return ([regex]::Matches($out, '(?m)^worktree ')).Count - 1  # the main tree is not managed
+    }
 }
 
 Describe 'recover.ps1' {
@@ -161,5 +177,59 @@ Describe 'recover.ps1' {
 
         $result.ExitCode | Should -Be 2
         $result.Output | Should -Match 'not a git checkout'
+    }
+
+    It 'prunes stale worktrees and keeps the newest ones' {
+        $repo = New-TestRepo
+        $newest = New-ManagedWorktree -Repo $repo -Id 'wt-newest' -AgeDays 0
+        $middle = New-ManagedWorktree -Repo $repo -Id 'wt-middle' -AgeDays 5
+        $oldest = New-ManagedWorktree -Repo $repo -Id 'wt-oldest' -AgeDays 10
+        (Get-ManagedWorktreeCount -Repo $repo) | Should -Be 3
+
+        $result = Invoke-Recover -Repo $repo -RecoverArgs @('-Prune', '-Keep', '1', '-MaxAgeDays', '0')
+
+        $result.ExitCode | Should -Be 0
+        $result.Output | Should -Match 'kept=1 removed=2'
+        (Test-Path $newest) | Should -BeTrue
+        (Test-Path $middle) | Should -BeFalse
+        (Test-Path $oldest) | Should -BeFalse
+        (Get-ManagedWorktreeCount -Repo $repo) | Should -Be 1
+    }
+
+    It 'keeps worktrees younger than -MaxAgeDays even beyond -Keep' {
+        $repo = New-TestRepo
+        $a = New-ManagedWorktree -Repo $repo -Id 'wt-recent-a' -AgeDays 1
+        $b = New-ManagedWorktree -Repo $repo -Id 'wt-recent-b' -AgeDays 2
+
+        $result = Invoke-Recover -Repo $repo -RecoverArgs @('-Prune', '-Keep', '0', '-MaxAgeDays', '7')
+
+        $result.ExitCode | Should -Be 0
+        $result.Output | Should -Match 'removed=0'
+        (Test-Path $a) | Should -BeTrue
+        (Test-Path $b) | Should -BeTrue
+    }
+
+    It 'reports what -Prune would remove in -DryRun without removing it' {
+        $repo = New-TestRepo
+        $old = New-ManagedWorktree -Repo $repo -Id 'wt-dry' -AgeDays 20
+
+        $result = Invoke-Recover -Repo $repo -RecoverArgs @('-Prune', '-Keep', '0', '-MaxAgeDays', '0', '-DryRun')
+
+        $result.ExitCode | Should -Be 0
+        $result.Output | Should -Match 'dry-run'
+        (Test-Path $old) | Should -BeTrue
+        (Get-ManagedWorktreeCount -Repo $repo) | Should -Be 1
+    }
+
+    It 'refuses to prune while a coding task holds the lock' {
+        $repo = New-TestRepo
+        New-ManagedWorktree -Repo $repo -Id 'wt-locked' -AgeDays 20 | Out-Null
+        Set-Content -LiteralPath (Join-Path $repo '.git/b4-coding.lock') -Value '{"pid":1}'
+
+        $result = Invoke-Recover -Repo $repo -RecoverArgs @('-Prune', '-MaxAgeDays', '0')
+
+        $result.ExitCode | Should -Be 1
+        $result.Output | Should -Match 'refusing to prune'
+        (Test-Path (Join-Path $repo '.browser4/worktrees/wt-locked')) | Should -BeTrue
     }
 }
