@@ -619,13 +619,11 @@ Plugins are server-side JARs that extend Browser4.
 | `plugin install <file>` | Install a plugin from a local JAR file. Supports `--replace`. |
 | `plugin remove <name>` | Remove a plugin. Supports `-y`, `--yes`. |
 
-#### Advanced and currently hidden commands
+#### Removed commands
 
-These commands exist in the CLI but are intentionally kept out of the default public help.
-
-| Command | Description |
+| Command | Replacement |
 |---|---|
-| `act <description>` | Experimental natural-language action translator that turns plain text into a browser command and runs it. |
+| `act <description>` | Removed in 4.16: the server-side `/api/act` one-shot text→tool-call translator (which reported a failed tool call as success) is gone. Use `agent run "<task>" --wait` — the CLI tool loop is the only agent engine. |
 
 ### Timeout environment variables
 

@@ -707,13 +707,11 @@ browser4-cli stop    # 下一条命令会自动重启开发后端
 | `plugin remove <name>` | 删除插件。支持 `-y`、`--yes`。 |
 | `tool list [--filter <substr>]` | 列出后端公布的全部 MCP 工具名（含插件工具）；`tool call <name> --json '{…}'` 调用其中之一。 |
 
-#### 高级 / 当前隐藏命令
+#### 已移除命令
 
-这些命令实际存在于 CLI 中，但默认 public help 不会展示。
-
-| 命令 | 说明 |
+| 命令 | 替代 |
 |---|---|
-| `act <description>` | 实验性自然语言动作翻译器：把自然语言转换成浏览器命令并立即执行。 |
+| `act <description>` | 4.16 移除：服务端 `/api/act` 的一次性文本→工具调用翻译链路已删除（它会把失败的工具调用报成成功）。改用 `agent run "<task>" --wait`——CLI tool loop 是唯一的 agent 引擎。 |
 
 ### 超时环境变量
 

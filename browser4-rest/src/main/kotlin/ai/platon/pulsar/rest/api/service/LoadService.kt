@@ -5,12 +5,27 @@ import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
-import ai.platon.pulsar.rest.api.entities.CommandRequest
 import ai.platon.pulsar.rest.api.entities.PromptRequest
-import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 
+/**
+ * Loads pages for the REST layer, optionally applying a prompt request's
+ * natural-language page actions.
+ *
+ * Those actions ([PromptRequest.actions]) run through the session's companion
+ * agent — the CLI tool loop. They used to go through the removed one-shot
+ * `session.act(...)` path, which ran a single LLM round trip outside the tool
+ * loop's timeouts/error handling and reported a failed tool call as success.
+ *
+ * A page-visit request whose actions belong to a *task* (the `CommandRequest` /
+ * `PageVisitRequest` payload submitted to `POST /api/commands/json`) is executed
+ * by [ai.platon.pulsar.agentic.tools.advanced.crawl.StatefulPageVisitor] →
+ * [ai.platon.pulsar.agentic.tools.advanced.crawl.service.ScrapeService.loadDocument],
+ * which owns the same `onBrowserLaunchedActions` / `onPageReadyActions` handling.
+ * This class used to carry a duplicate of it; nothing called that copy, so it was
+ * removed (2026-11-12) rather than kept as a second, silently diverging engine.
+ */
 @Service
 class LoadService(
     private val sessionManager: PulsarSessionManager
@@ -43,41 +58,10 @@ class LoadService(
 
         val actions = request.actions
         if (actions != null) {
-            be.onDocumentFullyLoaded.addLast { page, driver ->
-                actions.forEach { session.act(it) }
+            be.onDocumentFullyLoaded.addLast { _, _ ->
+                actions.forEach { session.companionAgent.run(it) }
             }
         }
-
-        val page = session.load(request.url, options)
-        val document = session.parse(page)
-
-        return page to document
-    }
-
-    suspend fun loadDocument(
-        request: CommandRequest,
-        eventHandlers: PageEventHandlers
-    ): Pair<WebPage, FeaturedDocument> {
-        val args = request.enhanceArgs()
-        val options = session.options(args, eventHandlers)
-
-        val be = options.eventHandlers.browseEventHandlers
-
-        request.onBrowserLaunchedActions?.let { actions ->
-            be.onBrowserLaunched.addLast { page, driver ->
-                actions.forEach { session.act(it) }
-            }
-        }
-
-        request.onPageReadyActions?.let { actions ->
-            be.onDocumentFullyLoaded.addLast { page, driver ->
-                actions.forEach { session.act(it) }
-            }
-        }
-
-//        request.actionsOnDidInteract?.let { actions -> be.onDidInteract.addLast { page, driver ->
-//            actions.forEach { driver.instruct(it) }
-//        } }
 
         val page = session.load(request.url, options)
         val document = session.parse(page)

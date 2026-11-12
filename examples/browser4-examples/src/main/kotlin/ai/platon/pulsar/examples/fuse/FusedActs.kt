@@ -67,7 +67,7 @@ class FusedActs {
         history = agent.run("switch to the newly open tab")
         result("action history", history.finalResult)
 
-        // More typical session.act() examples
+        // More typical agent.run() examples
 
         // 1) Use the page's search box (enter text and submit)
         log.info("[STEP ${++step}] Action: find the search box, type 'web scraping' and submit the form")

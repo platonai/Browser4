@@ -426,7 +426,6 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "attach",
         "profile-import",
         "goto",
-        "act",
         "batch",
         "chat",
         "chat-result",
@@ -16407,18 +16406,6 @@ async fn handle_chat_result(
 
     let response = http::get_chat_result(client, base_url, task_id).await?;
     cli_println!("{}", response);
-
-    Ok(())
-}
-
-async fn handle_act(client: &Client, base_url: &str, description: &str) -> Result<(), String> {
-    let result = http::execute_act_command(client, base_url, description).await?;
-
-    if result.is_empty() {
-        cli_println!("Action completed (no output).");
-    } else {
-        cli_println!("{}", result);
-    }
 
     Ok(())
 }
@@ -33265,6 +33252,32 @@ async fn run(
     let cmd_def = match cmd_map.get(command) {
         Some(def) => def,
         None => {
+            // `act` was removed on 2026-11-12: it drove the server's one-shot
+            // natural-language→tool-call path, which reported a failed tool call
+            // as success (the CLI printed a constant "performAct") and could not
+            // target a session. Name the replacement instead of answering with a
+            // bare "Unknown command".
+            if command == "act" {
+                let description = global
+                    .args
+                    .iter()
+                    .skip(1)
+                    .skip_while(|s| *s == "--")
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let hint = if description.is_empty() {
+                    "<natural language task>".to_string()
+                } else {
+                    description
+                };
+                return Err(CliError(
+                    ExitCode::Usage,
+                    format!(
+                        "The 'act' command was removed. Use the CLI tool loop instead:\n  browser4-cli agent run \"{hint}\" --wait"
+                    ),
+                ));
+            }
             // Dynamic plugin commands: plugin-<name> where <name> is not a
             // known built-in (plugin-list, plugin-info, etc.).
             // Also handles bare `plugin` (no subcommand) — lists available tools.
@@ -33343,31 +33356,6 @@ async fn run(
             ));
         }
     };
-
-    // `act` is handled early — its description is variadic (multi-word),
-    // so we join all remaining positionals before the standard arg parser
-    // would reject them as "too many positional arguments".
-    if command == "act" {
-        let description = global
-            .args
-            .iter()
-            .skip(1)
-            .skip_while(|s| *s == "--")
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(" ");
-        if description.is_empty() {
-            return Err(CliError(
-                ExitCode::Usage,
-                "A description is required. Usage: browser4-cli act \"<natural language description>\"".to_string()
-            ));
-        }
-        // Ensure the server is running before dispatching to act
-        ensure_server_running(&base_url, should_enforce_server_version(global)).await?;
-        let client = make_client();
-        handle_act(&client, &base_url, &description).await?;
-        return Ok(());
-    }
 
     // Parse positional + named arguments BEFORE starting the backend, so
     // malformed/illegal commands fail fast without a 30 s server launch.
@@ -38688,7 +38676,6 @@ mod tests {
 
     #[test]
     fn is_not_page_dependent_for_async() {
-        assert!(!is_page_dependent_command("act"));
         assert!(!is_page_dependent_command("batch"));
         assert!(!is_page_dependent_command("crawl"));
         assert!(!is_page_dependent_command("swarm-create"));

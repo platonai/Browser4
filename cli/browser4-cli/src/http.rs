@@ -19,8 +19,6 @@ const TEXT_INPUT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_INPUT_TIMEOUT_SECS";
 const SNAPSHOT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_SNAPSHOT_TIMEOUT_SECS";
 const AGENT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_AGENT_TIMEOUT_SECS";
 const CODING_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_CODING_TIMEOUT_SECS";
-const ACT_REQUEST_TIMEOUT_SECS: u64 = 60;
-const ACT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_ACT_TIMEOUT_SECS";
 /// Env var set by the CLI when the user passes `--timeout <seconds>`.
 /// This overrides per-tool defaults so that the global timeout flag
 /// affects all tool calls, including those made by command handlers
@@ -792,73 +790,6 @@ pub async fn get_chat_result(
     }
 
     Ok(response_text)
-}
-
-/// Submit a natural language description to the server, which translates it
-/// to a CLI command via LLM and executes it synchronously.
-/// Returns the command output on success.
-pub async fn execute_act_command(
-    client: &Client,
-    base_url: &str,
-    description: &str,
-) -> Result<String, String> {
-    let url = build_endpoint_url(base_url, "/api/act");
-    let timeout = std::time::Duration::from_secs(timeout_secs_from_env(
-        ACT_REQUEST_TIMEOUT_ENV,
-        ACT_REQUEST_TIMEOUT_SECS,
-    ));
-    let response = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .json(&json!({ "description": description }))
-        .timeout(timeout)
-        .send()
-        .await
-        .map_err(|e| {
-            if e.is_timeout() {
-                format!(
-                    "Act request timed out after {}s. Increase with {} env var.",
-                    timeout.as_secs(),
-                    ACT_REQUEST_TIMEOUT_ENV
-                )
-            } else {
-                format!("Failed to call act endpoint: {e}")
-            }
-        })?;
-
-    let status = response.status();
-    let response_text = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read act response body: {e}"))?;
-
-    if !status.is_success() {
-        return Err(format_http_error(status, &response_text));
-    }
-
-    // Parse the JSON response: { "success": true, "output": "..." }
-    // or { "success": false, "error": "..." }
-    let parsed: Value = serde_json::from_str(&response_text)
-        .map_err(|e| format!("Failed to parse act response: {e}"))?;
-
-    let success = parsed
-        .get("success")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-
-    if success {
-        Ok(parsed
-            .get("output")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .unwrap_or_default())
-    } else {
-        let error_msg = parsed
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Unknown error");
-        Err(error_msg.to_string())
-    }
 }
 
 /// Append an optional `batchId` query parameter to a REST path.

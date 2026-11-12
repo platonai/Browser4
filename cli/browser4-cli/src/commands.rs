@@ -24,7 +24,6 @@ pub enum Category {
     WebMiner,
     Snapshot,
     Skill,
-    Act,
     Skills,
     Plugins,
     Code,
@@ -50,7 +49,6 @@ impl Category {
             Category::WebMiner => "webminer",
             Category::Snapshot => "snapshot",
             Category::Skill => "skill",
-            Category::Act => "act",
             Category::Skills => "skills",
             Category::Plugins => "plugins",
             Category::Code => "code",
@@ -5431,25 +5429,6 @@ pub fn all_commands() -> Vec<CommandDef> {
                 json!({ "ref": r })
             },
         },
-        // ---- Act ----
-        CommandDef {
-            name: "act",
-            description: "Execute a natural language browser action. Translates plain text to a browser4-cli command and runs it immediately.",
-            category: Category::Act,
-            hidden: true,
-            batch_supported: false,
-            args: &[ArgDef {
-                name: "description",
-                description: "Natural language description of the browser action to perform",
-                optional: false,
-            }],
-            options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
-            tool_name_fn: |_| String::new(),
-            tool_params_fn: |args| {
-                json!({ "description": get_str(args, "description").unwrap_or_default() })
-            },
-        },
         // ---- Experience ----
         CommandDef {
             name: "experience-save",
@@ -6451,7 +6430,6 @@ mod tests {
             "plugin-info",
             "plugin-install",
             "plugin-remove",
-            "act",
             "config",
             "config-list",
             "config-get",
@@ -7650,22 +7628,6 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("id".to_string(), json!("abc-123"));
         assert_eq!((cmd.tool_name_fn)(&args), "command_result");
-    }
-
-    #[test]
-    fn test_act_command_params() {
-        let map = commands_map();
-        let cmd = map.get("act").unwrap();
-        assert_eq!(cmd.name, "act");
-        assert_eq!(cmd.category, Category::Act);
-        assert!(cmd.hidden);
-
-        let mut args = HashMap::new();
-        args.insert("description".to_string(), json!("scroll by 200px"));
-        let params = (cmd.tool_params_fn)(&args);
-        assert_eq!(params["description"], "scroll by 200px");
-        // tool_name_fn returns empty — act is handled CLI-side, not via MCP
-        assert_eq!((cmd.tool_name_fn)(&args), "");
     }
 
     #[test]

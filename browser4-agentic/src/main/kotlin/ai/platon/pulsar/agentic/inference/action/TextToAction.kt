@@ -1,102 +1,33 @@
 package ai.platon.pulsar.agentic.inference.action
 
-import ai.platon.pulsar.agentic.inference.AgentMessageList
-import ai.platon.pulsar.agentic.inference.forceLlmMaxInputTokenLength
-import ai.platon.pulsar.agentic.inference.PromptBuilder.Companion.SINGLE_WEB_DRIVER_ACTION_GENERATION_PROMPT
-import ai.platon.pulsar.agentic.inference.PromptBuilder.Companion.buildObserveResultSchema
 import ai.platon.pulsar.agentic.model.ActionDescription
 import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.agentic.model.ObserveElement
 import ai.platon.pulsar.agentic.model.ToolCall
-import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationRenderer
-import ai.platon.pulsar.api.AbstractWebDriver
 import ai.platon.pulsar.api.model.Locator
 import ai.platon.pulsar.api.model.MergedDOMTreeNode
-import ai.platon.pulsar.api.model.SnapshotOptions
-import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.Strings
-import ai.platon.pulsar.common.ai.llm.PromptTemplate
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
-import ai.platon.pulsar.api.WebDriver
-import ai.platon.pulsar.external.BrowserChatModel
-import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.external.ModelResponse
-import ai.platon.pulsar.skeleton.llm.TestChatModelFactory
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
-import java.nio.file.Files
 
+/**
+ * Parses the model's observe response into [ActionDescription]s.
+ *
+ * The one-shot `generateActions(action, driver)` entry point was removed on
+ * 2026-11-12 together with `SessionActExecutor` / `AgenticSession.act()`: it
+ * called the model directly, parsed the answer with a raw `jacksonObjectMapper()`
+ * (no code-fence repair, no unknown-property tolerance) and executed the tool
+ * calls without the tool loop's timeouts, error semantics or observability.
+ * Model responses are now parsed by [modelResponseToActionDescription] (the
+ * tolerant path used by [ContextToAction]) and executed by the CLI tool loop.
+ */
 open class TextToAction(
     val conf: ImmutableConfig
 ) {
     private val logger = getLogger(this)
-
-    /** Conf with the PulsarRPA input-length cap force-raised for deepseek-v4-flash's 1M context window. */
-    private val chatModelConf: ImmutableConfig by lazy { conf.forceLlmMaxInputTokenLength() }
-
-    val chatModel: BrowserChatModel
-        get() = TestChatModelFactory.getOrCreate(chatModelConf) ?: ChatModelFactory.getOrCreate(chatModelConf)
-
-    /**
-     * Generate EXACT ONE WebDriver action with interactive elements.
-     *
-     * @param action The action descriptions
-     * @param driver The driver to use to collect the context, such as interactive elements
-     * @return The action description
-     * */
-    @Deprecated("Use the CLI tool-loop engine path instead")
-    open suspend fun generateActions(
-        action: String, driver: WebDriver, screenshotB64: String? = null
-    ): List<ActionDescription> {
-        require(driver is AbstractWebDriver)
-        val snapshotService = requireNotNull(driver.snapshotService)
-
-        val snapshotOptions = SnapshotOptions(
-            maxDepth = 1000,
-            includeAX = true,
-            includeSnapshot = true,
-            includeStyles = true,
-            includePaintOrder = true,
-            includeDOMRects = true,
-            includeScrollAnalysis = true,
-            includeVisibility = true,
-            includeInteractivity = true
-        )
-
-        val browserUseState = snapshotService.getBrowserUseState(snapshotOptions = snapshotOptions)
-        val domState = browserUseState.domState
-        val agentState = AgentState(1, "", browserUseState = browserUseState)
-        val toolCallExpressions = ToolCallSpecificationRenderer.render(includeCustomDomains = true)
-
-        val promptTemplate = PromptTemplate(SINGLE_WEB_DRIVER_ACTION_GENERATION_PROMPT)
-        val message = promptTemplate.render(
-            mapOf(
-                "ACTION_DESCRIPTIONS" to action,
-                "TOOL_CALL_SPECIFICATION" to toolCallExpressions,
-                "ARIA_ACCESSIBILITY_TREE" to domState.ariaSnapshot,
-                "OUTPUT_SCHEMA_ACT" to buildObserveResultSchema(true),
-            )
-        )
-
-        val messages = AgentMessageList()
-        messages.addUser(message)
-
-        val systemMessage = messages.systemMessages().joinToString("\n")
-        val userMessage = messages.userMessages().joinToString("\n")
-        val response = if (screenshotB64 != null) {
-            chatModel.call(systemMessage, userMessage, null, screenshotB64, "image/jpeg")
-        } else {
-            chatModel.call(systemMessage, userMessage)
-        }
-
-        val mapper = jacksonObjectMapper()
-        val content = response.content
-        val elements: ModelObserveResponseElements = mapper.readValue(content)
-
-        return toActionDescription(action, elements, agentState, response).toActionDescriptions()
-    }
 
     @Deprecated("Use the CLI tool-loop engine path instead")
     fun modelResponseToActionDescription(
@@ -264,12 +195,6 @@ open class TextToAction(
     }
 
     companion object {
-        val baseDir = AppPaths.get("tta")
-
-        init {
-            Files.createDirectories(baseDir)
-        }
-
         @Deprecated("Use the CLI tool-loop engine path instead")
         fun toActionDescription(
             instruction: String,
