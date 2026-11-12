@@ -16118,10 +16118,15 @@ async fn handle_agent_run(
             .await;
     }
 
-    let task = tool_params
-        .get("task")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
+    // A pasted task line carries the same terminal escapes as an interactive
+    // one. Sanitize before the emptiness check so the one-shot `agent run
+    // --task "…"` form cannot smuggle CSI/OSC noise into the model prompt.
+    let task = agent_interactive::sanitize_task_text(
+        tool_params
+            .get("task")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default(),
+    );
     // `--resume <id>` makes the task text optional: the backend seeds the run from
     // the interrupted task's checkpoint (its instruction, workspace and files).
     let resume_task_id = tool_params
@@ -16193,7 +16198,7 @@ async fn handle_agent_run(
         &mut extra,
         tool_params.get("unrestricted").and_then(|v| v.as_bool()) == Some(true),
     );
-    let task_id = submit_agent_task(client, base_url, task, extra).await?;
+    let task_id = submit_agent_task(client, base_url, &task, extra).await?;
 
     // Say which session the task was bound to.  A silent submission is exactly
     // what hid the 2026-10-25 regression: the task executed in the backend's
@@ -16248,7 +16253,7 @@ async fn handle_agent_run(
     // Persist the task for cross-session tracking in BOTH async and wait
     // modes, so `agent list` always reflects every submitted task — including
     // ones that later time out while the server keeps working on them.
-    let _ = track_async_task(&task_id, "agent", task, None);
+    let _ = track_async_task(&task_id, "agent", &task, None);
 
     // `--follow`: stream the task's steps while waiting. `--wait` stays the
     // quiet, poll-only form it always was.

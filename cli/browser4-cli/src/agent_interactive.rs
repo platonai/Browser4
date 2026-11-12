@@ -17,11 +17,17 @@
 //! Nothing here is allowed to change the default `agent run` behaviour: adding
 //! events must be invisible unless `--follow` / `--ndjson` / `-i` is passed.
 
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::io::{self, BufRead, IsTerminal, Read};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use reqwest::Client;
 use serde_json::{json, Value};
+
+#[path = "line_editor.rs"]
+mod line_editor;
+
+use line_editor::Editor;
 
 use crate::http::{
     cancel_command_task, get_agent_access_view, get_command_events, get_command_result,
@@ -2940,14 +2946,14 @@ impl Repl {
         ]
     }
 
-    fn prompt(&mut self) {
+    fn prompt(&mut self, editor: &Editor) {
         if !self.tty || !human_output_enabled(self.quiet) {
             self.prompt_pending = false;
             return;
         }
-        let mut stdout = io::stdout();
-        let _ = write!(stdout, "agent> ");
-        let _ = stdout.flush();
+        // The line editor owns the prompt line in a TTY: it redraws the text the
+        // user is typing (and puts the caret back where it belongs).
+        editor.redraw();
         self.prompt_pending = false;
     }
 
@@ -2974,14 +2980,19 @@ impl Repl {
             }
         }
 
-        let mut lines = spawn_stdin_reader();
+        // The line editor only takes over the terminal when this session actually
+        // draws the prompt line. Under `--quiet` / `--json` stdout belongs to the
+        // machine, so the terminal keeps its own (cooked) line editing — exactly
+        // the behaviour those modes had before the editor existed.
+        let owns_prompt = self.tty && human_output_enabled(self.quiet);
+        let (mut lines, editor) = spawn_stdin_reader(line_editor::PROMPT, owns_prompt);
         let mut ctrl_c = Box::pin(tokio::signal::ctrl_c());
         let mut ticker = tokio::time::interval(EVENT_POLL_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             if self.prompt_pending && self.current.is_none() {
-                self.prompt();
+                self.prompt(&editor);
             }
 
             tokio::select! {
@@ -3323,6 +3334,13 @@ impl Repl {
     }
 
     async fn start_task(&mut self, task: String) -> Result<(), String> {
+        // A task is user text too: a pasted line can carry the same terminal
+        // escapes as a typed one. Sanitizing here also keeps the label and the
+        // tracked title free of control noise.
+        let task = sanitize_task_text(&task);
+        if task.is_empty() {
+            return Ok(());
+        }
         self.next_actions.clear();
         // A new task starts from a clean slate: the previous task's evidence must not
         // shape the follow-ups offered after THIS one. (Set only once the task is
@@ -4367,41 +4385,125 @@ impl Repl {
 /// `POST /api/commands/{id}/input` verbatim and became part of the prompt the
 /// model saw. Drop them here, at the single point where interactive user input
 /// enters the session.
+///
+/// String-valued escapes matter as much as key escapes: an OSC title change is
+/// `ESC ] 0 ; title BEL`, and stripping only the two introducer bytes turned the
+/// payload (`0;title`) into prompt text. OSC/DCS/SOS/PM/APC and their C1 forms
+/// are skipped up to their terminator instead.
 fn sanitize_stdin_line(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut chars = line.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
-            '\x1b' => match chars.peek().copied() {
-                // CSI: ESC '[' parameters/intermediates, then a final byte in
-                // 0x40..=0x7E (arrows, Home/End, Del, bracketed paste …).
-                Some('[') => {
-                    chars.next();
-                    for next in chars.by_ref() {
-                        if ('@'..='~').contains(&next) {
-                            break;
-                        }
-                    }
-                }
-                // SS3: ESC 'O' and one final byte (F1–F4, keypad, arrows).
-                Some('O') => {
-                    chars.next();
-                    let _ = chars.next();
-                }
-                // Any other two-byte escape (Alt+key) — or a lone ESC.
-                Some(_) => {
-                    chars.next();
-                }
-                None => {}
-            },
+            '\x1b' => skip_escape(&mut chars),
+            // C1 controls are the 8-bit spelling of the same escapes.
+            '\u{9b}' => skip_csi(&mut chars),
+            '\u{9d}' => skip_string_escape(&mut chars, true),
+            '\u{90}' | '\u{98}' | '\u{9e}' | '\u{9f}' => skip_string_escape(&mut chars, false),
             // A literal tab is harmless; every other control character is
-            // terminal noise (NUL from Ctrl+Space, DEL, C1 controls …).
+            // terminal noise (DEL, stray CR, non-introducer C1 controls …).
             '\t' => out.push('\t'),
+            // NUL (Ctrl+Space) separates words instead of gluing them together.
+            '\0' => out.push(' '),
             c if c.is_control() => {}
+            // U+FFFD is what lossy UTF-8 decoding leaves for a byte the input
+            // stream could not carry; it is noise, not user text.
+            '\u{fffd}' => {}
             c => out.push(c),
         }
     }
     out
+}
+
+/// Sanitize task text submitted to the backend.
+///
+/// Unlike a single stdin line this keeps the line structure: a multi-line task
+/// must not be flattened into one paragraph. Both the interactive session and
+/// the one-shot `agent run` form submit through this function, so a task built
+/// from a pasted line cannot smuggle terminal escapes into the model prompt.
+pub(crate) fn sanitize_task_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for (index, line) in text.split('\n').enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        out.push_str(&sanitize_stdin_line(line));
+    }
+    out.trim().to_string()
+}
+
+/// Skip one escape sequence whose introducer (`ESC`) was just consumed.
+fn skip_escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    match chars.peek().copied() {
+        // CSI: parameters/intermediates, then a final byte in 0x40..=0x7E
+        // (arrows, Home/End, Del, bracketed paste …).
+        Some('[') => {
+            chars.next();
+            skip_csi(chars);
+        }
+        // OSC: a string command terminated by BEL or ST (`ESC \`).
+        Some(']') => {
+            chars.next();
+            skip_string_escape(chars, true);
+        }
+        // DCS, SOS, PM, APC: string commands terminated by ST only.
+        Some('P') | Some('X') | Some('^') | Some('_') => {
+            chars.next();
+            skip_string_escape(chars, false);
+        }
+        // SS3: ESC 'O' and one final byte (F1–F4, keypad, arrows).
+        Some('O') => {
+            chars.next();
+            let _ = chars.next();
+        }
+        // Any other two-byte escape (Alt+key) — or a lone ESC.
+        Some(_) => {
+            chars.next();
+        }
+        None => {}
+    }
+}
+
+/// Skip the rest of a CSI sequence: parameters/intermediates up to the final
+/// byte in 0x40..=0x7E.
+fn skip_csi(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    for next in chars.by_ref() {
+        if ('@'..='~').contains(&next) {
+            break;
+        }
+    }
+}
+
+/// Skip a string-valued escape (OSC, DCS, SOS, PM, APC) up to its terminator.
+///
+/// `bel_terminates` is true for OSC, which some terminals close with BEL; DCS and
+/// friends are only closed by ST (`ESC \`, or the C1 form U+009C). An unterminated
+/// string is dropped to the end of the line rather than leaked as text.
+fn skip_string_escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, bel_terminates: bool) {
+    while let Some(next) = chars.next() {
+        match next {
+            '\u{9c}' => break,
+            '\x07' if bel_terminates => break,
+            '\x1b' => {
+                if chars.peek() == Some(&'\\') {
+                    chars.next();
+                }
+                break;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Decode and sanitize one raw stdin line.
+///
+/// `read_until` hands back bytes: a single invalid UTF-8 byte used to make
+/// `lines()` return `Err`, which killed the reader thread and ended the session.
+/// Lossy decoding keeps the session alive, and the sanitizer drops the U+FFFD
+/// markers, so the bad byte is lost instead of the whole line.
+fn sanitize_stdin_bytes(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    sanitize_stdin_line(text.trim_end_matches(['\n', '\r']))
 }
 
 /// Read stdin lines on a dedicated thread and forward them to the async loop.
@@ -4409,14 +4511,48 @@ fn sanitize_stdin_line(line: &str) -> String {
 /// A plain thread (not `spawn_blocking`) because the read is blocking for the
 /// whole session: the thread exits at EOF, and the process exits when the
 /// session ends, so a pending read can never leak past the CLI.
-fn spawn_stdin_reader() -> tokio::sync::mpsc::UnboundedReceiver<String> {
+///
+/// `owns_prompt` says the REPL draws the prompt line: only then does the
+/// returned [`Editor`] put the terminal into cbreak mode and turn key bytes
+/// into line edits. Piped stdin, and the machine-output modes, keep the
+/// line-oriented reader.
+fn spawn_stdin_reader(
+    prompt: &str,
+    owns_prompt: bool,
+) -> (tokio::sync::mpsc::UnboundedReceiver<String>, Arc<Editor>) {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let editor = Editor::new(prompt, owns_prompt && io::stdin().is_terminal());
+    let thread_editor = Arc::clone(&editor);
     std::thread::spawn(move || {
-        let stdin = io::stdin();
-        for line in stdin.lock().lines() {
-            match line {
-                Ok(line) => {
-                    if tx.send(sanitize_stdin_line(&line)).is_err() {
+        let mut stdin = io::stdin().lock();
+        // A TTY hands us the bytes of special keys: read them one key at a time
+        // and let the editor turn ←/→/Home/Del/Shift+Space into line edits.
+        // Piped input has no keys, so keep the line-oriented reader (and its
+        // sanitiser) there.
+        if let Some(_cbreak) = thread_editor.enabled().then(line_editor::RawMode::enable).flatten() {
+            thread_editor.redraw();
+            let mut buffer = [0u8; 256];
+            loop {
+                match stdin.read(&mut buffer) {
+                    Ok(0) => return,
+                    Ok(read) => {
+                        for line in thread_editor.feed(&buffer[..read]) {
+                            if tx.send(line).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                    Err(_) => return,
+                }
+            }
+        }
+        let mut buffer = Vec::new();
+        loop {
+            buffer.clear();
+            match stdin.read_until(b'\n', &mut buffer) {
+                Ok(0) => return,
+                Ok(_) => {
+                    if tx.send(sanitize_stdin_bytes(&buffer)).is_err() {
                         return;
                     }
                 }
@@ -4424,7 +4560,7 @@ fn spawn_stdin_reader() -> tokio::sync::mpsc::UnboundedReceiver<String> {
             }
         }
     });
-    rx
+    (rx, editor)
 }
 
 /// Run the interactive session (`agent run -i`).
@@ -6998,9 +7134,12 @@ mod tests {
     /// neither belongs in the user's message.
     #[test]
     fn sanitize_stdin_line_strips_nul_and_paste_markers() {
+        // Ctrl+Space arrives as NUL. Turn it into a space so a pasted line
+        // keeps its word boundary instead of gluing the neighbours together;
+        // DEL is still dropped outright.
         assert_eq!(
             sanitize_stdin_line("hello\u{0}()\u{7f}world"),
-            "hello()world"
+            "hello ()world"
         );
         assert_eq!(
             sanitize_stdin_line("\u{1b}[200~pasted text\u{1b}[201~"),
@@ -7031,5 +7170,46 @@ mod tests {
             sanitize_stdin_line("写个测试 ✅ café\tok"),
             "写个测试 ✅ café\tok"
         );
+    }
+    /// OSC titles and DCS/APC payloads are string-valued escapes: dropping only
+    /// the introducer leaked their payload (`0;title`) into the prompt.
+    #[test]
+    fn sanitize_stdin_line_strips_string_escapes() {
+        assert_eq!(
+            sanitize_stdin_line("\u{1b}]0;window title\u{7}hello"),
+            "hello"
+        );
+        assert_eq!(sanitize_stdin_line("a\u{1b}]2;title\u{1b}\\b"), "ab");
+        assert_eq!(sanitize_stdin_line("a\u{1b}P1;2;3q\u{1b}\\b"), "ab");
+        assert_eq!(sanitize_stdin_line("a\u{1b}_payload\u{1b}\\b"), "ab");
+        // An unterminated string is dropped to the end of the line.
+        assert_eq!(sanitize_stdin_line("a\u{1b}]0;unterminated"), "a");
+    }
+
+    /// Terminals may send the 8-bit C1 spelling of the same escapes.
+    #[test]
+    fn sanitize_stdin_line_strips_c1_escapes() {
+        assert_eq!(sanitize_stdin_line("a\u{9b}Db"), "ab");
+        assert_eq!(sanitize_stdin_line("a\u{9d}0;title\u{9c}b"), "ab");
+        assert_eq!(sanitize_stdin_line("a\u{90}payload\u{9c}b"), "ab");
+    }
+
+    /// Invalid UTF-8 used to end the stdin reader thread; lossy decoding plus
+    /// dropping U+FFFD keeps the session alive and only loses the bad byte.
+    #[test]
+    fn sanitize_stdin_bytes_drops_invalid_utf8() {
+        assert_eq!(sanitize_stdin_bytes(b"caf\xe9 ok\n"), "caf ok");
+        assert_eq!(sanitize_stdin_bytes(b"a\xffb\r\n"), "ab");
+    }
+
+    /// Task text keeps its line structure but loses terminal noise; both the
+    /// interactive and the one-shot submission paths use this.
+    #[test]
+    fn sanitize_task_text_keeps_newlines_and_drops_escapes() {
+        assert_eq!(
+            sanitize_task_text("  first line\u{1b}[A\nsecond\u{1b}]0;title\u{7} line  "),
+            "first line\nsecond line"
+        );
+        assert_eq!(sanitize_task_text("\u{1b}[A\n\u{0}"), "");
     }
 }
