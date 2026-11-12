@@ -115,6 +115,10 @@ mvn -o -pl browser4-agentic -am test -Dtest=ToolSpecSnapshotRegenerator -Dregene
   `buildBrowserVisionInfo` / `buildPrevToolCallResultMessage`：审查只点名 `buildMultistepAgentMessageListAll`；
   继续删除会连带 `MainSystemPrompt.kt`（`buildMainSystemPromptV1`）及其测试，属于下一次清理的范围。
   `PromptBuilderBlankMessageTest` 已改为覆盖 `buildMultistepMessageListStart`（P0.1 空白消息回归仍被守住）。
+  → **已在 2026-11-12 清理**：`MainSystemPrompt.kt` 整文件、`PromptBuilder` 的 companion object 与
+  `buildOperatorSystemPrompt` / `buildMultistepMessageListStart` 连同 3 个测试类已删除，见
+  `20261112-legacy-system-prompt-removal.md`（`buildUserRequestMessage` / `buildBrowserVisionInfo` /
+  `buildPrevToolCallResultMessage` 成为孤儿，仍留在代码里待定）。
 - `AgentStateManager.getOrCreateActiveContext(action: ActionOptions, …)`：`act` 删除后无生产调用方，
   但审查明确只删 observe 重载，保留。
 - `SessionActExecutor` / `TextToAction`（`session.act(...)` 的文本→动作链路）本身已标 `@Deprecated`，
