@@ -159,6 +159,8 @@ bin/maintenance/state/*.lock
 /.claude/
 /.coworker/
 /.b4scratch/
+# Previous runtime bundle kept for `b4w recover --use-last-good`
+/.b4build/
 # Task inputs copied into a coding worktree by the agent engine (never deliverables)
 /.b4inputs/
 .build-state

@@ -449,7 +449,7 @@ function Test-B4wMayStartBackend {
         # Wrapper-level help and version.
         'help', '--help', '-h', 'version', '--version', '-V',
         # Wrapper subcommands — routed before the CLI binary runs.
-        'coworker', 'sc', 'test', 'build', 'b4w',
+        'coworker', 'sc', 'test', 'build', 'recover', 'b4w',
         # CLI commands that never start the backend.
         'config', 'config-list', 'config-get', 'config-set', 'config-delete',
         'status', 'doctor', 'doctor-log', 'doctor-metrics', 'doctor-status',
@@ -777,13 +777,31 @@ if ($CliArgs -and $CliArgs[0] -eq 'build') {
     exit $LASTEXITCODE
 }
 
+# ── Subcommand: recover ───────────────────────────────────────────────────
+# Delegates to bin/recover.ps1, forwarding all remaining arguments. Works
+# without the backend and without a compiling checkout (see the isolation plan).
+if ($CliArgs -and $CliArgs[0] -eq 'recover') {
+    $RecoverScript = Join-Path $ScriptDir 'bin\recover.ps1'
+    if (-not (Test-Path $RecoverScript)) {
+        Write-Host "b4w recover: missing $RecoverScript" -ForegroundColor Red
+        exit 2
+    }
+    $RecoverArgs = if ($CliArgs.Count -gt 1) { ,$CliArgs[1..($CliArgs.Count - 1)] } else { @() }
+    if ($RecoverArgs) {
+        & $RecoverScript @RecoverArgs
+    } else {
+        & $RecoverScript
+    }
+    exit $LASTEXITCODE
+}
+
 # ── Top-level help ────────────────────────────────────────────────────────
 $TopHelp = @'
 b4w — browser4-cli wrapper with additional development tools.
 
 b4w is a development-only launcher that builds and runs browser4-cli
 directly from the current codebase.  It also bundles extra dev-tool
-subcommands (coworker, sc, test, build) that are not part of the published
+subcommands (coworker, sc, test, build, recover) that are not part of the published
 browser4-cli release.
 
 Usage: b4w [command] [options]
@@ -794,6 +812,8 @@ Commands:
   sc [args]        Real-world scenario picker (delegates to bin/test.ps1 rws sc)
   test [args]      Run tests (delegates to bin/test.ps1)
   build [args]     Build the project (delegates to bin/build.ps1)
+  recover [args]   Diagnose/undo a coding task and restore the last good runtime
+                   (delegates to bin/recover.ps1; needs no backend and no build)
   b4w install [-WithLaunchers]  Install b4w as a global command (adds to PATH)
   b4w uninstall                Remove b4w from PATH and delete generated launcher
 
