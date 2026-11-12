@@ -208,6 +208,32 @@ class WorkspaceIsolation private constructor(
         fun baselineRef(runId: String): String = "$REF_PREFIX/baseline/${sanitize(runId)}"
 
         /**
+         * Remove a managed worktree through git.
+         *
+         * A plain recursive delete would leave `.git/worktrees/<id>` behind, making
+         * `git worktree list` and the next `worktree add` for that path misbehave.
+         * Refuses paths outside `<repo>/.browser4/worktrees`.
+         *
+         * @return true when git removed the worktree (metadata pruned as well)
+         */
+        fun removeWorktree(repoRoot: Path, worktree: Path): Boolean {
+            val root = repoRoot.toAbsolutePath().normalize()
+            val managed = root.resolve(WORKTREE_DIR)
+            val target = worktree.toAbsolutePath().normalize()
+            if (!target.startsWith(managed)) {
+                logger.warn("refusing to remove a worktree outside {}: {}", managed, target)
+                return false
+            }
+            val remove = runGit(root, listOf("worktree", "remove", "--force", target.toString()))
+            if (remove.exitCode != 0) {
+                logger.warn("could not remove worktree {}: {}", target, remove.output.takeLast(300))
+                return false
+            }
+            runGit(root, listOf("worktree", "prune"))
+            return true
+        }
+
+        /**
          * Reject a linked worktree as isolation root.
          *
          * Running `git worktree add` from inside a worktree would nest one managed

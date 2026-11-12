@@ -18,6 +18,7 @@ import ai.platon.pulsar.coding.CodingWorkspace
 import ai.platon.pulsar.coding.IsolationGate
 import ai.platon.pulsar.coding.RepoLock
 import ai.platon.pulsar.coding.WorkspaceIsolation
+import ai.platon.pulsar.coding.WorktreeRetention
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -672,6 +673,7 @@ open class StatefulAgentRunner(
             if (reopened != null) {
                 // The lock is acquired on the MAIN checkout, not on the worktree.
                 val lock = RepoLock.acquire(reopened.repoRoot, taskId)
+                sweepWorktrees(reopened.repoRoot, exclude = resumable, taskId = taskId)
                 logger.info("Agent task {}: resuming the isolated worktree at {}", taskId, resumable)
                 return IsolationStart(reopened, lock)
             }
@@ -685,6 +687,9 @@ open class StatefulAgentRunner(
         // Throws when another coding task holds the checkout: running this one
         // unisolated would collide at merge time and in the Maven build cache.
         val lock = RepoLock.acquire(source, taskId)
+        // Reclaim old worktrees now that this task owns the checkout: no other coding
+        // task can be using one. Best-effort — GC must never fail the task.
+        sweepWorktrees(source, exclude = null, taskId = taskId)
         return runCatching { WorkspaceIsolation.begin(source, taskId) }.fold(
             onSuccess = { IsolationStart(it, lock) },
             onFailure = { e ->
@@ -696,6 +701,18 @@ open class StatefulAgentRunner(
                 IsolationStart(null, null)
             },
         )
+    }
+
+    /**
+     * Reclaim stale worktrees (isolation plan S4). Runs while this task holds the
+     * checkout lock, so nothing else can be using a worktree being removed.
+     * Best-effort: a GC failure is logged and must never fail the task.
+     */
+    private fun sweepWorktrees(repoRoot: Path, exclude: Path?, taskId: String) {
+        if (!WorktreeRetention.isEnabled()) return
+        runCatching { WorktreeRetention.sweep(repoRoot, exclude = exclude) }
+            .onSuccess { if (it.changed) logger.info("Agent task {}: {}", taskId, it.summary()) }
+            .onFailure { logger.warn("Agent task {}: worktree gc failed: {}", taskId, it.message) }
     }
 
     /** One task's isolation handles: the worktree and the checkout lock guarding it. */

@@ -760,6 +760,10 @@ All are JVM system properties (set with `BROWSER4_SERVER_OPTS` or `-D…` when y
 | `browser4.agent.isolation.requireVerify` | `true` | A code change is merged only with a passing `coding.verify` verdict covering the changed modules. |
 | `browser4.agent.lock.staleHours` | `12` | One coding task per checkout; a lock older than this (or with a dead pid) is taken over. |
 | `browser4.agent.protected.extra` | empty | Extra workspace-relative paths a task may not modify (defaults already cover `b4w.*`, `bin/build.ps1`, `bin/recover.ps1`, `build-runtime-bundle.ps1`, `mvnw*`, `.mvn/`). |
+| `browser4.agent.isolation.keep` | `3` | Isolated worktrees always retained (newest first). Older ones are reclaimed with `git worktree remove` once they also exceed `isolation.maxAgeDays`. |
+| `browser4.agent.isolation.maxAgeDays` | `7` | Worktrees younger than this are never reclaimed, whatever `keep` says. |
+| `browser4.agent.isolation.gc` | `on` | Reclaim stale worktrees at the start of a coding task, while the checkout lock is held. `off` disables. Patches and `refs/b4/*` stay as revert handles. |
+| `browser4.agent.isolation.gc.dryRun` | `false` | Log what the worktree sweep would remove without removing it. |
 | `browser4.agent.access` | `full` | Access preset (`full` / `write` / `read-build` / `read`). Unknown backend value is logged and falls back to `full`; an unknown `--access` flag is rejected. |
 | `browser4.agent.readPaths` | data root + source checkout | Folders the coding tools may read outside the workspace, read-only (`;`-separated, `~` expanded). Credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) stay refused whatever the list says. |
 | `browser4.agent.access.unattended` | unset (`full` + network) | Preset derived for a task with no TTY. `deny` removes workspace power entirely; explicit `--access` wins; the derivation is audited `ACCESS_APPROVED(source=default)`. Unknown value warns once and stays `full`. |

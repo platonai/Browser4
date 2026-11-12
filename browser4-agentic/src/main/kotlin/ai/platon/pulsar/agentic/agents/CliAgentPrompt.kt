@@ -77,6 +77,10 @@ internal object CliAgentPrompt {
             NOTHING is merged and the worktree is kept. Never edit the main checkout
             directly, and never run `b4w build`, `b4w stop` or `b4w upgrade` — rebuilding
             the backend you are running inside is operator work.
+
+            If this run resumed an earlier task, the worktree may predate changes made in
+            the main checkout since then: re-read a file before trusting what you remember
+            of it.
             """.trimIndent()
         } else {
             """

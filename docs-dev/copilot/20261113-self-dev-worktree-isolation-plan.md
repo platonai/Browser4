@@ -213,6 +213,8 @@ b4w recover [--status] [--revert <taskId>] [--hard <taskId>] [--use-last-good] [
 | `browser4.agent.isolation.requireVerify` | `true` | 代码改动必须有 passed verdict |
 | `browser4.agent.isolation.keep` | `3` | 保留的 worktree 数 |
 | `browser4.agent.isolation.maxAgeDays` | `7` | 过期回收 |
+| `browser4.agent.isolation.gc` | `on` | worktree 回收开关（锁内执行） |
+| `browser4.agent.isolation.gc.dryRun` | `false` | 只记录将删除的 worktree |
 | `browser4.agent.isolation.shadowBoot` | `auto` | `off|auto|always`（P2） |
 | `browser4.agent.lock.staleHours` | `12` | 锁接管阈值 |
 | `browser4.agent.protected.extra` | 启动链列表 | 见 D8 |
@@ -406,6 +408,7 @@ GC（进程内首次创建 agent 时一次）：`keep` 内保留；超出且 `st
 | S3 仓库锁 | `browser4-coding/.../RepoLock.kt`（`.git/b4-coding.lock`，pid/host/taskId/startedAt，stale 接管） |
 | S3 启动链路保护 | `DEFAULT_PROTECTED_FILES` 增加 `b4w.*`/`bin/build*.ps1`/`bin/recover*.ps1`/`build-runtime-bundle.ps1`/`mvnw*`，`DEFAULT_PROTECTED_DIRS` 增加 `.mvn`；`browser4.agent.protected.extra` |
 | S3 shell 守卫 | `CodingAgentShell.bootstrapViolation` + `browser4.agent.shell.forbidBootstrap` |
+| S4-2 worktree GC | `browser4-coding/.../WorktreeRetention.kt`（keep / maxAgeDays / dryRun）+ `WorkspaceIsolation.removeWorktree`（`git worktree remove` + prune）；runner 在**持有 checkout 锁之后**、创建 worktree 之前调用，`--resume` 时排除被续跑的树 |
 | 文档 | `agent-workspace.md`、`agent.md`、`SKILL.md`、`docs/config.md`、旧设计稿 superseded 注记、`b4w` help |
 
 ### 10.2 实施中做出的偏差（比计划更准确）
@@ -416,6 +419,7 @@ GC（进程内首次创建 agent 时一次）：`keep` 内保留；超出且 `st
 4. **锁在 worktree 创建之前获取**；锁竞争直接让第二个任务失败（不排队），错误里带持有者的 taskId/pid/开始时间。
 5. **`AgentTaskStatus.workspace` 语义未改**（仍是执行根），只在结果装配层映射；`coding.permissions` 通过公开的 `WorkspaceIsolation.resolveMainRepoRoot` 显示"worktree → 合并到哪个仓库"。
 6. **合并幂等**：`applyToMain` 先做 `git apply --check -R`，成立即返回 `Already merged`。`--resume` 在"已合并、但终态 manifest 未写"的窗口重跑时不会把成功的任务判成 refused。
+7. **GC 只删 worktree，不删 patch/refs**：patch 与 `refs/b4/*` 是 `recover -Revert` 的凭据，且只有 KB 级；删除它们会让"树没了但改动还在主树"的场景失去回退能力。GC 在 checkout 锁内执行，`--resume` 时排除被续跑的那棵树。
 
 ### 10.3 已执行的验收
 
@@ -426,14 +430,14 @@ GC（进程内首次创建 agent 时一次）：`keep` 内保留；超出且 `st
 | `Invoke-Pester bin/recover.tests.ps1` | 9/9 通过 |
 | `pwsh bin/recover.ps1 --status` / `b4w recover --status`（真实仓库） | 退出码 0，正确报告 worktree/patch/bundle 状态 |
 | `cargo test --bin browser4-cli -- agent_result::tests` | 2/2 通过（含 `refused_merge_is_stated_before_files`） |
+| `mvn test -pl browser4-coding -am -Dtest=WorktreeRetentionTest` | 6/6 通过（保留/过期/排除/dry-run/越界目录/摘要） |
 
 ### 10.4 未完成（S4 / 后续）
 
-- **worktree GC**：`.browser4/worktrees/*` 尚无保留数/过期回收（必须用 `git worktree remove`，不能直接删目录）。
 - **shadow boot**（D9）未实现。
 - **per-session worktree 复用**（S4-3）未实现；当前每任务一次全量检出。
 - **真实 `agent run --coding` 端到端**未跑（需要后端 + LLM key）；上线前应补两次运行（成功合并 / 失败保留 + resume）。
-- `--resume` 的提示词尚未声明"主树在此之后的变化不可见"（S1-5 的措辞项）。
+- PowerShell 版 `recover` 还没有 `-Prune` 子命令：worktree 回收在下一个 coding 任务的锁内自动执行（`browser4.agent.isolation.gc`），`-Status` 只报告。
 
 ---
 
