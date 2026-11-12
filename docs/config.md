@@ -764,6 +764,10 @@ All are JVM system properties (set with `BROWSER4_SERVER_OPTS` or `-D…` when y
 | `browser4.agent.isolation.maxAgeDays` | `7` | Worktrees younger than this are never reclaimed, whatever `keep` says. |
 | `browser4.agent.isolation.gc` | `on` | Reclaim stale worktrees at the start of a coding task, while the checkout lock is held. `off` disables. Patches and `refs/b4/*` stay as revert handles. |
 | `browser4.agent.isolation.gc.dryRun` | `false` | Log what the worktree sweep would remove without removing it. |
+| `browser4.agent.isolation.reuse` | `task` | `session` makes the tasks of one agent session share `<repo>/.browser4/worktrees/session-<id>`, reset to the current baseline between tasks. Reuse is taken only when the previous task **merged**; a refused/interrupted task keeps its tree and the next task gets a fresh one. |
+| `browser4.agent.isolation.shadowBoot` | `off` | Boot probe before merge: compile the worktree, start it on a spare port and require `/health`. `auto` = boot-chain modules only, `always` = any code change. Costs a Maven compile plus a JVM start per probe; `off` until measured on your machine. |
+| `browser4.agent.isolation.shadowBootTimeoutSeconds` | `120` | How long the probe waits for `/health`. |
+| `browser4.agent.isolation.shadowBootBuildTimeoutSeconds` | `600` | Compile budget for the probe (the worktree's changed modules with `-am`). |
 | `browser4.agent.access` | `full` | Access preset (`full` / `write` / `read-build` / `read`). Unknown backend value is logged and falls back to `full`; an unknown `--access` flag is rejected. |
 | `browser4.agent.readPaths` | data root + source checkout | Folders the coding tools may read outside the workspace, read-only (`;`-separated, `~` expanded). Credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) stay refused whatever the list says. |
 | `browser4.agent.access.unattended` | unset (`full` + network) | Preset derived for a task with no TTY. `deny` removes workspace power entirely; explicit `--access` wins; the derivation is audited `ACCESS_APPROVED(source=default)`. Unknown value warns once and stays `full`. |

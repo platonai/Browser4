@@ -71,10 +71,18 @@ class WorkspaceIsolation private constructor(
     val isolatedRoot: Path,
     private val runId: String,
     /** The commit the worktree was checked out from (dirty trees included). */
-    val baselineCommit: String = "",
+    baselineCommit: String = "",
     /** `refs/b4/baseline/<runId>` when this process created it. */
-    val baselineRef: String? = null,
+    baselineRef: String? = null,
 ) {
+    /** The commit the worktree was checked out from (dirty trees included). */
+    var baselineCommit: String = baselineCommit
+        private set
+
+    /** `refs/b4/baseline/<runId>` when this process created it. */
+    var baselineRef: String? = baselineRef
+        private set
+
     companion object {
         private val logger = LoggerFactory.getLogger(WorkspaceIsolation::class.java)
 
@@ -297,6 +305,36 @@ class WorkspaceIsolation private constructor(
         status.stdout.lineSequence().mapNotNull { line ->
             if (line.length < 4) null else line.substring(3).trim().trim('"').replace('\\', '/')
         }.filter { it.isNotEmpty() }.toList()
+    }
+
+    /**
+     * Move a reused worktree to the current baseline of the main checkout
+     * (plan S4-3).
+     *
+     * Resets tracked files to a freshly captured baseline and removes untracked
+     * files, so the next task starts from exactly what the checkout looks like now.
+     * Ignored build output (`target/`) survives — that is the point of reuse.
+     *
+     * Only call this when the previous task's change was already merged: the reset
+     * discards whatever the worktree still holds.
+     *
+     * @return false when the reset failed (the caller must start a new worktree)
+     */
+    suspend fun rebase(): Boolean = withContext(Dispatchers.IO) {
+        val baseline = captureBaseline(repoRoot, runId)
+        val reset = runGit(isolatedRoot, listOf("reset", "--hard", baseline.commit))
+        if (reset.exitCode != 0) {
+            logger.warn(
+                "could not rebase the reused worktree {}: {}",
+                isolatedRoot, reset.output.takeLast(300),
+            )
+            return@withContext false
+        }
+        runGit(isolatedRoot, listOf("clean", "-fd"))
+        baselineCommit = baseline.commit
+        baselineRef = baseline.ref
+        logger.info("reused worktree {} reset to baseline {}", isolatedRoot, baseline.commit.take(12))
+        true
     }
 
     /**

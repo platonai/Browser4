@@ -17,7 +17,10 @@ import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.coding.CodingWorkspace
 import ai.platon.pulsar.coding.IsolationGate
 import ai.platon.pulsar.coding.RepoLock
+import ai.platon.pulsar.coding.SessionWorktree
+import ai.platon.pulsar.coding.ShadowBoot
 import ai.platon.pulsar.coding.WorkspaceIsolation
+import ai.platon.pulsar.coding.WorkspaceManifestStore
 import ai.platon.pulsar.coding.WorktreeRetention
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.getLogger
@@ -647,6 +650,7 @@ open class StatefulAgentRunner(
      */
     private suspend fun startIsolation(
         taskId: String,
+        sessionId: String,
         resumeWorkspace: Path?,
         sharedWorkspace: Boolean?,
     ): IsolationStart {
@@ -687,10 +691,37 @@ open class StatefulAgentRunner(
         // Throws when another coding task holds the checkout: running this one
         // unisolated would collide at merge time and in the Maven build cache.
         val lock = RepoLock.acquire(source, taskId)
-        // Reclaim old worktrees now that this task owns the checkout: no other coding
-        // task can be using one. Best-effort — GC must never fail the task.
-        sweepWorktrees(source, exclude = null, taskId = taskId)
-        return runCatching { WorkspaceIsolation.begin(source, taskId) }.fold(
+
+        // Session-scoped reuse (plan S4-3): only when the previous task merged, and
+        // only when the operator opted in. A refused/interrupted task keeps its tree
+        // and the new task gets its own — unmerged work must stay inspectable.
+        val sessionDir = if (CodingWorkspace.isSessionReuseEnabled()) {
+            SessionWorktree.dirFor(source, sessionId)
+        } else null
+        sweepWorktrees(source, exclude = sessionDir, taskId = taskId)
+        if (sessionDir != null && Files.isDirectory(sessionDir)) {
+            val reusable = SessionWorktree.isReusable(
+                runCatching { WorkspaceManifestStore().read(sessionDir) }.getOrNull()
+            )
+            if (reusable) {
+                val reused = runCatching { WorkspaceIsolation.reopen(sessionDir, taskId) }.getOrNull()
+                if (reused != null && reused.rebase()) {
+                    logger.info("Agent task {}: reusing the session worktree {}", taskId, sessionDir)
+                    return IsolationStart(reused, lock)
+                }
+                logger.info(
+                    "Agent task {}: session worktree {} could not be reset; starting a task worktree",
+                    taskId, sessionDir
+                )
+            } else {
+                logger.info(
+                    "Agent task {}: the session worktree {} has unmerged work; starting a task worktree",
+                    taskId, sessionDir
+                )
+            }
+        }
+        val runId = sessionDir?.let { SessionWorktree.runIdFor(sessionId) } ?: taskId
+        return runCatching { WorkspaceIsolation.begin(source, runId) }.fold(
             onSuccess = { IsolationStart(it, lock) },
             onFailure = { e ->
                 logger.warn(
@@ -742,6 +773,21 @@ open class StatefulAgentRunner(
         if (!decision.allow) {
             markIsolationRefused(status, isolation, decision.reason, changed)
             return
+        }
+        // Boot probe (plan §D9): a change that compiles can still fail to start.
+        // Opt-in (`browser4.agent.isolation.shadowBoot`); `auto` probes boot-chain
+        // changes only. An unavailable probe is skipped, a failed one refuses the merge.
+        val shadow = withContext(Dispatchers.IO) {
+            runCatching { ShadowBoot.verify(isolation.repoRoot, isolation.isolatedRoot, changed) }
+                .getOrElse { e -> ShadowBoot.Outcome(false, false, "shadow boot failed: ${e.message}") }
+        }
+        if (!shadow.ok) {
+            val reason = if (shadow.logTail.isBlank()) shadow.reason else "${shadow.reason}\n${shadow.logTail}"
+            markIsolationRefused(status, isolation, reason, changed)
+            return
+        }
+        if (!shadow.skipped) {
+            logger.info("Agent task {}: {}", status.id, shadow.reason)
         }
         val outcome = isolation.applyToMain(status.id)
         status.isolationPatch = outcome.patchPath
@@ -927,7 +973,7 @@ open class StatefulAgentRunner(
                 // this block — so the components rebuilt here with the previous policy
                 // are never dispatched.
                 val started = if (codingMode) {
-                    startIsolation(status.id, resume?.workspace, sharedWorkspace)
+                    startIsolation(status.id, session.uuid.toString(), resume?.workspace, sharedWorkspace)
                 } else IsolationStart(null, null)
                 repoLock = started.lock
                 val startedIsolation = started.isolation

@@ -312,6 +312,38 @@ class WorkspaceIsolationTest {
         }
     }
 
+    @Test
+    @DisplayName("rebase resets a reused worktree to the checkout's current baseline")
+    fun rebaseResetsReusedWorktree() {
+        runBlocking {
+            val isolation = WorkspaceIsolation.begin(tempDir, "session-x")
+            try {
+                Files.writeString(isolation.isolatedRoot.resolve("a.txt"), "merged change\n")
+                val merged = isolation.applyToMain("task-1")
+                assertTrue(merged.ok, "merge failed: ${merged.message}")
+                assertEquals("merged change\n", read(tempDir.resolve("a.txt")))
+
+                // A previous run may leave untracked helpers behind; reuse must clear them.
+                Files.writeString(isolation.isolatedRoot.resolve("leftover.txt"), "junk\n")
+
+                assertTrue(isolation.rebase(), "rebase must succeed on a clean checkout")
+
+                assertEquals(
+                    "merged change\n",
+                    read(isolation.isolatedRoot.resolve("a.txt")),
+                    "the merged change is part of the new baseline",
+                )
+                assertFalse(
+                    Files.exists(isolation.isolatedRoot.resolve("leftover.txt")),
+                    "untracked leftovers are cleaned by rebase",
+                )
+                assertTrue(isolation.changedFiles().isEmpty(), "a reused tree starts clean: ${isolation.changedFiles()}")
+            } finally {
+                isolation.rollback()
+            }
+        }
+    }
+
     // ==================== helpers ====================
 
     @Test

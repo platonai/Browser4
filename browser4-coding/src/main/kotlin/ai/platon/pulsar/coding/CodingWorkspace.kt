@@ -106,4 +106,19 @@ object CodingWorkspace {
 
     /** Whether [isolationMode] asks for an isolated worktree. */
     fun isIsolationEnabled(): Boolean = isolationMode in setOf("worktree", "on", "true", "isolated")
+
+    /**
+     * Worktree reuse scope: `task` (default) gives every task its own checkout;
+     * `session` makes the tasks of one agent session share
+     * `<repo>/.browser4/worktrees/session-<id>`, reset to the current baseline
+     * between tasks (plan S4-3).
+     *
+     * Reuse is only taken when the previous task **merged**; a refused or
+     * interrupted task keeps its tree and the next task gets a fresh one.
+     */
+    val isolationReuse: String
+        get() = System.getProperty("browser4.agent.isolation.reuse", "task").trim().lowercase()
+
+    /** Whether [isolationReuse] asks for a session-scoped worktree. */
+    fun isSessionReuseEnabled(): Boolean = isolationReuse in setOf("session", "on", "true", "reuse")
 }

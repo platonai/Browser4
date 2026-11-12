@@ -178,13 +178,15 @@ b4w recover [--status] [--revert <taskId>] [--hard <taskId>] [--use-last-good] [
 
 ### D9 shadow boot（P2，可选）
 
-仅在改动命中启动链路模块（`browser4-rest`、`browser4-core/browser4-boot`、`browser4-apps`、`browser4-agent-tools`）且 `browser4.agent.isolation.shadowBoot != off` 时：
+**已实现**（`ShadowBoot.kt`），但与本节原稿有两处不同，以代码为准：
 
-1. worktree 内 `mvn -pl <mod> -am -DskipTests package`；
-2. 起一个子 JVM：独立端口（`server.port=0` 或 18299）、独立 app-data（临时目录）、超时 60s；
-3. 轮询健康端点（与 `doctor` 同源），就绪 → 杀进程、允许合并；失败/超时 → 拒绝合并，附启动日志尾部 50 行。
+仅在改动命中启动链路模块且 `browser4.agent.isolation.shadowBoot != off` 时（`auto` = 启动链路模块；`always` = 任何代码改动）：
 
-先按 `auto`（仅启动链路模块）实现，测量一次真实耗时后再决定是否默认开。
+1. 不是 `package` 整个 bundle，而是 worktree 内 `mvn -pl <改动模块> -am -DskipTests compile`，把 `target/classes` 放在已有 bundle 的 `app-classes` 与 `lib/*.jar` **之前**——改动的类覆盖旧 jar，其余依赖复用当前后端正在用的 bundle（打包级验证仍由正常构建负责）；
+2. 用 bundle 自带的 JRE 起子 JVM：`-Dserver.port=<空闲端口>`、`-Dapp.data.dir=<临时目录>`、`-Dbrowser4.agent.sandbox=off`、`mainClass=ai.platon.pulsar.apps.Browser4BundleApplicationKt`；
+3. 轮询 `/health`（`DefaultController`），就绪 → 杀进程树、允许合并；失败/超时 → 拒绝合并，附启动日志尾部 50 行；
+4. 探测**不可用**（没有已组装的 runtime bundle / 没有 JRE）→ `skipped=true` 并放行，不阻塞无法跑探测的机器；
+5. 默认 `off`（原稿写 `auto`）：一次探测 = 一次 Maven 编译 + 一次 JVM 启动，先测量再默认开。
 
 ### D10 结果字段、渲染与提示词
 
@@ -215,7 +217,10 @@ b4w recover [--status] [--revert <taskId>] [--hard <taskId>] [--use-last-good] [
 | `browser4.agent.isolation.maxAgeDays` | `7` | 过期回收 |
 | `browser4.agent.isolation.gc` | `on` | worktree 回收开关（锁内执行） |
 | `browser4.agent.isolation.gc.dryRun` | `false` | 只记录将删除的 worktree |
-| `browser4.agent.isolation.shadowBoot` | `auto` | `off|auto|always`（P2） |
+| `browser4.agent.isolation.shadowBoot` | `off` | `off|auto|always`（实现见 D9：默认 off，先测量耗时） |
+| `browser4.agent.isolation.reuse` | `task` | `session` = 同一会话共用一个 worktree，任务间 reset（S4-3） |
+| `browser4.agent.isolation.shadowBootTimeoutSeconds` | `120` | 等 `/health` 的上限 |
+| `browser4.agent.isolation.shadowBootBuildTimeoutSeconds` | `600` | 探测前编译的上限 |
 | `browser4.agent.lock.staleHours` | `12` | 锁接管阈值 |
 | `browser4.agent.protected.extra` | 启动链列表 | 见 D8 |
 | `browser4.agent.shell.forbidBootstrap` | `true` | 见 D8 |
@@ -409,6 +414,8 @@ GC（进程内首次创建 agent 时一次）：`keep` 内保留；超出且 `st
 | S3 启动链路保护 | `DEFAULT_PROTECTED_FILES` 增加 `b4w.*`/`bin/build*.ps1`/`bin/recover*.ps1`/`build-runtime-bundle.ps1`/`mvnw*`，`DEFAULT_PROTECTED_DIRS` 增加 `.mvn`；`browser4.agent.protected.extra` |
 | S3 shell 守卫 | `CodingAgentShell.bootstrapViolation` + `browser4.agent.shell.forbidBootstrap` |
 | S4-2 worktree GC | `browser4-coding/.../WorktreeRetention.kt`（keep / maxAgeDays / dryRun）+ `WorkspaceIsolation.removeWorktree`（`git worktree remove` + prune）；runner 在**持有 checkout 锁之后**、创建 worktree 之前调用，`--resume` 时排除被续跑的树 |
+| D9 shadow boot | `browser4-coding/.../ShadowBoot.kt`：编译改动模块 → 用 bundle 自带 JRE 起子 JVM（独立端口/app-data）→ 轮询 `/health` → 失败拒绝合并；探测不可用时 `skipped` 放行；默认 `off` |
+| S4-3 session 复用 | `browser4-coding/.../SessionWorktree.kt` + `WorkspaceIsolation.rebase()`；`browser4.agent.isolation.reuse=session` 时同一会话共用一个 `session-<id>` worktree，任务间 reset 到当前基线；只有上一任务 `merge=applied` 才复用 |
 | 文档 | `agent-workspace.md`、`agent.md`、`SKILL.md`、`docs/config.md`、旧设计稿 superseded 注记、`b4w` help |
 
 ### 10.2 实施中做出的偏差（比计划更准确）
@@ -420,6 +427,8 @@ GC（进程内首次创建 agent 时一次）：`keep` 内保留；超出且 `st
 5. **`AgentTaskStatus.workspace` 语义未改**（仍是执行根），只在结果装配层映射；`coding.permissions` 通过公开的 `WorkspaceIsolation.resolveMainRepoRoot` 显示"worktree → 合并到哪个仓库"。
 6. **合并幂等**：`applyToMain` 先做 `git apply --check -R`，成立即返回 `Already merged`。`--resume` 在"已合并、但终态 manifest 未写"的窗口重跑时不会把成功的任务判成 refused。
 7. **GC 只删 worktree，不删 patch/refs**：patch 与 `refs/b4/*` 是 `recover -Revert` 的凭据，且只有 KB 级；删除它们会让"树没了但改动还在主树"的场景失去回退能力。GC 在 checkout 锁内执行，`--resume` 时排除被续跑的那棵树。
+8. **shadow boot 默认 `off` 而不是 `auto`，且不重新打包**：一次探测 = 一次 Maven 编译 + 一次 JVM 启动，先测量再默认开；类路径用"worktree `target/classes` + 现有 bundle 的 `app-classes`/`lib`"，避免几分钟的 bundle 打包。探测不可用（无 bundle/JRE）时 `skipped` 放行。
+9. **session 复用的前提是"上一任务已合并"，且 `result.workspace` 语义不变**：只有 `lastTask.merge=applied` 的树才会被 reset 复用，refused/failed 的树原样保留、下一任务另开一棵；`workspace` 仍指主仓库、`isolatedWorkspace` 指会话树，所以不需要重新定义结果字段（计划 S4-3 原以为需要）。已知限制：`git stash create` 不含 untracked 文件，复用后 worktree 看不到上一任务新建的未跟踪文件（它们在主仓库里，`workspace` 指向主仓库）。
 
 ### 10.3 已执行的验收
 
@@ -431,13 +440,14 @@ GC（进程内首次创建 agent 时一次）：`keep` 内保留；超出且 `st
 | `pwsh bin/recover.ps1 --status` / `b4w recover --status`（真实仓库） | 退出码 0，正确报告 worktree/patch/bundle 状态 |
 | `cargo test --bin browser4-cli -- agent_result::tests` | 2/2 通过（含 `refused_merge_is_stated_before_files`） |
 | `mvn test -pl browser4-coding -am -Dtest=WorktreeRetentionTest` | 6/6 通过（保留/过期/排除/dry-run/越界目录/摘要） |
+| `mvn test -pl browser4-coding -am -Dtest=ShadowBootTest` | 8/8 通过（模式判定 / 无 bundle 跳过 / 布局发现 / 不完整 bundle 忽略） |
+| `mvn test -pl browser4-coding -am -Dtest=SessionWorktreeTest,WorkspaceIsolationTest` | 会话树命名/复用判定 + rebase 重置回归 |
 
 ### 10.4 未完成（S4 / 后续）
 
-- **shadow boot**（D9）未实现。
-- **per-session worktree 复用**（S4-3）未实现；当前每任务一次全量检出。
 - **真实 `agent run --coding` 端到端**未跑（需要后端 + LLM key）；上线前应补两次运行（成功合并 / 失败保留 + resume）。
 - PowerShell 版 `recover` 还没有 `-Prune` 子命令：worktree 回收在下一个 coding 任务的锁内自动执行（`browser4.agent.isolation.gc`），`-Status` 只报告。
+- shadow boot 只做过判定/布局的单元验证，**没有在真实 worktree 上跑过一次**（本环境无 LLM key，跑 `--coding` 受限）；开启前应先手工验证一次编译 + 启动耗时。
 
 ---
 
