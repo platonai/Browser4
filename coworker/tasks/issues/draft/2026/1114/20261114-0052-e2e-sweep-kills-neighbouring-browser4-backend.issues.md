@@ -3,7 +3,7 @@
 > **Source:** 2026-11-14 00:30–00:36 本机实测（一次 `cargo test --test e2e -- --scenario=test_e2e_agent_run_mock_*unrestricted*`）+ 源码核对
 > **Date:** 20261114-0052 · **Mode:** dev
 > **GitHub:** [#640 browser4-cli e2e sweep 会强杀同机其他 checkout 的 Browser4 后端](https://github.com/platonai/Browser4/issues/640)
-> **状态:** **未修复**（按要求先记录现场与修复方向）
+> **状态:** **已修复**（2026-11-14，见 §7；§1–§5 保留修复前的现场与方向）
 > **代码基线:** `4.16.x` @ `733b3236b5`
 > **受害现场:** 另一 checkout `D:\workspace\Browser4\Browser4-4.16-feat`（state 命名空间 `Browser4-4.16-feat-adc2c6c2`）
 > **报告人:** 本会话 agent（跑 e2e 的一方），以下时间均为 Asia/Shanghai
@@ -176,3 +176,68 @@ fn force_kill_browser4_server_processes_on_ports(ports: &[u16]) -> ServerKillRes
 - e2e 入口：`cli/browser4-cli/tests/e2e/mod.rs:6976-6992`（pre-sweep）、结束清理；
 - dev 端口：`cli/browser4-cli/src/daemon.rs:1441`、`:1594-1600`（顺延策略）、`:13458-13542`（相关单测）；
 - 本次受影响任务：`9c97e8c0-…`（邻居 checkout，00:30:28 提交）→ 新任务 `b059b770-…`（00:33:37）。
+
+---
+
+## 7. 修复记录（2026-11-14，`4.16.x`）
+
+### 7.1 核心思路：从"识别"改为"归属"
+
+旧 sweep 用 `command_line_matches_browser4_server()`（"这是不是 Browser4 后端"）决定杀谁，同机每个 checkout
+的后端都满足，所以它必然跨工作区。新 sweep 用它判断"**这是不是本 checkout 启动的后端**"：
+
+```
+owned(cmd) = command_line_matches_browser4_server(cmd)      // 还是后端
+          && command_line_mentions_path(cmd, checkout_root) // 且命令行带本 checkout 根
+```
+
+检查点实证（本机正在运行的邻居后端 `pid 75556`）：
+
+```
+"D:\workspace\Browser4\Browser4-4.16-feat\browser4-apps\browser4-bundle\target\runtime-bundle\
+ _work\browser4-bundle-runtime-windows-x64\browser4-bundle-runtime-windows-x64\runtime\bin\java.exe"
+ @C:\Users\pereg\AppData\Local\Temp\browser4-argfile-51512-…\java-args.txt
+```
+
+bundle 后端在 Windows 上走 `@argfile` 且启动后 argfile 已被删除（`daemon.rs:9852`），
+`-Dbrowser4.agent.workspace` 与 classpath 都看不见 —— 但**它自己的 JRE 就在 checkout 里**，
+这条路径永远可见。所以归属判定 = `-Dbrowser4.agent.workspace=<root>`（未走 argfile 时）
+**或** 命令行里出现 checkout 根。
+
+**关键细节**：`D:/workspace/Browser4/Browser4-4.16` 是邻居 `Browser4-4.16-feat` 的**前缀**，
+纯子串匹配会把邻居判成自己 —— 这正是事故的直接成因。`command_line_mentions_path()` 要求匹配后的
+下一个字符不能是路径名可续字符（字母数字、`-`、`_`、`.`、`~`），因此 `/`、引号、空格、行尾才算命中。
+
+### 7.2 逐条修复
+
+| 编号 | 修复 | 位置 |
+|---|---|---|
+| I1 | e2e 的 4 处 sweep 改调新的 `stop_owned_browser4_servers_forcibly()`：候选 = 命令行带本 checkout 根的 JVM ∪ 本 workspace registry 里的 pid ∪ **通过归属校验**的 registry 端口监听者；不再调用全局 `find_browser4_server_processes()` | `managed_processes.rs`、`tests/e2e/mod.rs` |
+| I2 | registry 端口只在归属校验通过后才停（端口被邻居接管 → 不动）；`cli-state.json` 的 URL 仅在**确实存在 state 文件且未 `stale`** 时才作为 `close_all_sessions` 目标，且仍要过 `owned_base_url()` 归属校验 | `notify_base_url_candidates()`、`owned_base_url()` |
+| I3 | 浏览器清扫改为归属：`kill_browsers_launched_by(本次杀掉的 server pid)` + 仅"本 workspace 自己的 `app-data/tmp` 下的孤儿"；场景 `test_open_recovery_after_browser_kill` 从 `kill_all_browsers()` 改为新的 `kill_browsers_of_owned_servers()`，并断言必须真的杀到 1 个 | `kill_owned_orphaned_browser_processes()`、`scenarios/browser.rs` |
+| I4 | 陈旧/缺失 state 不再影响终止决策（见 I2）；归属以"命令行 + registry + 端口监听者"为准，不再以 `base_url` 为准 | 同上 |
+| I5 | 每个被杀进程打印一行 `[sweep] kill pid=… source={checkout,registry-port,orphan-browser} port=… cmd=…`（命令行截断 200 字符） | `force_stop_owned_browser4_server_processes()` |
+
+旧行为可按需恢复：`BROWSER4_SWEEP_ALL_WORKSPACES=1`（`1/true/TRUE/yes/YES/on/ON`），
+未设置或写错都不会放宽清扫范围（有单测）。未从 checkout 运行时（安装版，`dev_workspace_root()` 为 `None`）
+仍走全局 sweep —— 安装环境只有一个后端，等于安全。`kill-all` / 生产版 `stop` 语义不变，仍是全局锤子。
+
+### 7.3 验证
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 单测 | `cargo test --bin browser4-cli managed_processes` | **53 passed**（新增 8 个：兄弟 checkout 前缀陷阱、引号/反斜杠归一化、Surefire fork 不算后端、邻居端口被接管不杀、陈旧 state 不 notify、env 开关拼写、审计截断） |
+| 真实后端 e2e | `cargo test --test e2e -- --scenario=test_session_lifecycle` | 1 passed；pre-sweep `Stopped 0`；收尾 `[sweep] kill pid=72588 source=checkout`（**证明"未注册的遗留后端"也能按命令行归属抓到并停掉**） |
+| 浏览器清扫 e2e | `cargo test --test e2e -- --scenario=test_open_recovery_after_browser_kill --level EXTENDED` | 1 passed；`killed browser PIDs: [65168]`（归属自查成功），收尾 `[sweep] kill pid=76104 source=checkout` |
+| 不误杀（现场） | 两次 e2e 前后对比 | 邻居 checkout 后端 `pid 75556`（命令行为 `Browser4-4.16-feat`）**始终存活**；本机无 `PULSAR_CHROME` 残留浏览器 |
+
+修复前的同一命令必然先把 `75556` 杀掉（I1 的全局扫描），所以上表第 4 行就是本 issue 的回归证据。
+
+### 7.4 未覆盖 / 后续
+
+- 归需要命令行里能看到 checkout 根：若某天 dev 模式改用装在 checkout 之外的 JRE，并同时把 classpath 折进
+  已删除的 argfile，则该后端不可归属 —— 方向是"宁可少杀"（可由 `BROWSER4_SWEEP_ALL_WORKSPACES=1` 兜底）；
+- 嵌套 worktree（`<checkout>/.claude/worktrees/x`）的命令行含 `checkout 根 + /`，按当前实现算作本 checkout，
+  如需严格隔离再单独收紧；
+- `stop` 的 `kill_orphaned_browser_processes()` 仍是全局孤儿扫描（只杀父进程已死的浏览器），本次未改。
+
