@@ -2480,6 +2480,11 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "exitCode" to result.exitCode,
                 "success" to result.success,
                 "timedOut" to result.timedOut,
+                // P0-1: a machine consumer must be able to tell "compiled now" from
+                // "replayed a compile of the same inputs" without parsing prose.
+                "cached" to result.cached,
+                "fingerprint" to result.fingerprint,
+                "builtAt" to result.builtAt,
                 "diagnostics" to result.diagnostics.map { d ->
                     linkedMapOf(
                         "file" to d.file,

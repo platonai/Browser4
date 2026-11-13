@@ -28,6 +28,12 @@ data class BuildDiagnostic(
 
 /**
  * Result of a Maven build: exit code, raw output, parsed diagnostics.
+ *
+ * @property cached the answer was served from [BuildCache] — no Maven process was started
+ *   (plan P0-1). A cached result is always a success; failures and timeouts are never stored.
+ * @property fingerprint short content fingerprint (`cached@<fingerprint>` in tool output and
+ *   in the verification verdict); `null` when no fingerprint was computed
+ * @property builtAt epoch millis of the original build a cached answer came from (`0` otherwise)
  */
 data class BuildResult(
     val module: String,
@@ -36,12 +42,24 @@ data class BuildResult(
     val output: String,
     val diagnostics: List<BuildDiagnostic>,
     val timedOut: Boolean = false,
+    val cached: Boolean = false,
+    val fingerprint: String? = null,
+    val builtAt: Long = 0L,
 ) {
     val success: Boolean get() = exitCode == 0 && !timedOut
 
     /** First [limit] diagnostics as a compact multi-line string. */
     fun diagnosticsSummary(limit: Int = 30): String =
         diagnostics.take(limit).joinToString("\n") { it.format() }
+
+    companion object {
+        /** Human/stable timestamp for fingerprint and cache-age reporting. */
+        fun stamp(epochMillis: Long): String = if (epochMillis <= 0L) {
+            "unknown"
+        } else {
+            java.time.Instant.ofEpochMilli(epochMillis).toString()
+        }
+    }
 }
 
 /**
@@ -56,8 +74,17 @@ data class BuildResult(
  * LSP servers for Kotlin (JDTLS) are heavy; for quick feedback, compiling the
  * affected module and parsing the errors is cheap and dependency-free.
  */
-class MavenBuildSupport {
-
+class MavenBuildSupport(
+    private val cache: BuildCache = BuildCache.shared,
+    /**
+     * Test seam: executes one formatted Maven command line.
+     *
+     * `null` (the production path) runs it through [CodingAgentShell.executeRaw]. The
+     * short-circuit tests inject a counting fake so they can prove that a cache hit does
+     * **not** start Maven at all — the one property a mocked shell cannot show.
+     */
+    internal val commandRunner: (suspend (shell: CodingAgentShell, command: String, timeoutSeconds: Long, workingDir: String?) -> ShellResult)? = null,
+) {
     companion object {
         private val logger = LoggerFactory.getLogger(MavenBuildSupport::class.java)
 
@@ -270,6 +297,46 @@ class MavenBuildSupport {
             }
             return p.replace('\\', '/')
         }
+
+        /**
+         * Whether a `build` call may be short-circuited by [BuildCache] (plan P0-1).
+         *
+         * Only a pure `compile` with tests skipped: `test`, `package`, `install`,
+         * `verify`-class goals produce evidence whose whole value is that it ran, so they
+         * are never replayed from a cache.
+         */
+        fun isCacheableBuild(goals: String, skipTests: Boolean): Boolean {
+            if (!skipTests) return false
+            val goalList = goals.trim().lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }
+            return goalList.isNotEmpty() && goalList.all { it == "compile" }
+        }
+
+        /**
+         * The fingerprint of a build invocation, or `null` when the workspace cannot be
+         * hashed (an unknown/foreign shell root, or a tree too large to hash per call).
+         * A `null` fingerprint bypasses the cache instead of guessing.
+         */
+        internal fun fingerprint(
+            root: Path?,
+            module: String,
+            goals: String,
+            skipTests: Boolean,
+            launcher: String,
+        ): BuildFingerprint? {
+            val digest = SourceDigest.digest(root) ?: return null
+            return BuildFingerprint(
+                module = module,
+                goals = goals,
+                skipTests = skipTests,
+                sourceDigest = digest,
+                launcher = launcher,
+                toolchain = toolchainId(),
+            )
+        }
+
+        /** JVM + OS identity: the same sources compiled by another toolchain is another build. */
+        private fun toolchainId(): String =
+            "java=${System.getProperty("java.version", "?")};os=${System.getProperty("os.name", "?")}"
     }
 
     /**
@@ -296,6 +363,19 @@ class MavenBuildSupport {
         // Accept a bare module directory name (`browser4-browser`) for a nested
         // reactor entry (`browser4-core/browser4-browser`); Maven would reject it.
         val selector = resolveModuleSelector(shell, module, workingDir) ?: module
+        val root = workspaceRoot(shell)
+
+        // P0-1 short-circuit: a second build of unchanged inputs must not start Maven.
+        // Only successful `compile` builds are cacheable; `test`/`verify` goals always run.
+        val buildFingerprint = if (cache.enabled && isCacheableBuild(goalList, skipTests)) {
+            fingerprint(root, selector, goalList, skipTests, launcher)
+        } else {
+            null
+        }
+        if (buildFingerprint != null) {
+            cache.lookup(root, buildFingerprint)?.let { return it }
+        }
+
         val result = runMavenWithSelectorFallback(shell, selector, timeoutSeconds, workingDir) { resolved ->
             mavenBuildCommand(launcher, resolved, goalList, skipTests)
         }
@@ -303,14 +383,18 @@ class MavenBuildSupport {
         val combined = listOf(result.stdout, result.stderr)
             .filter { it.isNotBlank() }
             .joinToString("\n")
-        return BuildResult(
+        val buildResult = BuildResult(
             module = selector,
             goals = goalList,
             exitCode = result.exitCode,
             output = combined,
-            diagnostics = parseDiagnostics(combined, workspaceRoot(shell)),
+            diagnostics = parseDiagnostics(combined, root),
             timedOut = result.timedOut,
+            fingerprint = buildFingerprint?.id,
         )
+        // Never store a failure: a transient error must not become a sticky verdict.
+        if (buildFingerprint != null) cache.put(root, buildFingerprint, buildResult)
+        return buildResult
     }
 
     /**
@@ -367,7 +451,7 @@ class MavenBuildSupport {
         val timeout = timeoutSeconds.coerceIn(1, CodingAgentShell.MAX_TIMEOUT_SECONDS)
         val primary = commandFor(module)
         logger.info("Maven: {}", primary)
-        val first = shell.executeRaw(command = primary, timeoutSeconds = timeout, workingDir = workingDir)
+        val first = runCommand(shell, primary, timeout, workingDir)
         if (first.exitCode == 0 || !isMavenModuleSelectorFailure(first.stdout + "\n" + first.stderr)) {
             return first
         }
@@ -377,8 +461,17 @@ class MavenBuildSupport {
         }
         val fallback = commandFor(":$artifactId")
         logger.info("Maven module path selector failed for '{}'; retrying with artifactId selector: {}", module, fallback)
-        return shell.executeRaw(command = fallback, timeoutSeconds = timeout, workingDir = workingDir)
+        return runCommand(shell, fallback, timeout, workingDir)
     }
+
+    /** Run one Maven command line — through the injected runner (tests) or the real shell. */
+    private suspend fun runCommand(
+        shell: CodingAgentShell,
+        command: String,
+        timeout: Long,
+        workingDir: String?,
+    ): ShellResult = commandRunner?.invoke(shell, command, timeout, workingDir)
+        ?: shell.executeRaw(command = command, timeoutSeconds = timeout, workingDir = workingDir)
 
     /**
      * Format a [BuildResult] for the agent: diagnostics first (structured),
@@ -387,6 +480,16 @@ class MavenBuildSupport {
     fun format(result: BuildResult, maxOutputChars: Int = 4_000): String {
         val sb = StringBuilder()
         if (result.timedOut) sb.appendLine("⏱ Maven build timed out")
+        // P0-1: a cached answer never ran Maven, so there is no log tail to show — say
+        // exactly that, with the fingerprint and the age of the build it replays.
+        if (result.cached) {
+            sb.appendLine("mvn -pl ${result.module} -am ${result.goals} → cached")
+            sb.appendLine(
+                "✓ Build succeeded (cached, fingerprint ${result.fingerprint ?: "?"}, " +
+                    "no source change since ${BuildResult.stamp(result.builtAt)})"
+            )
+            return sb.toString().trimEnd()
+        }
         sb.appendLine("mvn -pl ${result.module} -am ${result.goals} → exit ${result.exitCode}")
 
         if (result.diagnostics.isNotEmpty()) {

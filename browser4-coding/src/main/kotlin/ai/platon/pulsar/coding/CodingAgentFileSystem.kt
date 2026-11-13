@@ -327,6 +327,11 @@ class CodingAgentFileSystem(
         snapshots.clear()
         changeCounter.set(0)
         clearMutations()
+        // P0-1: a task boundary also invalidates the build short-circuit for this workspace.
+        // The content digest already makes a stale hit impossible; this keeps a long-lived
+        // JVM from carrying dozens of dead buckets across tasks.
+        runCatching { BuildCache.shared.invalidate(workspaceRoot) }
+            .onFailure { logger.warn("beginTask: failed to invalidate the build cache", it) }
     }
 
     private fun resetPersistedSnapshots(archiveDir: Path?) {

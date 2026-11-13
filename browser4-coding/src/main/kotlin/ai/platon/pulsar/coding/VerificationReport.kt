@@ -31,6 +31,17 @@ data class VerificationCheck(
     /** Why the check did not run, or the failure reason. */
     val detail: String? = null,
     val diagnostics: List<BuildDiagnostic> = emptyList(),
+    /**
+     * The check was served from [BuildCache] instead of running (plan P0-1).
+     *
+     * Only `compile` can be cached: the verdict still says the sources compiled, and the
+     * fingerprint names exactly which tree that verdict belongs to. Consumers that need
+     * "this run compiled something" must look at this flag — a cached check did not start
+     * a compiler.
+     */
+    val cached: Boolean = false,
+    /** Content fingerprint of the cached compile (`cached@<fingerprint>`); null when not cached. */
+    val fingerprint: String? = null,
 ) {
     /** `✓ compile browser4-coding — exit 0 (8.2s)` style one-liner. */
     fun format(): String {
@@ -114,6 +125,8 @@ data class VerificationReport(
                 "durationMs" to c.durationMs,
                 "evidence" to c.evidence,
                 "detail" to c.detail,
+                "cached" to c.cached,
+                "fingerprint" to c.fingerprint,
                 "diagnostics" to c.diagnostics.map { d ->
                     linkedMapOf(
                         "file" to d.file,
@@ -208,6 +221,8 @@ data class VerificationReport(
                     durationMs = node.get("durationMs")?.asLong() ?: 0,
                     evidence = node.get("evidence")?.asText().orEmpty(),
                     detail = node.get("detail")?.asText()?.takeIf { it.isNotEmpty() },
+                    cached = node.get("cached")?.asBoolean() ?: false,
+                    fingerprint = node.get("fingerprint")?.asText()?.takeIf { it.isNotEmpty() && it != "null" },
                     diagnostics = node.get("diagnostics")?.map { d ->
                         BuildDiagnostic(
                             file = d.get("file")?.asText().orEmpty(),
@@ -355,11 +370,19 @@ class VerificationRunner(
             ok = result.success,
             exitCode = result.exitCode,
             durationMs = System.currentTimeMillis() - started,
-            evidence = if (result.success) "exit 0" else
-                "${result.diagnostics.size} diagnostic(s), exit ${result.exitCode}",
+            evidence = when {
+                // P0-1: a cached compile names the tree it replayed, so the verdict can be
+                // audited ("this compiled, and nothing changed since").
+                result.cached -> "cached@${result.fingerprint ?: "?"} (no source change since " +
+                    "${BuildResult.stamp(result.builtAt)})"
+                result.success -> "exit 0"
+                else -> "${result.diagnostics.size} diagnostic(s), exit ${result.exitCode}"
+            },
             detail = if (result.success) null else
                 result.diagnosticsSummary(10).ifBlank { lastLines(result.output, 20) },
             diagnostics = result.diagnostics,
+            cached = result.cached,
+            fingerprint = result.fingerprint,
         )
     }
 
