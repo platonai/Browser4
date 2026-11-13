@@ -1212,7 +1212,12 @@ open class StatefulAgentRunner(
             // affordance are derived from the terminal state while it is still in
             // hand, so `agent result` can exit non-zero with a reason instead of prose
             // only, and the `task.failed` step carries the same code.
-            (agent as? RobustBrowserAgent)?.lastRunTokenBudget?.let { status.effectiveTokenBudget = it }
+            // Assigned unconditionally: a `null` must CLEAR the field instead of
+            // leaving the value of an earlier task in place. The agent is shared by
+            // every task of an interactive session, and a run that was cancelled (or
+            // failed) before it installed its budget reports `null` - a supervisor
+            // must see "unknown", never the previous task's limit.
+            status.effectiveTokenBudget = (agent as? RobustBrowserAgent)?.lastRunTokenBudget
             status.errorCode = AgentTaskStatus.errorCodeOf(status.failureReason, status.cancelled)
             status.resumable = if (status.cancelled || status.failureReason != null) {
                 AgentTaskStatus.isResumable(status.errorCode)

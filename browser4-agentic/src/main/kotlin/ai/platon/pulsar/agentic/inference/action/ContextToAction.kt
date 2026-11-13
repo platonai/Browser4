@@ -43,7 +43,25 @@ open class ContextToAction(
      * [generateResponseRaw]. Prevents runaway agent loops from burning
      * unbounded provider credits.
      */
-    val tokenBudget: AgentTokenBudget = AgentTokenBudget.from(conf)
+    @Volatile
+    var tokenBudget: AgentTokenBudget = AgentTokenBudget.from(conf)
+        private set
+
+    /**
+     * Install a fresh token budget for one agent run.
+     *
+     * A [ContextToAction] is cached on the agent (`BasicBrowserAgent.cta`) and
+     * reused across the tasks of an interactive session. A single budget
+     * instance would make task N inherit the spend of tasks 1..N-1, aborting a
+     * fresh task with a spurious `TokenBudgetExceededException` and reporting a
+     * cross-task cumulative token count. Every run starts from a clean budget.
+     *
+     * @param runConf the configuration whose `agent.token.budget.total` applies
+     * @param taskTokens the per-task override (`agent run --token-budget`), when given
+     * @return the budget now installed for this run
+     */
+    fun beginRun(runConf: ImmutableConfig = conf, taskTokens: Long? = null): AgentTokenBudget =
+        AgentTokenBudget.forRun(runConf, taskTokens).also { tokenBudget = it }
 
     /**
      * Per-request token limiter — caps the estimated token count of each

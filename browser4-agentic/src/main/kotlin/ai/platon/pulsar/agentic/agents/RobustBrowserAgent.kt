@@ -773,6 +773,14 @@ open class RobustBrowserAgent(
      */
     private suspend fun run(action: ActionOptions): AgentHistory {
         _lastRunSessionId = null
+        // A shared agent serves every task of an interactive session, so a fresh
+        // run must not inherit the previous task's LLM spend: a stale budget could
+        // abort it with a spurious TOKEN_BUDGET, and a stale `lastRunTokenBudget`
+        // would report the previous task's limit on a failure that happened
+        // before this run's tool loop started. Both are reset here, before any
+        // auxiliary (legacy/extract) inference call can charge them.
+        val runTokens = cta.beginRun(session.sessionConfig, tokenBudgetOverride)
+        lastRunTokenBudget = runTokens.effectiveMaxTotalTokens
         resetInnerToolExecutions()
         onWillRun(action)
 
@@ -1105,9 +1113,15 @@ open class RobustBrowserAgent(
             // abort. Charged from the loop's onModelResponse callback; the breach
             // propagates to resolveProblemWithRetry, which treats it as permanent.
             //
-            // The per-task override (`agent run --token-budget`) is resolved here, once
-            // per run, and never written into the process-wide registry.
-            val tokenBudget = AgentTokenBudget.forRun(session.sessionConfig, tokenBudgetOverride)
+            // The run budget - including the per-task override (`agent run
+            // --token-budget`) - was resolved once for the whole run by
+            // `ContextToAction.beginRun` before the first attempt and must NOT be
+            // recreated here: this block runs once per RETRY attempt, so a fresh
+            // instance would (a) let a task that retries N times spend N x the
+            // configured limit and (b) report `cumulativeTokens` from a budget that is
+            // not the one the legacy/extract path charges. `cta.tokenBudget` is the
+            // single per-run budget both engine paths share.
+            val tokenBudget = cta.tokenBudget
             lastRunTokenBudget = tokenBudget.effectiveMaxTotalTokens
             // Coding progress enforcement: rounds without a recorded file
             // mutation. Reset on every round that changes a file (see
@@ -2204,7 +2218,26 @@ open class RobustBrowserAgent(
         cliLoopTracer.logCompactionUsage(response)
         // The same call also reaches the run stats: compaction tokens are part of
         // what the run consumed, and hiding them made `/stats` under-report.
-        emitUsageEvent(response, turn = 0, category = AgentRunEvent.USAGE_CATEGORY_COMPACTION)
+        //
+        // They are also CHARGED to the run budget, not merely reported: this request
+        // bypasses `generateResponseRaw` (it calls the chat model directly), so
+        // without the charge a loop that compacts its history many times spends
+        // tokens that count neither toward the budget nor toward `cumulativeTokens`.
+        val compactionUsage = runCatching { response.tokenUsage() }.getOrNull()
+            ?.let { TokenUsage.from(it).normalized() }
+        if (compactionUsage != null) {
+            cta.tokenBudget.charge(
+                compactionUsage.inputTokenCount.toLong(),
+                compactionUsage.outputTokenCount.toLong(),
+                compactionUsage.cachedInputTokenCount?.toLong() ?: 0L,
+            )
+        }
+        emitUsageEvent(
+            response,
+            turn = 0,
+            category = AgentRunEvent.USAGE_CATEGORY_COMPACTION,
+            budget = cta.tokenBudget,
+        )
         return response.aiMessage().text() ?: ""
     }
 
