@@ -2,6 +2,7 @@
 
 > **Source:** 2026-11-14 00:30–00:36 本机实测（一次 `cargo test --test e2e -- --scenario=test_e2e_agent_run_mock_*unrestricted*`）+ 源码核对
 > **Date:** 20261114-0052 · **Mode:** dev
+> **GitHub:** [#640 browser4-cli e2e sweep 会强杀同机其他 checkout 的 Browser4 后端](https://github.com/platonai/Browser4/issues/640)
 > **状态:** **未修复**（按要求先记录现场与修复方向）
 > **代码基线:** `4.16.x` @ `733b3236b5`
 > **受害现场:** 另一 checkout `D:\workspace\Browser4\Browser4-4.16-feat`（state 命名空间 `Browser4-4.16-feat-adc2c6c2`）
