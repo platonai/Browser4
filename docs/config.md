@@ -642,12 +642,35 @@ docker run -d -p 18182:18182 `
   working directory. The CLI injects the repository root when it starts the backend from a source
   tree, so `coding.*` operates on your checkout rather than the runtime bundle.
 
-  A coding `agent run` mirrors the checkout into its per-task workspace; modules are linked as
-  directory junctions, so **module writes land in the real checkout** — the workspace isolates
-  task artifacts, not the module sources. `coding.permissions` prints the resolved root.
+  A coding `agent run` now executes in an isolated **git worktree** of the checkout
+  (`<repo>/.browser4/worktrees/<task-id>`) and merges the change back as a patch, so the
+  main checkout is never edited during the run. `coding.permissions` prints the resolved
+  root and the isolation facts (`merge` = `applied` | `refused` | `pending`).
 
-  Related: `browser4.agent.workspace.isolation=worktree` runs `coding.devTask(execute=true)` inside
-  a `git worktree` under `.browser4/worktrees/` and merges back only on success (default `off`).
+  Related: `browser4.agent.workspace.isolation` (default `worktree`; `off` restores the
+  pre-2026-11 in-place/mirror behaviour). The older `coding.devTask` path uses the same
+  switch and merges only on success.
+
+* **`browser4.agent.isolation.requireVerify`** *(default: `true`)*
+  A coding run that changed code is merged back only when `coding.verify` produced a
+  **passing** verdict covering the changed modules. Documentation-only changes need no
+  build. A refused merge fails the task and keeps the worktree; nothing is applied.
+
+* **`browser4.agent.lock.staleHours`** *(default: `12`)*
+  One coding task per checkout at a time (`.git/b4-coding.lock`). A lock whose process is
+  gone, or older than this, is taken over with a warning; a live lock makes the second
+  task fail immediately, naming the holder.
+
+* **`browser4.agent.protected.extra`** *(default: empty)*
+  Comma-separated, workspace-relative paths merged into the protected set. The launch
+  path is protected by default (`b4w.*`, `bin/build.ps1`, `bin/recover.ps1`,
+  `build-runtime-bundle.ps1`, `mvnw*`, `.mvn/`): a task must not edit how the backend
+  starts or how it is repaired.
+
+* **`browser4.agent.shell.forbidBootstrap`** *(default: `on`)*
+  `coding.shell` refuses `b4w build|stop|install|upgrade|uninstall|recover` and the
+  bootstrap build/recovery scripts — rebuilding the runtime that executes the task is
+  operator work. `coding.mvnBuild` / `coding.verify` are unaffected.
 
 * **`browser4.agent.session.contextEnabled`** *(default: `true`)* and
   **`browser4.agent.session.contextTokens`** *(default: `1200`)*
@@ -733,10 +756,23 @@ All are JVM system properties (set with `BROWSER4_SERVER_OPTS` or `-D…` when y
 |---|---|---|
 | `browser4.agent.sandbox` | Windows fresh install `windows-acl`; otherwise `off` | OS enforcement for `coding.shell`/`coding.runCode`. Unavailable backend, unknown id or unimplemented id → task fails (`SandboxUnavailableException`); never falls back. A denial becomes `code=SANDBOX_DENIED`. |
 | `browser4.agent.sandbox.account` | `browser4-agent` | Windows sandbox account. Missing account/credential or failed ACLs → hard failure at task start. |
+| `browser4.agent.workspace.isolation` | `worktree` | Coding tasks run in an isolated git worktree and merge back as a patch; `off` restores in-place execution. |
+| `browser4.agent.isolation.requireVerify` | `true` | A code change is merged only with a passing `coding.verify` verdict covering the changed modules. |
+| `browser4.agent.lock.staleHours` | `12` | One coding task per checkout; a lock older than this (or with a dead pid) is taken over. |
+| `browser4.agent.protected.extra` | empty | Extra workspace-relative paths a task may not modify (defaults already cover `b4w.*`, `bin/build.ps1`, `bin/recover.ps1`, `build-runtime-bundle.ps1`, `mvnw*`, `.mvn/`). |
+| `browser4.agent.isolation.keep` | `3` | Isolated worktrees always retained (newest first). Older ones are reclaimed with `git worktree remove` once they also exceed `isolation.maxAgeDays`. |
+| `browser4.agent.isolation.maxAgeDays` | `7` | Worktrees younger than this are never reclaimed, whatever `keep` says. |
+| `browser4.agent.isolation.gc` | `on` | Reclaim stale worktrees at the start of a coding task, while the checkout lock is held. `off` disables. Patches and `refs/b4/*` stay as revert handles. |
+| `browser4.agent.isolation.gc.dryRun` | `false` | Log what the worktree sweep would remove without removing it. |
+| `browser4.agent.isolation.reuse` | `task` | `session` makes the tasks of one agent session share `<repo>/.browser4/worktrees/session-<id>`, reset to the current baseline between tasks. Reuse is taken only when the previous task **merged**; a refused/interrupted task keeps its tree and the next task gets a fresh one. |
+| `browser4.agent.isolation.shadowBoot` | `off` | Boot probe before merge: compile the worktree, start it on a spare port and require `/health`. `auto` = boot-chain modules only, `always` = any code change. Costs a Maven compile plus a JVM start per probe; `off` until measured on your machine. |
+| `browser4.agent.isolation.shadowBootTimeoutSeconds` | `120` | How long the probe waits for `/health`. |
+| `browser4.agent.isolation.shadowBootBuildTimeoutSeconds` | `600` | Compile budget for the probe (the worktree's changed modules with `-am`). |
 | `browser4.agent.access` | `full` | Access preset (`full` / `write` / `read-build` / `read`). Unknown backend value is logged and falls back to `full`; an unknown `--access` flag is rejected. |
 | `browser4.agent.readPaths` | data root + source checkout | Folders the coding tools may read outside the workspace, read-only (`;`-separated, `~` expanded). Credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) stay refused whatever the list says. |
 | `browser4.agent.access.unattended` | unset (`full` + network) | Preset derived for a task with no TTY. `deny` removes workspace power entirely; explicit `--access` wins; the derivation is audited `ACCESS_APPROVED(source=default)`. Unknown value warns once and stays `full`. |
 | `browser4.agent.shell.workspaceBoundary` | `on` | Advisory fast-fail: refuses literal absolute paths outside the workspace. Not an enforcement layer; the sandbox is. |
+| `browser4.agent.shell.forbidBootstrap` | `on` | Refuses `b4w build\|stop\|install\|upgrade\|uninstall\|recover` and the bootstrap build/recovery scripts: a task must not rebuild the runtime executing it. Builds via `coding.mvnBuild`/`coding.verify` stay allowed. |
 | `browser4.agent.shell.pathGuard` | `on` | **Deprecated**, advisory: refuses command arguments naming credential locations. Does not relax protected subtrees; sandbox still enforces. |
 | `browser4.agent.allowExternalAccess` | `false` | **Deprecated**, advisory: relaxes the string-layer path checks only; does not widen what the sandbox lets a process reach. |
 | `browser4.agent.allowDestructive` | `true` | **Deprecated**: `false` refuses delete/copy/move but still allows write/append/replace — use `access=read` for a true read-only task. |

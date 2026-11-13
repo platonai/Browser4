@@ -29,10 +29,17 @@ internal object CliAgentPrompt {
     /**
      * Role preamble: who the agent is and what "done" means. [codingMode] selects
      * the coding framing (repository work in a mirrored checkout) instead of the
-     * browsing framing (drive browser4-cli).
+     * browsing framing (drive browser4-cli). [isolated] says the coding run works
+     * in a git worktree whose change the engine merges as a patch
+     * (self-development isolation plan §D10).
      */
-    fun role(codingMode: Boolean, repairMaxRounds: Int, workspaceDir: Path, windows: Boolean = isWindows()): String =
-        if (codingMode) codingRole(repairMaxRounds, workspaceDir, windows) else browsingRole(repairMaxRounds)
+    fun role(
+        codingMode: Boolean,
+        repairMaxRounds: Int,
+        workspaceDir: Path,
+        windows: Boolean = isWindows(),
+        isolated: Boolean = false,
+    ): String = if (codingMode) codingRole(repairMaxRounds, workspaceDir, windows, isolated) else browsingRole(repairMaxRounds)
 
     private fun browsingRole(repairMaxRounds: Int): String = """
         You are a browser automation agent. Drive the browser EXCLUSIVELY through the
@@ -51,7 +58,7 @@ internal object CliAgentPrompt {
         round(s); "the code looks right" is not a passing verdict.
     """.trimIndent()
 
-    private fun codingRole(repairMaxRounds: Int, workspaceDir: Path, windows: Boolean): String {
+    private fun codingRole(repairMaxRounds: Int, workspaceDir: Path, windows: Boolean, isolated: Boolean): String {
         val shell = if (windows) {
             "coding.shell runs through cmd.exe (use `dir`, `type`, `findstr`, `more`; " +
                 "POSIX tools such as `head`, `sed`, `grep` are NOT available) and each call " +
@@ -60,15 +67,35 @@ internal object CliAgentPrompt {
             "coding.shell runs through sh -c and each call starts in a fresh process — " +
                 "pass `workingDir` instead of a `cd … &&` prefix."
         }
-        return """
-            You are a coding agent working on a Browser4 checkout. This run is a repository
-            task (read, refactor, fix, build, test) — not a browsing task.
+        val tree = if (isolated) {
+            """
+            Working tree: $workspaceDir
+            It is an isolated git worktree of the checkout, created from HEAD (or from the
+            user's uncommitted changes). It HAS `.git`, so `git status` / `git diff` work —
+            use them to review your own work. The engine applies your change to the main
+            repository as a patch when the task finishes: if coding.verify did not pass,
+            NOTHING is merged and the worktree is kept. Never edit the main checkout
+            directly, and never run `b4w build`, `b4w stop` or `b4w upgrade` — rebuilding
+            the backend you are running inside is operator work.
 
+            If this run resumed an earlier task, the worktree may predate changes made in
+            the main checkout since then: re-read a file before trusting what you remember
+            of it.
+            """.trimIndent()
+        } else {
+            """
             Working tree: $workspaceDir
             It mirrors the repository for this run. The mirror has NO `.git`:
             `git status` / `git diff` fail there, so review your own work with
             coding.changeSummary (what changed since tracking started) and coding.diff
             (the actual patch). Never assume the real checkout reflects your edits.
+            """.trimIndent()
+        }
+        return """
+            You are a coding agent working on a Browser4 checkout. This run is a repository
+            task (read, refactor, fix, build, test) — not a browsing task.
+
+            $tree
 
             Tool chain: coding.read / coding.readLines / coding.grep / coding.glob to find
             and read code; coding.write / coding.replace to change it; coding.mvnBuild or

@@ -569,6 +569,17 @@ open class RobustBrowserAgent(
     var workspaceDirOverride: Path? = null
 
     /**
+     * The isolated worktree this coding task runs in, if any.
+     *
+     * Set by the task runner together with [workspaceDirOverride]; the loop passes
+     * it to the workspace manifest (isolation/baseline/worktree) and the merge gate
+     * reads it back. Cleared in the runner's `finally` like every other per-task
+     * override — the companion agent is shared by all tasks of a session.
+     */
+    @Volatile
+    var workspaceIsolation: ai.platon.pulsar.coding.WorkspaceIsolation? = null
+
+    /**
      * Live step sink of the current run, set by the task runner
      * ([ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner]).
      *
@@ -1040,8 +1051,21 @@ open class RobustBrowserAgent(
             // tracking (so changeSummary opens at 0), and obtain the inherited
             // workspace-state block to inject into the system prompt. Safe for
             // non-coding runs — it only resets the mutation log.
+            //
+            // The isolation identity travels with the manifest: a worktree has no
+            // manifest of its own before this write point, and the task-end Δgit
+            // computation must look at the MAIN repository, not the isolated tree.
+            val isolation = workspaceIsolation
             val inheritedSection = runCatching {
-                agentToolManager.beginTask(taskId, action.action, codingMode)
+                agentToolManager.beginTask(
+                    taskId,
+                    action.action,
+                    codingMode,
+                    isolation = isolation?.let { "worktree" },
+                    worktree = isolation?.isolatedRoot?.toString(),
+                    baseline = isolation?.baselineCommit,
+                    sourceRepo = isolation?.repoRoot,
+                )
             }.getOrNull().orEmpty()
             var messages: List<ChatMessage> = listOf(
                 SystemMessage.from(cliAgentSystemPrompt() + inheritedSection + memorySection),
@@ -2230,7 +2254,7 @@ open class RobustBrowserAgent(
 
     /** System prompt for the CLI tool-loop engine: role + resident quick reference + hygiene rules. */
     private fun cliAgentSystemPrompt(): String = buildString {
-        append(CliAgentPrompt.role(codingMode, config.repairMaxRounds, agentWorkspaceDir))
+        append(CliAgentPrompt.role(codingMode, config.repairMaxRounds, agentWorkspaceDir, isolated = workspaceIsolation != null))
         // The resident browsing quick reference is what a browsing run needs every
         // round; a coding run gets its role facts from CliAgentPrompt instead, so it
         // does not start by reading browser CLI docs (observed waste).

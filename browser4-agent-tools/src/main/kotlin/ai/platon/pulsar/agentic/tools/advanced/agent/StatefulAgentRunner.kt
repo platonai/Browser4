@@ -14,6 +14,14 @@ import ai.platon.pulsar.api.AbstractWebDriver
 import ai.platon.pulsar.api.Browser
 import ai.platon.pulsar.coding.AccessPreset
 import ai.platon.pulsar.coding.AgentAccessPolicy
+import ai.platon.pulsar.coding.CodingWorkspace
+import ai.platon.pulsar.coding.IsolationGate
+import ai.platon.pulsar.coding.RepoLock
+import ai.platon.pulsar.coding.SessionWorktree
+import ai.platon.pulsar.coding.ShadowBoot
+import ai.platon.pulsar.coding.WorkspaceIsolation
+import ai.platon.pulsar.coding.WorkspaceManifestStore
+import ai.platon.pulsar.coding.WorktreeRetention
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -632,6 +640,186 @@ open class StatefulAgentRunner(
     }
 
     /**
+     * Start the isolated worktree for a coding task (self-development isolation
+     * plan §D1), or null when the task must run in its per-task directory.
+     *
+     * Resume re-attaches to the interrupted task's worktree, so the files it
+     * already changed are what the new run continues from. Any other failure to
+     * start isolation is logged and degrades to the per-task workspace — never to
+     * writing straight into the user's checkout.
+     */
+    private suspend fun startIsolation(
+        taskId: String,
+        sessionId: String,
+        resumeWorkspace: Path?,
+        sharedWorkspace: Boolean?,
+    ): IsolationStart {
+        if (!CodingWorkspace.isIsolationEnabled()) {
+            return IsolationStart(null, null)
+        }
+        if (sharedWorkspace == true) {
+            // A shared directory is not a worktree, and reusing another task's tree is
+            // exactly the attribution problem isolation removes. Refuse instead of
+            // silently running the coding task in the legacy mirror.
+            throw IllegalArgumentException(
+                "--shared-workspace cannot be combined with --coding: a coding task runs in its " +
+                    "own git worktree and merges the change into the checkout. Drop the flag, or " +
+                    "set -Dbrowser4.agent.workspace.isolation=off to run in place."
+            )
+        }
+        val resumable = resumeWorkspace?.takeIf {
+            it.toString().replace('\\', '/').contains("/.browser4/worktrees/")
+        }
+        if (resumable != null) {
+            val reopened = runCatching { WorkspaceIsolation.reopen(resumable, taskId) }
+                .onFailure { logger.warn("Agent task {}: could not reopen worktree {}: {}", taskId, resumable, it.message) }
+                .getOrNull()
+            if (reopened != null) {
+                // The lock is acquired on the MAIN checkout, not on the worktree.
+                val lock = RepoLock.acquire(reopened.repoRoot, taskId)
+                sweepWorktrees(reopened.repoRoot, exclude = resumable, taskId = taskId)
+                logger.info("Agent task {}: resuming the isolated worktree at {}", taskId, resumable)
+                return IsolationStart(reopened, lock)
+            }
+        }
+        val source = runCatching { CodingWorkspace.workspaceRoot }.getOrNull()
+            ?: return IsolationStart(null, null)
+        if (!WorkspaceIsolation.isAvailable(source)) {
+            logger.info("Agent task {}: {} is not a git work tree; running in the per-task workspace", taskId, source)
+            return IsolationStart(null, null)
+        }
+        // Throws when another coding task holds the checkout: running this one
+        // unisolated would collide at merge time and in the Maven build cache.
+        val lock = RepoLock.acquire(source, taskId)
+
+        // Session-scoped reuse (plan S4-3): only when the previous task merged, and
+        // only when the operator opted in. A refused/interrupted task keeps its tree
+        // and the new task gets its own — unmerged work must stay inspectable.
+        val sessionDir = if (CodingWorkspace.isSessionReuseEnabled()) {
+            SessionWorktree.dirFor(source, sessionId)
+        } else null
+        sweepWorktrees(source, exclude = sessionDir, taskId = taskId)
+        if (sessionDir != null && Files.isDirectory(sessionDir)) {
+            val reusable = SessionWorktree.isReusable(
+                runCatching { WorkspaceManifestStore().read(sessionDir) }.getOrNull()
+            )
+            if (reusable) {
+                val reused = runCatching { WorkspaceIsolation.reopen(sessionDir, taskId) }.getOrNull()
+                if (reused != null && reused.rebase()) {
+                    logger.info("Agent task {}: reusing the session worktree {}", taskId, sessionDir)
+                    return IsolationStart(reused, lock)
+                }
+                logger.info(
+                    "Agent task {}: session worktree {} could not be reset; starting a task worktree",
+                    taskId, sessionDir
+                )
+            } else {
+                logger.info(
+                    "Agent task {}: the session worktree {} has unmerged work; starting a task worktree",
+                    taskId, sessionDir
+                )
+            }
+        }
+        val runId = sessionDir?.let { SessionWorktree.runIdFor(sessionId) } ?: taskId
+        return runCatching { WorkspaceIsolation.begin(source, runId) }.fold(
+            onSuccess = { IsolationStart(it, lock) },
+            onFailure = { e ->
+                logger.warn(
+                    "Agent task {}: workspace isolation could not start ({}); running in the per-task workspace",
+                    taskId, e.message
+                )
+                lock.release()
+                IsolationStart(null, null)
+            },
+        )
+    }
+
+    /**
+     * Reclaim stale worktrees (isolation plan S4). Runs while this task holds the
+     * checkout lock, so nothing else can be using a worktree being removed.
+     * Best-effort: a GC failure is logged and must never fail the task.
+     */
+    private fun sweepWorktrees(repoRoot: Path, exclude: Path?, taskId: String) {
+        if (!WorktreeRetention.isEnabled()) return
+        runCatching { WorktreeRetention.sweep(repoRoot, exclude = exclude) }
+            .onSuccess { if (it.changed) logger.info("Agent task {}: {}", taskId, it.summary()) }
+            .onFailure { logger.warn("Agent task {}: worktree gc failed: {}", taskId, it.message) }
+    }
+
+    /** One task's isolation handles: the worktree and the checkout lock guarding it. */
+    private data class IsolationStart(
+        val isolation: WorkspaceIsolation?,
+        val lock: RepoLock?,
+    )
+
+    /**
+     * Gate the isolated change and apply it to the main work tree (§D3/D4).
+     *
+     * A refused merge fails the task: reporting success while the change exists only
+     * in a hidden worktree is exactly the "where did my work go?" failure this design
+     * exists to prevent.
+     */
+    private suspend fun finishIsolation(
+        agent: PerceptiveAgent,
+        status: AgentTaskStatus,
+        isolation: WorkspaceIsolation,
+    ) {
+        status.sourceRepo = isolation.repoRoot.toString()
+        status.isolatedWorkspace = isolation.isolatedRoot.toString()
+        status.isolationMode = "worktree"
+        val changed = isolation.changedFiles()
+        val verdict = (agent as? BasicBrowserAgent)?.lastInnerVerdictJson
+        val decision = IsolationGate.evaluate(changed, verdict)
+        if (!decision.allow) {
+            markIsolationRefused(status, isolation, decision.reason, changed)
+            return
+        }
+        // Boot probe (plan §D9): a change that compiles can still fail to start.
+        // Opt-in (`browser4.agent.isolation.shadowBoot`); `auto` probes boot-chain
+        // changes only. An unavailable probe is skipped, a failed one refuses the merge.
+        val shadow = withContext(Dispatchers.IO) {
+            runCatching { ShadowBoot.verify(isolation.repoRoot, isolation.isolatedRoot, changed) }
+                .getOrElse { e -> ShadowBoot.Outcome(false, false, "shadow boot failed: ${e.message}") }
+        }
+        if (!shadow.ok) {
+            val reason = if (shadow.logTail.isBlank()) shadow.reason else "${shadow.reason}\n${shadow.logTail}"
+            markIsolationRefused(status, isolation, reason, changed)
+            return
+        }
+        if (!shadow.skipped) {
+            logger.info("Agent task {}: {}", status.id, shadow.reason)
+        }
+        val outcome = isolation.applyToMain(status.id)
+        status.isolationPatch = outcome.patchPath
+        if (!outcome.ok) {
+            markIsolationRefused(status, isolation, outcome.message, outcome.changedFiles.ifEmpty { changed })
+            return
+        }
+        status.isolationMerge = "applied"
+        logger.info(
+            "Agent task {}: merged {} file(s) into {} (patch: {})",
+            status.id, outcome.changedFiles.size, isolation.repoRoot, outcome.patchPath
+        )
+    }
+
+    /** Fail the task and name where the unmerged change lives. */
+    private fun markIsolationRefused(
+        status: AgentTaskStatus,
+        isolation: WorkspaceIsolation,
+        reason: String,
+        changedFiles: List<String>,
+    ) {
+        status.isolationMerge = "refused"
+        val detail = "Changes were NOT applied to ${isolation.repoRoot}: $reason. " +
+            "The isolated worktree is kept at ${isolation.isolatedRoot}."
+        logger.warn("Agent task {}: {}", status.id, detail)
+        status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
+        status.failureReason = detail
+        status.message = detail
+        status.deliverables = changedFiles.takeIf { it.isNotEmpty() } ?: status.deliverables
+    }
+
+    /**
      * The files THIS run wrote, for a run that ended without a completion report.
      *
      * Reads the run's mutation log (the authoritative record, already free of
@@ -715,6 +903,12 @@ open class StatefulAgentRunner(
         // detached final snapshot taken in the finally block below.
         val runHasReturned = AtomicBoolean(false)
 
+        // The task's isolated worktree (coding tasks only). Declared here because the
+        // catch/finally paths must still report where the unmerged change lives.
+        var isolation: WorkspaceIsolation? = null
+        // The checkout lock taken for this task, released in the finally.
+        var repoLock: RepoLock? = null
+
         try {
             status.refresh(ResourceStatus.SC_PROCESSING)
             // Record what this run is: the effective flags decide a later resume's
@@ -765,6 +959,12 @@ open class StatefulAgentRunner(
                 // --fresh-workspace is still accepted and is now the default behaviour;
                 // its old `workspace.fresh.*` directory is no longer created.
                 //
+                // Coding tasks run in a git worktree (self-development isolation plan
+                // §D1): the worktree IS the task workspace, so it must be created
+                // BEFORE the rebind. Failure to start isolation is logged and falls
+                // back to the per-task directory — never to "write straight into the
+                // user's checkout".
+                //
                 // The rebind happens BEFORE the access policy is applied below:
                 // `applyAccessPolicy` loads `<workspace>/.browser4/access-policy.json` and
                 // rebuilds the coding components from the *current* workspace root, so
@@ -772,14 +972,23 @@ open class StatefulAgentRunner(
                 // No tool can run between the two calls — the task thread starts after
                 // this block — so the components rebuilt here with the previous policy
                 // are never dispatched.
-                val taskWorkspace = taskWorkspaceFor(it.baseDir, status.id, resume?.workspace, sharedWorkspace)
+                val started = if (codingMode) {
+                    startIsolation(status.id, session.uuid.toString(), resume?.workspace, sharedWorkspace)
+                } else IsolationStart(null, null)
+                repoLock = started.lock
+                val startedIsolation = started.isolation
+                isolation = startedIsolation
+                it.workspaceIsolation = startedIsolation
+                val taskWorkspace = startedIsolation?.isolatedRoot
+                    ?: taskWorkspaceFor(it.baseDir, status.id, resume?.workspace, sharedWorkspace)
                 if (taskWorkspace != null) {
                     java.nio.file.Files.createDirectories(taskWorkspace)
                     it.workspaceDirOverride = taskWorkspace
                     it.agentToolManager.rebindWorkspace(taskWorkspace)
                     logger.info(
-                        "Agent task {} (session={}): workspace at {} (resume={}, shared={})",
-                        status.id, session.uuid, taskWorkspace, resume != null, sharedWorkspace == true
+                        "Agent task {} (session={}): workspace at {} (resume={}, shared={}, isolation={})",
+                        status.id, session.uuid, taskWorkspace, resume != null, sharedWorkspace == true,
+                        startedIsolation?.let { "worktree" } ?: "none"
                     )
                 } else {
                     logger.info(
@@ -887,6 +1096,19 @@ open class StatefulAgentRunner(
                     eventCollectorJob.cancel()
                 }
             }
+
+            // Isolation merge (plan S1). Reaching this line means the run itself
+            // finished without throwing — the only point at which a patch may reach
+            // the main work tree. A refused merge fails the task here, before the
+            // finally block publishes the terminal state.
+            isolation?.let { iso ->
+                runCatching { finishIsolation(agent, status, iso) }
+                    .onFailure { e ->
+                        logger.warn("Agent task {}: isolation merge failed: {}", status.id, e.message)
+                        val changed = runCatching { iso.changedFiles() }.getOrDefault(emptyList())
+                        markIsolationRefused(status, iso, "isolation merge failed: ${e.message}", changed)
+                    }
+            }
         } catch (e: CancellationException) {
             logger.warn("Agent task {} cancelled: {}", status.id, e.message)
             status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
@@ -902,6 +1124,14 @@ open class StatefulAgentRunner(
             // the deliverables that are already on disk. Attributed to THIS task —
             // files from earlier runs in a shared workspace are not ours to claim.
             status.deliverables = currentRunDeliverables(agent, status).takeIf { it.isNotEmpty() }
+            // The change exists only in the isolated tree: say so, or the caller reads
+            // "workspace: <repo>" and finds nothing there.
+            isolation?.let { iso ->
+                status.sourceRepo = iso.repoRoot.toString()
+                status.isolatedWorkspace = iso.isolatedRoot.toString()
+                status.isolationMode = "worktree"
+                status.isolationMerge = "refused"
+            }
             throw e
         } catch (e: Throwable) {
             logger.error("Failed to execute agent command: {} (agentSession={})", plainCommand, session.uuid, e)
@@ -912,6 +1142,12 @@ open class StatefulAgentRunner(
             // empty although the data was already written (2026-10-28: a complete
             // 20×75 CSV, task reported as `failed (417)` with no artifacts).
             status.deliverables = currentRunDeliverables(agent, status).takeIf { it.isNotEmpty() }
+            isolation?.let { iso ->
+                status.sourceRepo = iso.repoRoot.toString()
+                status.isolatedWorkspace = iso.isolatedRoot.toString()
+                status.isolationMode = "worktree"
+                status.isolationMerge = "refused"
+            }
             // Persist the terminal row NOW. The finally block below runs task bookkeeping
             // (endTask, workspace reset, policy reset) before it appends again, and a
             // status poll landing in that window used to read the last RUNNING row from
@@ -920,6 +1156,10 @@ open class StatefulAgentRunner(
             runCatching { onStatusChanged(status) }
                 .onFailure { logger.warn("persisting failed status for {} failed: {}", status.id, it.message) }
         } finally {
+            // Release the checkout lock first: a slow manifest/persistence write must
+            // not keep the next coding task blocked on a finished one.
+            runCatching { repoLock?.release() }
+                .onFailure { logger.warn("could not release the coding lock: {}", it.message) }
             // Reset the per-task overrides: the companion agent is shared with callers
             // outside this runner's mutex (chat, direct agent tools), and a stale
             // --noop-limit override would silently change those runs too.
@@ -943,8 +1183,18 @@ open class StatefulAgentRunner(
                     status.failureReason != null -> ai.platon.pulsar.coding.TaskStatus.FAILED
                     else -> ai.platon.pulsar.coding.TaskStatus.COMPLETE
                 }
-                runCatching { it.agentToolManager.endTask(status.id, taskStatus) }
-                    .onFailure { logger.warn("endTask failed for {}: {}", status.id, it.message) }
+                runCatching {
+                    it.agentToolManager.endTask(
+                        status.id,
+                        taskStatus,
+                        merge = status.isolationMerge,
+                        patch = status.isolationPatch,
+                        preRef = isolation?.let { iso -> ai.platon.pulsar.coding.WorkspaceIsolation.preRef(status.id) },
+                    )
+                }.onFailure { logger.warn("endTask failed for {}: {}", status.id, it.message) }
+                // Drop the isolation handle: the companion agent is shared, and a stale
+                // worktree reference would make the next task write into this one's tree.
+                it.workspaceIsolation = null
                 // Reset the fresh-workspace override (if any) back to the default
                 // workspace so subsequent tasks in this session don't inherit it.
                 if (it.workspaceDirOverride != null) {

@@ -81,11 +81,32 @@ data class CommandStatus(
     var instructResults: MutableList<InstructResult> = mutableListOf(),
 
     /**
-     * The directory the agent's tools wrote into (agent-backed tasks only, see
-     * [AgentTaskStatus.workspace]). Surfaced through [commandResult] so a caller can
-     * reach a deliverable the agent left on disk.
+     * The directory the agent's change landed in (agent-backed tasks only, see
+     * [AgentTaskStatus.workspace]). For a coding task this is the **main
+     * repository**; the isolated worktree travels in [isolatedWorkspace].
+     * Surfaced through [commandResult] so a caller can reach a deliverable the
+     * agent left on disk.
      */
     var workspace: String? = null,
+
+    /** The isolated git worktree a coding task ran in, when isolation was active. */
+    var isolatedWorkspace: String? = null,
+
+    /** `worktree` | `mirror` | `none` — how the coding workspace was provided. */
+    var isolation: String? = null,
+
+    /**
+     * Whether the isolated change reached the main work tree:
+     * `applied` / `refused` / `pending`.
+     *
+     * `refused` means nothing was applied — the run's files exist only in
+     * [isolatedWorkspace] — so a client must not present [workspace] as containing
+     * the work.
+     */
+    var merge: String? = null,
+
+    /** Patch kept for `b4w recover --revert <taskId>`. */
+    var patch: String? = null,
 
     /**
      * Machine-readable failure reason (`TOKEN_BUDGET`, `NOOP_LIMIT`, `CANCELLED`,
@@ -307,7 +328,14 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     status.finishTime = this.finishTime
     status.startedTime = this.startedTime
     status.toolExecutions = this.toolExecutions
-    status.workspace = this.workspace
+    // Coding isolation (plan §D2): the change belongs to the MAIN repository, so
+    // `workspace` reports the checkout the patch reached; the worktree is an extra
+    // field. Non-coding tasks have no sourceRepo and keep the per-task directory.
+    status.workspace = this.sourceRepo ?: this.workspace
+    status.isolatedWorkspace = this.isolatedWorkspace
+    status.isolation = this.isolationMode
+    status.merge = this.isolationMerge
+    status.patch = this.isolationPatch
     status.errorCode = this.errorCode
     status.resumable = this.resumable
     status.effectiveTokenBudget = this.effectiveTokenBudget
@@ -364,7 +392,13 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     result.filesChanged = lastState?.filesChanged?.takeIf { it.isNotEmpty() }
         ?: this.deliverables?.takeIf { it.isNotEmpty() }
     result.problems = lastState?.problems?.takeIf { it.isNotEmpty() }
-    result.workspace = this.workspace
+    // The result points at the main repository for a coding task (see the envelope
+    // mapping above) and carries the isolation facts next to it.
+    result.workspace = this.sourceRepo ?: this.workspace
+    result.isolatedWorkspace = this.isolatedWorkspace
+    result.isolation = this.isolationMode
+    result.merge = this.isolationMerge
+    result.patch = this.isolationPatch
     // Failure semantics travel with the payload too: a client that only reads
     // `result` (the CLI's `agent result --json`) must still see why the run failed
     // and whether resuming it is possible.

@@ -171,6 +171,14 @@ class CodingAgentFileSystem(
             "pom.xml",          // root aggregator pom — module registration lives here
             "browser4-dependencies/pom.xml", // BOM
             ".github/workflows/ci.yml",
+            // Launch path (self-development isolation plan §D8). A task that edits how
+            // the backend starts can make the recovery route unusable — the very
+            // scripts an operator needs when the checkout no longer builds.
+            "b4w.ps1", "b4w.sh", "b4w.bat",
+            "bin/build.ps1", "bin/build/build.ps1",
+            "bin/recover.ps1", "bin/recover.tests.ps1",
+            "browser4-apps/browser4-bundle/build-runtime-bundle.ps1",
+            "mvnw", "mvnw.cmd",
         )
 
         /**
@@ -187,6 +195,8 @@ class CodingAgentFileSystem(
         val DEFAULT_PROTECTED_DIRS: Set<String> = setOf(
             ".browser4",
             ".github/workflows",
+            // Maven wrapper configuration: part of how the project is built.
+            ".mvn",
         )
 
         /**

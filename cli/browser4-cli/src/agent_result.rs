@@ -76,6 +76,10 @@ const RESULT_KEYS: &[&str] = &[
     "filesChanged",
     "problems",
     "workspace",
+    "isolatedWorkspace",
+    "isolation",
+    "merge",
+    "patch",
     "errorCode",
     "resumable",
     "effectiveTokenBudget",
@@ -344,6 +348,26 @@ fn render_sections(
             body,
             options,
         );
+    }
+
+    // A coding task that did not merge must say so BEFORE "Files written": the
+    // workspace names the checkout, and a reader who sees files listed under it
+    // assumes the checkout contains them (self-development isolation plan §D10).
+    let merge = result.get("merge").and_then(|v| v.as_str());
+    if let Some(merge) = merge {
+        if merge != "applied" {
+            let isolated = string_of(result.get("isolatedWorkspace"));
+            let line = match isolated.as_deref() {
+                Some(tree) => format!("  Changes NOT applied — isolated tree: {tree}"),
+                None => "  Changes NOT applied to the checkout".to_string(),
+            };
+            section(
+                &mut lines,
+                "Merge",
+                vec![options.clip(&line, options.width)],
+                options,
+            );
+        }
     }
 
     let files = strings_of(result.get("filesChanged"));
@@ -799,6 +823,40 @@ mod tests {
         assert!(text.contains("browser4-dependencies/pom.xml"), "{text}");
         assert!(text.contains("Problems (1)"), "{text}");
         assert!(text.contains("⚠ The CI gate was not run"), "{text}");
+    }
+
+    /// A coding task whose patch was refused must not let "workspace: <repo>" imply the
+    /// change is in the checkout (isolation plan §D10).
+    #[test]
+    fn refused_merge_is_stated_before_files() {
+        let body = json!({
+            "taskId": "task-2",
+            "status": "failed",
+            "statusCode": 417,
+            "statusTool": "command_status",
+            "resultTool": "command_result",
+            "cancelTool": "command_cancel",
+            "result": {
+                "summary": "Changes were NOT applied to /repo: no coding.verify verdict",
+                "filesChanged": ["browser4-coding/src/main/kotlin/X.kt"],
+                "workspace": "/repo",
+                "isolatedWorkspace": "/repo/.browser4/worktrees/task-2",
+                "isolation": "worktree",
+                "merge": "refused"
+            }
+        })
+        .to_string();
+
+        let text = rendered(body, 100);
+
+        let merge_at = text.find("Merge").expect("a Merge section is rendered");
+        let files_at = text.find("Files written").expect("files are still listed");
+        assert!(merge_at < files_at, "the refusal must come first:\n{text}");
+        assert!(
+            text.contains("Changes NOT applied — isolated tree: /repo/.browser4/worktrees/task-2"),
+            "{text}"
+        );
+        assert!(text.contains("workspace: /repo"), "{text}");
     }
 
     /// The whole point: the envelope's transport plumbing never reaches a human.

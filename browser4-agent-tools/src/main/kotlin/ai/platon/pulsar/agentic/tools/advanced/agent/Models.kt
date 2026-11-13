@@ -165,6 +165,33 @@ data class AgentTaskStatus(
     var workspace: String? = null
 
     /**
+     * The checkout this task's edits landed in, for a coding task.
+     *
+     * Isolation runs the task in a worktree but the **change belongs to the main
+     * repository**: `agent result.workspace` reports this path, and
+     * [isolatedWorkspace] carries the worktree as an extra fact. Keeping the two
+     * separate is what stops a run from being reported as "delivered to
+     * .browser4/worktrees/..." when the patch also reached the checkout.
+     */
+    var sourceRepo: String? = null
+
+    /** The isolated worktree the coding tools wrote into (`null` without isolation). */
+    var isolatedWorkspace: String? = null
+
+    /** `worktree` | `mirror` | `none` — how the coding workspace was provided. */
+    var isolationMode: String? = null
+
+    /**
+     * Whether the isolated change reached the main work tree:
+     * `applied` | `refused` | `pending`. `refused` means the change exists **only**
+     * in [isolatedWorkspace] (verify gate or a merge conflict).
+     */
+    var isolationMerge: String? = null
+
+    /** Patch kept for `b4w recover --revert <taskId>` (when a merge was attempted). */
+    var isolationPatch: String? = null
+
+    /**
      * Files the run had already produced in [workspace] when it ended **without**
      * reporting them — a token-budget abort, the step cap, a cancellation.
      *
@@ -388,6 +415,11 @@ fun AgentTaskStatus.detachedSnapshot(includeHistory: Boolean = true): AgentTaskS
     snapshot.submittedTask = submittedTask
     snapshot.failureReason = failureReason
     snapshot.workspace = workspace
+    snapshot.sourceRepo = sourceRepo
+    snapshot.isolatedWorkspace = isolatedWorkspace
+    snapshot.isolationMode = isolationMode
+    snapshot.isolationMerge = isolationMerge
+    snapshot.isolationPatch = isolationPatch
     snapshot.toolExecutions = toolExecutions
     // Body-declared fields the resume/finish paths read back from disk: `copy()`
     // resets every one of them, so a progress row used to lose the flags a later

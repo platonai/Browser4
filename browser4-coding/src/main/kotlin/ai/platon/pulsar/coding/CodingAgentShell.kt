@@ -108,6 +108,20 @@ class CodingAgentShell(
      */
     private val workspaceBoundaryEnabled: Boolean =
         System.getProperty("browser4.agent.shell.workspaceBoundary", "on").lowercase() != "off",
+
+    /**
+     * Refuse commands that rebuild or restart the backend the task is running inside
+     * (`b4w build|stop|install|upgrade|uninstall|recover`, `bin/build.ps1`,
+     * `build-runtime-bundle.ps1`).
+     *
+     * The self-development isolation plan (§D8) treats the launch path as operator
+     * work: a task that rebuilds its own runtime can leave the checkout with no
+     * runnable backend. Compiling and testing (`coding.mvnBuild`/`coding.verify`)
+     * is unaffected — it writes `target/`, not the runtime bundle.
+     * `-Dbrowser4.agent.shell.forbidBootstrap=off` restores the old behaviour.
+     */
+    private val forbidBootstrap: Boolean =
+        System.getProperty("browser4.agent.shell.forbidBootstrap", "on").lowercase() != "off",
     /**
      * `build-only` profile: development tools are narrowed to [BUILD_COMMANDS].
      *
@@ -1385,6 +1399,35 @@ class CodingAgentShell(
      * Only runtime targets are refused: an explicit pid that is not the backend, or a
      * non-runtime image, still passes — killing a stray dev server is legitimate.
      */
+    /**
+     * A task must not rebuild or restart the backend it is running inside
+     * (self-development isolation plan §D8): those commands rewrite the runtime
+     * bundle that is executing this very task. `coding.mvnBuild`/`coding.verify`
+     * compile and test in the workspace and stay allowed.
+     *
+     * @return a human-readable refusal, or null when the command is fine
+     */
+    private fun bootstrapViolation(command: String, tokens: List<String>, index: Int): String? {
+        if (!forbidBootstrap) return null
+        val base = normalizeCommandName(tokens[index])
+        if (base == "b4w") {
+            val sub = tokens.getOrNull(index + 1)?.trim('\'', '"')?.lowercase()
+            if (sub in setOf("build", "stop", "install", "uninstall", "upgrade", "recover")) {
+                return "'b4w $sub' rebuilds or restarts the backend this task runs inside — " +
+                    "operator work, not a task step"
+            }
+        }
+        val flat = command.replace('\\', '/').lowercase()
+        val scripts = listOf(
+            "bin/build.ps1", "bin/build/build.ps1", "build-runtime-bundle.ps1", "bin/recover.ps1",
+        )
+        if (scripts.any { flat.contains(it) }) {
+            return "refusing to run a bootstrap/recovery script from a task — " +
+                "it rewrites the runtime this task is running inside"
+        }
+        return null
+    }
+
     private fun processKillViolation(command: String, tokens: List<String>): String? {
         if (tokens.isEmpty()) return null
         val base = normalizeCommandName(tokens[0])
@@ -1459,6 +1502,8 @@ class CodingAgentShell(
         // CLI's own lifecycle commands; `coding.shell` was the remaining way in — a live run
         // ended itself with `taskkill /PID <backend> /F /T` (2026-10-29 Gate, F12).
         processKillViolation(segment, tokens.subList(index, tokens.size))?.let { return it }
+        // …and it must not rebuild that runtime either (isolation plan §D8).
+        bootstrapViolation(segment, tokens, index)?.let { return it }
         // Explicit deny — absolute veto
         if (baseCommand in explicitDeny) return "'$baseCommand' is explicitly denied"
         for (pattern in denyPatterns) {

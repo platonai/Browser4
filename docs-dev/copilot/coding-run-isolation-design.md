@@ -1,5 +1,10 @@
 # 编码任务的工作区隔离与 shell 沙箱设计
 
+> **已过时（2026-11-13）**：本文 §5.1 的选型（镜像 + 会话级工作区复用）已被
+> [20261113-self-dev-worktree-isolation-plan.md](20261113-self-dev-worktree-isolation-plan.md) 取代；
+> 「工作区按会话/agent 实例复用」的描述也已与实现不符（当前为每任务一个工作区）。
+> 本文保留作为问题清单与实测证据（§1–§3 仍然有效），实施请以新计划为准。
+
 > 状态：设计稿 v0.3（未实现）· 日期：2026-10-23（同日评审后修订；v0.2→v0.3 修 manifest 写点时序、异常穿越 catch-all、filesChanged 公式等，见附录 C R13–R19）
 > 依据：2026-10-22 `agent run "重构 Browser4WebDriver"` 监督轮次（证据见
 > [agent-run-supervision-2026-10-22.md](agent-run-supervision-2026-10-22.md)），以及 2026-10-23 对 v0.1 的代码评审

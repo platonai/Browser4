@@ -136,6 +136,71 @@ class CommandStatusPageStatusTest {
     }
 
     @Test
+    @DisplayName("an applied coding merge reports the main repository and the worktree separately")
+    fun isolationMappingForAppliedMerge() {
+        val agentStatus = AgentTaskStatus(statusCode = ResourceStatus.SC_OK, processState = "done")
+        // The runner records the worktree as the execution root and the checkout as
+        // the change location.
+        agentStatus.workspace = "D:/repo/.browser4/worktrees/t1"
+        agentStatus.sourceRepo = "D:/repo"
+        agentStatus.isolatedWorkspace = "D:/repo/.browser4/worktrees/t1"
+        agentStatus.isolationMode = "worktree"
+        agentStatus.isolationMerge = "applied"
+        agentStatus.isolationPatch = "D:/repo/.browser4/patches/t1.patch"
+
+        val status = agentStatus.toCommandStatus()
+        assertEquals("D:/repo", status.workspace, "the envelope must name the checkout")
+        assertEquals("D:/repo/.browser4/worktrees/t1", status.isolatedWorkspace)
+        assertEquals("worktree", status.isolation)
+        assertEquals("applied", status.merge)
+        assertEquals("D:/repo/.browser4/patches/t1.patch", status.patch)
+
+        val result = status.commandResult!!
+        assertEquals("D:/repo", result.workspace, "`agent result` points at the change, not the worktree")
+        assertEquals("D:/repo/.browser4/worktrees/t1", result.isolatedWorkspace)
+        assertEquals("worktree", result.isolation)
+        assertEquals("applied", result.merge)
+        assertEquals("D:/repo/.browser4/patches/t1.patch", result.patch)
+    }
+
+    @Test
+    @DisplayName("a refused merge keeps workspace = repository and says nothing was applied")
+    fun isolationMappingForRefusedMerge() {
+        val agentStatus = AgentTaskStatus(
+            statusCode = ResourceStatus.SC_EXPECTATION_FAILED,
+            processState = "done",
+        )
+        agentStatus.workspace = "D:/repo/.browser4/worktrees/t2"
+        agentStatus.sourceRepo = "D:/repo"
+        agentStatus.isolatedWorkspace = "D:/repo/.browser4/worktrees/t2"
+        agentStatus.isolationMode = "worktree"
+        agentStatus.isolationMerge = "refused"
+        agentStatus.failureReason = "Changes were NOT applied to D:/repo: no coding.verify verdict"
+        agentStatus.deliverables = listOf("browser4-coding/src/main/kotlin/X.kt")
+
+        val result = agentStatus.toCommandStatus().commandResult!!
+
+        assertEquals("D:/repo", result.workspace)
+        assertEquals("refused", result.merge)
+        assertEquals("D:/repo/.browser4/worktrees/t2", result.isolatedWorkspace)
+        assertEquals(listOf("browser4-coding/src/main/kotlin/X.kt"), result.filesChanged)
+    }
+
+    @Test
+    @DisplayName("a browsing task keeps its per-task workspace and reports no isolation")
+    fun browsingTaskHasNoIsolation() {
+        val agentStatus = AgentTaskStatus(statusCode = ResourceStatus.SC_OK, processState = "done")
+        agentStatus.workspace = "C:/Users/me/.browser4/agent/workspace.task-1"
+
+        val result = agentStatus.toCommandStatus().commandResult!!
+
+        assertEquals("C:/Users/me/.browser4/agent/workspace.task-1", result.workspace)
+        assertEquals(null, result.isolatedWorkspace)
+        assertEquals(null, result.merge)
+        assertEquals(null, result.isolation)
+    }
+
+    @Test
     @DisplayName("the agent's own nextSuggestions reach the payload")
     fun nextSuggestionsReachThePayload() {
         val agentStatus = AgentTaskStatus(statusCode = ResourceStatus.SC_OK, processState = "done")

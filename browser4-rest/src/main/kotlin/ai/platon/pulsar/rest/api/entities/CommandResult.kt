@@ -13,9 +13,20 @@ package ai.platon.pulsar.rest.api.entities
  *   "likely next steps" menu; they describe work, not commands.
  * @property filesChanged The files the agent wrote or changed, as it reported them.
  * @property problems Open problems the agent's completion report named.
- * @property workspace The directory the agent's tools wrote into. Deliverables that
- *   are not inlined in [summary]/[fields]/[keyFindings] live here — without it a
- *   caller had to search the backend's app-data tree by hand.
+ * @property workspace The directory the agent's change landed in. For a coding task
+ *   this is the **main repository** (the checkout the patch was applied to); for a
+ *   browsing task it is the per-task workspace the tools wrote into. Deliverables
+ *   that are not inlined in [summary]/[fields]/[keyFindings] live here — without it
+ *   a caller had to search the backend's app-data tree by hand.
+ * @property isolatedWorkspace The isolated git worktree a coding task ran in, when
+ *   isolation was active. Informational: the change belongs to [workspace] once
+ *   [merge] is `applied`; when [merge] is `refused` this is where it exists.
+ * @property isolation How the coding workspace was provided (`worktree` / `mirror`
+ *   / `none`), or null for a browsing task.
+ * @property merge Whether the isolated change reached the main work tree:
+ *   `applied` / `refused` / `pending`. `refused` means **nothing was applied** —
+ *   the run's files live in [isolatedWorkspace] only.
+ * @property patch The applied patch kept for `b4w recover --revert <taskId>`.
  * @property errorCode Machine-readable failure reason (`TOKEN_BUDGET`, `NOOP_LIMIT`,
  *   `CANCELLED`, `TOOL_ERROR`), so a client can branch instead of parsing prose.
  * @property resumable Whether `agent run --resume <id>` can continue this task.
@@ -36,6 +47,10 @@ data class CommandResult(
     var filesChanged: List<String>? = null,
     var problems: List<String>? = null,
     var workspace: String? = null,
+    var isolatedWorkspace: String? = null,
+    var isolation: String? = null,
+    var merge: String? = null,
+    var patch: String? = null,
     var errorCode: String? = null,
     var resumable: Boolean? = null,
     var effectiveTokenBudget: Long? = null,

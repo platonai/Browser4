@@ -38,6 +38,7 @@ import ai.platon.pulsar.coding.CodingTokenStats
 import ai.platon.pulsar.coding.ValidationResult
 import ai.platon.pulsar.coding.VerificationReport
 import ai.platon.pulsar.coding.VerificationRunner
+import ai.platon.pulsar.coding.ModuleResolver
 import ai.platon.pulsar.coding.WorkspaceIsolation
 import ai.platon.pulsar.coding.WorkspaceMirror
 import ai.platon.pulsar.coding.Target as CodingTarget
@@ -2106,8 +2107,19 @@ class CodingToolExecutor : AbstractToolExecutor() {
         return buildString {
             appendLine("Access preset: ${policy.preset.id}")
             appendLine("Workspace root: ${fs.workspaceRoot}")
-            appendLine("Isolation: ${CodingWorkspace.isolationMode}" +
-                (WorkspaceMirror.defaultSourceRepo()?.let { " (mirror of $it)" } ?: " (no source checkout detected)"))
+            // Isolation, in the terms the model needs: an isolated run has a worktree
+            // as its workspace and the change lands in the MAIN checkout; an in-place
+            // run edits whatever the workspace names.
+            val mainCheckout = runCatching { WorkspaceIsolation.resolveMainRepoRoot(fs.workspaceRoot) }.getOrNull()
+            val isolationLine = when {
+                mainCheckout != null -> "worktree (changes merge into $mainCheckout)"
+                CodingWorkspace.isIsolationEnabled() ->
+                    "requested, but this workspace is not a linked worktree — running in place"
+                else ->
+                    "${CodingWorkspace.isolationMode} " +
+                        (WorkspaceMirror.defaultSourceRepo()?.let { "(mirror of $it)" } ?: "(no source checkout detected)")
+            }
+            appendLine("Isolation: $isolationLine")
             // Reads are not limited by the preset: the readable roots are where Browser4's own
             // data/temp/checkout live, and a model that was refused a workspace write needs to
             // know it can still read them (and where the list comes from).
@@ -2528,19 +2540,16 @@ class CodingToolExecutor : AbstractToolExecutor() {
      * browser4-apps/browser4-standalone). Best-effort: returns a module path the
      * agent can pass to `-pl`.
      */
-    private fun inferModule(absolutePath: String): String {
-        val norm = absolutePath.replace('\\', '/')
-        val idx = norm.indexOf("/src/")
-        if (idx <= 0) return norm.substringAfterLast('/')
-        val before = norm.substring(0, idx)
-        val segments = before.split('/').filter { it.isNotEmpty() }
-        // Top-level module dir (browser4-rest) OR nested (browser4-core/browser4-common)
-        return when {
-            segments.size >= 2 && segments[segments.size - 2].startsWith("browser4-") ->
-                segments.takeLast(2).joinToString("/")
-            else -> segments.lastOrNull() ?: ""
-        }
-    }
+    /**
+     * Infer the Maven module that owns a file path, for `coding.mvnBuild`.
+     *
+     * Delegates to [ModuleResolver] so the build tool and the isolation gate
+     * (`IsolationGate`, which decides whether a verify verdict covers the changed
+     * modules) cannot drift apart. The resolver preserves this method's historical
+     * best-effort behaviour for absolute paths outside a known module.
+     */
+    private fun inferModule(absolutePath: String): String =
+        ModuleResolver.moduleOf(absolutePath) ?: absolutePath.replace('\\', '/').substringAfterLast('/')
 
     /** kebab/snake → PascalCase (my-tool → MyTool), for test-class names. */
     private fun toTestClassName(name: String): String =
