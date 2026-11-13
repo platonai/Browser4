@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agentic.model
 
 import ai.platon.pulsar.coding.PermissionAudit
+import ai.platon.pulsar.coding.UnsupportedSyntax
 import ai.platon.pulsar.common.Strings
 
 /**
@@ -16,7 +17,9 @@ import ai.platon.pulsar.common.Strings
  *
  * A `PERMISSION_DENIED | code=…` refusal counts as a failure ([ok] is false) even
  * though the tool call itself did not throw: a refusal the model reads as success
- * is a refusal the model retries.
+ * is a refusal the model retries. The same holds for the syntax family
+ * (`UNSUPPORTED_SYNTAX | code=SYNTAX_NOT_SUPPORTED`): the command did not run, so
+ * reporting the step as `[ok]` would hide it from `--follow` and from the model.
  */
 data class ToolOutcome(
     val domain: String,
@@ -132,7 +135,7 @@ data class ToolOutcome(
             // every refusal from `--follow` (which prints `[fail]` results only)
             // and from the model, which re-phrased the same denied path four
             // times in a live run because nothing said the call was refused.
-            val refused = isPermissionRefusal(raw)
+            val refused = isRefusal(raw)
             val ok = evaluate.success && exception == null && !refused
             val summary = if (refused) buildRefusalSummary(raw) else buildSummary(ok, raw, exception)
             val budget = BODY_BUDGETS[resolvedMethod] ?: DEFAULT_BODY_LEN
@@ -162,8 +165,12 @@ data class ToolOutcome(
         }
 
         /**
-         * True when [raw] **starts** with a `PERMISSION_DENIED | code=…` refusal
-         * envelope (see [PermissionAudit]).
+         * True when [raw] **starts** with a refusal envelope — `PERMISSION_DENIED | code=…`
+         * ([PermissionAudit]) or `UNSUPPORTED_SYNTAX | code=…` ([UnsupportedSyntax]).
+         *
+         * Both mean the call did not take effect. The syntax family is a failure for the same
+         * reason the policy family is: the command never ran, and a step rendered `[ok]` would be
+         * invisible to `--follow` and to the model's own history.
          *
          * The envelope must lead the text: `memory.read` returns JSON that *contains*
          * earlier refusal events, and matching anywhere in the first line marked a
@@ -171,10 +178,12 @@ data class ToolOutcome(
          * the envelope either directly (`coding.shell`) or with `Error: `
          * (`coding.fs`), so only that tolerates a prefix; the rest of a body is data.
          */
-        private fun isPermissionRefusal(raw: String): Boolean {
+        private fun isRefusal(raw: String): Boolean {
             val firstLine = raw.lineSequence().firstOrNull { it.isNotBlank() }?.trimStart() ?: return false
             val candidate = firstLine.removePrefix("Error: ").trimStart()
-            return candidate.startsWith(PermissionAudit.DENIED) && candidate.contains("| code=")
+            if (!candidate.contains("| code=")) return false
+            return candidate.startsWith(PermissionAudit.DENIED) ||
+                candidate.startsWith(UnsupportedSyntax.PREFIX)
         }
 
         /**

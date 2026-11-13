@@ -22,9 +22,11 @@ import java.nio.file.Path
  * refused with no alternative — the model worked around all three with
  * `python -c …`, burning steps.
  *
- * `if`/`for` stay refused on purpose: `SAFE_COMMANDS` only checks the FIRST token, so a
- * control-flow keyword would let an arbitrary nested command through the workspace
- * boundary. They get an actionable hint instead (a `.cmd` file or `python -c`).
+ * `if` is parsed as a condition prefix: the payload goes through the same tier and boundary
+ * checks a top-level command gets, so `if exist x (del …)` is still refused (as a destructive
+ * command, not as a grammar limit). Only the shallow forms are supported; `for`, `else if`,
+ * nested blocks and `goto`/`call` payloads are refused as UNSUPPORTED_SYNTAX rather than
+ * PERMISSION_DENIED — no preset, approval or property lifts a grammar.
  *
  * Plan P1-4 adds the Windows execution coverage: `cmd /c`, `powershell -Command` and a
  * `runCode` interpreter subprocess all go through the same sandbox seam, so the suite stays
@@ -103,23 +105,123 @@ class CodingAgentShellWindowsBuiltinTest {
     }
 
     @Test
-    @DisplayName("if/for are refused with an actionable hint, never executed")
-    fun controlFlowGetsAHint() {
-        assumeTrue(isWindows, "cmd.exe control flow")
+    @DisplayName("supported if forms are allowed; the payload keeps its own checks")
+    fun conditionalFormsAreSupported() {
+        assumeTrue(isWindows, "cmd.exe conditional")
         val s = shell()
 
-        for (command in listOf("if exist out.csv echo yes", "for %f in (*.csv) do echo %f")) {
-            val explanation = s.explain(command)
+        for (command in listOf(
+            "if exist out.csv echo yes",
+            "if not exist out mkdir out",
+            "if \"a b\"==\"a b\" echo ok",
+            "if /i \"A\"==\"a\" echo ok",
+            "if defined JAVA_HOME echo ok",
+            "if errorlevel 1 echo failed",
+            "if exist out.csv (echo yes)",
+            "if exist out.csv (echo yes) else (echo no)",
+        )) {
+            assertTrue(s.isAllowed(command), "must be supported: $command — ${s.explain(command)}")
+        }
+    }
+
+    @Test
+    @DisplayName("an if payload is checked: a refused command stays a policy refusal")
+    fun conditionalPayloadIsStillChecked() = runBlocking {
+        assumeTrue(isWindows, "cmd.exe conditional")
+        val s = shell() // allowNetwork = false, allowDestructive = false
+
+        val destructive = s.execute("if exist out.csv (del out.csv)")
+        assertTrue(
+            destructive.startsWith("Error: ${PermissionAudit.DENIED}"),
+            "the payload is a policy refusal, not syntax: $destructive",
+        )
+        assertTrue(destructive.contains("destructive"), destructive)
+        assertFalse(destructive.contains(UnsupportedSyntax.PREFIX), destructive)
+
+        val network = s.execute("if exist out.csv (curl http://example.com)")
+        assertTrue(network.startsWith("Error: ${PermissionAudit.DENIED}"), network)
+        assertTrue(network.contains("network access"), network)
+    }
+
+    @Test
+    @DisplayName("an allowed if really runs through cmd.exe (then/else arms)")
+    fun conditionalRunsEndToEnd() = runBlocking {
+        assumeTrue(isWindows, "cmd.exe conditional")
+        val s = shellIn(tempDir)
+        Files.writeString(tempDir.resolve("out.csv"), "x")
+
+        val hit = runInShell(s, "if exist out.csv echo b4-if-hit")
+        assertEquals(0, hit.exitCode, hit.stderr)
+        assertTrue(hit.stdout.contains("b4-if-hit"), hit.stdout)
+
+        // The parser accepts `(then) else (else)`; cmd.exe must agree about what it means.
+        val miss = runInShell(s, "if exist missing.csv (echo b4-if-then) else (echo b4-if-else)")
+        assertEquals(0, miss.exitCode, miss.stderr)
+        assertTrue(miss.stdout.contains("b4-if-else"), miss.stdout)
+        assertFalse(miss.stdout.contains("b4-if-then"), miss.stdout)
+    }
+
+    @Test
+    @DisplayName("an if condition naming a credential path is a permission refusal")
+    fun conditionalConditionPathIsGuarded() = runBlocking {
+        assumeTrue(isWindows, "cmd.exe conditional")
+        val s = shell()
+
+        val refusal = s.execute("if exist %USERPROFILE%\\.ssh\\id_rsa echo yes")
+
+        assertTrue(refusal.startsWith("Error: ${PermissionAudit.DENIED}"), refusal)
+        assertTrue(refusal.contains(PermissionAudit.CODE_COMMAND_PATH_DENIED), refusal)
+    }
+
+    @Test
+    @DisplayName("unsupported control-flow shapes are refused as syntax, never executed")
+    fun unsupportedControlFlowIsASyntaxRefusal() = runBlocking {
+        assumeTrue(isWindows, "cmd.exe control flow")
+        val s = shell()
+        // The two counters must stay independent: a shape the shell cannot parse is not a
+        // policy decision, and the fix is "rewrite", never "ask for access".
+        val policyBefore = PermissionAudit.snapshot()["coding.shell:${PermissionAudit.CODE_COMMAND_NOT_ALLOWED}"] ?: 0
+        val syntaxBefore = UnsupportedSyntax.snapshot()["coding.shell"] ?: 0
+
+        for (command in listOf(
+            "if exist out.csv",                                        // no payload
+            "if exist out.csv (echo yes) else if exist a (echo no)",   // `else if`
+            "if exist out.csv (echo a & echo b)",                      // chain inside a block
+            "if exist out.csv goto :eof",                              // label jump
+            "if exist out.csv call :run",
+            "if exist out.csv (echo yes) trailing",                    // tokens after the block
+            "for %f in (*.csv) do echo %f",                            // loops stay unsupported
+        )) {
             assertFalse(s.isAllowed(command), "must stay refused: $command")
             assertTrue(
-                explanation.contains("control-flow keyword"),
-                "the refusal must explain the keyword: $explanation",
+                s.explain(command).contains("NOT SUPPORTED"),
+                "a syntax refusal must not read as a denial: ${s.explain(command)}",
             )
+
+            val refusal = s.execute(command)
             assertTrue(
-                explanation.contains("cmd /c") || explanation.contains("python -c"),
-                "the refusal must name an alternative: $explanation",
+                refusal.startsWith("Error: ${UnsupportedSyntax.PREFIX}"),
+                "the envelope must be the syntax family: $refusal",
             )
+            assertTrue(refusal.contains("code=${UnsupportedSyntax.CODE}"), refusal)
+            assertFalse(
+                refusal.contains(PermissionAudit.DENIED),
+                "a grammar limit must not read as a policy refusal: $refusal",
+            )
+            assertTrue(refusal.contains("coding.stat"), "must name the tool route: $refusal")
+            assertTrue(refusal.contains(".\\run.cmd"), "must name the script-by-path route: $refusal")
         }
+
+        assertEquals(
+            policyBefore,
+            PermissionAudit.snapshot()["coding.shell:${PermissionAudit.CODE_COMMAND_NOT_ALLOWED}"] ?: 0,
+            "a syntax refusal must not increment a policy counter",
+        )
+        assertEquals(
+            syntaxBefore + 7,
+            UnsupportedSyntax.snapshot()["coding.shell"] ?: 0,
+            "each refused command is counted once, separately from policy",
+        )
     }
 
     @Test

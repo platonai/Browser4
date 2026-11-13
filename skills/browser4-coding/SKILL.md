@@ -182,6 +182,18 @@ by the file system, the shell, the tool registry and the MCP direct-call path:
   `PERMISSION_DENIED | code=… | tool=… | detail=… | hint=…` (`TOOL_DENIED`, `READ_ONLY`,
   `EXEC_DISABLED`, `COMMAND_NOT_ALLOWED`, `PROTECTED_PATH`, `SENSITIVE_PATH`,
   `PATH_OUTSIDE_WORKSPACE`, `COMMAND_PATH_DENIED`).
+- **Syntax is not a permission.** On Windows a single-line `if` is supported — `if [not] exist
+  <path> <cmd>`, `if [/i] [not] <a>==<b> <cmd>`, `if [not] defined <var> <cmd>`,
+  `if [not] errorlevel <n> <cmd>`, optionally wrapped as `(<cmd>)` with one `else (<cmd>)`. The
+  command behind the condition is validated exactly like a top-level one, so `if exist x (del y)`
+  is refused as a *destructive* command, not as a grammar limit. What is **not** parsed — `for`
+  loops, `else if`, nested blocks, `&`/`|` inside a block, `goto`/`call` payloads — is refused as
+  `UNSUPPORTED_SYNTAX | code=SYNTAX_NOT_SUPPORTED`. No preset, operator approval or JVM property
+  widens a grammar, so `coding.requestAccess` is not the answer there, and such refusals are **not**
+  counted in `coding.permissions`' policy counters (they have their own `unsupported syntax` line).
+  Use a script file run **by path** (`.\run.cmd`, `./run.sh`) for those — a bare filename is read as
+  a program name and refused. Windows builtins supported inline: `set` (bare or `NAME=value`),
+  `mkdir`/`md`, `echo` (`echo.` is normalized).
 
 Relations that hold regardless of preset:
 

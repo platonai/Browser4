@@ -130,6 +130,17 @@ also carries `needed=…` and the raw OS evidence stays in the log). A refusal i
 it must not be retried with different quoting or an interpreter. `coding.permissions` prints
 the same view MCP clients get — the preset, the allowed routes and the protections.
 
+A refusal about **syntax** is a different family and is reported apart from policy:
+`UNSUPPORTED_SYNTAX | code=SYNTAX_NOT_SUPPORTED`. A single-line Windows `if` **is** supported
+(`if [not] exist <path> <cmd>`, `if [/i] [not] <a>==<b> <cmd>`, `if [not] defined <var> <cmd>`,
+`if [not] errorlevel <n> <cmd>`, optionally `(<cmd>)` with one `else (<cmd>)`) and its payload is
+validated like a top-level command. What is not parsed — `for` loops, `else if`, nested blocks,
+`&`/`|` inside a block, `goto`/`call` payloads — is refused as syntax: no preset, approval or
+property lifts it, so `coding.requestAccess` is not the answer. Put those in a script file and run
+it by path (`.\run.cmd`, `./run.sh`), or decide with a tool (`coding.stat` reports existence,
+`coding.mvnBuild`/`verify` return the build status). Syntax refusals are counted on their own
+`unsupported syntax` line in `coding.permissions`, never among the policy counters.
+
 ### Operator approval: `coding.requestAccess`
 
 A refusal is not a dead end, and it never blocks the task. The agent asks for the missing

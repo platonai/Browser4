@@ -243,6 +243,33 @@ class ToolOutcomeTest {
     }
 
     @Test
+    @DisplayName("a syntax refusal is a failure too, but never reads as a permission problem")
+    fun testSyntaxRefusalIsFailure() {
+        // The shell answers a shape it cannot parse with UNSUPPORTED_SYNTAX (one command per call,
+        // no blocks/parentheses/else). The command did not run, so the step must be [fail] — and
+        // because nothing can be approved into a grammar, it must not look like a policy refusal.
+        val refusal = "Error: " + ai.platon.pulsar.coding.UnsupportedSyntax.format(
+            tool = "coding.shell",
+            detail = "Command not executed — unsupported syntax: 'if' is cmd.exe flow control",
+        )
+
+        val outcome = ToolOutcome.from(result(refusal), domain = "coding", method = "shell")
+
+        assertFalse(outcome.ok, "a refusal must not be reported as success")
+        val rendered = outcome.render()
+        assertTrue(rendered.startsWith("coding.shell [fail]"), rendered)
+        assertTrue(
+            rendered.contains(ai.platon.pulsar.coding.UnsupportedSyntax.CODE),
+            "the syntax code must survive: $rendered",
+        )
+        assertFalse(
+            rendered.contains(ai.platon.pulsar.coding.PermissionAudit.DENIED),
+            "a grammar limit is not a policy refusal: $rendered",
+        )
+        assertTrue(rendered.contains("hint="), "the supported routes must survive: $rendered")
+    }
+
+    @Test
     @DisplayName("the refusal marker inside a result body does not fail a successful call")
     fun testRefusalMarkerInBodyStaysOk() {
         val outcome = ToolOutcome.from(result("README.md\nnote: PERMISSION_DENIED | code=PATH_DENIED in a doc"))

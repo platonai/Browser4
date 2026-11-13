@@ -227,6 +227,16 @@ class CodingAgentShell(
         /** Prefix of every [protectedPathViolation] message; used to pick the audit code. */
         private const val PROTECTED_PATH_PREFIX = "protected path: "
 
+        /**
+         * Prefix of every violation that is about **syntax**, not policy.
+         *
+         * A command the shell cannot parse must not be reported as a permission refusal: the policy
+         * never said no, and neither a wider preset nor an operator grant would make it runnable.
+         * [commandRefusal] turns this prefix into an [UnsupportedSyntax] envelope and keeps it out of
+         * the policy counters.
+         */
+        private const val SYNTAX_PREFIX = "unsupported syntax: "
+
         /** Redirection introduced by an argument (`>file`, `>>file`, `2>file`, `&>file`). */
         private val REDIRECTION_PREFIX = Regex("""^(?:\d+|&)?>>?""")
 
@@ -737,7 +747,15 @@ class CodingAgentShell(
      */
     fun explain(command: String): String {
         val violation = validateCommand(command)
-        if (violation != null) return "'$command' is DENIED — $violation"
+        if (violation != null) {
+            // Keep "denied" for policy refusals only: a shape this shell cannot parse must not
+            // read as a policy decision (see [UnsupportedSyntax]).
+            return if (violation.contains(SYNTAX_PREFIX)) {
+                "'$command' is NOT SUPPORTED — $violation"
+            } else {
+                "'$command' is DENIED — $violation"
+            }
+        }
 
         val base = extractBaseCommand(command)
         val reason = when {
@@ -825,11 +843,30 @@ class CodingAgentShell(
      * Structured refusal for a command the tiered allow-list refused.
      *
      * The reason itself is kept verbatim, because tools outside this module match on it (for example
-     * `bin/eval-devtask.ps1` recognises `Command blocked` and `is not allowed (safe=`), but it is now
-     * wrapped in the `PERMISSION_DENIED | code=… | tool=… | detail=… | hint=…` envelope so the model,
-     * the CLI and `FailureCategory` can all tell a policy refusal from a command that simply failed.
+     * `bin/eval-devtask.ps1` recognises `Command blocked` and `is not allowed (safe=`), but it is
+     * wrapped in a structured envelope so the model, the CLI and `FailureCategory` can all tell a
+     * structural refusal from a command that simply failed.
+     *
+     * Two families are produced, and they must not be conflated:
+     *
+     * - `PERMISSION_DENIED | code=…` ([PermissionAudit]) — the policy refused the command. A wider
+     *   preset or an operator grant can lift it, and it is counted in `coding.permissions`;
+     * - `UNSUPPORTED_SYNTAX | code=SYNTAX_NOT_SUPPORTED` ([UnsupportedSyntax]) — the shell cannot
+     *   parse the shape. Nothing can lift it, so it is not counted as a policy denial.
      */
     private fun commandRefusal(violation: String): String {
+        // A syntax refusal is NOT a permission refusal. Reporting it as one was a real defect:
+        // the model was told `code=COMMAND_NOT_ALLOWED`, went looking for an approval it could
+        // never get, and `coding.permissions` counted policy friction that did not exist.
+        // `contains`, not `startsWith`: a nested layer prefixes the reason
+        // (`inline script via 'cmd' rejected — unsupported syntax: …`) and the family is still
+        // syntax. Checked before the policy codes so it cannot be reclassified by a wrapper.
+        if (violation.contains(SYNTAX_PREFIX)) {
+            return UnsupportedSyntax.refused(
+                tool = SHELL_TOOL,
+                detail = "Command not executed — $violation",
+            )
+        }
         // `contains`, not `startsWith`: a violation can be wrapped by a nested-command layer
         // (`command substitution rejected — path guard: …`) and the specific audit code is still
         // the one the inner guard produced.
@@ -1514,14 +1551,22 @@ class CodingAgentShell(
             if (pattern.containsMatchIn(segment)) return null
         }
 
-        // cmd.exe flow control: valid inside a script, meaningless as a standalone
-        // command. Rejected with an actionable route instead of the generic
-        // "not allowed": the model can put the block in a .cmd file, and a hint is
-        // what stops it from re-phrasing the same `if exist …` four times.
-        if (isWindowsHost() && baseCommand in CMD_CONTROL_KEYWORDS) {
-            return "'$baseCommand' is a cmd.exe control-flow keyword and coding.shell does not " +
-                "execute blocks. Put the block in a script (write `run.cmd`, then `cmd /c run.cmd`) " +
-                "or use `python -c \"...\"` for the same logic"
+        // cmd.exe flow control. `if` is parsed as a CONDITION PREFIX: the payload behind it is
+        // re-validated by the same tier and boundary rules a top-level command gets, so supporting
+        // the shape does not create a first-token blind spot. Only the shallow forms are parsed
+        // (one command, optionally in parentheses with one `else`) — anything deeper needs a cmd
+        // grammar, and a half-parser that validates the wrong token is worse than a refusal.
+        // `for` stays refused: its body is a loop over a command substitution, which the string
+        // layer cannot judge. See [UnsupportedSyntax] for the family this refusal belongs to.
+        if (isWindowsHost()) {
+            if (baseCommand == "if") {
+                return conditionalViolation(tokens.subList(index, tokens.size), depth)
+            }
+            if (baseCommand in CMD_CONTROL_KEYWORDS) {
+                return SYNTAX_PREFIX +
+                    "'$baseCommand' is cmd.exe flow control — coding.shell parses `if` (a condition " +
+                    "plus one command) but not loops; use a script file run by path, or a tool"
+            }
         }
         // `set` (cmd built-in): allowed without arguments or with NAME=value
         // assignments only — `set /p`, `set /a` and other forms are not.
@@ -1575,6 +1620,169 @@ class CodingAgentShell(
             "network=${baseCommand in NETWORK_COMMANDS && networkAllowed()}, " +
             "destructive=${baseCommand in DESTRUCTIVE_COMMANDS && allowDestructive})"
     }
+
+    // ------------------------------------------------------------------
+    // cmd.exe conditionals (`if ...`)
+    // ------------------------------------------------------------------
+
+    /**
+     * Validate a cmd.exe conditional as a **condition prefix** plus its payload.
+     *
+     * The tier model answers "is the first token an allowed program?", which has no answer for a
+     * control-flow keyword: whitelisting `if` as a *program* would let its payload through
+     * unchecked (`if exist x (del …)` is the classic hole). Parsing it as a prefix keeps the model
+     * intact — the condition's own paths were already checked by the caller's argument and
+     * protected-path guards (they run over every token), and each payload command is re-validated
+     * by the same tier and boundary rules a top-level command gets.
+     *
+     * Supported shapes, one command per group:
+     *
+     * ```
+     * if [not] exist <path> <cmd>
+     * if [/i] [not] defined <var> <cmd>
+     * if [not] errorlevel <n> <cmd>
+     * if [/i] [not] <lhs>==<rhs> <cmd>
+     * if <condition> (<cmd>)
+     * if <condition> (<cmd>) else (<cmd>)
+     * ```
+     *
+     * Everything else — nested blocks, `else if`, `&`/`|` inside a block, `goto`/`call` payloads —
+     * is refused as [UnsupportedSyntax]. Those are exactly the shapes that would need a cmd
+     * grammar; guessing at them would validate the wrong token while looking successful.
+     *
+     * @return null when the statement is supported and every payload passed, else a violation
+     */
+    private fun conditionalViolation(tokens: List<String>, depth: Int): String? {
+        if (depth > MAX_INLINE_SCRIPT_DEPTH) {
+            return SYNTAX_PREFIX + "nested conditionals exceed $MAX_INLINE_SCRIPT_DEPTH levels"
+        }
+
+        var i = 1 // skip `if`
+        if (tokens.getOrNull(i)?.equals("/i", ignoreCase = true) == true) i++
+        if (tokens.getOrNull(i)?.equals("not", ignoreCase = true) == true) i++
+
+        val keyword = tokens.getOrNull(i)?.lowercase()
+        when (keyword) {
+            "exist", "defined", "errorlevel" -> {
+                val operand = tokens.getOrNull(i + 1)
+                    ?: return SYNTAX_PREFIX + "'if $keyword' is missing its operand"
+                if (keyword == "errorlevel" && operand.any { !it.isDigit() }) {
+                    return SYNTAX_PREFIX + "'if errorlevel' expects a number, not '$operand'"
+                }
+                i += 2
+            }
+            else -> {
+                val expr = keyword ?: return SYNTAX_PREFIX + "'if' is missing its condition"
+                // `<a>==<b>` is the remaining supported condition form.
+                if (!expr.contains("==")) {
+                    return SYNTAX_PREFIX + "unsupported 'if' condition '$expr' — supported: exist, " +
+                        "defined, errorlevel and <a>==<b>"
+                }
+                i += 1
+            }
+        }
+
+        val body = tokens.subList(i, tokens.size)
+        if (body.isEmpty()) {
+            return SYNTAX_PREFIX + "'if' needs a command after its condition"
+        }
+        val groups = splitConditionalBody(body) ?: return SYNTAX_PREFIX +
+            "unsupported 'if' body — one command, optionally `<cond> (<cmd>)` with one " +
+            "`else (<cmd>)`; nested blocks, 'else if' and '&'/'|' inside a block are not parsed"
+
+        for (group in groups) {
+            val command = renderCommand(group)
+            val base = extractBaseCommand(command)
+            // A nested conditional re-enters the first-token blind spot one level down, and a label
+            // jump leaves the linear check entirely (`goto` lands on a line this validator never
+            // saw), so both are refused rather than validated half-way.
+            if (base in CMD_CONTROL_KEYWORDS || base == "goto" || base == "call") {
+                return SYNTAX_PREFIX + "'if' body starts with '$base' — control-flow and label-jump " +
+                    "payloads are not parsed; put the block in a script file run by path"
+            }
+            validateSimpleCommand(command, depth + 1)?.let { return it }
+        }
+        return null
+    }
+
+    /**
+     * The commands an `if` body may run, or null when the body is not one of the supported shapes.
+     *
+     * Parentheses are separated from their neighbours first (`(echo x)` tokenizes as `(echo` and
+     * `x)`), and a token with a parenthesis in the middle — a path such as `a(b).txt` — makes the
+     * body unsupported rather than guessed at.
+     */
+    private fun splitConditionalBody(body: List<String>): List<List<String>>? {
+        val expanded = expandParentheses(body) ?: return null
+        if (expanded.none { it == "(" || it == ")" }) {
+            // Bare form: exactly one command. A bare `else` has no block to attach to.
+            if (expanded.any { it.equals("else", ignoreCase = true) }) return null
+            return listOf(expanded)
+        }
+        if (expanded.first() != "(") return null
+        val firstEnd = matchingParenToken(expanded, 0) ?: return null
+        val first = expanded.subList(1, firstEnd)
+        if (first.isEmpty()) return null
+        val rest = expanded.subList(firstEnd + 1, expanded.size)
+        if (rest.isEmpty()) return listOf(first)
+        if (!rest[0].equals("else", ignoreCase = true)) return null
+        // `else if …` has no parenthesis here; a trailing `else (<cmd>)` has one.
+        if (rest.size < 4 || rest[1] != "(") return null
+        val secondEnd = matchingParenToken(rest, 1) ?: return null
+        if (secondEnd != rest.size - 1) return null
+        val second = rest.subList(2, secondEnd)
+        if (second.isEmpty()) return null
+        return listOf(first, second)
+    }
+
+    /**
+     * Split leading `(` and trailing `)` off each token so `(echo x)` and `( echo x )` parse the
+     * same. Returns null when a parenthesis sits in the middle of a token — that is a path or an
+     * expression this parser refuses to guess about.
+     */
+    private fun expandParentheses(tokens: List<String>): List<String>? {
+        val out = mutableListOf<String>()
+        for (token in tokens) {
+            var value = token
+            while (value.startsWith("(")) {
+                out += "("
+                value = value.substring(1)
+            }
+            val closers = value.takeLastWhile { it == ')' }.length
+            if (closers > 0) value = value.dropLast(closers)
+            if (value.contains('(') || value.contains(')')) return null
+            if (value.isNotEmpty()) out += value
+            repeat(closers) { out += ")" }
+        }
+        return out
+    }
+
+    /** Index of the `)` matching the `(` at [openIndex], or null when the group is unbalanced. */
+    private fun matchingParenToken(tokens: List<String>, openIndex: Int): Int? {
+        if (tokens.getOrNull(openIndex) != "(") return null
+        var depth = 0
+        for (index in openIndex until tokens.size) {
+            when (tokens[index]) {
+                "(" -> depth++
+                ")" -> {
+                    depth--
+                    if (depth == 0) return index
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * Rebuild a command line from already-tokenized words so it can go through [validateSimpleCommand].
+     *
+     * A word that held whitespace (a quoted argument) is quoted again — otherwise
+     * `echo "a b"` would replay as three words and a path guard could judge the wrong token.
+     */
+    private fun renderCommand(tokens: List<String>): String =
+        tokens.joinToString(" ") { token ->
+            if (token.any { it.isWhitespace() }) "\"$token\"" else token
+        }
 
     /**
      * Split a command line into the simple commands it executes, in order.

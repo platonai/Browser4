@@ -34,6 +34,7 @@ import ai.platon.pulsar.coding.Request
 import ai.platon.pulsar.coding.SkeletonExtractor
 import ai.platon.pulsar.coding.TokenEstimator
 import ai.platon.pulsar.coding.ToolAccessDeniedException
+import ai.platon.pulsar.coding.UnsupportedSyntax
 import ai.platon.pulsar.coding.CodingTokenStats
 import ai.platon.pulsar.coding.ValidationResult
 import ai.platon.pulsar.coding.VerificationReport
@@ -226,7 +227,15 @@ class CodingToolExecutor : AbstractToolExecutor() {
             ),
             returnType = "String",
             description = "Execute a shell command. Supports git, cargo, mvn, npm, python, node, javac, and hundreds more dev tools. Use for building, testing, running scripts, and version control. " +
-                "Windows runs the command through cmd.exe (use Windows syntax: dir, type, cd /); Linux/macOS through sh -c."
+                "Windows runs the command through cmd.exe (use Windows syntax: dir, type, cd /); Linux/macOS through sh -c. " +
+                "Chaining with &&, ; and | is fine (every segment is checked). On Windows a single-line `if` is " +
+                "supported — `if [not] exist <path> <cmd>`, `if [/i] [not] <a>==<b> <cmd>`, " +
+                "`if [not] defined <var> <cmd>`, `if [not] errorlevel <n> <cmd>`, optionally `(<cmd>)` with one " +
+                "`else (<cmd>)` — and the command behind the condition is validated like a top-level one. " +
+                "`for` loops, `else if`, nested blocks and goto/call payloads are refused as UNSUPPORTED_SYNTAX " +
+                "(a syntax limit, not a permission one, so requesting access will not help): put those in a " +
+                "script file and run it by path (e.g. .\\run.cmd), or decide with tools " +
+                "(coding.stat reports whether a path exists, coding.mvnBuild/coding.verify return the build status)."
         )
         toolSpec["shellOutput"] = ToolSpec(
             domain = domain, method = "shellOutput",
@@ -2200,6 +2209,14 @@ class CodingToolExecutor : AbstractToolExecutor() {
             appendLine(
                 "  env passthrough   : ${count("coding.env", PermissionAudit.CODE_ENV_PASSTHROUGH)} " +
                     "(secret-shaped variables explicitly passed to a child process)"
+            )
+            // Syntax is reported apart from policy on purpose: nothing here is a refusal the
+            // preset or an approval could lift, so counting it with the policy codes made the
+            // report answer a question nobody asked ("is the scope too narrow?").
+            appendLine(
+                "  unsupported syntax: ${UnsupportedSyntax.snapshot()["coding.shell"] ?: 0} " +
+                    "(NOT a policy denial — coding.shell runs one command per call and does not " +
+                    "parse blocks/parentheses; rewrite, use a tool, or run a script file by path)"
             )
             appendLine(
                 "  execution sandbox : ${ExecutionSandboxes.current().id} (an unknown or unavailable " +

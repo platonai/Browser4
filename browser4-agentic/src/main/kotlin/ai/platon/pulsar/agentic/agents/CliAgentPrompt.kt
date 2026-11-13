@@ -319,10 +319,13 @@ internal object CliAgentPrompt {
             if (added.isNotEmpty()) appendLine(added)
             appendLine(
                 "- Tools the preset does not grant are not in your tool list at all, and a call that " +
-                    "slips through anyway is refused with `PERMISSION_DENIED | code=...`. A refusal is " +
-                    "structural, not a syntax problem: do NOT retry it, re-quote it, or reach for an " +
-                    "interpreter to do the same thing. The refusal text carries a `hint=` with the " +
-                    "route that is still open."
+                    "slips through anyway is refused with `PERMISSION_DENIED | code=...`. A policy " +
+                    "refusal is structural: do NOT retry it, re-quote it, or reach for an interpreter " +
+                    "to do the same thing — its `hint=` names the route that is still open. A " +
+                    "`UNSUPPORTED_SYNTAX` refusal is a different family: the shell runs one command " +
+                    "per call and cannot parse blocks, parentheses or `else`, so rewriting the step IS " +
+                    "the fix — one command per call, a tool instead (coding.stat, coding.mvnBuild), or " +
+                    "a script file run by path."
             )
             appendLine(
                 "- Run coding.permissions to see exactly what is allowed before planning a step that " +
