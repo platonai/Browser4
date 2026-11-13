@@ -140,6 +140,16 @@ data class CommandStatus(
      * backend log: a reviewer reading a finished task has to be able to see that it ran unrestricted.
      */
     var unrestricted: Boolean? = null,
+
+    /**
+     * Four-bucket attribution of the run (plan N3): `rounds`, `totalMs`,
+     * `buildMs` / `toolMs` / `callbackMs` / `modelMs`, and `tokens{in,cachedIn,out}`.
+     *
+     * Accumulated by the agent itself and carried through the status/result path, so a
+     * caller reads "where the time went" from the task result instead of re-deriving it
+     * from the memory event log.
+     */
+    var timings: Map<String, Any?>? = null,
 ) {
     val status: String get() = ResourceStatus.getStatusText(statusCode)
     var lastModifiedTime: Instant? = null
@@ -352,6 +362,7 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     // The per-task power grant: `agent status` has to show that a task ran with the OS user's own
     // permissions, because every other rail (preset, paths, sandbox) is off for it.
     status.unrestricted = this.unrestricted
+    status.timings = this.timings
     // The page this task ended on. AgentTaskStatus now carries it (observed from
     // the live page, see DocumentHttpStatus); before that the conversion dropped
     // it and every agent/loop record shipped the model's 201/"created" default.
@@ -418,6 +429,7 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     result.errorCode = this.errorCode
     result.resumable = this.resumable
     result.effectiveTokenBudget = this.effectiveTokenBudget
+    result.timings = this.timings
     // An aborted run's summary must carry what it DID produce, not only the
     // exception text: "wrote top20.csv, resume with …" is what tells the operator
     // whether the work is lost. The files were already there; the summary just did

@@ -63,10 +63,10 @@ class AgentMemorySink(
     fun roundTimed(
         taskId: String, agentUuid: String, round: Int, calls: Int,
         modelMs: Long, toolsMs: Long, callbacksMs: Long,
-        outTokens: Int = 0, cachedInTokens: Int = 0,
+        outTokens: Int = 0, cachedInTokens: Int = 0, inTokens: Int = 0,
     ) = emit(RoundTimed(
         seq.incrementAndGet(), now(), agentUuid, taskId,
-        round, calls, modelMs, toolsMs, callbacksMs, outTokens, cachedInTokens,
+        round, calls, modelMs, toolsMs, callbacksMs, outTokens, cachedInTokens, inTokens,
     ))
 
     fun textEmitted(taskId: String, agentUuid: String, kind: String, text: String?) =

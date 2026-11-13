@@ -249,6 +249,13 @@ data class AgentTaskStatus(
     var effectiveTokenBudget: Long? = null
 
     /**
+     * Four-bucket attribution of this run (plan N3): rounds, build/tool/callback/model
+     * milliseconds and token counts, accumulated by the agent
+     * (`RobustBrowserAgent.lastRunTimings`) and carried to `agent result`.
+     */
+    var timings: Map<String, Any?>? = null
+
+    /**
      * Machine-readable failure reason (`TOKEN_BUDGET`, `NOOP_LIMIT`, `CANCELLED`,
      * `TOOL_ERROR`), derived from [failureReason] by [failureCodeOf].
      *
@@ -438,6 +445,7 @@ fun AgentTaskStatus.detachedSnapshot(includeHistory: Boolean = true): AgentTaskS
     snapshot.resumedFrom = resumedFrom
     snapshot.deliverables = deliverables
     snapshot.effectiveTokenBudget = effectiveTokenBudget
+    snapshot.timings = timings
     snapshot.errorCode = errorCode
     snapshot.resumable = resumable
     return snapshot

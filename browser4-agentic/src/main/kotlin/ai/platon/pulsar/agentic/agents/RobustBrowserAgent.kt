@@ -716,6 +716,17 @@ open class RobustBrowserAgent(
     private var lastVerificationVerdict: VerificationReport? = null
 
     /**
+     * Four-bucket attribution of the current run (plan N3): build / tool / callback /
+     * model time plus token counts, accumulated in-process so the answer travels with
+     * the task result instead of having to be re-derived from the memory event log.
+     */
+    private val runTimings = RunTimingsAccumulator()
+
+    /** The current run's attribution, or `null` before the first round. */
+    val lastRunTimings: RunTimings?
+        get() = runTimings.snapshot().takeIf { it.rounds > 0 || it.toolMs > 0 || it.buildMs > 0 }
+
+    /**
      * Coding mode override (see [BasicBrowserAgent.codingMode]): set by
      * [ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner] from the
      * task's explicit coding flag (`command.run`'s `coding` argument, the CLI's
@@ -1087,6 +1098,7 @@ open class RobustBrowserAgent(
             val maxTurns = config.maxSteps.coerceAtLeast(1)
             // A new run starts with no verdict and a full repair budget.
             lastVerificationVerdict = null
+            runTimings.reset()
             repairLoop.reset()
             finishReportRepair.reset()
             logger.info("🚀 cli-agent.start sid={} turns={} instr='{}'",
@@ -1558,6 +1570,10 @@ open class RobustBrowserAgent(
                     )
                 )
                 cliLoopTracer.logTool(req, result, durationMs)
+                // N3: per-tool attribution, so the task result can report build vs tool
+                // time without re-reading the event log. Build tools are split out here —
+                // a `coding.mvnBuild` body is the dominant cost of a self-development run.
+                runTimings.onTool(req.name(), durationMs)
                 // P1-2: record executed tools (meta plumbing excluded — it is
                 // neither task progress nor useful context for the model).
                 if (req.name() !in ToolDisclosureTools.META_NAMES) {
@@ -1644,6 +1660,8 @@ open class RobustBrowserAgent(
             // bookkeeping" are indistinguishable, and they have different fixes.
             onRoundTiming = { timing ->
                 runCatching {
+                    // N3: accumulate the round into the run's four buckets.
+                    runTimings.onRound(timing)
                     cliLoopTracer.logEvent(
                         "round_timing",
                         mapOf(
@@ -1654,6 +1672,7 @@ open class RobustBrowserAgent(
                             "callbacksMs" to timing.callbacksMs,
                             "outTokens" to timing.outTokens,
                             "cachedInTokens" to timing.cachedInTokens,
+                            "inTokens" to timing.inTokens,
                         ),
                     )
                     val memory = agentMemory
@@ -1661,7 +1680,7 @@ open class RobustBrowserAgent(
                         memory.sink.roundTimed(
                             memory.currentTaskId ?: "unknown", uuid.toString(),
                             timing.round, timing.calls, timing.modelMs, timing.toolsMs, timing.callbacksMs,
-                            timing.outTokens, timing.cachedInTokens,
+                            timing.outTokens, timing.cachedInTokens, timing.inTokens,
                         )
                     }
                 }.onFailure { logger.warn("round_timing emission failed: {}", it.message) }

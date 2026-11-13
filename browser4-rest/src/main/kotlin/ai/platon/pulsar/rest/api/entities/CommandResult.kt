@@ -54,4 +54,12 @@ data class CommandResult(
     var errorCode: String? = null,
     var resumable: Boolean? = null,
     var effectiveTokenBudget: Long? = null,
+    /**
+     * Four-bucket attribution of the run: `rounds`, `totalMs`, `buildMs` / `toolMs` /
+     * `callbackMs` / `modelMs`, and `tokens{in,cachedIn,out}`.
+     *
+     * A caller asking "why did this task take six minutes" reads it here instead of
+     * re-deriving it from the backend's memory event log (plan N3).
+     */
+    var timings: Map<String, Any?>? = null,
 )

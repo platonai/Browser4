@@ -158,6 +158,8 @@ data class RoundTimed(
     val outTokens: Int = 0,
     /** Input tokens served from the provider's prompt cache. */
     val cachedInTokens: Int = 0,
+    /** Full prompt token count for this round (cached + uncached). */
+    val inTokens: Int = 0,
 ) : MemoryEvent() {
     /** The round's measured wall clock (the three buckets, nothing else). */
     val totalMs: Long get() = modelMs + toolsMs + callbacksMs

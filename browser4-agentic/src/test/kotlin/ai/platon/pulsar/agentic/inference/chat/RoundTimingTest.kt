@@ -174,6 +174,7 @@ class RoundTimingTest {
 
         assertEquals(120, timings.first().outTokens, "output tokens are what model time is proportional to")
         assertEquals(900, timings.first().cachedInTokens, "cache hits explain cheap input")
+        assertEquals(1_000, timings.first().inTokens, "the full prompt count rides the same event")
         // A provider that reports no usage contributes nothing (never a guessed number).
         assertEquals(0, timings.last().outTokens)
     }

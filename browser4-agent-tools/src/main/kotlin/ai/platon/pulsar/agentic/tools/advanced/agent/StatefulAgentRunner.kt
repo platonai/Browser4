@@ -1243,6 +1243,9 @@ open class StatefulAgentRunner(
             // failed) before it installed its budget reports `null` - a supervisor
             // must see "unknown", never the previous task's limit.
             status.effectiveTokenBudget = (agent as? RobustBrowserAgent)?.lastRunTokenBudget
+            // N3: the run's own four-bucket attribution travels with the result, so
+            // "where did the six minutes go" is answerable from `agent result` alone.
+            status.timings = (agent as? RobustBrowserAgent)?.lastRunTimings?.toMap()
             status.errorCode = AgentTaskStatus.errorCodeOf(status.failureReason, status.cancelled)
             status.resumable = if (status.cancelled || status.failureReason != null) {
                 AgentTaskStatus.isResumable(status.errorCode)

@@ -100,6 +100,9 @@ class CommandStatusPageStatusTest {
         agentStatus.errorCode = AgentTaskStatus.ERROR_TOKEN_BUDGET
         agentStatus.resumable = true
         agentStatus.effectiveTokenBudget = 5_000_000
+        // Plan N3: the run's four-bucket attribution must reach both the status and the
+        // result payload, so `agent result` can answer "where did the time go".
+        agentStatus.timings = mapOf("rounds" to 3, "modelMs" to 4_814L, "buildMs" to 0L)
 
         val commandStatus = agentStatus.toCommandStatus()
         val result = commandStatus.commandResult!!
@@ -110,6 +113,9 @@ class CommandStatusPageStatusTest {
         assertEquals(AgentTaskStatus.ERROR_TOKEN_BUDGET, result.errorCode)
         assertEquals(true, result.resumable)
         assertEquals(5_000_000L, result.effectiveTokenBudget)
+        assertEquals(3L, (commandStatus.timings?.get("rounds") as Number).toLong())
+        assertEquals(3L, (result.timings?.get("rounds") as Number).toLong())
+        assertEquals(4_814L, (result.timings?.get("modelMs") as Number).toLong())
     }
 
     @Test

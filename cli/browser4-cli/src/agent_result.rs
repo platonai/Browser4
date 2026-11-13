@@ -83,6 +83,7 @@ const RESULT_KEYS: &[&str] = &[
     "errorCode",
     "resumable",
     "effectiveTokenBudget",
+    "timings",
 ];
 
 /// How a payload is rendered.
@@ -474,6 +475,19 @@ fn render_sections(
         section(&mut lines, &format!("Links ({})", links.len()), body, options);
     }
 
+    // Plan N3: the run's own attribution — where the wall clock went. One line, because
+    // it is a diagnosis and not a deliverable; `--json` carries the whole object.
+    if let Some(Value::Object(timings)) = result.get("timings") {
+        if let Some(line) = timings_line(timings) {
+            section(
+                &mut lines,
+                "Timings",
+                vec![options.clip(&line, options.width)],
+                options,
+            );
+        }
+    }
+
     // Anything the backend adds that this renderer does not know yet stays
     // visible, but folded: a new field must never disappear silently.
     let mut others = serde_json::Map::new();
@@ -547,6 +561,70 @@ fn render_array(items: &[Value], options: &RenderOptions) -> Vec<String> {
 
 fn is_known_key(key: &str) -> bool {
     RESULT_KEYS.iter().any(|known| *known == key) || ENVELOPE_KEYS.iter().any(|known| *known == key)
+}
+
+/// One-line rendering of the backend's `timings` object (plan N3).
+///
+/// Example: `3 rounds · model 4.8s · tools 170ms · callbacks 54ms · tokens 555 out /
+/// 12.8k cached in`. Zero buckets are omitted, so a read-only run does not claim a build
+/// time and a run that reported no usage does not claim tokens.
+fn timings_line(timings: &serde_json::Map<String, Value>) -> Option<String> {
+    let number = |key: &str| timings.get(key).and_then(|value| value.as_u64());
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(rounds) = number("rounds") {
+        if rounds > 0 {
+            parts.push(format!("{rounds} round{}", if rounds == 1 { "" } else { "s" }));
+        }
+    }
+    // Ordered the way a reader thinks about a run: the model, then the tools, then the
+    // loop's own overhead, then builds.
+    let buckets = [
+        ("model", "modelMs"),
+        ("tools", "toolMs"),
+        ("callbacks", "callbackMs"),
+        ("build", "buildMs"),
+    ];
+    for (label, key) in buckets {
+        match number(key) {
+            Some(ms) if ms > 0 => {
+                parts.push(format!("{label} {}", crate::state::format_duration_ms(ms as i64)))
+            }
+            _ => {}
+        }
+    }
+    if let Some(Value::Object(tokens)) = timings.get("tokens") {
+        let count = |key: &str| tokens.get(key).and_then(|value| value.as_u64()).unwrap_or(0);
+        let output = count("out");
+        let cached = count("cachedIn");
+        let input = count("in");
+        if output > 0 || cached > 0 || input > 0 {
+            let mut token_parts = Vec::new();
+            if input > 0 {
+                token_parts.push(format!("{} in", format_tokens(input)));
+            }
+            if cached > 0 {
+                token_parts.push(format!("{} cached in", format_tokens(cached)));
+            }
+            if output > 0 {
+                token_parts.push(format!("{} out", format_tokens(output)));
+            }
+            parts.push(format!("tokens {}", token_parts.join(" / ")));
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(format!("  {}", parts.join(" · ")))
+    }
+}
+
+/// `980` stays exact; larger counts get one decimal so a line stays readable.
+fn format_tokens(count: u64) -> String {
+    if count < 1_000 {
+        format!("{count}")
+    } else {
+        format!("{:.1}k", count as f64 / 1_000.0)
+    }
 }
 
 fn section(lines: &mut Vec<String>, title: &str, body: Vec<String>, options: &RenderOptions) {
@@ -823,6 +901,56 @@ mod tests {
         assert!(text.contains("browser4-dependencies/pom.xml"), "{text}");
         assert!(text.contains("Problems (1)"), "{text}");
         assert!(text.contains("⚠ The CI gate was not run"), "{text}");
+    }
+
+    #[test]
+    fn renders_the_run_timings_line() {
+        let body = json!({
+            "taskId": "task-1",
+            "status": "done",
+            "statusCode": 200,
+            "result": {
+                "summary": "Checked the module.",
+                "timings": {
+                    "rounds": 3,
+                    "totalMs": 5039,
+                    "buildMs": 0,
+                    "toolMs": 171,
+                    "callbackMs": 54,
+                    "modelMs": 4814,
+                    "tokens": { "in": 12800, "cachedIn": 12000, "out": 555 }
+                }
+            }
+        })
+        .to_string();
+
+        let text = rendered(body, 120);
+
+        assert!(text.contains("Timings"), "{text}");
+        assert!(text.contains("3 rounds"), "{text}");
+        assert!(text.contains("model 4.8s"), "{text}");
+        assert!(text.contains("tools 171ms"), "{text}");
+        assert!(text.contains("callbacks 54ms"), "{text}");
+        // A read-only run must not claim a build time ...
+        assert!(!text.contains("build "), "{text}");
+        assert!(text.contains("12.8k in"), "{text}");
+        assert!(text.contains("12.0k cached in"), "{text}");
+        assert!(text.contains("555 out"), "{text}");
+        // ... and the timings object must not be dumped as an unknown field.
+        assert!(!text.contains("Other fields"), "{text}");
+    }
+
+    #[test]
+    fn omits_the_timings_section_when_no_round_was_measured() {
+        let body = json!({
+            "taskId": "task-1",
+            "status": "done",
+            "statusCode": 200,
+            "result": { "summary": "Nothing to do." }
+        })
+        .to_string();
+        let text = rendered(body, 100);
+        assert!(!text.contains("Timings"), "{text}");
     }
 
     /// A coding task whose patch was refused must not let "workspace: <repo>" imply the

@@ -67,6 +67,8 @@ data class RoundTiming(
     val outTokens: Int = 0,
     /** Input tokens served from the provider's prompt cache. */
     val cachedInTokens: Int = 0,
+    /** Full prompt token count for this round (cached + uncached). */
+    val inTokens: Int = 0,
 ) {
     val totalMs: Long get() = modelMs + toolsMs + callbacksMs
 }
@@ -350,6 +352,7 @@ class AgentToolCallLoop(
             roundUsage?.let { totalUsage += it }
             val outTokens = roundUsage?.outputTokenCount ?: 0
             val cachedInTokens = roundUsage?.cachedInputTokenCount ?: 0
+            val inTokens = roundUsage?.inputTokenCount ?: 0
 
             val toolRequests = aiMessage.toolExecutionRequests()
             if (toolRequests.isNullOrEmpty()) {
@@ -360,7 +363,7 @@ class AgentToolCallLoop(
                 // context), and dropping it would leave "model time" systematically short
                 // in every four-bucket report.
                 runCatching {
-                    onRoundTiming(RoundTiming(iteration + 1, 0, modelMs, 0L, 0L, outTokens, cachedInTokens))
+                    onRoundTiming(RoundTiming(iteration + 1, 0, modelMs, 0L, 0L, outTokens, cachedInTokens, inTokens))
                 }.onFailure { logger.warn("round timing observer failed: {}", it.message) }
                 logger.debug("Tool loop finished after ${iteration + 1} round(s)")
                 return chatResponseToModelResponse(response, totalUsage)
@@ -426,7 +429,7 @@ class AgentToolCallLoop(
 
             // Measurement must never fail a task: a broken observer is logged, not thrown.
             runCatching {
-                onRoundTiming(RoundTiming(iteration + 1, toolRequests.size, modelMs, toolsMs, callbacksMs, outTokens, cachedInTokens))
+                onRoundTiming(RoundTiming(iteration + 1, toolRequests.size, modelMs, toolsMs, callbacksMs, outTokens, cachedInTokens, inTokens))
             }.onFailure { logger.warn("round timing observer failed: {}", it.message) }
         }
 

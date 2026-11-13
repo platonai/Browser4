@@ -399,6 +399,30 @@ P0-3 与 P1-3 ①② 因此被数据否决（§5、§9 已改）。成本公式�
 | 度量 | 同任务 2+2 A/B：outTok −22.6%、model −26.1%、墙钟 105.4 → 77.7 s（附录 B.7） |
 | 证据留痕 | `round_timing` 的 token 字段 + 脚本自动拟合 `modelMs ≈ 942 + 3.30·outTokens`（R² 90.9%） |
 
+### 10.6 N3 度量随任务结果交付 — 已落地并端到端验证
+
+| 落点 | 内容 |
+|---|---|
+| `RunTimings` / `RunTimingsAccumulator`（agentic，新） | 四桶累计器：`onTool` 把 build 工具（`coding_mvnBuild`/`coding.verify` 两种写法）从工具桶拆出，`onRound` 记 model/callback/rounds/tokens；负值钳零；`toMap()` 产出结果 JSON 的形状 |
+| `RobustBrowserAgent` | `lastRunTimings`（每次 run 重置）+ 在 `onToolResult`/`onRoundTiming` 两个已有点位累计；`RoundTiming`/`RoundTimed` 增 `inTokens`，托管到事件与 tracer |
+| `AgentTaskStatus` → `CommandStatus` → `CommandResult` | 新增 `timings: Map<String, Any?>?`，在 `detachedSnapshot`、`toCommandStatus`、`toResult` 三处透传；`StatefulAgentRunner` 从 agent 取值 |
+| `agent result` 渲染（Rust） | 新增 `Timings` 段（单行：`4 rounds · model 4.8s · tools 59ms · callbacks 11ms · tokens 25.2k in / 18.3k cached in / 554 out`），`timings` 加入 `RESULT_KEYS`（不再落进 unknown 块） |
+
+**端到端验证**（真实任务 `348ca7a6`，8.1 s）：`agent result` 的人读输出与后端 `CommandResult.timings` 如下，
+并与事件日志复算（`analyze-agent-timing.ps1`）**逐项一致**：
+
+| 指标 | 任务结果 `timings` | 事件日志复算 |
+|---|---|---|
+| rounds | 4 | 4 |
+| buildMs | 0 | 0（buildN=0） |
+| toolMs | 59 | 59 |
+| callbackMs | 11 | 11 |
+| modelMs | 4,779 | 4,779 |
+| tokens | in 25,226 / cachedIn 18,304 / out 554 | cachedIn 18,304 / out 554 |
+
+测试：`RunTimingsTest` 7 例、`AgentTaskStatusTest` 25（含 timings 快照）、`CommandStatusPageStatusTest` 11（含 timings 透传）、
+CLI `agent_result` 28 例（含 Timings 段渲染与"无度量不渲染"）。
+
 ## 附录 A：数据来源与复算方法
 
 - 数据源：`app-data/memory/events` 中的 `tool_executed` 事件，字段 `seq` / `tool` / `ok` /
@@ -530,3 +554,52 @@ P0-3 与 P1-3 ①② 因此被数据否决（§5、§9 已改）。成本公式�
 
 教训：一次请求 ≈0.9 s 的延迟是**模型规划行为的函数**，不是提示词能直接压的量。真要减请求，得让
 "列目录 + 读 N 个文件"这类动作在**一次工具调用**里完成（复合工具），或改写工具面，而不是要求模型"多调用"。
+
+## 11. 后续开发计划（2026-11-14）
+
+### 11.1 已冻结的约束（后续任何优化先对照这张表）
+
+| 事实（实测） | 数值 | 对计划的约束 |
+|---|---|---|
+| 成本公式 | `modelMs ≈ 600 + 4.05×outTokens`（R² 94.7%，n=59） | 输出 token 是贵的那一半；每 1k ≈ 4 s |
+| 每次请求固定延迟 | 0.6–0.9 s（63 次 → 38 s） | 减请求有效，但**只能靠结构**（实验 2 证明提示词不行） |
+| 输入 | ≈ 0（prompt cache 命中 92.6%） | **不再为"减输入"立项**：结果裁剪、多文件合并读都不是延迟优化 |
+| 四桶 | model 77% / build 10% / tool 1.2% / callback 0.2%（build-heavy 任务 build 46%） | 已否决 P0-3、P1-3①②；P0-1 是唯一确定的大块 |
+| 已验证有效 | 输出预算提示词：墙钟 −26%（105.4 → 77.7 s） | 保持；新增提示词规则必须 A/B |
+| 不可控 | 隐藏推理 ≈ model 桶六成 | 只有 provider 参数能压 → 列为 N2（前置 base 库） |
+
+### 11.2 计划项（按可兑现收益排序）
+
+| ID | 项 | 为什么（数据支撑） | 动作 | 验收 | 估时 |
+|---|---|---|---|---|---|
+| **N1** | 复合工具 `coding.readFiles`（一次调用读 N 个文件） | 请求 ≈0.6–0.9 s/次；实验 2 证明"让模型多调用"反而 +15% 墙钟，只有**一次调用覆盖 N 个文件**才能真正减轮 | 新工具 + 结果分段预算（避免 5k 结果上限截断）+ 提示词示范 + 一致性测试 | 同一枚举任务 A/B：轮数下降**且**墙钟下降（目标 ≥10%） | 1–2 d |
+| **N2** | provider 参数透传（=`P1-5`） | 隐藏推理约占 model 桶六成（最典型一轮 3,948 输出 token、可见输出约 100 字符） | base 库给 `BrowserChatModel` 加自定义参数缝；本仓库加 `browser4.agent.llm.extraParams`（默认空） | `reasoning_effort=low/off` 的 A/B：model 桶与墙钟对比 | 本仓库 0.5 d（前置 base 库） |
+| **N3** | 把度量搬进任务结果（✅ **已实施**，见 §10.6） | `agent result` 原先只有 `elapsedMs`/`effectiveTokenBudget`，看不到轮数、token、四桶；每次分析都要跑脚本 | 任务结果 JSON 增 `rounds`/`tokens{in,cached,out}`/`timings{build,tool,callback,model}` | ✅ 一次真实任务的结果里直接读出四桶，且与事件日志复算逐项一致 | 0.5 d |
+| **N4** | `cached` verdict 带上"覆盖的模块列表" | worktree 合并闸门要判断"这次缓存的编译是否覆盖本次改动"；当前 verdict 只有 `cached`/`fingerprint` | `VerificationCheck.modules` + `IsolationGate` 消费 + 用例 | 合并闸门用例：缓存命中但未覆盖改动 → 拒绝合并 | 0.5 d |
+| **N5** | P0-1 指纹收敛（可选） | 现按整个 workspace 摘要，换模块必失配；命中率未测 | 先统计真实任务的缓存命中/失配原因，再决定是否按 module+上游 pom 收敛 | 命中率提升 vs 误失效（要有数据） | 1 d |
+| **N6** | 故障：runner 消失 | 任务 `9c97e8c0` 后端中途消失、判失败、日志无崩溃行（§10.4） | 单独 issue：存活检测 / 更明确的错误 / 排查 OOM·端口·外部 kill | 可复现或排除；任务不再"无声失败" | 0.5–1 d |
+| **N7** | worktree 可见性 | 未提交文件"读得到、写不了"（B.3），真实任务 `e76c517c` 被 `PATH_DENIED` | `WorkspaceIsolation` 把未跟踪文件也带入 worktree（`stash -u` 或复制） | 用例 + 真实任务能编辑未提交文件 | 1 d |
+
+### 11.3 降级 / 不做（已有数据判定）
+
+- **P1-1 只读结果复用**：工具桶 1.2%，收益上限就是它 → 降到"顺手做"，不单独排期。
+- **P1-2 verify 并发**：`repo-consistency` 实测 103–132 ms，与 compile 并发无收益 → 只保留 N4（正确性）。
+- **P0-2 合并构建**：合并只省一次 Maven 启动（全 reactor `validate` ≈ 2 s），却可能把 2 个模块变 10 个上游 → 在真实任务出现"同一轮多次多模块构建"之前不立项。
+
+### 11.4 执行顺序与复测方式
+
+顺序：**N3 → N1 → N4 →（N2 等 base 库）→ N5 → N6 / N7**。N3 先做的理由：它把 N1/N2 的验收从"跑脚本"变成"读结果"。
+
+每项门禁：最小作用域单测 + 一次真实任务。真实任务现在可以直接等结果（**`agent run <task> --coding --wait --wait-timeout 900`**，
+`--wait` 会阻塞到完成；本轮早期用的是手写轮询，属于多余步骤）：
+
+```bash
+pwsh ./b4w.ps1 agent run "<task>" --coding --wait --wait-timeout 900
+pwsh docs-dev/copilot/scripts/analyze-agent-timing.ps1 -Last 3      # 四桶 + token + 成本模型拟合
+```
+
+### 11.5 每项的最小验收口径（避免再次"跑通了但没省时间"）
+
+1. 任何优化都必须给出**同任务、同模型、≥2 次/臂**的 A/B，报告 outTok、rounds、model ms、墙钟四项。
+2. 验收以**墙钟**为准；轮数/token 只作为解释项（实验 2 就是轮数解释不了的例子）。
+3. 报告里必须写明样本量与离散度；n=1 的"改进"不作数。
