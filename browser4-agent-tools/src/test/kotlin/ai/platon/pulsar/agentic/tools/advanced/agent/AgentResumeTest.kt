@@ -209,4 +209,20 @@ class AgentResumeTest {
             "a resume keeps the interrupted task's workspace even with --shared-workspace",
         )
     }
+
+    @Test
+    @DisplayName("an unrestricted grant is carried by the checkpoint, so a resume keeps it")
+    fun checkpointCarriesTheUnrestrictedGrant() {
+        // Decision (2026-11-14): a resume keeps the grant and cannot drop it — the continued
+        // instruction was written against "run with my own permissions", and there is no
+        // --no-unrestricted. `StatefulAgentRunner` merges `flag ?: checkpoint.unrestricted ?: false`,
+        // so a row that predates the flag stays "not unrestricted" (the safe default).
+        val granted = status().apply { unrestricted = true }
+        assertEquals(true, resumeCheckpointOf(granted).unrestricted)
+
+        assertNull(
+            resumeCheckpointOf(status()).unrestricted,
+            "a row written before the flag existed must stay unknown, not become a grant",
+        )
+    }
 }

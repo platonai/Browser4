@@ -83,8 +83,13 @@ What it does **not** do:
 - It is inherited by `agent run --resume <id>` — a continued instruction must not lose the grant
   it was written against — and recorded on the task row (`unrestricted`) so `agent status` reports
   it and `coding.permissions` states it (`Unrestricted: YES`, with the sandbox line reading `off`).
+  **A resume cannot drop the grant**: there is no `--no-unrestricted`, so going back to the rails
+  means starting a new task rather than continuing that one.
 - It is audited: the first time the policy is applied the backend writes a `coding.access`
   approval event with `source=flag`.
+
+`--add-dir` has no effect next to `--unrestricted` (there is no boundary for an added folder to
+join); the flag is harmless, not additive — the whole filesystem is already in scope.
 
 Prefer the narrow tools when the task needs *one* extra capability: `--access read-build` /
 `write`, `--add-dir <path>`, or an operator approval through `coding.requestAccess`.
