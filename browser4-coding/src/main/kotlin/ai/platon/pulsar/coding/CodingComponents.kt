@@ -392,7 +392,7 @@ object CodingComponents {
             readOnly = !policy.allowsFileMutation(),
             readOnlyProvider = { !policy.allowsFileMutation() },
             writeAllowedProvider = { policy.allowsMutationOf(it) },
-            protectedFiles = policy.protectedFiles + extraProtectedEntries(),
+            protectedFiles = policy.effectiveProtectedFiles(),
             protectedDirs = policy.effectiveProtectedDirs(),
             sensitivePaths = policy.sensitivePaths,
             persistSnapshots = persistSnapshots,

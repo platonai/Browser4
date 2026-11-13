@@ -274,6 +274,23 @@ class CodingAccessEnforcementTest {
     }
 
     @Test
+    @DisplayName("coding.permissions says an unrestricted task runs with the OS user's own permissions")
+    fun testPermissionsReportUnderUnrestricted(@TempDir root: Path) {
+        val report = valueOf(
+            call(CodingToolExecutor.target(root, AgentAccessPolicy().withUnrestricted()), "permissions"),
+        )
+
+        // The rails below are empty because the flag removed them, not because nothing was
+        // configured — a model (or an operator reading the report) must be able to tell those apart.
+        assertTrue(report.contains("Unrestricted: YES"), report)
+        // The sandbox line must describe THIS task's pass-through shell, not whatever
+        // `browser4.agent.sandbox` happens to be configured with.
+        assertTrue(report.contains("execution sandbox : off (not applied"), report)
+        // The credential rail is the one promise `--unrestricted` does not make.
+        assertTrue(report.contains("always refused"), report)
+    }
+
+    @Test
     @DisplayName("an operator decision leaves an approval audit entry")
     fun testOperatorDecisionIsAudited(@TempDir root: Path) {
         Files.writeString(root.resolve("a.txt"), "hello")

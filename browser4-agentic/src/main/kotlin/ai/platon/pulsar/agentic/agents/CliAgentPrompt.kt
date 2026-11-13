@@ -334,10 +334,11 @@ internal object CliAgentPrompt {
                             "inline scripts (`powershell -Command ...`) run as written — use them when one " +
                             "command per call would take several steps. Every in-process rail is off as well " +
                             "(workspace boundary, protected dirs), so the OS user's own permissions are the " +
-                            "only limit: be deliberate about what you delete or overwrite. The one family that " +
-                            "still refuses is destroying the runtime you run inside — `taskkill` on the " +
-                            "backend, `b4w build/stop`, `bin/build.ps1`, and `mklink`/`ln`/`mount` — and that " +
-                            "refusal is permanent, not a syntax limit."
+                            "only limit: be deliberate about what you delete or overwrite. Two families still " +
+                            "refuse, and both are permanent: the OS credential stores (`~/.ssh`, `~/.aws`, " +
+                            "`~/.gnupg`, `~/.config/gcloud`) — never read them into your context — and " +
+                            "destroying the runtime you run inside (`taskkill` on the backend, `b4w build/stop`, " +
+                            "`bin/build.ps1`, `mklink`/`ln`/`mount`)."
                     else
                         "A `UNSUPPORTED_SYNTAX` refusal is a different family: the shell runs one command " +
                             "per call and cannot parse blocks, parentheses or `else`, so rewriting the step IS " +

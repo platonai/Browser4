@@ -7,6 +7,7 @@ import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskStatus
 import ai.platon.pulsar.common.ResourceStatus
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -109,6 +110,20 @@ class CommandStatusPageStatusTest {
         assertEquals(AgentTaskStatus.ERROR_TOKEN_BUDGET, result.errorCode)
         assertEquals(true, result.resumable)
         assertEquals(5_000_000L, result.effectiveTokenBudget)
+    }
+
+    @Test
+    @DisplayName("an unrestricted task carries its power grant onto the status row")
+    fun unrestrictedFlagIsCarriedIntoThePayload() {
+        // `--unrestricted` removes every rail, so a reviewer of a finished task must be able to
+        // see that it ran that way from `agent status` alone.
+        val agentStatus = AgentTaskStatus(statusCode = ResourceStatus.SC_OK)
+        agentStatus.unrestricted = true
+
+        assertEquals(true, agentStatus.toCommandStatus().unrestricted)
+
+        // A row that never opted in stays null ("unknown"), not false: an old row is not a decision.
+        assertNull(AgentTaskStatus(statusCode = ResourceStatus.SC_OK).toCommandStatus().unrestricted)
     }
 
     @Test

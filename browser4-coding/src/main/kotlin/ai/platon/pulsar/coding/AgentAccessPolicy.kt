@@ -112,6 +112,12 @@ data class AgentAccessPolicy(
      * platform shell verbatim instead of being refused with `UNSUPPORTED_SYNTAX`. The OS user's own
      * rights stay the ceiling — this cannot grant more than the process already has.
      *
+     * Two things are deliberately **not** lifted, because "use my permissions" is not "hand my
+     * secrets to a model": the OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`,
+     * `~/.config/gcloud` — [ReadablePaths.ALWAYS_REFUSED]) stay refused whatever this flag says,
+     * and the vetoes that would destroy the runtime the task runs inside
+     * ([CodingAgentShell.liftedSyntaxGuardViolation]) keep refusing.
+     *
      * Opt-in per task (`agent run --unrestricted`); see [withUnrestricted].
      */
     val unrestricted: Boolean = false,
@@ -263,6 +269,9 @@ data class AgentAccessPolicy(
      * [CodingAgentShell]'s `allowUnsupportedSyntax`, which the shell builders derive from this
      * flag). What the OS user may actually reach is still decided by the operating system, so this
      * widens the agent's capability to exactly the user's own — never beyond it.
+     *
+     * The OS credential stores stay refused: [ReadablePaths.ALWAYS_REFUSED] is checked ahead of the
+     * (now empty) [sensitivePaths] by every consumer, and that is intentional — see [unrestricted].
      */
     fun withUnrestricted(unrestricted: Boolean = true): AgentAccessPolicy =
         if (!unrestricted) {
@@ -608,6 +617,17 @@ data class AgentAccessPolicy(
  */
 internal fun AgentAccessPolicy.effectiveProtectedDirs(): Set<String> =
     if (unrestricted) emptySet() else protectedDirs + extraProtectedEntries()
+
+/**
+ * Protected files for this policy: the configured set plus operator additions, or none at all when
+ * the task is unrestricted — the mirror of [effectiveProtectedDirs].
+ *
+ * One property feeds both lists (`-Dbrowser4.agent.protected.extra`), so they must agree on what an
+ * unrestricted task drops: before this existed, a directory entry was released while the same entry
+ * spelled as a file stayed refused.
+ */
+internal fun AgentAccessPolicy.effectiveProtectedFiles(): Set<String> =
+    if (unrestricted) emptySet() else protectedFiles + extraProtectedEntries()
 
 /**
  * Operator additions to the protected set:

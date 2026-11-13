@@ -130,6 +130,16 @@ data class CommandStatus(
      * offer "continue with a doubled budget" without the cap it just hit.
      */
     var effectiveTokenBudget: Long? = null,
+
+    /**
+     * Whether this task ran with the current OS user's own permissions
+     * (`agent run --unrestricted`), `null` when unknown (a non-agent row, or a row written before
+     * the flag existed).
+     *
+     * A power grant that removes every rail must be visible from `agent status`, not only in the
+     * backend log: a reviewer reading a finished task has to be able to see that it ran unrestricted.
+     */
+    var unrestricted: Boolean? = null,
 ) {
     val status: String get() = ResourceStatus.getStatusText(statusCode)
     var lastModifiedTime: Instant? = null
@@ -339,6 +349,9 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     status.errorCode = this.errorCode
     status.resumable = this.resumable
     status.effectiveTokenBudget = this.effectiveTokenBudget
+    // The per-task power grant: `agent status` has to show that a task ran with the OS user's own
+    // permissions, because every other rail (preset, paths, sandbox) is off for it.
+    status.unrestricted = this.unrestricted
     // The page this task ended on. AgentTaskStatus now carries it (observed from
     // the live page, see DocumentHttpStatus); before that the conversion dropped
     // it and every agent/loop record shipped the model's 201/"created" default.

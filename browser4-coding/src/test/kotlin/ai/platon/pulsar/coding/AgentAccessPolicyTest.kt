@@ -407,6 +407,7 @@ class AgentAccessPolicyTest {
         assertTrue(p.allowDestructive)
         assertTrue(p.denyTools.isEmpty())
         assertTrue(p.effectiveProtectedDirs().isEmpty())
+        assertTrue(p.effectiveProtectedFiles().isEmpty())
         assertTrue(p.sensitivePaths.isEmpty())
         // Every gate is open, including the ones the narrow presets refuse.
         assertTrue(p.allowsTool("coding", "shell"))
@@ -414,6 +415,26 @@ class AgentAccessPolicyTest {
         assertTrue(p.allowsFileMutation())
         assertTrue(p.allowsExec())
         assertTrue(p.allowsCommandExecution("rm -rf build"))
+    }
+
+    @DisplayName("an unrestricted policy drops the operator protected extras from files and dirs alike")
+    @Test
+    fun unrestrictedDropsOperatorProtectedExtrasFromBothLists() {
+        // `-Dbrowser4.agent.protected.extra` feeds both protected lists, so a flag that documents
+        // both rails as gone must clear both: the file entry used to survive while the directory
+        // entry was released.
+        System.setProperty("browser4.agent.protected.extra", "bin/build.ps1,target")
+        try {
+            val restricted = policy(AccessPreset.FULL)
+            assertTrue(restricted.effectiveProtectedFiles().contains("bin/build.ps1"))
+            assertTrue(restricted.effectiveProtectedDirs().contains("target"))
+
+            val unrestricted = restricted.withUnrestricted()
+            assertTrue(unrestricted.effectiveProtectedFiles().isEmpty())
+            assertTrue(unrestricted.effectiveProtectedDirs().isEmpty())
+        } finally {
+            System.clearProperty("browser4.agent.protected.extra")
+        }
     }
 
     @DisplayName("withUnrestricted(false) keeps the policy byte for byte")

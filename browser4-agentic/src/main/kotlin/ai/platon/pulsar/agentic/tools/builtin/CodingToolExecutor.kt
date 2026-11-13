@@ -2118,6 +2118,17 @@ class CodingToolExecutor : AbstractToolExecutor() {
         return buildString {
             appendLine("Access preset: ${policy.preset.id}")
             appendLine("Workspace root: ${fs.workspaceRoot}")
+            // An unrestricted task must say so before the rest of the report: the rails below are
+            // empty because the flag removed them, not because nothing was configured, and the model
+            // (or an operator reading over its shoulder) has to be able to tell those apart.
+            if (policy.unrestricted) {
+                appendLine(
+                    "Unrestricted: YES (`agent run --unrestricted`) — this task runs with the current OS " +
+                        "user's own permissions: no preset, workspace, protected or sensitive rails and no OS " +
+                        "sandbox. The OS credential stores stay refused (see `always refused` below), as do the " +
+                        "commands that would destroy or rebuild the runtime this task runs inside."
+                )
+            }
             // Isolation, in the terms the model needs: an isolated run has a worktree
             // as its workspace and the change lands in the MAIN checkout; an in-place
             // run edits whatever the workspace names.
@@ -2224,8 +2235,17 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     "an `--unrestricted` task passes the line to the platform shell instead)"
             )
             appendLine(
-                "  execution sandbox : ${ExecutionSandboxes.current().id} (an unknown or unavailable " +
-                    "sandbox fails hard instead of running unsandboxed)"
+                if (policy.unrestricted) {
+                    // Report the sandbox THIS task's shell runs under, not the process-wide
+                    // configuration: an unrestricted shell is built with the pass-through sandbox,
+                    // so echoing ExecutionSandboxes.current() would describe a stricter environment
+                    // than the one the task actually has.
+                    "  execution sandbox : off (not applied — this task is unrestricted; the OS user's " +
+                        "own permissions are the limit)"
+                } else {
+                    "  execution sandbox : ${ExecutionSandboxes.current().id} (an unknown or unavailable " +
+                        "sandbox fails hard instead of running unsandboxed)"
+                }
             )
             appendLine(
                 "Scope of this policy: the presets bound what the model can *spell* — mutating paths, " +
