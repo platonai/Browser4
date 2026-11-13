@@ -1824,18 +1824,25 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    access, network, destructive commands, no protected rails and no OS sandbox. It"
+            "    access, network, destructive commands, no protected rails, no OS sandbox, and the"
                 .to_string(),
         );
         lines.push(
-            "    removes the rails as well as the scope, so it is opt-in per task, is audited"
+            "    shell's own rules are off too (syntax gate, command allow-list), so `for` loops,"
                 .to_string(),
         );
         lines.push(
-            "    (coding.access), and a --resume of that task keeps it. With -i it applies"
+            "    blocks, inline scripts and PowerShell cmdlets run as written. It removes the rails"
                 .to_string(),
         );
-        lines.push("    to every task of the session.".to_string());
+        lines.push(
+            "    as well as the scope, so it is opt-in per task, is audited (coding.access), and a"
+                .to_string(),
+        );
+        lines.push(
+            "    --resume of that task keeps it. With -i it applies to every task of the session."
+                .to_string(),
+        );
         lines.push(
             "    OS credential stores (~/.ssh, ~/.aws, ~/.gnupg, ~/.config/gcloud) stay refused, as"
                 .to_string(),

@@ -196,7 +196,7 @@ fails in the other:
 |---|---|---|
 | `b4.run(args=…)` | `pwsh -Command "& browser4-cli …"` | PowerShell parses `args`: quote `@file` (`'--sql @q.sql'`), `&&` works, `dir /b` does not |
 | `coding.shell` | `cmd.exe` | POSIX tools (`head`, `sed`) and `$()` fail; pipes/redirection are restricted |
-| `coding.shell` inline scripts | refused — `PERMISSION_DENIED \| code=COMMAND_NOT_ALLOWED` | `powershell -Command …` / `bash -c …` are blocked by the command guard |
+| `coding.shell` inline scripts | refused — `PERMISSION_DENIED \| code=COMMAND_NOT_ALLOWED` | `powershell -Command …` / `bash -c …` are blocked by the command guard; an `--unrestricted` task runs them as written |
 
 Observed 2026-10-28 (20-product supervision run): an unquoted `@.b4scratch/x-asin.sql`
 inside `b4.run` produced 18 `ParserError`s — and the Chinese parse error came back as

@@ -15965,7 +15965,8 @@ fn apply_add_dirs(extra: &mut Value, add_dirs: &[String]) {
 ///
 /// The flag is the per-task opt-in to run with the current OS user's own
 /// permissions: full preset, external access, network, destructive commands, no
-/// protected/sensitive rails and no OS sandbox. Only `true` is forwarded -- an
+/// protected/sensitive rails, no OS sandbox, and the shell's own spelling rules
+/// (syntax gate, command allow-list) off as well. Only `true` is forwarded -- an
 /// absent key keeps the backend's server-wide policy, so the rails can never be
 /// removed by omission.
 fn apply_unrestricted(extra: &mut Value, unrestricted: bool) {

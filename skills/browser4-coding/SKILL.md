@@ -191,6 +191,9 @@ by the file system, the shell, the tool registry and the MCP direct-call path:
   `UNSUPPORTED_SYNTAX | code=SYNTAX_NOT_SUPPORTED`. No preset, operator approval or JVM property
   widens a grammar, so `coding.requestAccess` is not the answer there, and such refusals are **not**
   counted in `coding.permissions`' policy counters (they have their own `unsupported syntax` line).
+  The one exception is `agent run --unrestricted`, which lifts the syntax gate *and* the command
+  allow-list; the vetoes that protect the run's own runtime and the OS credential stores still
+  refuse, and their `hint=` now says `no approval lifts this` instead of offering a request.
   Use a script file run **by path** (`.\run.cmd`, `./run.sh`) for those — a bare filename is read as
   a program name and refused. Windows builtins supported inline: `set` (bare or `NAME=value`),
   `mkdir`/`md`, `echo` (`echo.` is normalized).
@@ -219,7 +222,7 @@ Relations that hold regardless of preset:
 
 ## Shell & Filesystem Tools
 
-- `coding.shell(command, timeoutSeconds?, workingDir?)` — execute allowed dev commands (git/cargo/mvn/npm/python/...). The WHOLE command line is validated: every segment split on `&&` `||` `;` `|` `&`, every `$(...)`/backtick substitution, and every inline `sh -c "..."` / `pwsh -Command "..."` / `cmd /c ...` script is checked against the same allow-list. Windows launcher names normalize first (`mvnw.cmd` → `mvnw`).
+- `coding.shell(command, timeoutSeconds?, workingDir?)` — execute allowed dev commands (git/cargo/mvn/npm/python/...). The WHOLE command line is validated: every segment split on `&&` `||` `;` `|` `&`, every `$(...)`/backtick substitution, and every inline `sh -c "..."` / `pwsh -Command "..."` / `cmd /c ...` script is checked against the same allow-list. Windows launcher names normalize first (`mvnw.cmd` → `mvnw`). Under `agent run --unrestricted` both of those shell rules are off (only the runtime/credential/deny vetoes still refuse), so inline scripts — `powershell -Command "Get-Content x"` included — run as written.
 - File ops: `read`, `readLines`, `write`, `append`, `replace`, `replaceRegex`, `editLines`, `insertAfter`, `revert`, `delete`, `mkdir`, `copy`, `move`, `stat`, `diff` (myers/patience), `checksum`
 - **Optimistic concurrency**: `coding.checksum(path)` returns `sha256:…`; pass it as `coding.write(path, content, expectedChecksum=…)` and a concurrent edit fails loudly instead of being overwritten. Write snapshots are persisted under `.browser4/coding-snapshots/`, so `coding.revert` still works after a backend restart.
 - **Provisioned agent workspace**: a coding-mode agent run (`browser4-cli agent run "<task>" --coding` — the coding mode is always requested explicitly, never auto-detected) gets the checkout mirrored into its scratch workspace before the first tool call — every `<module>` of the root pom is junctioned/symlinked and `pom.xml`/`mvnw`/`mvnw.cmd`/`.mvn`/`VERSION`/`ROOT.md` are copied (`WorkspaceMirror`), so Maven resolves modules from the first try and the agent never has to repair workspace topology itself.

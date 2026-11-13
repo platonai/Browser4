@@ -106,11 +106,12 @@ data class AgentAccessPolicy(
      *
      * Every policy rail becomes pass-through: the preset gate, `allowExternalAccess`,
      * `denyTools` and the protected/sensitive path lists no longer restrict anything, the
-     * file system / shell boundary is built without the workspace sandbox, and the shell's
-     * **syntax** gate is lifted as well (`CodingAgentShell.allowUnsupportedSyntax`), so a line the
-     * checker cannot decompose — `for` loops, `if exist (...)`, inline scripts — is handed to the
-     * platform shell verbatim instead of being refused with `UNSUPPORTED_SYNTAX`. The OS user's own
-     * rights stay the ceiling — this cannot grant more than the process already has.
+     * file system / shell boundary is built without the workspace sandbox, and the shell's own
+     * spelling rules are lifted as well (`CodingAgentShell.unrestricted`): a line the checker cannot
+     * decompose — `for` loops, `if exist (...)`, inline scripts — is handed to the platform shell
+     * verbatim instead of being refused with `UNSUPPORTED_SYNTAX`, and a program outside the
+     * SAFE/DEV tier (a PowerShell cmdlet such as `Get-Content`, or `wmic`) runs like any other. The
+     * OS user's own rights stay the ceiling — this cannot grant more than the process already has.
      *
      * Two things are deliberately **not** lifted, because "use my permissions" is not "hand my
      * secrets to a model": the OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`,
@@ -265,10 +266,11 @@ data class AgentAccessPolicy(
      *
      * The returned policy is pass-through: `full` preset, external access, destructive operations
      * and network commands allowed, no denied tools and no protected/sensitive path rails, and the
-     * shell no longer refuses shapes it cannot decompose (the `UNSUPPORTED_SYNTAX` family — see
-     * [CodingAgentShell]'s `allowUnsupportedSyntax`, which the shell builders derive from this
-     * flag). What the OS user may actually reach is still decided by the operating system, so this
-     * widens the agent's capability to exactly the user's own — never beyond it.
+     * shell's own spelling rules are off — it no longer refuses shapes it cannot decompose (the
+     * `UNSUPPORTED_SYNTAX` family) or programs outside its tier allow-list (see
+     * [CodingAgentShell]'s `unrestricted`, which the shell builders derive from this flag). What the
+     * OS user may actually reach is still decided by the operating system, so this widens the
+     * agent's capability to exactly the user's own — never beyond it.
      *
      * The OS credential stores stay refused: [ReadablePaths.ALWAYS_REFUSED] is checked ahead of the
      * (now empty) [sensitivePaths] by every consumer, and that is intentional — see [unrestricted].

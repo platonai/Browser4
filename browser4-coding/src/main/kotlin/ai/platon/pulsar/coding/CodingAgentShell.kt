@@ -72,25 +72,30 @@ class CodingAgentShell(
     private val sandbox: ExecutionSandbox? = null,
 
     /**
-     * Whether the **syntax** gate is lifted too (`agent run --unrestricted`).
+     * Whether this task runs with the caller's own OS permissions (`agent run --unrestricted`).
      *
-     * The syntax gate is not a permission gate: [validateCommandRaw] refuses shapes this module
-     * cannot decompose (`for %f in (...) do ...`, `if exist x (...)`, command substitution, inline
-     * scripts), because it must validate every program a command line can reach. Under
-     * `--unrestricted` the task already runs with the caller's own OS permissions and the platform
-     * shell parses the line itself, so a shape the checker cannot decompose is no longer a reason to
-     * refuse: the command is handed over verbatim and the shell reports its own parse error.
+     * Two of the shell's *own* rules are not rails the flag keeps, and both are lifted here:
      *
-     * Policy refusals (hardcoded blocked patterns, explicit deny, protected paths, tier checks) are
-     * untouched — only the syntax family is bypassed.
+     * - the **syntax** gate: [validateCommandRaw] refuses shapes this module cannot decompose
+     *   (`for %f in (...) do ...`, `if exist x (...)`, command substitution, inline scripts), because
+     *   it must validate every program a command line can reach. The platform shell parses the line
+     *   itself, so such a shape is handed over verbatim and the shell reports its own parse error;
+     * - the **tier** allow-list: a program that is neither [SAFE_COMMANDS] nor [DEV_COMMANDS] nor on
+     *   `PATH` (a PowerShell cmdlet such as `Get-Content`, or `wmic`) is handed over like any other.
+     *   Keeping it refused made the flag's documented promise false — `powershell -Command
+     *   "Get-Content x"` failed with `COMMAND_NOT_ALLOWED` while the model had been told that inline
+     *   scripts run as written (2026-11-14 supervision run). The list is a *spelling* rule, not a
+     *   boundary: the same body already runs unexamined through `powershell -File`.
      *
-     * The vetoes that keep a task from destroying its own runtime are *not* syntax either and
-     * survive the lift ([liftedSyntaxGuardViolation]): a `for` body still may not `taskkill` the
-     * backend that runs the task, or rebuild it with `b4w build`.
+     * Everything else keeps applying, and the order in [validateSimpleCommandTier] is what guarantees
+     * it: hardcoded blocked patterns, explicit deny, deny patterns, credential and protected paths,
+     * [FORBIDDEN_COMMANDS], [processKillViolation] and [bootstrapViolation] are all checked before
+     * the tier verdict, so a lifted line can reach nothing they would not have reached anyway. The
+     * vetoes survive the *syntax* lift through [liftedSyntaxGuardViolation] for the same reason.
      *
      * Defaults to `false`, so every other task keeps exactly the historical behaviour.
      */
-    private val allowUnsupportedSyntax: Boolean = false,
+    private val unrestricted: Boolean = false,
     /**
      * When false, the destructive command tier (`rm`, `del`, `move`, `taskkill`, …) is refused.
      *
@@ -298,6 +303,37 @@ class CodingAgentShell(
 
         /** Separates a wrapper reason from the inner one (`inline script via 'sh' rejected — …`). */
         private const val INNER_REASON_SEPARATOR = " — "
+
+        /**
+         * Fragments of the refusals **no** flag, preset or operator approval can lift.
+         *
+         * [permanentVetoHint] keys the hint on them. Each refusal message is composed from the same
+         * constant the classifier matches, so the text and the classification cannot drift apart —
+         * which is how the model ended up being told to `coding.requestAccess` a veto that never
+         * lifts (2026-11-14 supervision run).
+         */
+        private const val VETO_WORKSPACE_LINK =
+            "workspace links are provisioned by the framework, not by the agent"
+
+        private const val VETO_BACKEND_KILL = "would terminate the Browser4 backend"
+
+        private const val VETO_BOOTSTRAP = "rebuilds or restarts the backend this task runs inside"
+
+        private const val VETO_BOOTSTRAP_SCRIPT = "refusing to run a bootstrap/recovery script"
+
+        private const val VETO_EXPLICIT_DENY = "is explicitly denied"
+
+        private const val VETO_DENY_PATTERN = "matches deny pattern: "
+
+        /**
+         * The two tier *category* vetoes, which [commandRefusal] hints at separately: they are
+         * liftable (a wider preset, or `net.connect` approval), unlike the permanent ones above.
+         */
+        private const val VETO_NETWORK_DISABLED =
+            "requires network access but it is disabled by the access policy"
+
+        private const val VETO_DESTRUCTIVE_DISABLED =
+            "is a destructive command but allowDestructive=false"
 
         /** Redirection introduced by an argument (`>file`, `>>file`, `2>file`, `&>file`). */
         private val REDIRECTION_PREFIX = Regex("""^(?:\d+|&)?>>?""")
@@ -829,6 +865,7 @@ class CodingAgentShell(
             networkAllowed() && base in NETWORK_COMMANDS ->
                 "'$base' is a network command (network access enabled)"
             allowDestructive && base in DESTRUCTIVE_COMMANDS -> "'$base' is a destructive command (allowDestructive=true)"
+            unrestricted -> "'$base' is outside the tier allow-list, and this task is unrestricted"
             else -> "every command in the chain is allowed (pattern / path / PATH rule)"
         }
         return "'$command' is ALLOWED — $reason"
@@ -935,12 +972,25 @@ class CodingAgentShell(
                 detail = "Command not executed — $violation",
             )
         }
+        // A veto that no flag, preset or approval can lift gets its own hint. Sending the model to
+        // `coding.requestAccess` for one of these is a dead end it will retry: the refusal is
+        // permanent by design, so the hint names what is permanent and the route that stays open.
+        permanentVetoHint(violation)?.let { vetoHint ->
+            return PermissionAudit.denied(
+                tool = SHELL_TOOL,
+                code = PermissionAudit.CODE_COMMAND_NOT_ALLOWED,
+                detail = "Command blocked — $violation",
+                hint = vetoHint,
+            )
+        }
         // `contains`, not `startsWith`: a violation can be wrapped by a nested-command layer
         // (`command substitution rejected — path guard: …`) and the specific audit code is still
         // the one the inner guard produced.
-        val (code, hint) = when {
+        val leaf = leafViolation(violation)
+        val (code, hint, needed) = when {
             violation.contains(PATH_GUARD_PREFIX) ->
-                PermissionAudit.CODE_COMMAND_PATH_DENIED to
+                Triple(
+                    PermissionAudit.CODE_COMMAND_PATH_DENIED,
                     // Without a workspace boundary (`--access full` with external access, or an
                     // `--unrestricted` task) telling the model to use a workspace-relative path
                     // sends it down a wall that is not there: the credential rail is the whole
@@ -950,24 +1000,87 @@ class CodingAgentShell(
                             "workspace boundary is off; the agent must not read credentials into its context"
                     } else {
                         "pass a path inside the workspace; credential locations are never valid arguments"
-                    }
+                    },
+                    null,
+                )
             violation.contains(PROTECTED_PATH_PREFIX) ->
-                PermissionAudit.CODE_PROTECTED_PATH to
+                Triple(
+                    PermissionAudit.CODE_PROTECTED_PATH,
                     "use the coding.* tools for the agent's own bookkeeping (.browser4) and CI " +
-                        "definitions (.github/workflows); the shell may not touch them"
+                        "definitions (.github/workflows); the shell may not touch them",
+                    null,
+                )
+            leaf.contains(VETO_NETWORK_DISABLED) ->
+                Triple(
+                    PermissionAudit.CODE_COMMAND_NOT_ALLOWED,
+                    "network access is off for this task — ask for it with " +
+                        "coding.requestAccess(effect=\"net.connect\", target=\"<host>\"), or run the " +
+                        "command from outside the task",
+                    Effect.NET_CONNECT.id,
+                )
+            leaf.contains(VETO_DESTRUCTIVE_DISABLED) ->
+                Triple(
+                    PermissionAudit.CODE_COMMAND_NOT_ALLOWED,
+                    "destructive commands are off under this access preset — re-run the task with " +
+                        "`--access write`/`full`, or use a non-destructive command; an approval does " +
+                        "not widen a preset",
+                    null,
+                )
             else ->
-                PermissionAudit.CODE_COMMAND_NOT_ALLOWED to
-                    ("run the build through coding.mvnBuild/coding.verify, or request operator " +
-                        "approval with coding.requestAccess(effect=\"fs.exec\", target=\"<command>\") " +
-                        "if this command is genuinely needed")
+                // The tier refusal. No approval widens it (the allow-list is fixed by the
+                // embedding), so the hint names the routes that exist and never offers
+                // `coding.requestAccess` — the old hint did, and a refusal whose fix does not
+                // exist is a round the model wastes (2026-11-14 run).
+                Triple(
+                    PermissionAudit.CODE_COMMAND_NOT_ALLOWED,
+                    "the shell's allow-list does not cover this command and no approval widens it — " +
+                        "use an allowed equivalent (type/cat/head/dir/grep) or a coding.* tool " +
+                        "(coding.read, coding.stat, coding.glob), run the build through " +
+                        "coding.mvnBuild/coding.verify, or put the step in a script file and run it " +
+                        "by path; a task that genuinely needs arbitrary programs runs with " +
+                        "`--unrestricted`",
+                    null,
+                )
         }
         return PermissionAudit.denied(
             tool = SHELL_TOOL,
             code = code,
             detail = "Command blocked — $violation",
             hint = hint,
-            needed = if (code == PermissionAudit.CODE_COMMAND_NOT_ALLOWED) Effect.FS_EXEC.id else null,
+            needed = needed,
         )
+    }
+
+    /**
+     * The hint for a refusal **no** flag, preset or operator approval can lift.
+     *
+     * These are the promises the access model makes outside its presets: the workspace topology the
+     * framework provisions, the runtime executing the task, and an operator's explicit deny. A hint
+     * that offers `coding.requestAccess` for them is worse than none — the model files a request
+     * that can never be granted and retries the step (observed in the 2026-11-14 supervision run,
+     * where a `COMMAND_NOT_ALLOWED` hint suggested an approval for a permanent veto).
+     *
+     * @param violation the refusal text, possibly wrapped (`inline script via 'sh' rejected — …`)
+     * @return the hint, or null when the refusal is an ordinary policy decision
+     */
+    private fun permanentVetoHint(violation: String): String? {
+        val leaf = leafViolation(violation)
+        return when {
+            leaf.contains(VETO_WORKSPACE_LINK) ->
+                "workspace links are provisioned by the framework — no approval or wider preset " +
+                    "lifts this; use the workspace paths as they are"
+            leaf.contains(VETO_BACKEND_KILL) ->
+                "a task must not terminate the runtime it runs inside — no approval lifts this; " +
+                    "stop the process from outside the task, or name a pid that is not the backend"
+            leaf.contains(VETO_BOOTSTRAP) || leaf.contains(VETO_BOOTSTRAP_SCRIPT) ->
+                "rebuilding or restarting this backend is operator work — no approval lifts it " +
+                    "from a task; run the build outside the task (`b4w build`) or use " +
+                    "coding.mvnBuild/coding.verify"
+            leaf.contains(VETO_EXPLICIT_DENY) || leaf.contains(VETO_DENY_PATTERN) ->
+                "this command is excluded by the task's policy — no approval lifts it; choose a " +
+                    "different route, or report the step in system.taskComplete(problems=…)"
+            else -> null
+        }
     }
 
     /** Whether execution is allowed right now (live when a provider was supplied, plan P4-1). */
@@ -1074,7 +1187,7 @@ class CodingAgentShell(
      */
     private fun validateCommand(command: String): String? {
         val violation = validateCommandRaw(command) ?: return null
-        if (!allowUnsupportedSyntax || !isSyntaxViolation(violation)) return violation
+        if (!unrestricted || !isSyntaxViolation(violation)) return violation
         // The syntax gate is lifted, so this line is handed to the platform shell verbatim. The
         // vetoes that protect the runtime this task runs *inside* are not policy rails and are not
         // lifted with it: a `for` loop's body can still hold `taskkill /PID <backend>`, and the OS
@@ -1087,20 +1200,34 @@ class CodingAgentShell(
      *
      * A syntax refusal means "this module cannot decompose the shape"; it is not a permission
      * decision, so neither a wider preset nor an operator grant would lift it, and no policy
-     * counter is incremented for it ([commandRefusal]). Under `--unrestricted`
-     * ([allowUnsupportedSyntax]) the whole family is handed to the platform shell instead.
+     * counter is incremented for it ([commandRefusal]). Under `--unrestricted` ([unrestricted]) the
+     * whole family is handed to the platform shell instead.
      */
     private fun isSyntaxViolation(violation: String): Boolean {
-        // The wrapper messages carry the inner reason after an em-dash; classify that one, so a
-        // *policy* veto nested inside `$(...)` or `sh -c "..."` is never lifted by accident
-        // (`echo $(rm -rf /)` must stay refused under --unrestricted, too).
-        if (violation.startsWith(SUBSTITUTION_PREFIX) || violation.startsWith(INLINE_SCRIPT_PREFIX)) {
-            val inner = violation.substringAfter(INNER_REASON_SEPARATOR, "")
-            return inner.isNotEmpty() && isSyntaxViolation(inner)
+        val leaf = leafViolation(violation)
+        return leaf.startsWith(SYNTAX_PREFIX) ||
+            leaf.startsWith(NESTED_SCRIPT_PREFIX) ||
+            leaf == EMPTY_COMMAND_VIOLATION
+    }
+
+    /**
+     * The innermost reason of a wrapped violation (`inline script via 'sh' rejected — …`).
+     *
+     * The wrapper carries the inner reason after an em-dash; classifying *that* one keeps a policy
+     * veto nested inside `$(...)` or `sh -c "..."` from being lifted by accident
+     * (`echo $(rm -rf /)` must stay refused under `--unrestricted`, too). One helper for every
+     * classifier, so the syntax lift and the hint family always agree about which rule produced the
+     * refusal.
+     */
+    private fun leafViolation(violation: String): String {
+        var current = violation
+        while (current.startsWith(SUBSTITUTION_PREFIX) || current.startsWith(INLINE_SCRIPT_PREFIX)) {
+            val inner = current.substringAfter(INNER_REASON_SEPARATOR, "")
+            // No separator: the wrapper did not compose an inner reason, so it is the leaf.
+            if (inner.isEmpty()) return current
+            current = inner
         }
-        return violation.startsWith(SYNTAX_PREFIX) ||
-            violation.startsWith(NESTED_SCRIPT_PREFIX) ||
-            violation == EMPTY_COMMAND_VIOLATION
+        return current
     }
 
     /**
@@ -1199,10 +1326,10 @@ class CodingAgentShell(
         // 2. Explicit deny / deny patterns — whole-string vetoes (they are
         //    authored as full-command regexes), re-checked per segment below
         extractBaseCommand(normalizedCommand).lowercase().let { base ->
-            if (base.isNotEmpty() && base in explicitDeny) return "'$base' is explicitly denied"
+            if (base.isNotEmpty() && base in explicitDeny) return "'$base' $VETO_EXPLICIT_DENY"
         }
         for (pattern in denyPatterns) {
-            if (pattern.containsMatchIn(normalizedCommand)) return "matches deny pattern: ${pattern.pattern}"
+            if (pattern.containsMatchIn(normalizedCommand)) return "$VETO_DENY_PATTERN${pattern.pattern}"
         }
 
         // 3. Explicit allow / allow patterns — whole-string opt-ins bypass the
@@ -1652,7 +1779,7 @@ class CodingAgentShell(
         if (base == "b4w") {
             val sub = tokens.getOrNull(index + 1)?.trim('\'', '"')?.lowercase()
             if (sub in setOf("build", "stop", "install", "uninstall", "upgrade", "recover")) {
-                return "'b4w $sub' rebuilds or restarts the backend this task runs inside — " +
+                return "'b4w $sub' $VETO_BOOTSTRAP — " +
                     "operator work, not a task step"
             }
         }
@@ -1661,7 +1788,7 @@ class CodingAgentShell(
             "bin/build.ps1", "bin/build/build.ps1", "build-runtime-bundle.ps1", "bin/recover.ps1",
         )
         if (scripts.any { flat.contains(it) }) {
-            return "refusing to run a bootstrap/recovery script from a task — " +
+            return "$VETO_BOOTSTRAP_SCRIPT from a task — " +
                 "it rewrites the runtime this task is running inside"
         }
         return null
@@ -1681,7 +1808,7 @@ class CodingAgentShell(
             Regex("""(?<![\w-])java(?:w)?(?:\.exe)?(?![\w-])""").containsMatchIn(lower)
         if (!targetsOwnPid && !targetsRuntimeName) return null
 
-        return "'$base' would terminate the Browser4 backend (pid $ownPid) or a JVM that may be " +
+        return "'$base' $VETO_BACKEND_KILL (pid $ownPid) or a JVM that may be " +
             "it — coding.shell refuses to kill the runtime executing this task. Stop stray " +
             "processes from outside the task, or name an explicit pid that is not the backend."
     }
@@ -1693,8 +1820,7 @@ class CodingAgentShell(
      * lifted line gets is byte-for-byte the one a normal command gets.
      */
     private fun forbiddenCommandViolation(baseCommand: String): String =
-        "'$baseCommand' is disabled — workspace links are provisioned by the framework, " +
-            "not by the agent"
+        "'$baseCommand' is disabled — $VETO_WORKSPACE_LINK"
 
     private fun validateSimpleCommand(segment: String, depth: Int): String? {
         val tierViolation = validateSimpleCommandTier(segment, depth)
@@ -1753,9 +1879,9 @@ class CodingAgentShell(
         // …and it must not rebuild that runtime either (isolation plan §D8).
         bootstrapViolation(segment, tokens, index)?.let { return it }
         // Explicit deny — absolute veto
-        if (baseCommand in explicitDeny) return "'$baseCommand' is explicitly denied"
+        if (baseCommand in explicitDeny) return "'$baseCommand' $VETO_EXPLICIT_DENY"
         for (pattern in denyPatterns) {
-            if (pattern.containsMatchIn(segment)) return "matches deny pattern: ${pattern.pattern}"
+            if (pattern.containsMatchIn(segment)) return "$VETO_DENY_PATTERN${pattern.pattern}"
         }
         if (baseCommand in explicitAllow) return null
         for (pattern in allowPatterns) {
@@ -1810,10 +1936,10 @@ class CodingAgentShell(
         // Without this, `curl` (installed on almost every host) was allowed even
         // with network access off, which made the whole network tier cosmetic.
         if (baseCommand in NETWORK_COMMANDS) {
-            return "'$baseCommand' requires network access but it is disabled by the access policy"
+            return "'$baseCommand' $VETO_NETWORK_DISABLED"
         }
         if (baseCommand in DESTRUCTIVE_COMMANDS) {
-            return "'$baseCommand' is a destructive command but allowDestructive=false"
+            return "'$baseCommand' $VETO_DESTRUCTIVE_DISABLED"
         }
 
         // Explicit path form (e.g. /usr/bin/git, ./script.sh, C:\repo\mvnw.cmd):
@@ -1825,6 +1951,20 @@ class CodingAgentShell(
 
         // PATH fallback — command not in any set but found on PATH
         if (allowDevTools && !buildOnly && isCommandOnPath(baseCommand)) return null
+
+        // `agent run --unrestricted`: the tier is the shell's *spelling* rule, not a rail this flag
+        // keeps. A program outside SAFE/DEV that is not an executable on PATH — a PowerShell cmdlet
+        // such as `Get-Content`, or `wmic` — is handed to the platform shell like any other: the
+        // promise is that the task runs with the caller's own OS permissions, and the same body
+        // already runs unexamined through `powershell -File`. Keeping it refused also contradicted
+        // the model-facing prompt, which says inline scripts run as written (2026-11-14 run).
+        //
+        // Nothing is skipped by this: every veto above (blocked patterns, explicit deny, deny
+        // patterns, credential/protected paths, FORBIDDEN commands, the runtime vetoes) already ran,
+        // and [validateSimpleCommand] still applies the workspace boundary afterwards. The
+        // build-only profile is exempt — that shell belongs to `coding.mvnBuild`/`verify`, not to
+        // the model, so unrestricted must not widen it.
+        if (unrestricted && !buildOnly) return null
 
         return "command '$baseCommand' is not allowed (safe=${baseCommand in SAFE_COMMANDS}, " +
             "dev=${devToolAllowed(baseCommand)}, " +

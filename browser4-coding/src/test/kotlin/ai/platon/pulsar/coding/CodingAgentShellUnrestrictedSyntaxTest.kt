@@ -22,8 +22,9 @@ import java.nio.file.Path
  * checker decomposes a command line to validate every program it can reach, and a `for` loop's
  * body is not the shell's to decompose — but under `--unrestricted` the task already runs with the
  * caller's own OS permissions, so a shape the checker cannot parse must be handed to the platform
- * shell instead of being refused. Policy refusals (blocked patterns, deny list, protected paths,
- * tier checks) keep applying: only the syntax family is lifted.
+ * shell instead of being refused. Policy refusals (blocked patterns, deny list, protected paths)
+ * keep applying here: this file covers the *syntax* family only. The command tier allow-list is
+ * lifted by the same flag, and [CodingAgentShellUnrestrictedTierTest] covers that half.
  *
  * The cmd.exe shapes below (`for`, `if`) are Windows-only — [CodingAgentShell] recognises them as
  * control flow only when `isWindowsHost()` — so those cases are `@EnabledOnOs(WINDOWS)` rather than
@@ -33,19 +34,19 @@ import java.nio.file.Path
  */
 class CodingAgentShellUnrestrictedSyntaxTest {
 
-    private fun shell(allowUnsupportedSyntax: Boolean) = CodingAgentShell(
+    private fun shell(unrestricted: Boolean) = CodingAgentShell(
         baseDir = Path.of(System.getProperty("user.dir")).toAbsolutePath(),
         allowDevTools = true,
         allowExecution = true,
         allowDestructive = true,
-        allowUnsupportedSyntax = allowUnsupportedSyntax,
+        unrestricted = unrestricted,
     )
 
     @Test
     @EnabledOnOs(OS.WINDOWS)
     @DisplayName("without --unrestricted a control-flow shape stays a syntax refusal")
     fun defaultShellKeepsTheSyntaxGate() {
-        val s = shell(allowUnsupportedSyntax = false)
+        val s = shell(unrestricted = false)
         val command = "for %f in (*.csv) do echo %f"
 
         val explained = s.explain(command)
@@ -57,7 +58,7 @@ class CodingAgentShellUnrestrictedSyntaxTest {
     @EnabledOnOs(OS.WINDOWS)
     @DisplayName("--unrestricted lifts the syntax gate instead of answering NOT SUPPORTED")
     fun unrestrictedLiftsTheSyntaxGate() {
-        val s = shell(allowUnsupportedSyntax = true)
+        val s = shell(unrestricted = true)
         val command = "for %f in (*.csv) do echo %f"
 
         val explained = s.explain(command)
@@ -68,7 +69,7 @@ class CodingAgentShellUnrestrictedSyntaxTest {
     @Test
     @DisplayName("the syntax relaxation does not widen the policy: blocked patterns still refuse")
     fun policyRefusalsSurviveTheSyntaxRelaxation() {
-        val s = shell(allowUnsupportedSyntax = true)
+        val s = shell(unrestricted = true)
 
         val explained = s.explain("format c:")
         assertTrue(explained.contains("DENIED"), explained)
@@ -82,7 +83,7 @@ class CodingAgentShellUnrestrictedSyntaxTest {
         val command = "for %f in (*.csv) do echo %f"
         val before = UnsupportedSyntax.snapshot()["coding.shell"] ?: 0
 
-        shell(allowUnsupportedSyntax = false).executeRaw(command)
+        shell(unrestricted = false).executeRaw(command)
         assertEquals(
             before + 1,
             UnsupportedSyntax.snapshot()["coding.shell"] ?: 0,
@@ -91,7 +92,7 @@ class CodingAgentShellUnrestrictedSyntaxTest {
 
         // The lifted gate never builds a refusal, so the syntax counter must not move — whatever
         // the platform shell makes of the line (it reports its own parse error, if any).
-        shell(allowUnsupportedSyntax = true).executeRaw(command)
+        shell(unrestricted = true).executeRaw(command)
         assertEquals(
             before + 1,
             UnsupportedSyntax.snapshot()["coding.shell"] ?: 0,
@@ -109,7 +110,7 @@ class CodingAgentShellUnrestrictedSyntaxTest {
             allowDevTools = true,
             allowExecution = true,
             allowDestructive = true,
-            allowUnsupportedSyntax = true,
+            unrestricted = true,
         )
 
         val result = s.executeRaw("for %f in (*.csv) do echo b4-loop-%f", workingDir = tempDir.toString())
@@ -148,8 +149,8 @@ class CodingAgentShellUnrestrictedSyntaxTest {
         // `empty or invalid command` belongs to the same family as the cmd.exe shapes and is
         // produced on every platform, so it exercises the lift itself without depending on
         // `isWindowsHost()`.
-        val restricted = shell(allowUnsupportedSyntax = false)
-        val lifted = shell(allowUnsupportedSyntax = true)
+        val restricted = shell(unrestricted = false)
+        val lifted = shell(unrestricted = true)
         val blank = "   "
 
         assertFalse(restricted.isAllowed(blank), restricted.explain(blank))
@@ -162,7 +163,7 @@ class CodingAgentShellUnrestrictedSyntaxTest {
         // The guard is the part of the lift that protects the run's own runtime; it is
         // platform-independent, so it is asserted directly rather than through `isAllowed` (which
         // only reaches it through a syntax refusal, and the cmd.exe refusals are Windows-only).
-        val s = shell(allowUnsupportedSyntax = true)
+        val s = shell(unrestricted = true)
         val ownPid = ProcessHandle.current().pid()
 
         assertNotNull(
@@ -210,7 +211,7 @@ class CodingAgentShellUnrestrictedSyntaxTest {
             allowDevTools = true,
             allowExecution = true,
             allowDestructive = true,
-            allowUnsupportedSyntax = true,
+            unrestricted = true,
             allowExternalAccess = true,
             sensitivePaths = emptySet(),
             protectedDirs = emptySet(),

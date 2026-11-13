@@ -236,8 +236,9 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "(a syntax limit, not a permission one, so requesting access will not help): put those in a " +
                 "script file and run it by path (e.g. .\\run.cmd), or decide with tools " +
                 "(coding.stat reports whether a path exists, coding.mvnBuild/coding.verify return the build status). " +
-                "Exception: under `agent run --unrestricted` the syntax gate is lifted as well, so a command " +
-                "line (blocks, `for` loops, inline scripts) is handed to the platform shell verbatim."
+                "Exception: under `agent run --unrestricted` both the syntax gate and the command " +
+                "allow-list are lifted, so a command line (blocks, `for` loops, inline scripts, a " +
+                "PowerShell cmdlet) is handed to the platform shell verbatim."
         )
         toolSpec["shellOutput"] = ToolSpec(
             domain = domain, method = "shellOutput",

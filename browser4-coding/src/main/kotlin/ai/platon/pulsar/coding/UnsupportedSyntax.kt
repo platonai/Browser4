@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger
  *   per call; it does not parse blocks, parentheses or `else`". No preset, approval or
  *   configuration can change it, and asking for `fs.exec` would not help — the one exception is
  *   `agent run --unrestricted`, which lifts the whole syntax gate
- *   ([CodingAgentShell]'s `allowUnsupportedSyntax`): the line is handed to the platform shell
+ *   ([CodingAgentShell]'s `unrestricted`): the line is handed to the platform shell
  *   verbatim, so no syntax refusal is produced and nothing is counted here. That lift is not a
  *   blank cheque either — the vetoes that protect the run's own runtime (killing the backend,
  *   rebuilding it, rewriting the workspace topology) still refuse the line

@@ -1033,9 +1033,10 @@ open class StatefulAgentRunner(
                 }
                 // `--unrestricted` is the last word: the pass-through policy (full preset, no
                 // protected/sensitive rails, external access, network and destructive commands
-                // allowed) is applied on top of the preset and the added folders. It is audited,
-                // because "run with the operator's own permissions" is exactly the grant a reviewer
-                // must be able to find later.
+                // allowed; the coding shell's syntax gate and command allow-list lifted) is applied
+                // on top of the preset and the added folders. It is audited, because "run with the
+                // operator's own permissions" is exactly the grant a reviewer must be able to find
+                // later.
                 val taskPolicy = if (effectiveUnrestricted) {
                     ai.platon.pulsar.coding.PermissionAudit.writeEvent(
                         tool = "coding.access",

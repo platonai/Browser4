@@ -209,7 +209,7 @@ command guard.
 | The same pages are fetched in several rounds | rows/progress kept only in the conversation | append each row + id to `.b4scratch/` as you collect |
 | Titles/prices in the wrong language or currency, or you land on a "change language & currency" page | the site localized for the profile/IP | open the picker on the page and choose language + currency (`snapshot` → `select`/`click`), then verify one product; `set headers`/`?language=` are only hints |
 | `ParserError` from a `b4.run` command | PowerShell parsed an unquoted `@file` | quote it: `'--sql @q.sql'` (see [shell-quoting.md](shell-quoting.md)) |
-| `PERMISSION_DENIED \| code=COMMAND_NOT_ALLOWED` | inline interpreter or a blocked command | keep each shell's syntax in its own tool; use `b4.run` or a script file |
+| `PERMISSION_DENIED \| code=COMMAND_NOT_ALLOWED` | inline interpreter or a blocked command | keep each shell's syntax in its own tool; use `b4.run` or a script file (an `--unrestricted` task lifts both the syntax gate and the command allow-list) |
 | Extracted CSV has the wrong columns | spec not compared with the output | diff the header row against the field spec; report missing columns in `problems` |
 | `coding.read` refuses the file | binary (`.xlsx`, `.pdf`, `.zip`, image) | extract with a script, or convert to CSV once |
 | Deliverable "missing" after a green run | written under the task workspace, not the repo | `agent result` → `workspace`, then copy the CSV out |

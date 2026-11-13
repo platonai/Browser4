@@ -64,10 +64,18 @@ pass-through ones for that one task:
 | preset gate | `--access` / backend default | `full` — every tool domain |
 | path boundary | workspace + readable roots + `--add-dir` | every path the OS user can reach |
 | protected paths | refused | allowed (the OS still governs) |
+| shell's own rules (syntax gate, command allow-list) | applied | **not** applied — `for` loops, inline scripts and programs the list never knew (`Get-Content`, `wmic`) run as written |
 | OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) | refused | **still refused** — see below |
 | network, destructive commands | per preset | allowed |
 | OS sandbox (`browser4.agent.sandbox`) | applied | **not** applied — plain child processes |
 | runtime-protection vetoes (`taskkill` on the backend, `b4w build/stop`, `bin/build.ps1`, `mklink`/`ln`/`mount`) | refused | **still refused** |
+
+The shell's own rules are the two that only look like rails: the syntax gate and the command
+allow-list. Neither confines a process — the same script body already ran unexamined through
+`powershell -File`, and `python -c` is on the list — so refusing `powershell -Command "Get-Content
+x"` only cost rounds (2026-11-14 run). Every row marked **still refused** above keeps refusing, and
+the shell's `hint=` says `no approval lifts this` instead of offering a request that cannot be
+granted.
 
 What it does **not** do:
 
@@ -350,7 +358,7 @@ answer to "why was this refused" is one call away.
 |---|---|---|
 | `code=TOOL_DENIED` | the preset does not grant the method | use a wider preset, or call `coding.requestAccess` and have an operator approve that effect |
 | `code=EXEC_DISABLED` | shell/code execution is off under the preset | run the step another way, request `fs.exec` approval, or widen to `full` |
-| `code=COMMAND_NOT_ALLOWED` | the command is outside the shell's tier | use the project build (`mvnBuild`), a script file, or a different command |
+| `code=COMMAND_NOT_ALLOWED` | the command is outside the shell's tier | use the project build (`mvnBuild`), an allowed equivalent (`type`/`cat`/`dir`/`grep`) or a `coding.*` file tool, a script file, or a different command — under `--unrestricted` the tier does not apply at all; a `no approval lifts this` hint means the command is a permanent veto (runtime/credential/deny) |
 | `code=PATH_DENIED` | the path is outside the workspace | see [agent-workspace.md](agent-workspace.md) — name the input, use `--coding`, or widen paths |
 | `code=PROTECTED_PATH` / `code=SENSITIVE_PATH` | rails, not capabilities | never approvable; copy the data somewhere allowed |
 | `code=SANDBOX_DENIED` | the OS sandbox refused the operation (the step's `needed` names the granted roots) | keep the command inside the workspace and granted roots; change the sandbox configuration, not the command |
