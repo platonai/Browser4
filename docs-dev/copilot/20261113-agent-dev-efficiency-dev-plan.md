@@ -21,6 +21,15 @@
 > **修订 v3（2026-11-13 深夜，数据回填）**：P0-0 实测 4 个真实任务后，**P0-3 与 P1-3 ①② 被数据否决**、
 > P1-4 重定义为"压低每轮请求成本"、P0-2 改用实测 reactor 规模（2 / 10 模块）、DoD 第 2 条删除并新增
 > "model 桶下降 ≥20%"；P0-1 与 P0-0 已在真实任务中端到端验证。见 §0.1、§5、§9、附录 B。
+>
+> **修订 v4（2026-11-14，进度回填）**：P0-1 / P0-0 / 实验 1（输出预算提示词）/ N3（度量进结果）/
+> N1（`coding.readFiles`）均已落地并各自提交；**N1 的 A/B 没有墙钟收益**（如实记录，工具保留、提示词行回滚）。
+> 当前进度与待办见 **§12**，逐项数据见附录 B。6 个提交：`41993ec592`、`570c884f54`、`df378a5bed`、
+> `a72cfd399b`、`e5df9643eb`、`fea39337c6`。
+
+> **一句话进度（2026-11-14）**：数据采集与最大的两块浪费（零编辑重建、输出 token）已解决；
+> 剩下 N4（缓存 verdict 的模块覆盖，0.5 d）、N7（worktree 未提交文件可见性，1 d）、N6（runner 消失，
+> 0.5–1 d）、N5（指纹收敛，需先有命中率数据，1 d）；N2 受 base 库阻塞。
 
 ## 0. 前置门禁：先归因，再优化（P0-0）
 
@@ -423,6 +432,139 @@ P0-3 与 P1-3 ①② 因此被数据否决（§5、§9 已改）。成本公式�
 测试：`RunTimingsTest` 7 例、`AgentTaskStatusTest` 25（含 timings 快照）、`CommandStatusPageStatusTest` 11（含 timings 透传）、
 CLI `agent_result` 28 例（含 Timings 段渲染与"无度量不渲染"）。
 
+
+## 11. 后续开发计划（2026-11-14）
+
+### 11.1 已冻结的约束（后续任何优化先对照这张表）
+
+| 事实（实测） | 数值 | 对计划的约束 |
+|---|---|---|
+| 成本公式 | `modelMs ≈ 600 + 4.05×outTokens`（R² 94.7%，n=59） | 输出 token 是贵的那一半；每 1k ≈ 4 s |
+| 每次请求固定延迟 | 0.6–0.9 s（63 次 → 38 s） | 减请求有效，但**只能靠结构**（实验 2 证明提示词不行） |
+| 输入 | ≈ 0（prompt cache 命中 92.6%） | **不再为"减输入"立项**：结果裁剪、多文件合并读都不是延迟优化 |
+| 四桶 | model 77% / build 10% / tool 1.2% / callback 0.2%（build-heavy 任务 build 46%） | 已否决 P0-3、P1-3①②；P0-1 是唯一确定的大块 |
+| 已验证有效 | 输出预算提示词：墙钟 −26%（105.4 → 77.7 s） | 保持；新增提示词规则必须 A/B |
+| 不可控 | 隐藏推理 ≈ model 桶六成 | 只有 provider 参数能压 → 列为 N2（前置 base 库） |
+
+### 11.2 计划项（按可兑现收益排序）
+
+| ID | 项 | 为什么（数据支撑） | 动作 | 验收 | 估时 |
+|---|---|---|---|---|---|
+| **N1** | 复合工具 `coding.readFiles`（一次调用读 N 个文件）（✅ **已实施**，A/B 无收益，见 B.9） | 请求≈0.6–0.9 s/次；实验 2 证明提示词压不动轮数；结构化的批量读至少能消除"逐文件读撑大上下文"的路径 | `readFiles(paths, startLine, maxLinesPerFile, maxTotalChars)`：4.6 KB 硬预算、逐文件截断、跳过清单；注册进 `READ_METHODS`/`TOOL_EFFECTS`/`CLI_CORE_CODING_METHODS` | ✅ 9 例单测 + 25 例矩阵/副作用守卫；❌ A/B 未显示墙钟收益（两臂都采纳，轮数 10–22 波动），**提示词行已回滚** | 1 d |
+| **N2** | provider 参数透传（=`P1-5`） | 隐藏推理约占 model 桶六成（最典型一轮 3,948 输出 token、可见输出约 100 字符） | base 库给 `BrowserChatModel` 加自定义参数缝；本仓库加 `browser4.agent.llm.extraParams`（默认空） | `reasoning_effort=low/off` 的 A/B：model 桶与墙钟对比 | 本仓库 0.5 d（前置 base 库） |
+| **N3** | 把度量搬进任务结果（✅ **已实施**，见 §10.6） | `agent result` 原先只有 `elapsedMs`/`effectiveTokenBudget`，看不到轮数、token、四桶；每次分析都要跑脚本 | 任务结果 JSON 增 `rounds`/`tokens{in,cached,out}`/`timings{build,tool,callback,model}` | ✅ 一次真实任务的结果里直接读出四桶，且与事件日志复算逐项一致 | 0.5 d |
+| **N4** | `cached` verdict 带上"覆盖的模块列表" | worktree 合并闸门要判断"这次缓存的编译是否覆盖本次改动"；当前 verdict 只有 `cached`/`fingerprint` | `VerificationCheck.modules` + `IsolationGate` 消费 + 用例 | 合并闸门用例：缓存命中但未覆盖改动 → 拒绝合并 | 0.5 d |
+| **N5** | P0-1 指纹收敛（可选） | 现按整个 workspace 摘要，换模块必失配；命中率未测 | 先统计真实任务的缓存命中/失配原因，再决定是否按 module+上游 pom 收敛 | 命中率提升 vs 误失效（要有数据） | 1 d |
+| **N6** | 故障：runner 消失 | 任务 `9c97e8c0` 后端中途消失、判失败、日志无崩溃行（§10.4） | 单独 issue：存活检测 / 更明确的错误 / 排查 OOM·端口·外部 kill | 可复现或排除；任务不再"无声失败" | 0.5–1 d |
+| **N7** | worktree 可见性 | 未提交文件"读得到、写不了"（B.3），真实任务 `e76c517c` 被 `PATH_DENIED` | `WorkspaceIsolation` 把未跟踪文件也带入 worktree（`stash -u` 或复制） | 用例 + 真实任务能编辑未提交文件 | 1 d |
+
+### 11.3 降级 / 不做（已有数据判定）
+
+- **P1-1 只读结果复用**：工具桶 1.2%，收益上限就是它 → 降到"顺手做"，不单独排期。
+- **P1-2 verify 并发**：`repo-consistency` 实测 103–132 ms，与 compile 并发无收益 → 只保留 N4（正确性）。
+- **`coding.writeBatch`**：与 N1 同一前提（"批量调用能省轮"），而 N1 的 A/B 已表明轮数由模型规划决定（同指令 10–22 轮）；写入还受"先读后改"的依赖限制。不立项，除非将来出现真实的批量写场景数据。
+- **P0-2 合并构建**：合并只省一次 Maven 启动（全 reactor `validate` ≈ 2 s），却可能把 2 个模块变 10 个上游 → 在真实任务出现"同一轮多次多模块构建"之前不立项。
+
+### 11.4 执行顺序与复测方式
+
+顺序：**N3 → N1 → N4 →（N2 等 base 库）→ N5 → N6 / N7**。N3 先做的理由：它把 N1/N2 的验收从"跑脚本"变成"读结果"。
+
+每项门禁：最小作用域单测 + 一次真实任务。真实任务现在可以直接等结果（**`agent run <task> --coding --wait --wait-timeout 900`**，
+`--wait` 会阻塞到完成；本轮早期用的是手写轮询，属于多余步骤）：
+
+```bash
+pwsh ./b4w.ps1 agent run "<task>" --coding --wait --wait-timeout 900
+pwsh docs-dev/copilot/scripts/analyze-agent-timing.ps1 -Last 3      # 四桶 + token + 成本模型拟合
+```
+
+### 11.5 每项的最小验收口径（避免再次"跑通了但没省时间"）
+
+1. 任何优化都必须给出**同任务、同模型、≥2 次/臂**的 A/B，报告 outTok、rounds、model ms、墙钟四项。
+2. 验收以**墙钟**为准；轮数/token 只作为解释项（实验 2 就是轮数解释不了的例子）。
+3. 报告里必须写明样本量与离散度；n=1 的"改进"不作数。
+
+### B.9 A/B #3：`coding.readFiles`（工具保留，提示词行回滚）
+
+同一中性指令（不点名任何工具）、同模型、无会话：`browser4-coding/src/test/kotlin` 下全部 .kt 读前 30 行并列表。
+
+| 臂 | 任务 | 轮 | model | 墙钟 | 用了 readFiles |
+|---|---|---|---|---|---|
+| 处理组（提示词点名 readFiles） | `5ac9a55e` | 17 | 68 s | 74 s | 是 |
+| 处理组 | `90eb492a` | — | — | 64 s | 是 |
+| 对照组（提示词不点名，工具仍在） | `cf81b12d` | 10 | 53.6 s | **58.5 s** | 是（靠工具描述） |
+| 对照组 | `13f57b0a` | 15 | 61 s | 66 s | 是 |
+| 参考：更早一次（工具未被采纳） | `4a843524` | 22 | 100 s | 106 s | 否 |
+
+结论（如实记录）：
+
+1. **没有可归因于 N1 的墙钟收益**：两臂都采纳了工具，墙钟 58.5–74 s，对照组反而略快；同指令下轮数在 **10–22** 之间波动，
+   模型方差远大于臂间差，n=2 无法分辨。
+2. **采纳由工具描述驱动，不由提示词驱动**：对照组（提示词从不提 readFiles）两跑都用了它——`ToolSpec.description`
+   里"ANY batch of 2+ files"才是有效信号。因此**提示词行已回滚**（`CliAgentPromptTest` 反向钉住），工具与其描述保留。
+3. 工具价值不在"减轮"，而在**单次调用覆盖 N 个文件且回复有界**（4.6 KB 硬预算 + 跳过清单），
+   这消除了"逐文件读 → 上下文被 60 个文件结果撑大"的路径；是否减少轮数由模型规划决定。
+4. 推论：**不要在同一个前提上继续做 `coding.writeBatch`**（§11.3 已记）。写入的轮次受"先看后改"的依赖限制，不是调用粒度限制。
+
+## 12. 进度与待办（2026-11-14）
+
+### 12.1 已交付（按提交顺序）
+
+| 提交 | 内容 | 状态 | 证据 |
+|---|---|---|---|
+| `41993ec592` | **P0-1 构建短路**：`BuildFingerprint`/`BuildCache`/`SourceDigest`、`MavenBuildSupport.build` 命中即返回、`cached` 进 `BuildResult`/`VerificationCheck`/`mvnBuild(json)` | ✅ 已完成 | 真实任务 `mvnBuild` 真跑后 `verify` 返回 `cached@sha256:248d2b574`（附录 B.2）；`BuildShortCircuitTest` 12 例 |
+| `570c884f54` | **P0-0 轮次归因**：`RoundTiming`（model/tools/callbacks + 末轮）、`RoundTimed` 事件、sink/查询/索引/追踪接线 | ✅ 已完成 | 4 个真实任务四桶：model 77% / build 10% / tool 1.2% / callback 0.2%（§0.1）；`RoundTimingTest` 6 例 |
+| `df378a5bed` | **实验 1 输出预算提示词**：工具轮不写散文、报告不复述文件内容 | ✅ 已保留（A/B 通过） | 2+2 次：outTok −22.6%、model −26.1%、墙钟 105.4 → 77.7 s（§0.3 / B.7）；`CliAgentPromptTest` 13 例 |
+| `a72cfd399b` | 计划 v3、审查报告、四桶复算脚本 | ✅ 已完成 | 本文 + [审查报告](20261113-agent-dev-efficiency-dev-plan-review.md) + `scripts/analyze-agent-timing.ps1` |
+| `e5df9643eb` | **N3 度量进结果**：`RunTimings` 累计器、`timings` 透传链、`agent result` 的 `Timings` 段 | ✅ 已完成 | 真实任务结果与事件日志**逐项一致**（§10.6）；`RunTimingsTest` 7 例 + 状态/结果透传 36 例 + CLI 28 例 |
+| `fea39337c6` | **N1 `coding.readFiles`**：一次读 N 文件、4.6 KB 硬预算、跳过清单、内联失败 | ⚠️ 已交付但 **A/B 无收益** | 9 例单测；四跑 58.5–74 s、轮数 10–22 无臂间差；**采纳靠工具描述，提示词行已回滚**（B.9） |
+
+配套的判死记录（都有数据）：P0-3 只读并发（工具桶 1.2%）、P1-3 ①② 记账合批（回调桶 0.2%）、
+实验 2 批量提示词（+15% 墙钟，已回滚）、`coding.writeBatch`、P0-2 合并构建（见 §11.3）。
+
+### 12.2 待办
+
+| ID | 任务 | 前置 / 阻塞 | 验收 | 估时 |
+|---|---|---|---|---|
+| **N4** | `cached` verdict 带**覆盖模块列表** | 无（可直接开工） | 合并闸门用例：缓存命中但未覆盖本次改动 → 拒绝合并 | 0.5 d |
+| **N7** | worktree 纳入**未提交文件** | 无 | 用例 + 真实任务能编辑未跟踪文件（现在 `e76c517c` 被 `PATH_DENIED`） | 1 d |
+| **N6** | **runner 消失**的故障处理 | 无（需先定位 OOM/端口/外部 kill） | 任务不再"无声失败"，或可复现并给出根因 | 0.5–1 d |
+| **N5** | P0-1 指纹收敛（可选） | 需先有真实任务的命中/失配数据 | 命中率提升且不引入误失效 | 1 d |
+| **N2** | provider 参数透传（`reasoning_effort`） | **被 base 库阻塞**（`BrowserChatModel` 无透传缝） | `reasoning_effort=low/off` 的 A/B：model 桶与墙钟对比 | 本仓库 0.5 d + 前置 |
+
+建议顺序：**N4 → N7 → N6 → N5**；N2 等前置解除后再排。
+
+### 12.3 DoD 达成对照（§2）
+
+| DoD | 状态 |
+|---|---|
+| 1. 零编辑构建 = 0 次（第二次 build 返回 `cached`） | ✅ 真实任务验证 |
+| 2. ~~同轮只读并发~~ | 已删除（工具桶 1.2%，数据否决） |
+| 3. 同轮多模块编译合并 | ❌ 未做（P0-2 降级，见 §11.3） |
+| 4. 可分桶度量（四桶，不依赖外部日志） | ✅ N3 交付，`agent result` 直读 |
+| 5. 验证强度不降 + `cached@<fp>` + 生成时间 | ✅ 已验证；**"覆盖模块列表"= N4 待做** |
+| 6. model 桶下降 ≥20%（新增） | ✅ 实验 1：−26.1%（读密集型任务） |
+| 7. 回归（`browser4-coding` / `browser4-agentic`） | ✅ 相关类全绿（见 §10.3 / §10.6）；**未跑全量**（仓库策略：最小作用域） |
+
+### 12.4 已知缺口（写在纸面上，避免误读）
+
+1. **没有跑全量测试套件**：所有门禁都是"最小作用域"（相关测试类），符合仓库测试策略，但跨模块回归风险
+   由 CI 承担。
+2. **N1 没有收益数字**：工具保留是因为它消除"逐文件读撑大上下文"的路径且回复有界，不是因为省时间。
+3. **合并闸门仍只看 `cached` 标志**：N4 未做之前，闸门无法判断缓存的编译是否覆盖本次改动。
+4. **缓存断言的是"源码能编译"**，不是 `target/classes` 存在（§10.1 已记）。
+5. **隐藏推理仍不可控**：model 桶约六成是模型侧不可见的输出 token，只有 N2 能压。
+
+### 12.5 复测方法（下次接着做之前先跑一遍）
+
+```bash
+# 真实任务（本轮才发现 --wait 可以不用手写轮询）
+pwsh ./b4w.ps1 agent run "<task>" --coding --access read --wait --wait-timeout 600
+# 四桶 + token + 成本模型拟合（也可以直接读 agent result 的 timings 段）
+pwsh docs-dev/copilot/scripts/analyze-agent-timing.ps1 -Last 5
+# 相关单测
+.\mvnw.cmd -pl browser4-coding,browser4-agentic -am -D"test=BuildShortCircuitTest,RoundTimingTest,RunTimingsTest,CodingReadFilesToolTest" -D"surefire.failIfNoSpecifiedTests=false" test
+```
+
 ## 附录 A：数据来源与复算方法
 
 - 数据源：`app-data/memory/events` 中的 `tool_executed` 事件，字段 `seq` / `tool` / `ok` /
@@ -555,74 +697,3 @@ CLI `agent_result` 28 例（含 Timings 段渲染与"无度量不渲染"）。
 教训：一次请求 ≈0.9 s 的延迟是**模型规划行为的函数**，不是提示词能直接压的量。真要减请求，得让
 "列目录 + 读 N 个文件"这类动作在**一次工具调用**里完成（复合工具），或改写工具面，而不是要求模型"多调用"。
 
-## 11. 后续开发计划（2026-11-14）
-
-### 11.1 已冻结的约束（后续任何优化先对照这张表）
-
-| 事实（实测） | 数值 | 对计划的约束 |
-|---|---|---|
-| 成本公式 | `modelMs ≈ 600 + 4.05×outTokens`（R² 94.7%，n=59） | 输出 token 是贵的那一半；每 1k ≈ 4 s |
-| 每次请求固定延迟 | 0.6–0.9 s（63 次 → 38 s） | 减请求有效，但**只能靠结构**（实验 2 证明提示词不行） |
-| 输入 | ≈ 0（prompt cache 命中 92.6%） | **不再为"减输入"立项**：结果裁剪、多文件合并读都不是延迟优化 |
-| 四桶 | model 77% / build 10% / tool 1.2% / callback 0.2%（build-heavy 任务 build 46%） | 已否决 P0-3、P1-3①②；P0-1 是唯一确定的大块 |
-| 已验证有效 | 输出预算提示词：墙钟 −26%（105.4 → 77.7 s） | 保持；新增提示词规则必须 A/B |
-| 不可控 | 隐藏推理 ≈ model 桶六成 | 只有 provider 参数能压 → 列为 N2（前置 base 库） |
-
-### 11.2 计划项（按可兑现收益排序）
-
-| ID | 项 | 为什么（数据支撑） | 动作 | 验收 | 估时 |
-|---|---|---|---|---|---|
-| **N1** | 复合工具 `coding.readFiles`（一次调用读 N 个文件）（✅ **已实施**，A/B 无收益，见 B.9） | 请求≈0.6–0.9 s/次；实验 2 证明提示词压不动轮数；结构化的批量读至少能消除"逐文件读撑大上下文"的路径 | `readFiles(paths, startLine, maxLinesPerFile, maxTotalChars)`：4.6 KB 硬预算、逐文件截断、跳过清单；注册进 `READ_METHODS`/`TOOL_EFFECTS`/`CLI_CORE_CODING_METHODS` | ✅ 9 例单测 + 25 例矩阵/副作用守卫；❌ A/B 未显示墙钟收益（两臂都采纳，轮数 10–22 波动），**提示词行已回滚** | 1 d |
-| **N2** | provider 参数透传（=`P1-5`） | 隐藏推理约占 model 桶六成（最典型一轮 3,948 输出 token、可见输出约 100 字符） | base 库给 `BrowserChatModel` 加自定义参数缝；本仓库加 `browser4.agent.llm.extraParams`（默认空） | `reasoning_effort=low/off` 的 A/B：model 桶与墙钟对比 | 本仓库 0.5 d（前置 base 库） |
-| **N3** | 把度量搬进任务结果（✅ **已实施**，见 §10.6） | `agent result` 原先只有 `elapsedMs`/`effectiveTokenBudget`，看不到轮数、token、四桶；每次分析都要跑脚本 | 任务结果 JSON 增 `rounds`/`tokens{in,cached,out}`/`timings{build,tool,callback,model}` | ✅ 一次真实任务的结果里直接读出四桶，且与事件日志复算逐项一致 | 0.5 d |
-| **N4** | `cached` verdict 带上"覆盖的模块列表" | worktree 合并闸门要判断"这次缓存的编译是否覆盖本次改动"；当前 verdict 只有 `cached`/`fingerprint` | `VerificationCheck.modules` + `IsolationGate` 消费 + 用例 | 合并闸门用例：缓存命中但未覆盖改动 → 拒绝合并 | 0.5 d |
-| **N5** | P0-1 指纹收敛（可选） | 现按整个 workspace 摘要，换模块必失配；命中率未测 | 先统计真实任务的缓存命中/失配原因，再决定是否按 module+上游 pom 收敛 | 命中率提升 vs 误失效（要有数据） | 1 d |
-| **N6** | 故障：runner 消失 | 任务 `9c97e8c0` 后端中途消失、判失败、日志无崩溃行（§10.4） | 单独 issue：存活检测 / 更明确的错误 / 排查 OOM·端口·外部 kill | 可复现或排除；任务不再"无声失败" | 0.5–1 d |
-| **N7** | worktree 可见性 | 未提交文件"读得到、写不了"（B.3），真实任务 `e76c517c` 被 `PATH_DENIED` | `WorkspaceIsolation` 把未跟踪文件也带入 worktree（`stash -u` 或复制） | 用例 + 真实任务能编辑未提交文件 | 1 d |
-
-### 11.3 降级 / 不做（已有数据判定）
-
-- **P1-1 只读结果复用**：工具桶 1.2%，收益上限就是它 → 降到"顺手做"，不单独排期。
-- **P1-2 verify 并发**：`repo-consistency` 实测 103–132 ms，与 compile 并发无收益 → 只保留 N4（正确性）。
-- **`coding.writeBatch`**：与 N1 同一前提（"批量调用能省轮"），而 N1 的 A/B 已表明轮数由模型规划决定（同指令 10–22 轮）；写入还受"先读后改"的依赖限制。不立项，除非将来出现真实的批量写场景数据。
-- **P0-2 合并构建**：合并只省一次 Maven 启动（全 reactor `validate` ≈ 2 s），却可能把 2 个模块变 10 个上游 → 在真实任务出现"同一轮多次多模块构建"之前不立项。
-
-### 11.4 执行顺序与复测方式
-
-顺序：**N3 → N1 → N4 →（N2 等 base 库）→ N5 → N6 / N7**。N3 先做的理由：它把 N1/N2 的验收从"跑脚本"变成"读结果"。
-
-每项门禁：最小作用域单测 + 一次真实任务。真实任务现在可以直接等结果（**`agent run <task> --coding --wait --wait-timeout 900`**，
-`--wait` 会阻塞到完成；本轮早期用的是手写轮询，属于多余步骤）：
-
-```bash
-pwsh ./b4w.ps1 agent run "<task>" --coding --wait --wait-timeout 900
-pwsh docs-dev/copilot/scripts/analyze-agent-timing.ps1 -Last 3      # 四桶 + token + 成本模型拟合
-```
-
-### 11.5 每项的最小验收口径（避免再次"跑通了但没省时间"）
-
-1. 任何优化都必须给出**同任务、同模型、≥2 次/臂**的 A/B，报告 outTok、rounds、model ms、墙钟四项。
-2. 验收以**墙钟**为准；轮数/token 只作为解释项（实验 2 就是轮数解释不了的例子）。
-3. 报告里必须写明样本量与离散度；n=1 的"改进"不作数。
-
-### B.9 A/B #3：`coding.readFiles`（工具保留，提示词行回滚）
-
-同一中性指令（不点名任何工具）、同模型、无会话：`browser4-coding/src/test/kotlin` 下全部 .kt 读前 30 行并列表。
-
-| 臂 | 任务 | 轮 | model | 墙钟 | 用了 readFiles |
-|---|---|---|---|---|---|
-| 处理组（提示词点名 readFiles） | `5ac9a55e` | 17 | 68 s | 74 s | 是 |
-| 处理组 | `90eb492a` | — | — | 64 s | 是 |
-| 对照组（提示词不点名，工具仍在） | `cf81b12d` | 10 | 53.6 s | **58.5 s** | 是（靠工具描述） |
-| 对照组 | `13f57b0a` | 15 | 61 s | 66 s | 是 |
-| 参考：更早一次（工具未被采纳） | `4a843524` | 22 | 100 s | 106 s | 否 |
-
-结论（如实记录）：
-
-1. **没有可归因于 N1 的墙钟收益**：两臂都采纳了工具，墙钟 58.5–74 s，对照组反而略快；同指令下轮数在 **10–22** 之间波动，
-   模型方差远大于臂间差，n=2 无法分辨。
-2. **采纳由工具描述驱动，不由提示词驱动**：对照组（提示词从不提 readFiles）两跑都用了它——`ToolSpec.description`
-   里"ANY batch of 2+ files"才是有效信号。因此**提示词行已回滚**（`CliAgentPromptTest` 反向钉住），工具与其描述保留。
-3. 工具价值不在"减轮"，而在**单次调用覆盖 N 个文件且回复有界**（4.6 KB 硬预算 + 跳过清单），
-   这消除了"逐文件读 → 上下文被 60 个文件结果撑大"的路径；是否减少轮数由模型规划决定。
-4. 推论：**不要在同一个前提上继续做 `coding.writeBatch`**（§11.3 已记）。写入的轮次受"先看后改"的依赖限制，不是调用粒度限制。
