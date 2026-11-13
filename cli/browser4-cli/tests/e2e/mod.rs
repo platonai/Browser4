@@ -56,7 +56,7 @@
 
 use base64::Engine as _;
 use browser4_cli::commands::{all_commands, E2eCoverage};
-use browser4_cli::managed_processes::stop_browser4_server_forcibly;
+use browser4_cli::managed_processes::stop_owned_browser4_servers_forcibly;
 use chrono::Local;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -3202,8 +3202,11 @@ impl E2ETestResources {
         // starting a fresh one.  Without this, the new Java server may see
         // stale BrowserProtocol browser contexts, leading to intermittent
         // "Cannot find context with specified id" errors.
+        // Ownership-scoped: only this checkout's backends/browsers are swept, so
+        // a neighbouring checkout's e2e run (or agent task) keeps running
+        // (issue #640).
         let cleanup_started_at = Instant::now();
-        stop_browser4_server_forcibly();
+        stop_owned_browser4_servers_forcibly();
         self.local_browser4_started = false;
         steps.push(TimedStep::new(
             "browser4 pre-restart cleanup",
@@ -5450,7 +5453,7 @@ fn cleanup_browser4_sessions_with_ctx(ctx: &E2ECtx) -> Result<Vec<TimedStep>, St
     }
 
     let fallback_started_at = Instant::now();
-    stop_browser4_server_forcibly();
+    stop_owned_browser4_servers_forcibly();
     steps.push(TimedStep::new(
         "browser4 forced cleanup fallback",
         fallback_started_at.elapsed(),
@@ -5513,7 +5516,7 @@ fn cleanup_after_scenario(
 
 fn run_final_cleanup() -> Result<Vec<TimedStep>, String> {
     let started_at = Instant::now();
-    stop_browser4_server_forcibly();
+    stop_owned_browser4_servers_forcibly();
     let steps = vec![TimedStep::new(
         "browser4 final service cleanup",
         started_at.elapsed(),
@@ -6976,15 +6979,21 @@ fn main() {
     // Sweep orphaned Browser4 processes from previous runs before starting.
     // This is a safety net: even if the final cleanup of a prior run was
     // skipped (e.g. Ctrl+C), the next run starts from a clean slate.
+    //
+    // Ownership-scoped on purpose (issue #640): the previous global sweep killed
+    // every Browser4 backend on the machine, which force-stopped a neighbouring
+    // checkout's backend in the middle of an agent task.  This sweep only
+    // touches backends launched from *this* checkout; set
+    // BROWSER4_SWEEP_ALL_WORKSPACES=1 to get the old machine-wide behaviour.
     let pre_sweep_started_at = Instant::now();
-    let pre_sweep_result = stop_browser4_server_forcibly();
+    let pre_sweep_result = stop_owned_browser4_servers_forcibly();
     if pre_sweep_result.shutdown.stopped_pids.is_empty()
         && pre_sweep_result.browser_kill.killed_pids.is_empty()
     {
         // nothing to clean up — don't add a timing entry
     } else {
         eprintln!(
-            "[pre-sweep] cleaned up {} server(s) and {} browser(s) from previous runs ({:.2}s)",
+            "[pre-sweep] cleaned up {} server(s) and {} browser(s) of this checkout ({:.2}s)",
             pre_sweep_result.shutdown.stopped_pids.len(),
             pre_sweep_result.browser_kill.killed_pids.len(),
             pre_sweep_started_at.elapsed().as_secs_f64()

@@ -504,6 +504,7 @@ to PowerShell's `Invoke-WebRequest` which uses the WinINET proxy stack.
 | `BROWSER4_CLI_DISABLE_PLUGIN_WARM_RESTART` | Set to `1` to stop the CLI from auto-restarting the local server when its `plugins/` directory changes; plugins then require a manual restart (`1`/`true`/`yes`/`on`) |
 | `BROWSER4_CLI_FORCE_REBUILD_BUNDLE` | Dev mode: rebuild the runtime bundle from the checked-out sources before starting (`1`/`true`/`yes`/`on`) |
 | `BROWSER4_CLI_ALLOW_STALE_BUNDLE` | Dev mode: start against a bundle that does not match the checkout instead of refusing (`1`/`true`/`yes`/`on`) |
+| `BROWSER4_SWEEP_ALL_WORKSPACES` | Set to `1` to make the CLI e2e harness's pre/post process sweep machine-wide (every Browser4 backend and browser on the host) instead of scoped to this checkout (`1`/`true`/`yes`/`on`) |
 | `BROWSER4_CLI_HTTP_TIMEOUT_SECS` | HTTP request timeout in seconds (default: `30`) |
 | `BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS` | Navigation request timeout in seconds (default: `120`) |
 

@@ -662,6 +662,25 @@ pub fn kill_all_browsers() -> BrowserKillResult {
 /// process-wide temp directory (`.../browser4-pereg/...`).
 const BROWSER_TEMP_ROOT_MARKER: &str = "browser4-pereg";
 
+/// Close the browsers launched by **this checkout's** backends.
+///
+/// The ownership-scoped counterpart of [`kill_all_browsers`], which closes every
+/// Browser4 browser on the machine — a neighbouring checkout's browser windows
+/// included (issue #640).  Attribution is the parent process: a backend starts
+/// its browser directly, so the browser root's parent is one of this checkout's
+/// backends (see [`find_browser_roots_launched_by`]).
+///
+/// An installed runtime (no checkout) has exactly one backend, so it keeps the
+/// machine-wide behaviour.
+#[allow(dead_code)]
+pub fn kill_browsers_of_owned_servers() -> BrowserKillResult {
+    let Some(workspace_root) = crate::daemon::dev_workspace_root() else {
+        return kill_all_browsers();
+    };
+    let server_pids = find_workspace_browser4_server_processes(&workspace_root);
+    kill_browsers_launched_by(&server_pids)
+}
+
 /// Reclaim browser processes whose backend died before it could close them.
 ///
 /// Why this exists: `stop` is deliberately **workspace-scoped for servers** and never
@@ -1133,6 +1152,69 @@ fn command_line_matches_browser4_server(command_line: &str) -> bool {
         || normalized.contains("browser4/runtime/")
 }
 
+/// True when [command_line] mentions [path] as a whole path.
+///
+/// A plain substring test is not enough: checkouts sit next to each other, so
+/// the root `D:/workspace/Browser4/Browser4-4.16` is a **prefix** of the
+/// neighbouring checkout `D:/workspace/Browser4/Browser4-4.16-feat` — and that
+/// neighbouring backend's command line (`.../Browser4-4.16-feat/browser4-apps/
+/// browser4-bundle/target/runtime-bundle/_work/.../runtime/bin/java.exe`) would
+/// then read as "owned by us".  That exact confusion is what let one checkout's
+/// e2e sweep force-stop another checkout's backend (issue #640), so a match
+/// only counts when the character after it cannot continue a path name.
+fn command_line_mentions_path(command_line: &str, path: &Path) -> bool {
+    let needle = normalize_process_text(&path.to_string_lossy());
+    let needle = needle.trim_end_matches('/');
+    if needle.is_empty() {
+        return false;
+    }
+
+    let haystack = normalize_process_text(command_line);
+    let mut search_from = 0usize;
+    while let Some(offset) = haystack[search_from..].find(needle) {
+        let end = search_from + offset + needle.len();
+        let continues_name = haystack[end..]
+            .chars()
+            .next()
+            .map(path_name_continuation)
+            .unwrap_or(false);
+        if !continues_name {
+            return true;
+        }
+        search_from = end;
+    }
+    false
+}
+
+/// True for characters that may continue a file name, i.e. the ones that make a
+/// path match a *different* path (`browser4-4.16` → `browser4-4.16-feat`).
+/// Both separators pass through, so a checkout root still matches the
+/// directories underneath it.
+fn path_name_continuation(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '~')
+}
+
+/// True when [command_line] is a Browser4 backend **launched from
+/// [workspace_root]**.
+///
+/// Recognition ([`command_line_matches_browser4_server`]) is deliberately not
+/// enough: every checkout on the machine runs the same backend, so it alone
+/// cannot distinguish "my backend" from "the neighbour's backend" — the mistake
+/// behind issue #640.  Ownership is the checkout the launcher ran from, and
+/// every launch path leaves that root in the command line:
+///
+/// * the bundled JRE lives inside the checkout in development mode
+///   (`<root>/browser4-apps/browser4-bundle/target/runtime-bundle/_work/...`),
+///   and it stays visible even when the classpath was moved into a `@argfile`
+///   that the launcher has already deleted;
+/// * `-Dbrowser4.agent.workspace=<root>` is injected on every launch
+///   (`daemon::build_server_launch_spec`) and is visible whenever the command
+///   line was not folded into an argfile.
+fn is_workspace_owned_browser4_server(command_line: &str, workspace_root: &Path) -> bool {
+    command_line_matches_browser4_server(command_line)
+        && command_line_mentions_path(command_line, workspace_root)
+}
+
 /// One PowerShell round-trip: every `java`/`javaw` pid together with its
 /// command line, emitted as JSON.
 ///
@@ -1203,6 +1285,21 @@ fn find_browser4_server_processes() -> Vec<u32> {
 /// command line.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn parse_java_process_snapshot(stdout: &str) -> Vec<u32> {
+    parse_java_process_snapshot_entries(stdout)
+        .into_iter()
+        .filter(|(_, command_line)| command_line_matches_browser4_server(command_line))
+        .map(|(pid, _)| pid)
+        .collect()
+}
+
+/// Every JVM in a `WINDOWS_JAVA_PROCESS_SNAPSHOT_PS` snapshot as
+/// `(pid, expanded command line)`.
+///
+/// The ownership-scoped sweep needs the command line itself, not just a
+/// recognition verdict: deciding whether a backend belongs to *this* checkout
+/// requires the paths the launcher was started with.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn parse_java_process_snapshot_entries(stdout: &str) -> Vec<(u32, String)> {
     let trimmed = stdout.trim();
     if trimmed.is_empty() {
         return Vec::new();
@@ -1216,7 +1313,7 @@ fn parse_java_process_snapshot(stdout: &str) -> Vec<u32> {
         _ => return Vec::new(),
     };
 
-    let mut pids: Vec<u32> = entries
+    entries
         .into_iter()
         .filter_map(|entry| {
             let pid = u32::try_from(entry.get("ProcessId")?.as_u64()?).ok()?;
@@ -1224,13 +1321,76 @@ fn parse_java_process_snapshot(stdout: &str) -> Vec<u32> {
                 .get("CommandLine")
                 .and_then(|value| value.as_str())
                 .unwrap_or_default();
-            let expanded = expand_windows_argfile(command_line.to_string());
-            command_line_matches_browser4_server(&expanded).then_some(pid)
+            Some((pid, expand_windows_argfile(command_line.to_string())))
         })
-        .collect();
+        .collect()
+}
 
-    pids.sort_unstable();
-    pids.dedup();
+/// `(pid, command line)` of every JVM on this machine.
+///
+/// One process-table round-trip per platform: a single WMI query on Windows,
+/// one `ps` on unix.  The ownership-scoped sweep compares *all* of them against
+/// a checkout root, so it cannot reuse the recognition-only pids.
+fn jvm_process_command_lines() -> Vec<(u32, String)> {
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        let Ok(output) = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                WINDOWS_JAVA_PROCESS_SNAPSHOT_PS,
+            ])
+            .output()
+        else {
+            return Vec::new();
+        };
+        let mut entries =
+            parse_java_process_snapshot_entries(&String::from_utf8_lossy(&output.stdout));
+        entries.sort_by_key(|(pid, _)| *pid);
+        entries.dedup_by_key(|(pid, _)| *pid);
+        entries
+    }
+
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        let Ok(output) = Command::new("ps").args(["-eo", "pid=,args="]).output() else {
+            return Vec::new();
+        };
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut entries: Vec<(u32, String)> = text
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim_start();
+                let (pid_text, args) = trimmed.split_once(char::is_whitespace)?;
+                let pid = pid_text.trim().parse::<u32>().ok()?;
+                matches!(executable_name(args), "java" | "javaw").then(|| (pid, args.to_string()))
+            })
+            .collect();
+        entries.sort_by_key(|(pid, _)| *pid);
+        entries.dedup_by_key(|(pid, _)| *pid);
+        entries
+    }
+}
+
+/// PIDs of the Browser4 backends launched from [workspace_root].
+///
+/// The ownership-scoped counterpart of [`find_browser4_server_processes`]: same
+/// JVM scan, but a backend only qualifies when its command line carries
+/// [workspace_root] (see [`is_workspace_owned_browser4_server`]).  A
+/// neighbouring checkout's backend carries *its* root and is therefore never a
+/// candidate.
+fn find_workspace_browser4_server_processes(workspace_root: &Path) -> Vec<u32> {
+    let mut pids: Vec<u32> = jvm_process_command_lines()
+        .into_iter()
+        .filter(|(_, command_line)| {
+            is_workspace_owned_browser4_server(command_line, workspace_root)
+        })
+        .map(|(pid, _)| pid)
+        .collect();
+    dedup_sort_u32(&mut pids);
     pids
 }
 
@@ -1369,6 +1529,432 @@ pub fn stop_workspace_servers_forcibly(extra_port: Option<u16>) -> ForceStopBrow
         shutdown,
         browser_kill,
     }
+}
+
+/// Opt-in switch that restores the machine-wide sweep in development mode.
+///
+/// Off by default: a machine that runs several checkouts (or several agent
+/// sessions) is this project's normal working setup, and a sweep that reaches
+/// beyond its own checkout kills a neighbour's backend mid-task (issue #640).
+pub const SWEEP_ALL_WORKSPACES_ENV: &str = "BROWSER4_SWEEP_ALL_WORKSPACES";
+
+/// Force-stop the Browser4 backends **this checkout** launched, plus the
+/// browsers they launched.
+///
+/// This is the sweep the e2e harness runs before and after a test run, and it
+/// is deliberately *ownership*-scoped rather than recognition-scoped:
+///
+/// * recognition ([`command_line_matches_browser4_server`]) matches every
+///   Browser4 backend on the machine, so the pre-sweep of a run in checkout A
+///   force-stopped the backend of checkout B while B was in the middle of an
+///   agent task (issue #640);
+/// * ownership is the checkout root the launcher ran from
+///   ([`find_workspace_browser4_server_processes`]), plus the entries this
+///   workspace registered itself, plus listeners on *those* ports;
+/// * the default ports 8182/18182 are **not** swept: in development mode they
+///   belong to no workspace in particular, and the ports a checkout's e2e run
+///   uses are ephemeral, so they only ever named a neighbour's backend;
+/// * browsers are swept by attribution — parents that are one of the killed
+///   backends, and orphans under this workspace's own temp root — instead of by
+///   the machine-wide `PULSAR_CHROME` marker.
+///
+/// Set [`SWEEP_ALL_WORKSPACES_ENV`] to get the old machine-wide behaviour (an
+/// installed runtime, which has exactly one backend, always uses it).
+// Called through the `browser4_cli` library by the e2e harness (which sweeps
+// before/after every run); the `browser4-cli` binary itself has no caller.
+#[allow(dead_code)]
+pub fn stop_owned_browser4_servers_forcibly() -> ForceStopBrowser4ServerResult {
+    let Some(workspace_root) = crate::daemon::dev_workspace_root() else {
+        // Not running from a checkout: an installed CLI owns the only backend
+        // on the machine, so the global sweep cannot reach anyone else's.
+        return stop_browser4_server_forcibly();
+    };
+    if sweep_all_workspaces_enabled() {
+        eprintln!(
+            "  [sweep] {SWEEP_ALL_WORKSPACES_ENV} is set: sweeping every workspace's backends."
+        );
+        return stop_browser4_server_forcibly();
+    }
+    stop_owned_browser4_servers_forcibly_for(&workspace_root)
+}
+
+/// [`SWEEP_ALL_WORKSPACES_ENV`] parsed from the process environment.
+fn sweep_all_workspaces_enabled() -> bool {
+    sweep_all_workspaces_enabled_from(std::env::var(SWEEP_ALL_WORKSPACES_ENV).ok().as_deref())
+}
+
+/// Pure half of [`sweep_all_workspaces_enabled`] so the accepted spellings are
+/// unit-testable without touching the process environment.  An unset variable,
+/// or a typo, must never widen the sweep.
+fn sweep_all_workspaces_enabled_from(raw: Option<&str>) -> bool {
+    matches!(
+        raw.map(str::trim),
+        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON")
+    )
+}
+
+fn stop_owned_browser4_servers_forcibly_for(
+    workspace_root: &Path,
+) -> ForceStopBrowser4ServerResult {
+    let total_started = std::time::Instant::now();
+    let registry_path = managed_server_registry_path(None);
+    let state_dir = resolve_default_state_dir();
+    let registered_ports = managed_server_ports(None);
+
+    eprintln!("  [1/4] Notifying this workspace's servers to close all sessions ...");
+    let step_started = std::time::Instant::now();
+    notify_owned_servers_before_force_stop(workspace_root, &registry_path, &state_dir);
+    eprintln!(
+        "        done ({:.1}s)",
+        step_started.elapsed().as_secs_f64()
+    );
+
+    eprintln!("  [2/4] Stopping this workspace's Browser4 server processes ...");
+    let step_started = std::time::Instant::now();
+    // Registered backends first: a registry entry is the CLI's own record of a
+    // pid it launched, and it is only acted on while that pid still owns the
+    // recorded port, so a recycled pid can never be killed.
+    let mut shutdown = stop_browser4_server(true);
+    let owned = force_stop_owned_browser4_server_processes(workspace_root, &registered_ports);
+    merge_shutdown_with_fallback_server_kill(&mut shutdown, &owned);
+    shutdown.fallback_killed_server_pids = owned.killed_pids.clone();
+    eprintln!(
+        "        Stopped {}, forced {}, still running {} ({:.1}s)",
+        shutdown.stopped_pids.len(),
+        shutdown.forced_pids.len(),
+        shutdown.remaining_pids.len(),
+        step_started.elapsed().as_secs_f64()
+    );
+
+    eprintln!("  [3/4] Closing the browsers those backends launched ...");
+    let step_started = std::time::Instant::now();
+    let mut server_pids = shutdown.stopped_pids.clone();
+    server_pids.extend(shutdown.forced_pids.iter().copied());
+    server_pids.sort_unstable();
+    server_pids.dedup();
+    let browser_kill = merge_browser_kill_results(
+        kill_browsers_launched_by(&server_pids),
+        kill_owned_orphaned_browser_processes(),
+    );
+    eprintln!(
+        "        Closed {} browser(s), {} still running ({:.1}s)",
+        browser_kill.killed_pids.len(),
+        browser_kill.remaining_pids.len(),
+        step_started.elapsed().as_secs_f64()
+    );
+
+    let has_activity = !shutdown.stopped_pids.is_empty()
+        || !shutdown.forced_pids.is_empty()
+        || !shutdown.remaining_pids.is_empty()
+        || !browser_kill.killed_pids.is_empty()
+        || !browser_kill.remaining_pids.is_empty();
+    if has_activity {
+        eprintln!("  [4/4] Waiting for processes to exit ...");
+        let step_started = std::time::Instant::now();
+        sleep(std::time::Duration::from_secs(2));
+        eprintln!(
+            "        done ({:.1}s)",
+            step_started.elapsed().as_secs_f64()
+        );
+    } else {
+        eprintln!("  [4/4] No processes to wait for, skipping.");
+    }
+
+    eprintln!(
+        "        cleanup finished in {:.1}s",
+        total_started.elapsed().as_secs_f64()
+    );
+
+    ForceStopBrowser4ServerResult {
+        shutdown,
+        browser_kill,
+    }
+}
+
+/// One attributed kill candidate of the workspace-scoped sweep.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OwnedServerCandidate {
+    pid: u32,
+    /// Why this pid is ours: `checkout` (its command line carries this
+    /// checkout's root) or `registry-port` (it listens on a port this
+    /// workspace's registry recorded).
+    source: &'static str,
+    port: Option<u16>,
+    command_line: String,
+}
+
+/// Force-stop every backend that belongs to [workspace_root].
+///
+/// Candidates come from three places, and each one is *ownership* checked, not
+/// merely recognized as Browser4:
+///
+/// 1. JVMs whose command line carries the checkout root
+///    ([`find_workspace_browser4_server_processes`]) — covers backends the
+///    registry no longer knows about (a registry deleted with its state dir, an
+///    interrupted run);
+/// 2. JVM listeners on [registered_ports] — ports this workspace's own registry
+///    recorded, used only when the listener is also owned (a port can be
+///    re-allocated to a neighbour after our backend died);
+/// 3. nothing else: the default 8182/18182 are deliberately not swept here.
+fn force_stop_owned_browser4_server_processes(
+    workspace_root: &Path,
+    registered_ports: &[u16],
+) -> ServerKillResult {
+    let candidates = owned_server_candidates(workspace_root, registered_ports);
+    if candidates.is_empty() {
+        return ServerKillResult::default();
+    }
+
+    // The audit trail the incident could not reconstruct: which pid was killed,
+    // why it counted as ours, and the command line it had at the time.
+    for candidate in &candidates {
+        eprintln!(
+            "  [sweep] kill pid={} source={} port={} cmd={}",
+            candidate.pid,
+            candidate.source,
+            candidate
+                .port
+                .map(|port| port.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            truncate_for_log(&candidate.command_line, 200)
+        );
+    }
+
+    force_stop_pids(
+        candidates
+            .into_iter()
+            .map(|candidate| candidate.pid)
+            .collect(),
+    )
+}
+
+/// [`OwnedServerCandidate`]s for [workspace_root], de-duplicated by pid.
+fn owned_server_candidates(
+    workspace_root: &Path,
+    registered_ports: &[u16],
+) -> Vec<OwnedServerCandidate> {
+    // One process-table round-trip, plus one netstat round-trip when the
+    // registry named ports; the decision itself is pure and unit-tested.
+    let port_listeners: Vec<(u32, u16)> = registered_ports
+        .iter()
+        .flat_map(|&port| {
+            find_java_pids_listening_on_ports(&[port])
+                .into_iter()
+                .map(move |pid| (pid, port))
+        })
+        .collect();
+    owned_server_candidates_from(
+        &jvm_process_command_lines(),
+        workspace_root,
+        &port_listeners,
+    )
+}
+
+/// Pure core of [`owned_server_candidates`].
+///
+/// [command_lines] is the machine's JVM table, [port_listeners] the
+/// `(pid, port)` pairs found LISTENING on the ports this workspace's registry
+/// recorded.  Both are injected so the selection — the part that decides whether
+/// another checkout's backend survives — is testable without spawning anything.
+fn owned_server_candidates_from(
+    command_lines: &[(u32, String)],
+    workspace_root: &Path,
+    port_listeners: &[(u32, u16)],
+) -> Vec<OwnedServerCandidate> {
+    let mut candidates: Vec<OwnedServerCandidate> = Vec::new();
+
+    for (pid, command_line) in command_lines {
+        if is_workspace_owned_browser4_server(command_line, workspace_root) {
+            candidates.push(OwnedServerCandidate {
+                pid: *pid,
+                source: "checkout",
+                port: None,
+                command_line: command_line.clone(),
+            });
+        }
+    }
+
+    for (pid, port) in port_listeners {
+        if candidates.iter().any(|candidate| candidate.pid == *pid) {
+            continue;
+        }
+        // Attribution is the same predicate as above: a listener on a port we
+        // once used is ours only when it is a Browser4 backend launched from
+        // this checkout.  A neighbour that took the port over fails this check
+        // and is left alone.
+        let Some((_, command_line)) = command_lines
+            .iter()
+            .find(|(candidate_pid, _)| candidate_pid == pid)
+        else {
+            continue;
+        };
+        if is_workspace_owned_browser4_server(command_line, workspace_root) {
+            candidates.push(OwnedServerCandidate {
+                pid: *pid,
+                source: "registry-port",
+                port: Some(*port),
+                command_line: command_line.clone(),
+            });
+        }
+    }
+
+    candidates.sort_by_key(|candidate| candidate.pid);
+    candidates.dedup_by_key(|candidate| candidate.pid);
+    candidates
+}
+
+/// Shorten a command line for a log line, on a char boundary.
+fn truncate_for_log(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut truncated: String = value.chars().take(max_chars).collect();
+    truncated.push('…');
+    truncated
+}
+
+/// Close orphaned browsers that belong to this workspace's own temp tree.
+///
+/// An orphan is a Browser4 browser root whose parent JVM is gone — this
+/// workspace's backend was force-killed before it could close them.  Ownership
+/// comes from the profile path: every browser this checkout launches carries the
+/// checkout's own app-data tree in its `--user-data-dir`
+/// (`daemon::workspace_app_data_path`), so a neighbouring workspace's browser
+/// (a different tree) is never a candidate even though it carries the same
+/// `browser4-pereg` marker.
+fn kill_owned_orphaned_browser_processes() -> BrowserKillResult {
+    let Some(temp_root) = crate::daemon::workspace_app_data_path().map(|dir| dir.join("tmp"))
+    else {
+        return BrowserKillResult::default();
+    };
+
+    let pids: Vec<u32> = find_orphaned_browser_roots()
+        .into_iter()
+        .filter(|&pid| {
+            process_command_line(pid)
+                .map(|command_line| command_line_mentions_path(&command_line, &temp_root))
+                .unwrap_or(false)
+        })
+        .collect();
+    if pids.is_empty() {
+        return BrowserKillResult::default();
+    }
+
+    for pid in &pids {
+        eprintln!(
+            "  [sweep] kill pid={} source=orphan-browser dir={}",
+            pid,
+            temp_root.display()
+        );
+    }
+
+    let mut result = BrowserKillResult::default();
+    result.killed_pids.extend(pids.iter().copied());
+    bulk_force_stop_browser_processes(&pids);
+    wait_for_exit_all(&pids, 500, 100);
+    dedup_sort_u32(&mut result.killed_pids);
+    result
+}
+
+/// Notify only the servers this workspace owns to close their sessions.
+///
+/// The machine-wide version posts `close_all_sessions` to every URL in the
+/// registry *and* to whatever `cli-state.json` remembers.  In a stale state
+/// that URL points at a port a neighbour has since taken over — the incident
+/// fired `close_all_sessions` at the neighbour's backend (8282) for exactly that
+/// reason — so every URL is checked for ownership first, and a state record the
+/// CLI already marked `stale` is not used at all (see
+/// [`notify_base_url_candidates`]).
+fn notify_owned_servers_before_force_stop(
+    workspace_root: &Path,
+    registry_path: &Path,
+    state_dir: &Path,
+) {
+    // A state file that does not exist carries no session to close — and its
+    // default `base_url` is the production port, not something this workspace
+    // ever chose.
+    let state_path = state_dir.join("cli-state.json");
+    let state = state_path
+        .is_file()
+        .then(|| read_state(Some(state_dir), None));
+    let mut base_urls = notify_base_url_candidates(
+        &read_managed_server_processes(Some(registry_path)),
+        state.as_ref(),
+    );
+    base_urls.retain(|base_url| owned_base_url(workspace_root, base_url));
+    if base_urls.is_empty() {
+        return;
+    }
+
+    let handle = std::thread::spawn(move || {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap_or_else(|_| reqwest::blocking::Client::new());
+
+        for base_url in &base_urls {
+            match call_close_all_sessions(&client, base_url) {
+                Ok(_) => eprintln!("        Closed sessions on {}", base_url),
+                Err(err) => eprintln!(
+                    "        Server {} unreachable ({}), skipping",
+                    base_url, err
+                ),
+            }
+        }
+    });
+    let _ = handle.join();
+}
+
+/// Base URLs worth notifying, before the ownership check runs.
+///
+/// The registry's URLs name backends this workspace started, so they are always
+/// candidates (a stale one is filtered by [`owned_base_url`]).  The URL in
+/// `cli-state.json` is a *memory*, not a record of ownership, and it is only a
+/// candidate when it was actually read from disk:
+///
+/// * no state file at all (a fresh checkout) — [`crate::state::CliState::default`]
+///   carries the production port 18182, which this workspace never chose, so
+///   notifying it would reach whatever release backend happens to listen there;
+/// * a state `stop` already marked `stale` — the port it remembers may have been
+///   re-allocated to a neighbour, and the incident posted `close_all_sessions`
+///   to exactly such a URL (8282, the neighbouring checkout's port, issue #640).
+fn notify_base_url_candidates(
+    registered: &[ManagedServerProcess],
+    state: Option<&crate::state::CliState>,
+) -> Vec<String> {
+    let mut base_urls: Vec<String> = registered
+        .iter()
+        .map(|proc| proc.base_url.clone())
+        .filter(|base_url| !base_url.trim().is_empty())
+        .collect();
+    if let Some(state) = state {
+        if !state.stale && !state.base_url.trim().is_empty() {
+            base_urls.push(state.base_url.clone());
+        }
+    }
+    base_urls.sort();
+    base_urls.dedup();
+    base_urls
+}
+
+/// True when [base_url] is served by a backend this checkout launched, or by
+/// nobody at all (an unreachable URL is harmless to notify).
+fn owned_base_url(workspace_root: &Path, base_url: &str) -> bool {
+    let Some(port) = crate::daemon::local_backend_port(base_url) else {
+        // Not a loopback URL: nothing local to own.
+        return false;
+    };
+    let listeners = find_java_pids_listening_on_ports(&[port]);
+    if listeners.is_empty() {
+        // Nothing is listening; the notify call fails harmlessly.  Refusing it
+        // here would hide a real backend behind an OS scan hiccup.
+        return true;
+    }
+    listeners.iter().any(|&pid| {
+        process_command_line(pid)
+            .map(|command_line| is_workspace_owned_browser4_server(&command_line, workspace_root))
+            .unwrap_or(false)
+    })
 }
 
 /// Fold [other] into [target], de-duplicating the PID lists.
@@ -2680,6 +3266,248 @@ mod tests {
         // The JVM sweep now relies on a single snapshot query; a syntax error
         // here would silently kill nothing, so validate the exact command.
         assert_powershell_syntax_valid("java-process-snapshot", WINDOWS_JAVA_PROCESS_SNAPSHOT_PS);
+    }
+
+    // -----------------------------------------------------------------------
+    // Ownership scoping (issue #640: a sweep killed a neighbouring checkout's
+    // backend).  The command lines below are the shapes observed on a developer
+    // machine running two checkouts side by side.
+    // -----------------------------------------------------------------------
+
+    const OUR_CHECKOUT: &str = r"D:\workspace\Browser4\Browser4-4.16";
+    const NEIGHBOUR_CHECKOUT: &str = r"D:\workspace\Browser4\Browser4-4.16-feat";
+
+    fn dev_bundle_backend_command_line(checkout: &str) -> String {
+        format!(
+            r#""{checkout}\browser4-apps\browser4-bundle\target\runtime-bundle\_work\browser4-bundle-runtime-windows-x64\browser4-bundle-runtime-windows-x64\runtime\bin\java.exe" @C:\Users\pereg\AppData\Local\Temp\browser4-argfile-51512-1794592147164795500\java-args.txt"#
+        )
+    }
+
+    #[test]
+    fn test_command_line_mentions_path_rejects_a_sibling_checkout() {
+        // `Browser4-4.16` is a *prefix* of `Browser4-4.16-feat`: the naive
+        // substring test reads the neighbour's backend as ours, which is how a
+        // pre-sweep in one checkout killed the other checkout's backend.
+        let neighbour = dev_bundle_backend_command_line(NEIGHBOUR_CHECKOUT);
+        assert!(!command_line_mentions_path(
+            &neighbour,
+            Path::new(OUR_CHECKOUT)
+        ));
+        assert!(command_line_mentions_path(
+            &neighbour,
+            Path::new(NEIGHBOUR_CHECKOUT)
+        ));
+        // Same trap for a directory that merely starts with the name.
+        assert!(!command_line_mentions_path(
+            "java -cp D:/workspace/app-extra/lib/a.jar Main",
+            Path::new("D:/workspace/app")
+        ));
+        assert!(!command_line_mentions_path(
+            "java -cp D:/workspace/application/lib/a.jar Main",
+            Path::new("D:/workspace/app")
+        ));
+    }
+
+    #[test]
+    fn test_command_line_mentions_path_normalizes_separators_and_quotes() {
+        let root = Path::new(OUR_CHECKOUT);
+
+        // The launcher writes forward slashes into the JVM options, the JRE
+        // path uses backslashes.
+        assert!(command_line_mentions_path(
+            r#"java -Dbrowser4.agent.workspace=D:\workspace\Browser4\Browser4-4.16 -cp lib Browser4LauncherKt"#,
+            root
+        ));
+        assert!(command_line_mentions_path(
+            r#"java "-Dbrowser4.agent.workspace=D:/workspace/Browser4/Browser4-4.16" -cp lib Browser4LauncherKt"#,
+            root
+        ));
+        // Nested paths (the checkout's own runtime bundle) still match.
+        assert!(command_line_mentions_path(
+            &dev_bundle_backend_command_line(OUR_CHECKOUT),
+            root
+        ));
+        // A trailing separator on the root must not break the match.
+        assert!(command_line_mentions_path(
+            r#"java -cp D:\workspace\Browser4\Browser4-4.16\target\classes Main"#,
+            Path::new(r"D:\workspace\Browser4\Browser4-4.16\")
+        ));
+        // Unrelated paths do not.
+        assert!(!command_line_mentions_path(
+            r#"java -jar C:\apps\Browser4.jar"#,
+            root
+        ));
+        assert!(!command_line_mentions_path("", root));
+    }
+
+    #[test]
+    fn test_is_workspace_owned_browser4_server_distinguishes_the_two_checkouts() {
+        let our_root = Path::new(OUR_CHECKOUT);
+
+        // Our own backend (bundle JRE inside the checkout, classpath moved into
+        // an already-deleted argfile) still carries the checkout root.
+        assert!(is_workspace_owned_browser4_server(
+            &dev_bundle_backend_command_line(OUR_CHECKOUT),
+            our_root
+        ));
+        // The neighbouring checkout's backend does not.
+        assert!(!is_workspace_owned_browser4_server(
+            &dev_bundle_backend_command_line(NEIGHBOUR_CHECKOUT),
+            our_root
+        ));
+        // An installed runtime reports no checkout at all.
+        assert!(!is_workspace_owned_browser4_server(
+            r#""C:\Users\pereg\.browser4\runtime\v4.16.7\runtime\bin\java.exe" @C:\Temp\args.txt"#,
+            our_root
+        ));
+    }
+
+    #[test]
+    fn test_is_workspace_owned_browser4_server_ignores_non_backend_jvms() {
+        let our_root = Path::new(OUR_CHECKOUT);
+
+        // A Maven/Surefire fork from this very checkout is *not* a backend: it
+        // matches ownership but no Browser4 marker, and killing it would abort
+        // a test run in progress.
+        let surefire_fork = format!(
+            r#""C:\Program Files\Java\bin\java.exe" -cp {OUR_CHECKOUT}\browser4-rest\target\classes;{OUR_CHECKOUT}\browser4-rest\target\test-classes org.junit.runner.JUnitCore"#
+        );
+        assert!(!is_workspace_owned_browser4_server(
+            &surefire_fork,
+            our_root
+        ));
+
+        // A Kotlin compile daemon started from the checkout's shell carries the
+        // same root neither a Browser4 marker nor ownership.
+        assert!(!is_workspace_owned_browser4_server(
+            r#""C:\Program Files\Java\bin\java" -cp C:\Users\pereg\.m2\repository\kotlin-daemon.jar org.jetbrains.kotlin.daemon.KotlinCompileDaemon"#,
+            our_root
+        ));
+    }
+
+    #[test]
+    fn test_owned_server_candidates_attributes_both_ownership_paths() {
+        let command_lines = vec![
+            (100u32, dev_bundle_backend_command_line(OUR_CHECKOUT)),
+            (200, dev_bundle_backend_command_line(NEIGHBOUR_CHECKOUT)),
+        ];
+
+        let candidates =
+            owned_server_candidates_from(&command_lines, Path::new(OUR_CHECKOUT), &[(100, 8282)]);
+
+        assert_eq!(candidates.len(), 1, "candidates: {candidates:?}");
+        assert_eq!(candidates[0].pid, 100);
+        assert_eq!(candidates[0].source, "checkout");
+    }
+
+    #[test]
+    fn test_owned_server_candidates_leaves_a_foreign_listener_on_a_reused_port() {
+        // Our registry recorded 8282, but our backend died and a neighbouring
+        // checkout took the port over (the exact situation the incident
+        // reported: the sweep followed a stale port straight into the
+        // neighbour's backend).
+        let command_lines = vec![(200u32, dev_bundle_backend_command_line(NEIGHBOUR_CHECKOUT))];
+
+        let candidates =
+            owned_server_candidates_from(&command_lines, Path::new(OUR_CHECKOUT), &[(200, 8282)]);
+
+        assert!(
+            candidates.is_empty(),
+            "a port recorded by this workspace must not make another checkout's \
+             backend a candidate: {candidates:?}"
+        );
+    }
+
+    #[test]
+    fn test_owned_server_candidates_records_the_port_of_a_ported_backend() {
+        // A backend whose command line is only recognized through the port we
+        // recorded still has to pass the ownership check, and the audit trail
+        // must name the port and the command line.
+        let own = dev_bundle_backend_command_line(OUR_CHECKOUT);
+        let command_lines = vec![(100u32, own.clone())];
+
+        let candidates =
+            owned_server_candidates_from(&command_lines, Path::new(OUR_CHECKOUT), &[(100, 8282)]);
+
+        assert_eq!(candidates.len(), 1, "candidates: {candidates:?}");
+        assert_eq!(candidates[0].source, "checkout");
+        assert_eq!(candidates[0].command_line, own);
+
+        // A pid that is not in the JVM table cannot be attributed at all.
+        let unattributable =
+            owned_server_candidates_from(&[], Path::new(OUR_CHECKOUT), &[(300, 8282)]);
+        assert!(unattributable.is_empty(), "{unattributable:?}");
+    }
+
+    #[test]
+    fn test_sweep_all_workspaces_requires_an_explicit_opt_in() {
+        for enabled in ["1", "true", "TRUE", "yes", "on", " on "] {
+            assert!(
+                sweep_all_workspaces_enabled_from(Some(enabled)),
+                "{enabled:?} should enable the machine-wide sweep"
+            );
+        }
+        for disabled in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("false"),
+            Some("y"),
+            Some("2"),
+        ] {
+            assert!(
+                !sweep_all_workspaces_enabled_from(disabled),
+                "{disabled:?} must keep the sweep scoped to this checkout"
+            );
+        }
+    }
+
+    #[test]
+    fn test_notify_base_url_candidates_skips_a_stale_state_url() {
+        let registered = vec![ManagedServerProcess {
+            pid: 100,
+            base_url: "http://localhost:8282/".to_string(),
+            port: 8282,
+            jar_path: "lib".to_string(),
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+            version: None,
+            workspace_root: None,
+        }];
+
+        // No persisted state at all: the default record names the production
+        // port, which this workspace never chose — not a notify target.
+        assert_eq!(
+            notify_base_url_candidates(&registered, None),
+            vec!["http://localhost:8282/".to_string()]
+        );
+
+        let mut state = crate::state::CliState::default();
+        state.base_url = "http://localhost:8283".to_string();
+        state.stale = false;
+        assert_eq!(
+            notify_base_url_candidates(&registered, Some(&state)),
+            vec![
+                "http://localhost:8282/".to_string(),
+                "http://localhost:8283".to_string()
+            ]
+        );
+
+        // `stop` marked the record stale: the port it remembers may now belong
+        // to a neighbouring checkout, so it must not receive close_all_sessions.
+        state.stale = true;
+        assert_eq!(
+            notify_base_url_candidates(&registered, Some(&state)),
+            vec!["http://localhost:8282/".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_truncate_for_log_keeps_short_values_and_char_boundaries() {
+        assert_eq!(truncate_for_log("short", 10), "short");
+        let long = "é".repeat(5);
+        let truncated = truncate_for_log(&long, 3);
+        assert_eq!(truncated.chars().count(), 4, "{truncated:?}");
+        assert!(truncated.starts_with("ééé"), "{truncated:?}");
     }
 
     #[test]

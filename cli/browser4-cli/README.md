@@ -712,6 +712,28 @@ backend's `/api/doctor/llm-status` endpoint whether `detectedVia` is
 the scenario prints `SKIPPED` and continues with the rest of the suite instead
 of failing.
 
+### Process sweep scope (several checkouts on one machine)
+
+Before the first scenario and after the last one, the harness sweeps orphaned
+Browser4 processes. That sweep is **scoped to the checkout it runs from**: it
+stops only backends this checkout launched (recognised by the checkout root in
+the backend JVM's command line — the bundled JRE, the classpath, or
+`-Dbrowser4.agent.workspace`), the backends this workspace registered, and the
+browsers those backends started. A neighbouring checkout's backend — and any
+agent task it is running — is left alone, which is what makes several checkouts
+(running `cargo test --test e2e` in one while an agent works in another) safe on
+one machine.
+
+Each killed pid is logged as a `[sweep] kill pid=… source=… cmd=…` line, so a
+sweep can be audited after the fact.
+
+To get the old machine-wide sweep (every Browser4 backend and browser on the
+machine, the behaviour before issue #640):
+
+```bash
+BROWSER4_SWEEP_ALL_WORKSPACES=1 cargo test --test e2e -- --nocapture
+```
+
 ## License
 
 Apache-2.0
