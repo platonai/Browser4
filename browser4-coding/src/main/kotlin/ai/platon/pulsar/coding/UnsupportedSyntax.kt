@@ -15,8 +15,11 @@ import java.util.concurrent.atomic.AtomicInteger
  *   allow this". It is counted in `coding.permissions`, a wider preset or an operator grant can
  *   lift it, and `coding.requestAccess` is a meaningful next step;
  * - a **syntax** refusal (this object, `UNSUPPORTED_SYNTAX`) says "this shell executes one command
- *   per call; it does not parse blocks, parentheses or `else`". No preset, approval, JVM property
- *   or configuration can change it, and asking for `fs.exec` would not help.
+ *   per call; it does not parse blocks, parentheses or `else`". No preset, approval or
+ *   configuration can change it, and asking for `fs.exec` would not help — the one exception is
+ *   `agent run --unrestricted`, which lifts the whole syntax gate
+ *   ([CodingAgentShell]'s `allowUnsupportedSyntax`): the line is handed to the platform shell
+ *   verbatim, so no syntax refusal is produced and nothing is counted here.
  *
  * Reporting the second as the first was a real defect, observed in a live run (2026-10-28): the
  * model was refused `if exist …` with `code=COMMAND_NOT_ALLOWED`, treated it as a permission

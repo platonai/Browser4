@@ -235,7 +235,9 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "`for` loops, `else if`, nested blocks and goto/call payloads are refused as UNSUPPORTED_SYNTAX " +
                 "(a syntax limit, not a permission one, so requesting access will not help): put those in a " +
                 "script file and run it by path (e.g. .\\run.cmd), or decide with tools " +
-                "(coding.stat reports whether a path exists, coding.mvnBuild/coding.verify return the build status)."
+                "(coding.stat reports whether a path exists, coding.mvnBuild/coding.verify return the build status). " +
+                "Exception: under `agent run --unrestricted` the syntax gate is lifted as well, so a command " +
+                "line (blocks, `for` loops, inline scripts) is handed to the platform shell verbatim."
         )
         toolSpec["shellOutput"] = ToolSpec(
             domain = domain, method = "shellOutput",
@@ -2210,13 +2212,16 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "  env passthrough   : ${count("coding.env", PermissionAudit.CODE_ENV_PASSTHROUGH)} " +
                     "(secret-shaped variables explicitly passed to a child process)"
             )
-            // Syntax is reported apart from policy on purpose: nothing here is a refusal the
-            // preset or an approval could lift, so counting it with the policy codes made the
-            // report answer a question nobody asked ("is the scope too narrow?").
+            // Syntax is reported apart from policy on purpose: no preset and no approval lifts a
+            // grammar, so counting it with the policy codes made the report answer a question
+            // nobody asked ("is the scope too narrow?"). The single exception is a per-task
+            // `--unrestricted` run, which hands such a line to the platform shell verbatim — then
+            // nothing is counted here at all.
             appendLine(
                 "  unsupported syntax: ${UnsupportedSyntax.snapshot()["coding.shell"] ?: 0} " +
                     "(NOT a policy denial — coding.shell runs one command per call and does not " +
-                    "parse blocks/parentheses; rewrite, use a tool, or run a script file by path)"
+                    "parse blocks/parentheses; rewrite, use a tool, or run a script file by path; " +
+                    "an `--unrestricted` task passes the line to the platform shell instead)"
             )
             appendLine(
                 "  execution sandbox : ${ExecutionSandboxes.current().id} (an unknown or unavailable " +

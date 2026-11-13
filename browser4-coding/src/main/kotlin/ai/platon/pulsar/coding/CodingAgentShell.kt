@@ -70,6 +70,23 @@ class CodingAgentShell(
      * the current OS user's own permissions instead of the confined profile.
      */
     private val sandbox: ExecutionSandbox? = null,
+
+    /**
+     * Whether the **syntax** gate is lifted too (`agent run --unrestricted`).
+     *
+     * The syntax gate is not a permission gate: [validateCommandRaw] refuses shapes this module
+     * cannot decompose (`for %f in (...) do ...`, `if exist x (...)`, command substitution, inline
+     * scripts), because it must validate every program a command line can reach. Under
+     * `--unrestricted` the task already runs with the caller's own OS permissions and the platform
+     * shell parses the line itself, so a shape the checker cannot decompose is no longer a reason to
+     * refuse: the command is handed over verbatim and the shell reports its own parse error.
+     *
+     * Policy refusals (hardcoded blocked patterns, explicit deny, protected paths, tier checks) are
+     * untouched — only the syntax family is bypassed.
+     *
+     * Defaults to `false`, so every other task keeps exactly the historical behaviour.
+     */
+    private val allowUnsupportedSyntax: Boolean = false,
     /**
      * OS sandbox seam for this shell instance (`agent run --unrestricted`).
      *
@@ -254,6 +271,30 @@ class CodingAgentShell(
          * the policy counters.
          */
         private const val SYNTAX_PREFIX = "unsupported syntax: "
+
+        /**
+         * Prefixes of the remaining syntax-family refusals.
+         *
+         * They come from the same decomposer as [SYNTAX_PREFIX] and mean "this shape cannot be
+         * validated", not "the policy said no": [isSyntaxViolation] collects the whole family so
+         * `--unrestricted` can hand the line to the platform shell.
+         */
+        private const val SUBSTITUTION_PREFIX = "command substitution rejected"
+
+        private const val INLINE_SCRIPT_PREFIX = "inline script via "
+
+        private const val EMPTY_COMMAND_VIOLATION = "empty or invalid command"
+
+        /**
+         * Prefix of the recursion-limit refusals (`nested inline shell script …`, `nested command
+         * substitution …`): the decomposer stopped rather than guessing, which is a syntax limit,
+         * not a policy decision.
+         */
+        private const val NESTED_SCRIPT_PREFIX = "nested "
+
+        /** Separates a wrapper reason from the inner one (`inline script via 'sh' rejected — …`). */
+        private const val INNER_REASON_SEPARATOR = " — "
+
 
         /** Redirection introduced by an argument (`>file`, `>>file`, `2>file`, `&>file`). */
         private val REDIRECTION_PREFIX = Regex("""^(?:\d+|&)?>>?""")
@@ -870,7 +911,9 @@ class CodingAgentShell(
      * - `PERMISSION_DENIED | code=…` ([PermissionAudit]) — the policy refused the command. A wider
      *   preset or an operator grant can lift it, and it is counted in `coding.permissions`;
      * - `UNSUPPORTED_SYNTAX | code=SYNTAX_NOT_SUPPORTED` ([UnsupportedSyntax]) — the shell cannot
-     *   parse the shape. Nothing can lift it, so it is not counted as a policy denial.
+     *   parse the shape. Nothing but `--unrestricted` can lift it (that switch does not report the
+     *   refusal at all, it hands the line to the platform shell), so it is not counted as a policy
+     *   denial.
      */
     private fun commandRefusal(violation: String): String {
         // A syntax refusal is NOT a permission refusal. Reporting it as one was a real defect:
@@ -1004,6 +1047,37 @@ class CodingAgentShell(
      * @return a human-readable violation reason, or null when allowed
      */
     private fun validateCommand(command: String): String? {
+        val violation = validateCommandRaw(command) ?: return null
+        return if (allowUnsupportedSyntax && isSyntaxViolation(violation)) null else violation
+    }
+
+    /**
+     * Whether [violation] belongs to the syntax family rather than to the policy.
+     *
+     * A syntax refusal means "this module cannot decompose the shape"; it is not a permission
+     * decision, so neither a wider preset nor an operator grant would lift it, and no policy
+     * counter is incremented for it ([commandRefusal]). Under `--unrestricted`
+     * ([allowUnsupportedSyntax]) the whole family is handed to the platform shell instead.
+     */
+    private fun isSyntaxViolation(violation: String): Boolean {
+        // The wrapper messages carry the inner reason after an em-dash; classify that one, so a
+        // *policy* veto nested inside `$(...)` or `sh -c "..."` is never lifted by accident
+        // (`echo $(rm -rf /)` must stay refused under --unrestricted, too).
+        if (violation.startsWith(SUBSTITUTION_PREFIX) || violation.startsWith(INLINE_SCRIPT_PREFIX)) {
+            val inner = violation.substringAfter(INNER_REASON_SEPARATOR, "")
+            return inner.isNotEmpty() && isSyntaxViolation(inner)
+        }
+        return violation.startsWith(SYNTAX_PREFIX) ||
+            violation.startsWith(NESTED_SCRIPT_PREFIX) ||
+            violation == EMPTY_COMMAND_VIOLATION
+    }
+
+    /**
+     * The unfiltered command validator — see [validateCommand] for the policy/syntax split.
+     *
+     * @return a human-readable violation reason, or null when allowed
+     */
+    private fun validateCommandRaw(command: String): String? {
         // Normalize first so a policy query (`isAllowed` / `explain`) agrees with what
         // would actually be executed: `echo.` is cmd's blank-line idiom for `echo`.
         val normalizedCommand = normalizeShellCommand(command)

@@ -105,8 +105,11 @@ data class AgentAccessPolicy(
      * When true this task runs with the current OS user's own permissions.
      *
      * Every policy rail becomes pass-through: the preset gate, `allowExternalAccess`,
-     * `denyTools` and the protected/sensitive path lists no longer restrict anything, and the
-     * file system / shell boundary is built without the workspace sandbox. The OS user's own
+     * `denyTools` and the protected/sensitive path lists no longer restrict anything, the
+     * file system / shell boundary is built without the workspace sandbox, and the shell's
+     * **syntax** gate is lifted as well (`CodingAgentShell.allowUnsupportedSyntax`), so a line the
+     * checker cannot decompose — `for` loops, `if exist (...)`, inline scripts — is handed to the
+     * platform shell verbatim instead of being refused with `UNSUPPORTED_SYNTAX`. The OS user's own
      * rights stay the ceiling — this cannot grant more than the process already has.
      *
      * Opt-in per task (`agent run --unrestricted`); see [withUnrestricted].
@@ -255,9 +258,11 @@ data class AgentAccessPolicy(
      * Runs this task with the current OS user's own permissions (`agent run --unrestricted`).
      *
      * The returned policy is pass-through: `full` preset, external access, destructive operations
-     * and network commands allowed, no denied tools and no protected/sensitive path rails. What
-     * the OS user may actually reach is still decided by the operating system, so this widens the
-     * agent's capability to exactly the user's own — never beyond it.
+     * and network commands allowed, no denied tools and no protected/sensitive path rails, and the
+     * shell no longer refuses shapes it cannot decompose (the `UNSUPPORTED_SYNTAX` family — see
+     * [CodingAgentShell]'s `allowUnsupportedSyntax`, which the shell builders derive from this
+     * flag). What the OS user may actually reach is still decided by the operating system, so this
+     * widens the agent's capability to exactly the user's own — never beyond it.
      */
     fun withUnrestricted(unrestricted: Boolean = true): AgentAccessPolicy =
         if (!unrestricted) {

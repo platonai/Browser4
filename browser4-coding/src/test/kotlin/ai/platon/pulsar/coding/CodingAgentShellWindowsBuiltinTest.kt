@@ -26,7 +26,10 @@ import java.nio.file.Path
  * checks a top-level command gets, so `if exist x (del …)` is still refused (as a destructive
  * command, not as a grammar limit). Only the shallow forms are supported; `for`, `else if`,
  * nested blocks and `goto`/`call` payloads are refused as UNSUPPORTED_SYNTAX rather than
- * PERMISSION_DENIED — no preset, approval or property lifts a grammar.
+ * PERMISSION_DENIED — no preset, approval or property lifts a grammar. The one exception is the
+ * per-task `agent run --unrestricted` switch, which lifts the syntax gate together with the
+ * permission gate ([CodingAgentShell]'s `allowUnsupportedSyntax`): the line is then handed to
+ * cmd.exe verbatim. The refusals below are asserted on a default shell, where nothing is lifted.
  *
  * Plan P1-4 adds the Windows execution coverage: `cmd /c`, `powershell -Command` and a
  * `runCode` interpreter subprocess all go through the same sandbox seam, so the suite stays

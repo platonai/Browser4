@@ -301,6 +301,7 @@ object CodingComponents {
         return CodingAgentShell(
             baseDir = root,
             sandbox = if (policy.unrestricted) ExecutionSandboxes.of("off") else null,
+            allowUnsupportedSyntax = policy.unrestricted,
             allowNetwork = policy.allowNetwork,
             allowNetworkProvider = { policy.allowNetwork || policy.hasActiveNetworkGrant() },
             allowDestructive = policy.allowDestructive,
@@ -349,6 +350,7 @@ object CodingComponents {
         return CodingAgentShell(
             baseDir = root,
             sandbox = if (policy.unrestricted) ExecutionSandboxes.of("off") else null,
+            allowUnsupportedSyntax = policy.unrestricted,
             buildOnly = true,
             allowNetwork = policy.allowNetwork,
             allowNetworkProvider = { policy.allowNetwork || policy.hasActiveNetworkGrant() },

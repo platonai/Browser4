@@ -321,11 +321,19 @@ internal object CliAgentPrompt {
                 "- Tools the preset does not grant are not in your tool list at all, and a call that " +
                     "slips through anyway is refused with `PERMISSION_DENIED | code=...`. A policy " +
                     "refusal is structural: do NOT retry it, re-quote it, or reach for an interpreter " +
-                    "to do the same thing — its `hint=` names the route that is still open. A " +
-                    "`UNSUPPORTED_SYNTAX` refusal is a different family: the shell runs one command " +
-                    "per call and cannot parse blocks, parentheses or `else`, so rewriting the step IS " +
-                    "the fix — one command per call, a tool instead (coding.stat, coding.mvnBuild), or " +
-                    "a script file run by path."
+                    "to do the same thing — its `hint=` names the route that is still open. " +
+                    (if (policy.unrestricted)
+                        "This run is unrestricted, so the *syntax* gate is lifted too: a command line is " +
+                            "handed to the platform shell verbatim, so `for` loops, parenthesised blocks and " +
+                            "inline scripts (`powershell -Command ...`) run as written — use them when one " +
+                            "command per call would take several steps. Every in-process rail is off as well " +
+                            "(workspace boundary, protected dirs), so the OS user's own permissions are the " +
+                            "only limit: be deliberate about what you delete or overwrite."
+                    else
+                        "A `UNSUPPORTED_SYNTAX` refusal is a different family: the shell runs one command " +
+                            "per call and cannot parse blocks, parentheses or `else`, so rewriting the step IS " +
+                            "the fix — one command per call, a tool instead (coding.stat, coding.mvnBuild), or " +
+                            "a script file run by path.")
             )
             appendLine(
                 "- Run coding.permissions to see exactly what is allowed before planning a step that " +
