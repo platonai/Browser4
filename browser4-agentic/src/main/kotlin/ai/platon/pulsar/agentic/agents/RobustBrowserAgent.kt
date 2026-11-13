@@ -1639,6 +1639,33 @@ open class RobustBrowserAgent(
                     }.onFailure { logger.warn("cli-agent taskComplete parse failed: {}", it.message) }
                 }
             },
+            // P0-0: one attribution event per tool round (model / tools / callbacks).
+            // Without it, "the gap is model inference" and "the gap is per-call
+            // bookkeeping" are indistinguishable, and they have different fixes.
+            onRoundTiming = { timing ->
+                runCatching {
+                    cliLoopTracer.logEvent(
+                        "round_timing",
+                        mapOf(
+                            "round" to timing.round,
+                            "calls" to timing.calls,
+                            "modelMs" to timing.modelMs,
+                            "toolsMs" to timing.toolsMs,
+                            "callbacksMs" to timing.callbacksMs,
+                            "outTokens" to timing.outTokens,
+                            "cachedInTokens" to timing.cachedInTokens,
+                        ),
+                    )
+                    val memory = agentMemory
+                    if (MemoryConfig.enabled) {
+                        memory.sink.roundTimed(
+                            memory.currentTaskId ?: "unknown", uuid.toString(),
+                            timing.round, timing.calls, timing.modelMs, timing.toolsMs, timing.callbacksMs,
+                            timing.outTokens, timing.cachedInTokens,
+                        )
+                    }
+                }.onFailure { logger.warn("round_timing emission failed: {}", it.message) }
+            },
             // Steering arrives mid-round for the interactive session: inject it
             // right before the next inference so the model can react within the
             // current round instead of after it. The budget wrap-up directive rides

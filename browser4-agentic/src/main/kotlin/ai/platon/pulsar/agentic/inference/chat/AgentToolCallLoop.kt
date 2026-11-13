@@ -35,6 +35,43 @@ class LlmInferenceTimeoutException(
 ) : Exception("LLM inference timed out after $timeoutMs ms", cause)
 
 /**
+ * Attribution of one tool round (plan P0-0).
+ *
+ * `build` / `tool` / "gap" could not tell model inference apart from the loop's own
+ * per-call plumbing, and the two have different fixes. This splits a round into what it
+ * actually spent:
+ *
+ * - [modelMs] — the provider round-trip that produced this round's tool requests;
+ * - [toolsMs] — the tool bodies (`ToolExecutionCoordinator.execute`);
+ * - [callbacksMs] — the loop's per-call observers (request/result hooks, page-view
+ *   decoration, run tracing and memory writes) plus result-message bookkeeping.
+ *
+ * The three sum to the round's measured wall clock, so a report can say "60% model,
+ * 35% bookkeeping, 5% work" instead of guessing.
+ *
+ * [outTokens] / [cachedInTokens] are the round's token accounting: measured on 4 real
+ * coding tasks, model time is ~1 s of fixed latency plus ~3.4 ms per OUTPUT token, while a
+ * 90%+ prompt-cache hit rate makes input size nearly free. Without the token fields a
+ * four-bucket report cannot tell "the model is slow" from "the model is being asked to
+ * write too much".
+ */
+data class RoundTiming(
+    /** 1-based round number inside the loop. */
+    val round: Int,
+    /** Tool calls the model asked for in this round. */
+    val calls: Int,
+    val modelMs: Long,
+    val toolsMs: Long,
+    val callbacksMs: Long,
+    /** Output tokens the provider reported for this round (`0` when it reported none). */
+    val outTokens: Int = 0,
+    /** Input tokens served from the provider's prompt cache. */
+    val cachedInTokens: Int = 0,
+) {
+    val totalMs: Long get() = modelMs + toolsMs + callbacksMs
+}
+
+/**
  * Manages multi-turn tool-calling via LangChain4j's native function-calling
  * protocol.
  *
@@ -150,6 +187,12 @@ class AgentToolCallLoop(
      * coding round may run up to 60 tool calls).
      */
     private val onBeforeIteration: (MutableList<ChatMessage>) -> Unit = {},
+    /**
+     * Called once per tool round with its measured attribution (plan P0-0): the provider
+     * call, the tool bodies, and the loop's own per-call plumbing. Default is a no-op, so
+     * callers that do not measure are unaffected.
+     */
+    private val onRoundTiming: (RoundTiming) -> Unit = {},
 ) {
     private val logger = getLogger(AgentToolCallLoop::class)
 
@@ -252,6 +295,8 @@ class AgentToolCallLoop(
             this.maxOutputTokens?.let { requestBuilder.maxOutputTokens(it) }
             val request = requestBuilder.build()
 
+            // P0-0: attribution of this round starts at the provider call.
+            val modelStartedAt = System.nanoTime()
             response = try {
                 // Per-call timeout: a hung provider call fails fast, while a
                 // long multi-tool round keeps progressing (P1-1).
@@ -292,27 +337,56 @@ class AgentToolCallLoop(
             }
             // A successful response resets the overflow-recovery budget.
             overflowRetries = 0
+            val modelMs = (System.nanoTime() - modelStartedAt) / 1_000_000
             onModelResponse(iteration + 1, response)
             val aiMessage = response.aiMessage()
             messages.add(aiMessage)
 
-            response.tokenUsage()?.let { u ->
-                totalUsage += TokenUsage.from(u).normalized()
-            }
+            // P0-0: per-round token accounting rides the same attribution. Output tokens
+            // are what the round actually costs (measured: ~1 s fixed latency + ~3.4 ms per
+            // output token), so a four-bucket report that cannot see them cannot explain
+            // model time.
+            val roundUsage = response.tokenUsage()?.let { TokenUsage.from(it).normalized() }
+            roundUsage?.let { totalUsage += it }
+            val outTokens = roundUsage?.outputTokenCount ?: 0
+            val cachedInTokens = roundUsage?.cachedInputTokenCount ?: 0
 
             val toolRequests = aiMessage.toolExecutionRequests()
             if (toolRequests.isNullOrEmpty()) {
-                // No more tool calls — return the final response
+                // No more tool calls — return the final response.
+                //
+                // P0-0: the closing round is measured too (calls = 0). It is often the
+                // most expensive one (the model writes the whole report against the full
+                // context), and dropping it would leave "model time" systematically short
+                // in every four-bucket report.
+                runCatching {
+                    onRoundTiming(RoundTiming(iteration + 1, 0, modelMs, 0L, 0L, outTokens, cachedInTokens))
+                }.onFailure { logger.warn("round timing observer failed: {}", it.message) }
                 logger.debug("Tool loop finished after ${iteration + 1} round(s)")
                 return chatResponseToModelResponse(response, totalUsage)
             }
 
             logger.debug("Tool loop round ${iteration + 1}: executing ${toolRequests.size} tool(s)")
 
+            // P0-0: the round's other two buckets. `toolsMs` is the part that does the
+            // work; `callbacksMs` is the loop's own plumbing (observers, page-view
+            // decoration, result-message bookkeeping) — the number that decides whether
+            // "reduce per-call overhead" or "fewer rounds" is the lever worth pulling.
+            var toolsMs = 0L
+            var callbacksMs = 0L
+            fun observed(block: () -> Unit) {
+                val startedAt = System.nanoTime()
+                try {
+                    block()
+                } finally {
+                    callbacksMs += (System.nanoTime() - startedAt) / 1_000_000
+                }
+            }
+
             // Execute each tool request and append results
             for (request in toolRequests) {
-                onToolRequest(request.name(), request.arguments() ?: "{}")
-                val executedAt = System.currentTimeMillis()
+                observed { onToolRequest(request.name(), request.arguments() ?: "{}") }
+                val executedAt = System.nanoTime()
                 // Progressive disclosure: system.listTools / system.exposeTools
                 // are intercepted here — exposeTools mutates exposedToolSpecs,
                 // so the very next request carries the expanded specs.
@@ -329,22 +403,31 @@ class AgentToolCallLoop(
                     )
                     else -> coordinator.execute(request)
                 }
-                onToolResult(request, resultMessage, System.currentTimeMillis() - executedAt)
-                // Web-context optimization: fold repeated page content at
-                // append time (identical → reference, changed → diff). The
-                // raw result still reaches onToolResult for run tracing.
-                val decorated = pageViewDeduper?.decorate(resultMessage, messages) ?: resultMessage
-                onToolDecorated(request, resultMessage, decorated)
-                messages.add(decorated)
-                // Meta tools are protocol plumbing, not task progress: keep
-                // them out of the overflow digest AND out of onToolExecuted,
-                // otherwise a listTools-only round would count as real work
-                // and bypass the caller's finish gate ("≥1 tool executed").
-                if (request.name() !in ToolDisclosureTools.META_NAMES) {
-                    executedTools += request.name()
-                    onToolExecuted()
+                val executionMs = (System.nanoTime() - executedAt) / 1_000_000
+                toolsMs += executionMs
+                observed { onToolResult(request, resultMessage, executionMs) }
+                observed {
+                    // Web-context optimization: fold repeated page content at
+                    // append time (identical → reference, changed → diff). The
+                    // raw result still reaches onToolResult for run tracing.
+                    val decorated = pageViewDeduper?.decorate(resultMessage, messages) ?: resultMessage
+                    onToolDecorated(request, resultMessage, decorated)
+                    messages.add(decorated)
+                    // Meta tools are protocol plumbing, not task progress: keep
+                    // them out of the overflow digest AND out of onToolExecuted,
+                    // otherwise a listTools-only round would count as real work
+                    // and bypass the caller's finish gate ("≥1 tool executed").
+                    if (request.name() !in ToolDisclosureTools.META_NAMES) {
+                        executedTools += request.name()
+                        onToolExecuted()
+                    }
                 }
             }
+
+            // Measurement must never fail a task: a broken observer is logged, not thrown.
+            runCatching {
+                onRoundTiming(RoundTiming(iteration + 1, toolRequests.size, modelMs, toolsMs, callbacksMs, outTokens, cachedInTokens))
+            }.onFailure { logger.warn("round timing observer failed: {}", it.message) }
         }
 
         // Max iterations exhausted — return last response with error. The error

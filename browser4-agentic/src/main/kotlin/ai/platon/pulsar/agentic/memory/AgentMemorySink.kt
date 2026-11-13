@@ -53,6 +53,22 @@ class AgentMemorySink(
         seq.incrementAndGet(), now(), agentUuid, taskId, url.take(300), title.take(200), viewType, fingerprint.take(64),
     ))
 
+    /**
+     * One tool-loop round's measured attribution (plan P0-0).
+     *
+     * The three components are the round's own wall clock, split into the provider call, the
+     * tool bodies, and the loop's per-call plumbing — the split that decides whether "reduce
+     * per-call overhead" or "fewer rounds" is the lever worth pulling.
+     */
+    fun roundTimed(
+        taskId: String, agentUuid: String, round: Int, calls: Int,
+        modelMs: Long, toolsMs: Long, callbacksMs: Long,
+        outTokens: Int = 0, cachedInTokens: Int = 0,
+    ) = emit(RoundTimed(
+        seq.incrementAndGet(), now(), agentUuid, taskId,
+        round, calls, modelMs, toolsMs, callbacksMs, outTokens, cachedInTokens,
+    ))
+
     fun textEmitted(taskId: String, agentUuid: String, kind: String, text: String?) =
         emit(TextEmitted(seq.incrementAndGet(), now(), agentUuid, taskId, kind, Sanitizer.brief(text, 300)))
 
