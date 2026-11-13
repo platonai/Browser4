@@ -146,6 +146,21 @@ class CliAgentPromptTest {
     }
 
     @Test
+    @DisplayName("the coding prompt prices output tokens and forbids per-round narration")
+    fun outputTokenBudgetIsStated() {
+        val coding = CliAgentPrompt.hygiene(true, workspace)
+        // Measured: model time is ~4 ms per output token; a coding run that narrates every
+        // round pays for it in wall clock (plan P1-4). The rule must stay in the prompt.
+        assertTrue(coding.contains("1,000 output tokens"), coding)
+        assertTrue(coding.contains("A tool round needs\n          NO prose") || coding.contains("NO prose"), coding)
+        // A "batch independent calls into one round" rule was A/B-tested and REVERTED: rounds did
+        // not drop (22 vs 17-21) and wall clock rose ~15% (plan §0.4, appendix B.8).
+        assertFalse(coding.contains("Batch independent calls"), coding)
+        assertFalse(CliAgentPrompt.hygiene(false, workspace).contains("NO prose"),
+            "browsing runs must not inherit the coding output-budget rule")
+    }
+
+    @Test
     @DisplayName("the prompt states the finish-report contract for both modes")
     fun finishContractPresent() {
         for (codingMode in listOf(true, false)) {

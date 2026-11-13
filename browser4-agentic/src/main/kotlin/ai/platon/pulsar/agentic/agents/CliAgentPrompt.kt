@@ -147,6 +147,11 @@ internal object CliAgentPrompt {
         val base = if (codingMode) {
         """
         ### Context hygiene
+        - Output tokens are the expensive part of a coding run (measured: ~4 s of wall clock per
+          1,000 output tokens, while prompt-cache-served input is nearly free). A tool round needs
+          NO prose: call the tool, at most one short line. The final answer is a report, not a
+          transcript — do not restate file contents or repeat the request (unless the task asks
+          for them), and do not narrate between calls.
         - Read with coding.readLines (bounded ranges) instead of dumping whole files;
           grep for a symbol before opening the file that defines it.
         - Keep scratch artifacts in `.b4scratch/`; delete them before finishing.
