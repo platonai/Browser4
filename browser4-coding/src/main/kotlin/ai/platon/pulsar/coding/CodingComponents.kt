@@ -1,5 +1,6 @@
 package ai.platon.pulsar.coding
 
+import ai.platon.pulsar.coding.sandbox.ExecutionSandbox
 import ai.platon.pulsar.coding.sandbox.ExecutionSandboxes
 import org.slf4j.LoggerFactory
 import java.nio.file.Path
@@ -300,7 +301,7 @@ object CodingComponents {
         val boundary = policy.boundaryOrUnrestricted(root)
         return CodingAgentShell(
             baseDir = root,
-            sandbox = if (policy.unrestricted) ExecutionSandboxes.of("off") else null,
+            sandbox = sandbox(policy),
             allowUnsupportedSyntax = policy.unrestricted,
             allowNetwork = policy.allowNetwork,
             allowNetworkProvider = { policy.allowNetwork || policy.hasActiveNetworkGrant() },
@@ -349,7 +350,7 @@ object CodingComponents {
         val boundary = policy.boundaryOrUnrestricted(root)
         return CodingAgentShell(
             baseDir = root,
-            sandbox = if (policy.unrestricted) ExecutionSandboxes.of("off") else null,
+            sandbox = sandbox(policy),
             allowUnsupportedSyntax = policy.unrestricted,
             buildOnly = true,
             allowNetwork = policy.allowNetwork,
@@ -411,5 +412,16 @@ object CodingComponents {
      */
     private fun AgentAccessPolicy.boundaryOrUnrestricted(root: Path): Authorizer =
         if (unrestricted) Authorizer.unrestricted() else boundaryAuthorizer(root, additionalDirs)
+
+    /**
+     * The OS sandbox seam a task under [policy] must use, or `null` to keep the process-wide
+     * `browser4.agent.sandbox` choice.
+     *
+     * One helper for every path that spawns a child process on the agent's behalf — `coding.shell`,
+     * the build-only shell and `coding.runCode`: an unrestricted task has to be unsandboxed on all
+     * of them, or "the OS sandbox is not applied" would hold for one path and not for another.
+     */
+    fun sandbox(policy: AgentAccessPolicy): ExecutionSandbox? =
+        if (policy.unrestricted) ExecutionSandboxes.of("off") else null
 
 }

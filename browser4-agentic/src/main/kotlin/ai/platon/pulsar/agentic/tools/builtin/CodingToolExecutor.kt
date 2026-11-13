@@ -1545,6 +1545,9 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     code,
                     timeoutSeconds = timeout.coerceIn(1, 120),
                     networkAllowed = policy.allowNetwork || policy.hasActiveNetworkGrant(),
+                    // Same seam as `coding.shell` for this task: an unrestricted run is unsandboxed
+                    // here too, and every other policy keeps the process-wide backend choice.
+                    sandbox = CodingComponents.sandbox(policy),
                 )
                 buildString {
                     if (result.timedOut) appendLine("⏱ Timed out after ${timeout}s — process killed")
@@ -2182,9 +2185,27 @@ class CodingToolExecutor : AbstractToolExecutor() {
             // touch — `protectedList()` alone only shows the session's dynamic protections, which
             // made the report answer "No protections." next to a guarded bookkeeping tree.
             appendLine("Protections:")
-            appendLine("  protected files   : ${policy.protectedFiles.sorted().joinToString(", ")}")
-            appendLine("  protected dirs    : ${policy.protectedDirs.sorted().joinToString(", ")}")
-            appendLine("  credential paths  : ${policy.sensitivePaths.sorted().joinToString(", ")}")
+            // An empty list next to "Unrestricted: YES" would read as "nothing configured", which is
+            // a different statement from "this task dropped the rails" — say which one it is.
+            val noProtections = if (policy.unrestricted) "none (unrestricted)" else "none"
+            appendLine(
+                "  protected files   : " +
+                    policy.protectedFiles.sorted().joinToString(", ").ifEmpty { noProtections }
+            )
+            appendLine(
+                "  protected dirs    : " +
+                    policy.protectedDirs.sorted().joinToString(", ").ifEmpty { noProtections }
+            )
+            appendLine(
+                "  credential paths  : " + policy.sensitivePaths.sorted().joinToString(", ").ifEmpty {
+                    if (policy.unrestricted) {
+                        // The policy list is empty on purpose; the hard rail is the static list.
+                        "none in this policy — the `always refused` stores below still apply"
+                    } else {
+                        "none"
+                    }
+                }
+            )
             // A readable root relaxes a credential entry (the data root is on both lists), so the
             // model must know which locations are still refused whatever it configures.
             appendLine("  always refused    : ${ReadablePaths.ALWAYS_REFUSED.sorted().joinToString(", ")}")
@@ -2196,15 +2217,25 @@ class CodingToolExecutor : AbstractToolExecutor() {
             // what the run actually reached, which is what an operator needs to decide whether the
             // scope is too wide. Counts are process-wide, like [PermissionAudit] itself.
             appendLine("Capabilities and observed activity:")
-            appendLine(
-                "  boundary grants   : ${CodingComponents.CAP_FS_BOUNDARY} (canonical, file tools), " +
-                    "${CodingComponents.CAP_SHELL_BOUNDARY} (lexical, shell)"
-            )
-            appendLine("  declared effects  : fs.read, fs.write (both boundary grants)")
-            appendLine(
-                "  budget            : unbounded per call; the boundary Authorizer enforces limits, " +
-                    "preset budget accounting is not wired yet (M2)"
-            )
+            if (policy.unrestricted) {
+                // The boundary Authorizer this task was built with is a pass-through: printing the
+                // capability ids and their limits would describe a gate that is not there.
+                appendLine(
+                    "  boundary grants   : none — the boundary authorizer is a pass-through for this task"
+                )
+                appendLine("  declared effects  : none enforced (no workspace boundary, no capability budget)")
+                appendLine("  budget            : unbounded per call")
+            } else {
+                appendLine(
+                    "  boundary grants   : ${CodingComponents.CAP_FS_BOUNDARY} (canonical, file tools), " +
+                        "${CodingComponents.CAP_SHELL_BOUNDARY} (lexical, shell)"
+                )
+                appendLine("  declared effects  : fs.read, fs.write (both boundary grants)")
+                appendLine(
+                    "  budget            : unbounded per call; the boundary Authorizer enforces limits, " +
+                        "preset budget accounting is not wired yet (M2)"
+                )
+            }
             val events = PermissionAudit.snapshot()
             fun count(tool: String, code: String): Int = events["$tool:$code"] ?: 0
             appendLine(

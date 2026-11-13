@@ -283,11 +283,18 @@ class CodingAccessEnforcementTest {
         // The rails below are empty because the flag removed them, not because nothing was
         // configured — a model (or an operator reading the report) must be able to tell those apart.
         assertTrue(report.contains("Unrestricted: YES"), report)
+        assertTrue(report.contains("protected files   : none (unrestricted)"), report)
+        assertTrue(report.contains("protected dirs    : none (unrestricted)"), report)
+        // The credential rail is the one promise `--unrestricted` does not make: the policy list is
+        // empty on purpose and the static stores are what still refuses.
+        assertTrue(report.contains("credential paths  : none in this policy"), report)
+        assertTrue(report.contains("always refused"), report)
+        // The boundary view must not claim a gate that is not there any more.
+        assertTrue(report.contains("boundary grants   : none"), report)
+        assertFalse(report.contains("both boundary grants"), report)
         // The sandbox line must describe THIS task's pass-through shell, not whatever
         // `browser4.agent.sandbox` happens to be configured with.
         assertTrue(report.contains("execution sandbox : off (not applied"), report)
-        // The credential rail is the one promise `--unrestricted` does not make.
-        assertTrue(report.contains("always refused"), report)
     }
 
     @Test
