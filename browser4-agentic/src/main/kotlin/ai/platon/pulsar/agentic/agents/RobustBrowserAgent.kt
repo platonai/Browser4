@@ -112,7 +112,7 @@ private val CLI_CORE_DOMAINS = setOf("b4", "system", "memory")
  */
 private val CLI_CORE_CODING_METHODS = setOf(
     "shell", "shellOutput", "shellStatus",
-    "read", "readLines", "write", "append", "replace", "insertAfter", "editLines", "delete", "mkdir",
+    "read", "readLines", "readFiles", "write", "append", "replace", "insertAfter", "editLines", "delete", "mkdir",
     "listDir", "glob", "grep", "stat", "diff", "changeSummary",
     "validate", "verify", "mvnBuild", "diagnostics", "workspaceRoot", "devTask",
 )

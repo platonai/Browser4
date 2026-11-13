@@ -156,6 +156,11 @@ class CliAgentPromptTest {
         // A "batch independent calls into one round" rule was A/B-tested and REVERTED: rounds did
         // not drop (22 vs 17-21) and wall clock rose ~15% (plan §0.4, appendix B.8).
         assertFalse(coding.contains("Batch independent calls"), coding)
+        // N1 note: a prompt line recommending coding.readFiles was A/B-tested and DROPPED —
+        // the tool's own spec description is what makes the model adopt it (both arms used it;
+        // the arm with the extra prompt line was not faster). The tool is advertised through
+        // `CodingReadFilesToolTest`, not through the prompt.
+        assertFalse(coding.contains("coding.readFiles"), coding)
         assertFalse(CliAgentPrompt.hygiene(false, workspace).contains("NO prose"),
             "browsing runs must not inherit the coding output-budget rule")
     }

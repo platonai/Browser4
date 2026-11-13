@@ -572,7 +572,7 @@ CLI `agent_result` 28 例（含 Timings 段渲染与"无度量不渲染"）。
 
 | ID | 项 | 为什么（数据支撑） | 动作 | 验收 | 估时 |
 |---|---|---|---|---|---|
-| **N1** | 复合工具 `coding.readFiles`（一次调用读 N 个文件） | 请求 ≈0.6–0.9 s/次；实验 2 证明"让模型多调用"反而 +15% 墙钟，只有**一次调用覆盖 N 个文件**才能真正减轮 | 新工具 + 结果分段预算（避免 5k 结果上限截断）+ 提示词示范 + 一致性测试 | 同一枚举任务 A/B：轮数下降**且**墙钟下降（目标 ≥10%） | 1–2 d |
+| **N1** | 复合工具 `coding.readFiles`（一次调用读 N 个文件）（✅ **已实施**，A/B 无收益，见 B.9） | 请求≈0.6–0.9 s/次；实验 2 证明提示词压不动轮数；结构化的批量读至少能消除"逐文件读撑大上下文"的路径 | `readFiles(paths, startLine, maxLinesPerFile, maxTotalChars)`：4.6 KB 硬预算、逐文件截断、跳过清单；注册进 `READ_METHODS`/`TOOL_EFFECTS`/`CLI_CORE_CODING_METHODS` | ✅ 9 例单测 + 25 例矩阵/副作用守卫；❌ A/B 未显示墙钟收益（两臂都采纳，轮数 10–22 波动），**提示词行已回滚** | 1 d |
 | **N2** | provider 参数透传（=`P1-5`） | 隐藏推理约占 model 桶六成（最典型一轮 3,948 输出 token、可见输出约 100 字符） | base 库给 `BrowserChatModel` 加自定义参数缝；本仓库加 `browser4.agent.llm.extraParams`（默认空） | `reasoning_effort=low/off` 的 A/B：model 桶与墙钟对比 | 本仓库 0.5 d（前置 base 库） |
 | **N3** | 把度量搬进任务结果（✅ **已实施**，见 §10.6） | `agent result` 原先只有 `elapsedMs`/`effectiveTokenBudget`，看不到轮数、token、四桶；每次分析都要跑脚本 | 任务结果 JSON 增 `rounds`/`tokens{in,cached,out}`/`timings{build,tool,callback,model}` | ✅ 一次真实任务的结果里直接读出四桶，且与事件日志复算逐项一致 | 0.5 d |
 | **N4** | `cached` verdict 带上"覆盖的模块列表" | worktree 合并闸门要判断"这次缓存的编译是否覆盖本次改动"；当前 verdict 只有 `cached`/`fingerprint` | `VerificationCheck.modules` + `IsolationGate` 消费 + 用例 | 合并闸门用例：缓存命中但未覆盖改动 → 拒绝合并 | 0.5 d |
@@ -584,6 +584,7 @@ CLI `agent_result` 28 例（含 Timings 段渲染与"无度量不渲染"）。
 
 - **P1-1 只读结果复用**：工具桶 1.2%，收益上限就是它 → 降到"顺手做"，不单独排期。
 - **P1-2 verify 并发**：`repo-consistency` 实测 103–132 ms，与 compile 并发无收益 → 只保留 N4（正确性）。
+- **`coding.writeBatch`**：与 N1 同一前提（"批量调用能省轮"），而 N1 的 A/B 已表明轮数由模型规划决定（同指令 10–22 轮）；写入还受"先读后改"的依赖限制。不立项，除非将来出现真实的批量写场景数据。
 - **P0-2 合并构建**：合并只省一次 Maven 启动（全 reactor `validate` ≈ 2 s），却可能把 2 个模块变 10 个上游 → 在真实任务出现"同一轮多次多模块构建"之前不立项。
 
 ### 11.4 执行顺序与复测方式
@@ -603,3 +604,25 @@ pwsh docs-dev/copilot/scripts/analyze-agent-timing.ps1 -Last 3      # 四桶 + t
 1. 任何优化都必须给出**同任务、同模型、≥2 次/臂**的 A/B，报告 outTok、rounds、model ms、墙钟四项。
 2. 验收以**墙钟**为准；轮数/token 只作为解释项（实验 2 就是轮数解释不了的例子）。
 3. 报告里必须写明样本量与离散度；n=1 的"改进"不作数。
+
+### B.9 A/B #3：`coding.readFiles`（工具保留，提示词行回滚）
+
+同一中性指令（不点名任何工具）、同模型、无会话：`browser4-coding/src/test/kotlin` 下全部 .kt 读前 30 行并列表。
+
+| 臂 | 任务 | 轮 | model | 墙钟 | 用了 readFiles |
+|---|---|---|---|---|---|
+| 处理组（提示词点名 readFiles） | `5ac9a55e` | 17 | 68 s | 74 s | 是 |
+| 处理组 | `90eb492a` | — | — | 64 s | 是 |
+| 对照组（提示词不点名，工具仍在） | `cf81b12d` | 10 | 53.6 s | **58.5 s** | 是（靠工具描述） |
+| 对照组 | `13f57b0a` | 15 | 61 s | 66 s | 是 |
+| 参考：更早一次（工具未被采纳） | `4a843524` | 22 | 100 s | 106 s | 否 |
+
+结论（如实记录）：
+
+1. **没有可归因于 N1 的墙钟收益**：两臂都采纳了工具，墙钟 58.5–74 s，对照组反而略快；同指令下轮数在 **10–22** 之间波动，
+   模型方差远大于臂间差，n=2 无法分辨。
+2. **采纳由工具描述驱动，不由提示词驱动**：对照组（提示词从不提 readFiles）两跑都用了它——`ToolSpec.description`
+   里"ANY batch of 2+ files"才是有效信号。因此**提示词行已回滚**（`CliAgentPromptTest` 反向钉住），工具与其描述保留。
+3. 工具价值不在"减轮"，而在**单次调用覆盖 N 个文件且回复有界**（4.6 KB 硬预算 + 跳过清单），
+   这消除了"逐文件读 → 上下文被 60 个文件结果撑大"的路径；是否减少轮数由模型规划决定。
+4. 推论：**不要在同一个前提上继续做 `coding.writeBatch`**（§11.3 已记）。写入的轮次受"先看后改"的依赖限制，不是调用粒度限制。

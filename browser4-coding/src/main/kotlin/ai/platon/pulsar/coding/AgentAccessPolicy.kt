@@ -499,7 +499,7 @@ data class AgentAccessPolicy(
 
         /** `coding.*` methods whose only effect is to read data or metadata. */
         private val READ_METHODS = setOf(
-            "read", "readLines", "checksum", "listDir", "glob", "grep", "stat", "diff",
+            "read", "readLines", "readFiles", "checksum", "listDir", "glob", "grep", "stat", "diff",
             "changeSummary", "languages", "workspaceRoot",
             "symbols", "references", "impact", "moduleGraph", "diagnostics", "lspServers",
             "ktSymbols", "ktReferences", "ktInheritance",

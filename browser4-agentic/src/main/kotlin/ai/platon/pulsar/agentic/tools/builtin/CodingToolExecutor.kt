@@ -337,6 +337,29 @@ class CodingToolExecutor : AbstractToolExecutor() {
             returnType = "String",
             description = "Read specific line range from a file"
         )
+        toolSpec["readFiles"] = ToolSpec(
+            domain = domain, method = "readFiles",
+            arguments = listOf(
+                ToolSpec.Arg(
+                    "paths", "List<String>", null,
+                    "Files to read, in order. A comma-separated string is accepted too.",
+                ),
+                ToolSpec.Arg("startLine", "Int", "1", "First line of every file."),
+                ToolSpec.Arg(
+                    "maxLinesPerFile", "Int", "60",
+                    "Lines read per file; -1 reads from startLine to the end.",
+                ),
+                ToolSpec.Arg(
+                    "maxTotalChars", "Int", "4000",
+                    "Character budget for the whole reply (clamped to 4600 so the tool envelope never truncates it).",
+                ),
+            ),
+            returnType = "String",
+            description = "Read several files in ONE call, bounded per file and in total. " +
+                "Use it for ANY batch of 2+ files you can already name — a glob's result, a sample " +
+                "of several modules — instead of looping coding.readLines once per file. " +
+                "The reply says which files the char budget skipped."
+        )
         toolSpec["write"] = ToolSpec(
             domain = domain, method = "write",
             arguments = listOf(
@@ -1054,6 +1077,21 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     path = paramString(args, "path", functionName)!!,
                     startLine = paramInt(args, "startLine", functionName, required = false, default = 1) ?: 1,
                     endLine = paramInt(args, "endLine", functionName, required = false, default = -1) ?: -1,
+                )
+            }
+            "readFiles" -> {
+                validateArgs(
+                    args,
+                    allowed = setOf("paths", "startLine", "maxLinesPerFile", "maxTotalChars"),
+                    required = setOf("paths"),
+                    functionName,
+                )
+                readFilesBatch(
+                    fs = fs,
+                    paths = paramStringList(args, "paths", functionName),
+                    startLine = paramInt(args, "startLine", functionName, required = false, default = 1) ?: 1,
+                    maxLinesPerFile = paramInt(args, "maxLinesPerFile", functionName, required = false, default = 60) ?: 60,
+                    maxTotalChars = paramInt(args, "maxTotalChars", functionName, required = false, default = 4000) ?: 4000,
                 )
             }
             "write" -> {
@@ -2468,6 +2506,63 @@ class CodingToolExecutor : AbstractToolExecutor() {
     }
 
     /**
+     * Read several files in one tool call (plan N1).
+     *
+     * Why this exists: a measured coding round costs ~0.6-0.9 s of fixed latency before any
+     * tool runs, and the efficiency plan's A/B showed a "batch your calls" prompt rule does
+     * **not** reduce rounds — the model still issues one call per file. A single call that
+     * reads N files is the structural way to cut rounds, so it has to behave well under the
+     * tool envelope's 5000-char cap in the native loop:
+     *
+     * - the total is clamped below that cap, so the reply is never silently truncated;
+     * - each file gets a fair share, with its own truncation marker from
+     *   [CodingAgentFileSystem.readFileLines];
+     * - files dropped for budget are **named**, so the model asks for them next instead of
+     *   concluding they were empty.
+     */
+    private suspend fun readFilesBatch(
+        fs: CodingAgentFileSystem,
+        paths: List<String>,
+        startLine: Int,
+        maxLinesPerFile: Int,
+        maxTotalChars: Int,
+    ): String {
+        val requested = paths.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (requested.isEmpty()) {
+            return "No files requested: pass paths=[\"a.kt\", \"b.kt\"] (a comma-separated string is accepted too)."
+        }
+        val totalBudget = maxTotalChars.coerceIn(MinBatchReadChars, MaxBatchReadChars)
+        val endLine = if (maxLinesPerFile <= 0) -1 else startLine + maxLinesPerFile - 1
+        val perFileBudget = (totalBudget / requested.size).coerceAtLeast(MinPerFileChars)
+
+        val sb = StringBuilder()
+        val skipped = mutableListOf<String>()
+        for (path in requested) {
+            val remaining = totalBudget - sb.length
+            // A sliver smaller than one useful excerpt is not worth a call: name the file instead.
+            if (remaining < MinPerFileChars) {
+                skipped += path
+                continue
+            }
+            val body = fs.readFileLines(
+                path = path,
+                startLine = startLine,
+                endLine = endLine,
+                maxChars = minOf(perFileBudget, remaining),
+            )
+            sb.append("### ").append(path)
+            if (startLine > 1) sb.append(" (from line ").append(startLine).append(')')
+            sb.append('\n').append(body).append("\n\n")
+        }
+        if (skipped.isNotEmpty()) {
+            sb.append("… ").append(skipped.size).append(" file(s) not shown (char budget ")
+                .append(totalBudget).append("): ").append(skipped.joinToString(", "))
+            sb.append("\nCall coding.readFiles again for those (fewer paths or a larger maxTotalChars).")
+        }
+        return sb.toString().trimEnd()
+    }
+
+    /**
      * Structured sidecar for `mvnBuild` (plan P0.2). The default tool reply
      * stays human prose; `json=true` returns this object instead so the CLI and
      * CI can consume the build verdict without parsing `✓ Build succeeded`.
@@ -2675,6 +2770,7 @@ internal object CodingToolEffects {
             // Read side of the file tools.
             "read" to FS_READ,
             "readLines" to FS_READ,
+            "readFiles" to FS_READ,
             "checksum" to FS_READ,
             "listDir" to FS_READ,
             "glob" to FS_READ,
@@ -2733,3 +2829,18 @@ internal object CodingToolEffects {
             "estimateTokens" to NONE,
         )
 }
+
+/**
+ * Read-batch budget constants (plan N1).
+ *
+ * The native tool loop truncates a rendered result at 5000 chars
+ * (`ToolExecutionCoordinator`), so the batch tool must stay below it: a silently cut reply
+ * loses whole files, which reads to the model as "the file was empty".
+ */
+private const val MaxBatchReadChars = 4_600
+
+/** Smaller than this and a batch reply is not worth a call at all. */
+private const val MinBatchReadChars = 600
+
+/** The smallest share one file may take while the budget lasts. */
+private const val MinPerFileChars = 160
