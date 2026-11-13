@@ -244,7 +244,8 @@ internal object CliAgentPrompt {
     }
 
     /**
-     * The `### Permissions` block, empty under `full` with external access on.
+     * The `### Permissions` block, empty under `full` with external access on — except for an
+     * unrestricted run, which must be described.
      *
      * A restricted preset changes the *shape* of a run — whole tools disappear and mutating calls
      * are refused — so the agent has to be told before it plans, not after it fails. The key line is
@@ -260,10 +261,15 @@ internal object CliAgentPrompt {
      * problem instead of reading them. A live browsing run retried the same denied repo path four
      * times because the block was suppressed by the preset check while the boundary was still
      * active, so that case keeps its own short block.
+     *
+     * `agent run --unrestricted` is the one `full` policy that still gets the block: the syntax
+     * gate is lifted, and the model must learn that before it plans a multi-step `for` loop — plus
+     * the vetoes that survive the lift. Without `!policy.unrestricted` here the branch below is
+     * unreachable (the flag forces `full` + external access), which would silently drop that text.
      */
     private fun permissionsBlock(policy: AgentAccessPolicy): String {
         val added = addedDirsLine(policy)
-        if (policy.preset == AccessPreset.FULL && policy.denyTools.isEmpty()) {
+        if (policy.preset == AccessPreset.FULL && policy.denyTools.isEmpty() && !policy.unrestricted) {
             if (policy.allowExternalAccess) return ""
             val addedSuffix = if (added.isEmpty()) "" else " or an added folder named below"
             return buildString {
@@ -328,7 +334,10 @@ internal object CliAgentPrompt {
                             "inline scripts (`powershell -Command ...`) run as written — use them when one " +
                             "command per call would take several steps. Every in-process rail is off as well " +
                             "(workspace boundary, protected dirs), so the OS user's own permissions are the " +
-                            "only limit: be deliberate about what you delete or overwrite."
+                            "only limit: be deliberate about what you delete or overwrite. The one family that " +
+                            "still refuses is destroying the runtime you run inside — `taskkill` on the " +
+                            "backend, `b4w build/stop`, `bin/build.ps1`, and `mklink`/`ln`/`mount` — and that " +
+                            "refusal is permanent, not a syntax limit."
                     else
                         "A `UNSUPPORTED_SYNTAX` refusal is a different family: the shell runs one command " +
                             "per call and cannot parse blocks, parentheses or `else`, so rewriting the step IS " +

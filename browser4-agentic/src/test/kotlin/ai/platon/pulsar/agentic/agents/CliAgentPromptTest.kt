@@ -188,6 +188,21 @@ class CliAgentPromptTest {
     }
 
     @Test
+    @DisplayName("an unrestricted prompt names the lifted syntax gate and the vetoes that still refuse")
+    fun unrestrictedPromptNamesTheLiftedGateAndTheSurvivingVetoes() {
+        // `--unrestricted` lifts the syntax gate, so the `UNSUPPORTED_SYNTAX` advice would be
+        // wrong here — but the prompt must not promise a blank cheque either: killing the backend
+        // or rebuilding the runtime still refuses (CodingAgentShell.liftedSyntaxGuardViolation).
+        val prompt = CliAgentPrompt.hygiene(true, workspace, AgentAccessPolicy().withUnrestricted())
+
+        assertTrue(prompt.contains("unrestricted"), prompt)
+        assertTrue(prompt.contains("syntax"), prompt)
+        assertTrue(prompt.contains("b4w build"), "the surviving vetoes must be named: $prompt")
+        assertTrue(prompt.contains("taskkill"), prompt)
+        assertFalse(prompt.contains("UNSUPPORTED_SYNTAX"), "a lifted gate must not be advertised: $prompt")
+    }
+
+    @Test
     @DisplayName("the permissions block reports what the policy actually grants, including an operator grant")
     fun permissionsBlockReflectsOperatorGrant() {
         // `read` + an operator-approved `fs.write` grant unlocks file mutation and — because the
