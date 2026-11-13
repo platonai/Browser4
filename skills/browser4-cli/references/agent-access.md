@@ -63,20 +63,26 @@ pass-through ones for that one task:
 |---|---|---|
 | preset gate | `--access` / backend default | `full` — every tool domain |
 | path boundary | workspace + readable roots + `--add-dir` | every path the OS user can reach |
-| protected / sensitive paths | refused | allowed (the OS still governs) |
+| protected paths | refused | allowed (the OS still governs) |
+| OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) | refused | **still refused** — see below |
 | network, destructive commands | per preset | allowed |
 | OS sandbox (`browser4.agent.sandbox`) | applied | **not** applied — plain child processes |
+| runtime-protection vetoes (`taskkill` on the backend, `b4w build/stop`, `bin/build.ps1`, `mklink`/`ln`/`mount`) | refused | **still refused** |
 
 What it does **not** do:
 
 - It never widens another task: the policy is applied when the task starts and the backend
   default is restored when it ends.
-- It does not escalate the OS user. `~/.ssh`, browser credential stores and cloud token files
-  are readable only if that user can read them; nothing runs as root/Administrator that would
-  not from the same shell.
+- It does not escalate the OS user, and it does not turn "my permissions" into "my secrets":
+  `~/.ssh`, `~/.aws`, `~/.gnupg` and `~/.config/gcloud` stay refused whatever the flag says, so
+  a task cannot read a private key into its context. Nothing runs as root/Administrator that
+  would not from the same shell.
+- It never lets the task destroy the runtime it runs inside: the path/credential string guards are
+  gone, but a `for` loop body still may not `taskkill` the backend, run `b4w build`, or rewrite
+  the workspace topology with `mklink`/`ln`.
 - It is inherited by `agent run --resume <id>` — a continued instruction must not lose the grant
-  it was written against — and recorded on the task row (`unrestricted`) so `agent status` and
-  `coding.permissions` can report it.
+  it was written against — and recorded on the task row (`unrestricted`) so `agent status` reports
+  it and `coding.permissions` states it (`Unrestricted: YES`, with the sandbox line reading `off`).
 - It is audited: the first time the policy is applied the backend writes a `coding.access`
   approval event with `source=flag`.
 

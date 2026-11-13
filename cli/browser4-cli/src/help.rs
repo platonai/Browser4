@@ -1824,18 +1824,27 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    access, network, destructive commands, no protected/sensitive rails and no OS"
+            "    access, network, destructive commands, no protected rails and no OS sandbox. It"
                 .to_string(),
         );
         lines.push(
-            "    sandbox. It removes the rails as well as the scope, so it is opt-in per task, is"
+            "    removes the rails as well as the scope, so it is opt-in per task, is audited"
                 .to_string(),
         );
         lines.push(
-            "    audited (coding.access), and a --resume of that task keeps it. With -i it applies"
+            "    (coding.access), and a --resume of that task keeps it. With -i it applies"
                 .to_string(),
         );
         lines.push("    to every task of the session.".to_string());
+        lines.push(
+            "    OS credential stores (~/.ssh, ~/.aws, ~/.gnupg, ~/.config/gcloud) stay refused, as"
+                .to_string(),
+        );
+        lines.push(
+            "    do the commands that would kill or rebuild this backend: 'my permissions' is not"
+                .to_string(),
+        );
+        lines.push("    'my secrets', and a task must not destroy its own runtime.".to_string());
         lines.push(
             "  - Reads are wider than writes: Browser4's own folders (the data root, e.g. ~/.browser4".to_string(),
         );

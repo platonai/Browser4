@@ -195,9 +195,11 @@ browser4-cli agent run "Move the cache into D:/corpus and fix the symlinks" --co
 ```
 
 The boundary described above is replaced with a pass-through one (no workspace scope, no
-readable-root list, no need for `--add-dir`), the protected and credential rails are dropped, and
+readable-root list, no need for `--add-dir`), the protected rails are dropped, and
 the OS sandbox (`browser4.agent.sandbox`) is **not** applied — child processes inherit the
 backend's own token, so a command reaches exactly what you could reach from the same terminal.
+The OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) are the exception:
+they stay refused, because "my permissions" must not become "my secrets" in a model's context.
 The OS is then the only limit: on Windows with `windows-acl` configured, that confinement is what
 you are switching off, so prefer an added folder when the task only needs one more directory.
 The flag is scoped to the task (the backend default is restored afterwards) and inherited by
