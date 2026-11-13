@@ -1,11 +1,13 @@
 package ai.platon.pulsar.coding
 
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import java.nio.file.Path
 
 /**
  * The syntax family must stay distinguishable from the policy family (`PermissionAudit`).
@@ -68,6 +70,37 @@ class UnsupportedSyntaxTest {
         UnsupportedSyntax.refused("coding.shell", "unsupported syntax: 'for'")
 
         assertEquals(2, UnsupportedSyntax.snapshot()["coding.shell"])
+        assertTrue(
+            PermissionAudit.snapshot().isEmpty(),
+            "policy counters must stay untouched: ${PermissionAudit.snapshot()}",
+        )
+    }
+
+    @Test
+    @DisplayName("a nested-depth refusal is reported as UNSUPPORTED_SYNTAX, not as a policy denial")
+    fun testNestedDepthIsClassifiedAsSyntax() = runBlocking {
+        // `nested inline shell script exceeds N levels` belongs to the family
+        // (CodingAgentShell.isSyntaxViolation), but the refusal path matched the literal
+        // `unsupported syntax: ` prefix only — so it reached the model as
+        // PERMISSION_DENIED | code=COMMAND_NOT_ALLOWED and told it to ask for an approval that
+        // cannot exist. The classification is now shared with the `--unrestricted` lift.
+        val shell = CodingAgentShell(
+            baseDir = Path.of(System.getProperty("user.dir")).toAbsolutePath(),
+            allowDevTools = true,
+            allowExecution = true,
+            allowDestructive = true,
+        )
+        val nested = List(5) { "powershell -Command" }.joinToString(" ") + " echo hi"
+
+        val result = shell.executeRaw(nested)
+
+        assertTrue(result.stderr.startsWith(UnsupportedSyntax.PREFIX), result.stderr)
+        assertTrue(result.stderr.contains("| code=${UnsupportedSyntax.CODE}"), result.stderr)
+        assertFalse(
+            result.stderr.contains(PermissionAudit.DENIED),
+            "must not read as a policy refusal: ${result.stderr}",
+        )
+        assertEquals(1, UnsupportedSyntax.snapshot()["coding.shell"])
         assertTrue(
             PermissionAudit.snapshot().isEmpty(),
             "policy counters must stay untouched: ${PermissionAudit.snapshot()}",

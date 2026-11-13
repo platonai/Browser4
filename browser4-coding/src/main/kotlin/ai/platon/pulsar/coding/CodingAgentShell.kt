@@ -92,12 +92,12 @@ class CodingAgentShell(
      */
     private val allowUnsupportedSyntax: Boolean = false,
     /**
-     * OS sandbox seam for this shell instance (`agent run --unrestricted`).
+     * When false, the destructive command tier (`rm`, `del`, `move`, `taskkill`, …) is refused.
      *
-     * `null` — the default — keeps the process-wide [ExecutionSandboxes] choice from
-     * `browser4.agent.sandbox`, so every other task behaves exactly as before. An unrestricted
-     * task passes the pass-through sandbox explicitly: that is what makes its commands run with
-     * the current OS user's own permissions instead of the confined profile.
+     * This is **not** a read-only switch — reads and builds work either way — and it is not the
+     * workspace boundary either: [allowExternalAccess] decides where a command may point, this flag
+     * decides what it may do. `agent run --access write` clears it; `read-build` and `read` refuse
+     * the shell outright rather than reaching this flag.
      */
     private val allowDestructive: Boolean = true,
     /** v0.3: when false the shell's working directory is constrained to [baseDir]
@@ -923,10 +923,14 @@ class CodingAgentShell(
         // A syntax refusal is NOT a permission refusal. Reporting it as one was a real defect:
         // the model was told `code=COMMAND_NOT_ALLOWED`, went looking for an approval it could
         // never get, and `coding.permissions` counted policy friction that did not exist.
-        // `contains`, not `startsWith`: a nested layer prefixes the reason
-        // (`inline script via 'cmd' rejected — unsupported syntax: …`) and the family is still
-        // syntax. Checked before the policy codes so it cannot be reclassified by a wrapper.
-        if (violation.contains(SYNTAX_PREFIX)) {
+        //
+        // The classification lives in ONE place — [isSyntaxViolation], the same predicate the
+        // `--unrestricted` lift uses — so the whole family (`unsupported syntax: …`, `nested …`,
+        // `empty or invalid command`, and a wrapper that carries either) is reported the same way.
+        // Matching on `unsupported syntax: ` alone left `nested inline shell script exceeds …`
+        // arriving as a policy denial, which is the defect this family exists to prevent.
+        // Checked before the policy codes so it cannot be reclassified by a wrapper.
+        if (isSyntaxViolation(violation)) {
             return UnsupportedSyntax.refused(
                 tool = SHELL_TOOL,
                 detail = "Command not executed — $violation",
@@ -938,7 +942,16 @@ class CodingAgentShell(
         val (code, hint) = when {
             violation.contains(PATH_GUARD_PREFIX) ->
                 PermissionAudit.CODE_COMMAND_PATH_DENIED to
-                    "pass a path inside the workspace; credential locations are never valid arguments"
+                    // Without a workspace boundary (`--access full` with external access, or an
+                    // `--unrestricted` task) telling the model to use a workspace-relative path
+                    // sends it down a wall that is not there: the credential rail is the whole
+                    // reason for this refusal, so name only that.
+                    if (allowExternalAccess) {
+                        "credential locations are never valid arguments — a hard rail even where the " +
+                            "workspace boundary is off; the agent must not read credentials into its context"
+                    } else {
+                        "pass a path inside the workspace; credential locations are never valid arguments"
+                    }
             violation.contains(PROTECTED_PATH_PREFIX) ->
                 PermissionAudit.CODE_PROTECTED_PATH to
                     "use the coding.* tools for the agent's own bookkeeping (.browser4) and CI " +

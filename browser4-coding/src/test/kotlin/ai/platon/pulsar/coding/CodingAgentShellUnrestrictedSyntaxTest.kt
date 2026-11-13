@@ -186,4 +186,34 @@ class CodingAgentShellUnrestrictedSyntaxTest {
             "a word in argument position is not a program",
         )
     }
+
+    @Test
+    @DisplayName("the credential rail survives --unrestricted, and its hint does not invent a boundary")
+    fun credentialRailSurvivesUnrestricted() = runBlocking {
+        // `ALWAYS_REFUSED` is checked ahead of the policy's (now empty) sensitive list, so an
+        // unrestricted task still cannot read a key into its context — `coding.permissions` prints
+        // that list as `always refused`. Only the *policy* rails are lifted.
+        val unrestricted = CodingAgentShell(
+            baseDir = Path.of(System.getProperty("user.dir")).toAbsolutePath(),
+            allowDevTools = true,
+            allowExecution = true,
+            allowDestructive = true,
+            allowUnsupportedSyntax = true,
+            allowExternalAccess = true,
+            sensitivePaths = emptySet(),
+            protectedDirs = emptySet(),
+        )
+
+        val refused = unrestricted.executeRaw("echo ~/.ssh/id_rsa")
+
+        assertTrue(refused.stderr.contains("credential location"), refused.stderr)
+        assertTrue(
+            refused.stderr.contains("hard rail even where the workspace boundary is off"),
+            "the hint must describe the credential rail, not a boundary that is gone: ${refused.stderr}",
+        )
+        assertFalse(
+            refused.stderr.contains("pass a path inside the workspace"),
+            "an unrestricted task has no workspace boundary to pass: ${refused.stderr}",
+        )
+    }
 }
