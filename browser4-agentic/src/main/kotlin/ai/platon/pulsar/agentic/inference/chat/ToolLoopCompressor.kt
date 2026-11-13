@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.inference.chat
 
+import ai.platon.pulsar.agentic.inference.TokenBudgetExceededException
 import ai.platon.pulsar.coding.SafeText
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.getLogger
@@ -296,6 +297,12 @@ class ToolLoopCompressor(
         for (attempt in 0..summarizationRetries.coerceAtLeast(0)) {
             val candidate = try {
                 summarizer.summarize(prefix)
+            } catch (e: TokenBudgetExceededException) {
+                // A budget abort is a task-level verdict, not a compaction failure. Retrying it
+                // would re-run (and re-charge) the summarization request and then report the
+                // breach as "compaction failed", hiding the real cause from the CLI and the
+                // supervisor — so it bypasses the retry loop entirely and ends the run.
+                throw e
             } catch (e: Exception) {
                 logger.warn("🧹 tool-loop compaction summarization failed: {}", e.brief())
                 lastFailure = "summarization failed: ${e.message ?: e.javaClass.simpleName}"
