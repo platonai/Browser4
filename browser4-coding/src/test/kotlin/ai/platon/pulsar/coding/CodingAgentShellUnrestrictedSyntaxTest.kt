@@ -177,9 +177,21 @@ class CodingAgentShellUnrestrictedSyntaxTest {
             s.liftedSyntaxGuardViolation("for %f in (1) do bin/build.ps1 -SkipTests"),
             "rebuilding the runtime from a loop body",
         )
+        assertNotNull(
+            s.liftedSyntaxGuardViolation("for %f in (1) do (mklink link target)"),
+            "a veto must not hide behind block parentheses",
+        )
+        assertNotNull(
+            s.liftedSyntaxGuardViolation("for %f in (1) do cmd /c \"taskkill /PID $ownPid /F\""),
+            "the inline-script body is scanned recursively",
+        )
         assertNull(
             s.liftedSyntaxGuardViolation("for %f in (*.csv) do echo %f"),
             "an ordinary loop must not be refused",
+        )
+        assertNull(
+            s.liftedSyntaxGuardViolation("for %f in (*.csv) do (echo %f)"),
+            "a benign parenthesised body must not be refused",
         )
         assertNull(
             s.liftedSyntaxGuardViolation("echo b4w build failed"),

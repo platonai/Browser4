@@ -127,6 +127,20 @@ class SensitivePathGuardTest {
         }
     }
 
+    @Test
+    @DisplayName("the OS credential stores stay refused even when the policy list is empty")
+    fun alwaysRefusedSurvivesAnEmptyPolicyList() {
+        // Decision (2026-11-14): `agent run --unrestricted` keeps this rail. The static list is
+        // checked ahead of the policy's (now empty) sensitive list, so clearing the policy cannot
+        // open a key store to a model's context — `coding.permissions` prints it as `always refused`.
+        val home = Path.of(System.getProperty("user.home")).toAbsolutePath()
+        assertTrue(SensitivePaths.isRefused(home.resolve(".ssh").resolve("id_rsa"), emptyList(), emptyList()))
+        assertTrue(SensitivePaths.isRefused(home.resolve(".aws").resolve("credentials"), emptyList(), emptyList()))
+        assertTrue(SensitivePaths.isRefused(home.resolve(".gnupg").resolve("private-keys-v1.d"), emptyList(), emptyList()))
+        // An ordinary path is unaffected: the rail is a list, not a blanket refusal.
+        assertFalse(SensitivePaths.isRefused(home.resolve("projects").resolve("notes.txt"), emptyList(), emptyList()))
+    }
+
     /** Creates a symlink or (on Windows) a directory junction; false when the platform refuses. */
     private fun createLink(link: Path, target: Path): Boolean {
         if (runCatching { Files.createSymbolicLink(link, target) }.isSuccess) return true

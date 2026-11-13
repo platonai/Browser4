@@ -299,7 +299,6 @@ class CodingAgentShell(
         /** Separates a wrapper reason from the inner one (`inline script via 'sh' rejected — …`). */
         private const val INNER_REASON_SEPARATOR = " — "
 
-
         /** Redirection introduced by an argument (`>file`, `>>file`, `2>file`, `&>file`). */
         private val REDIRECTION_PREFIX = Regex("""^(?:\d+|&)?>>?""")
 
@@ -1122,7 +1121,8 @@ class CodingAgentShell(
      * The scan is coarse, and coarse in one direction only: a *program position* is checked (the
      * first token of a segment, or the token after `do`/`then`/`else`/`(`/`&`/`|`/`;`), plus every
      * inline-script body recursively — an undecomposable body is precisely the program position
-     * the parser cannot name. An ordinary argument is not a program, so `echo b4w build failed`
+     * the parser cannot name. Block parentheses are stripped from the program token, so a veto
+     * cannot hide behind `( … )`. An ordinary argument is not a program, so `echo b4w build failed`
      * stays allowed. Past [MAX_INLINE_SCRIPT_DEPTH] the guard can no longer prove the line safe and
      * refuses it: the lift stops where the inspection stops.
      *
@@ -1141,16 +1141,32 @@ class CodingAgentShell(
             val tokens = tokenize(segment)
             for (index in tokens.indices) {
                 if (!isLiftedProgramPosition(tokens, index)) continue
-                val base = normalizeCommandName(tokens[index])
+                val programTokens = programTokensAt(tokens, index)
+                val base = normalizeCommandName(programTokens[index])
                 if (base in FORBIDDEN_COMMANDS) return forbiddenCommandViolation(base)
-                inlineScript(tokens.subList(index, tokens.size))?.let { inner ->
+                inlineScript(programTokens.subList(index, programTokens.size))?.let { inner ->
                     liftedSyntaxGuardViolation(inner, depth + 1)?.let { return it }
                 }
-                processKillViolation(command, tokens.subList(index, tokens.size))?.let { return it }
-                bootstrapViolation(command, tokens, index)?.let { return it }
+                processKillViolation(command, programTokens.subList(index, programTokens.size))?.let { return it }
+                bootstrapViolation(command, programTokens, index)?.let { return it }
             }
         }
         return null
+    }
+
+    /**
+     * [tokens] with the program token at [index] stripped of block parentheses.
+     *
+     * `for %f in (1) do (mklink …)` tokenizes the program as `(mklink`, and `(taskkill … /F)` as
+     * `(taskkill`: without this, a veto inside a block would be invisible to the guard — the one
+     * place a lifted line can hide a program. The caller's list is returned unchanged when there is
+     * nothing to strip, so the common path does not copy.
+     */
+    private fun programTokensAt(tokens: List<String>, index: Int): List<String> {
+        val raw = tokens[index]
+        val program = raw.trim('(', ')')
+        if (program == raw || program.isEmpty()) return tokens
+        return tokens.toMutableList().also { it[index] = program }
     }
 
     /**
