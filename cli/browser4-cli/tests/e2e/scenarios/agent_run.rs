@@ -1203,6 +1203,87 @@ pub(super) fn test_agent_run_omits_access_when_absent(ctx: &mut E2ECtx) {
     );
 }
 
+/// `--unrestricted` is a per-task power grant: it must reach `command_run` as `true`, so the
+/// backend applies — and later resets — exactly the grant the user asked for.
+pub(super) fn test_agent_run_forwards_unrestricted(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task = "Rebuild the pinned toolchain";
+    mock_server.set_command_status_response(
+        "agent-task-1",
+        completed_status("agent-task-1", task, "done"),
+    );
+    mock_server.set_command_result_response("agent-task-1", r#"{"summary":"Toolchain rebuilt"}"#);
+
+    let run_result = run_command(
+        ctx,
+        &["agent", "run", task, "--coding", "--unrestricted"],
+    );
+    assert!(
+        run_result.stdout.contains("Task submitted: agent-task-1"),
+        "expected task submission in:\n{}",
+        run_result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    let command_call = snapshot
+        .tool_calls
+        .iter()
+        .find(|call| call.tool == "command_run")
+        .expect("expected command_run MCP tool call");
+    assert_eq!(
+        command_call.arguments["unrestricted"],
+        serde_json::json!(true),
+        "command_run payload should carry the unrestricted grant: {:?}",
+        command_call.arguments
+    );
+    assert_eq!(
+        command_call.arguments["coding"],
+        serde_json::json!(true),
+        "coding must still be forwarded alongside unrestricted: {:?}",
+        command_call.arguments
+    );
+}
+
+/// Without `--unrestricted` the payload must carry no key at all — an absent flag must never
+/// look like a decision the user made, and the server-wide rails stay in force.
+pub(super) fn test_agent_run_omits_unrestricted_when_absent(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task = "Read the changelog";
+    mock_server.set_command_status_response(
+        "agent-task-1",
+        completed_status("agent-task-1", task, "done"),
+    );
+
+    let run_result = run_command(ctx, &["agent", "run", task, "--coding"]);
+    assert!(
+        run_result.stdout.contains("Task submitted: agent-task-1"),
+        "expected task submission in:\n{}",
+        run_result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    let command_call = snapshot
+        .tool_calls
+        .iter()
+        .find(|call| call.tool == "command_run")
+        .expect("expected command_run MCP tool call");
+    assert!(
+        command_call.arguments.get("unrestricted").is_none(),
+        "an omitted --unrestricted must not appear in the payload: {:?}",
+        command_call.arguments
+    );
+}
+
 /// `--add-dir` grants a folder besides the workspace: it must reach `command_run`
 /// as an array of **absolute** paths. The backend runs in the runtime bundle, so a
 /// path relative to the user's shell directory would name a different place there.

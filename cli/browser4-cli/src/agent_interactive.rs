@@ -5295,6 +5295,44 @@ mod tests {
         assert!(!plain.banner_lines()[0].contains("add-dir="), "{:?}", plain.banner_lines());
     }
 
+    /// `--unrestricted` is a session-wide power grant in `-i` mode, exactly like
+    /// `--add-dir`: every task the session submits carries it, the banner names it
+    /// (a grant that removes every rail must never be silent), and a session that
+    /// did not ask for it never sends the key at all.
+    #[test]
+    fn the_repl_forwards_unrestricted_and_names_it_in_the_banner() {
+        let client = Client::builder().build().expect("client");
+        let repl = Repl::new(
+            &client,
+            "http://localhost:1",
+            &json!({"unrestricted": true}),
+            None,
+        );
+
+        assert!(repl.unrestricted);
+        assert_eq!(
+            repl.payload()["unrestricted"],
+            json!(true),
+            "every task of the session keeps the grant: {:?}",
+            repl.payload()
+        );
+        let first = &repl.banner_lines()[0];
+        assert!(first.contains("unrestricted"), "{first}");
+
+        let plain = Repl::new(&client, "http://localhost:1", &json!({}), None);
+        assert!(!plain.unrestricted);
+        assert!(
+            plain.payload().get("unrestricted").is_none(),
+            "an absent flag must not look like a decision: {:?}",
+            plain.payload()
+        );
+        assert!(
+            !plain.banner_lines()[0].contains("unrestricted"),
+            "{:?}",
+            plain.banner_lines()
+        );
+    }
+
     /// `/add-dir` is the live counterpart of `--add-dir`: a long session discovers
     /// mid-way that the work lives in another folder, and restarting it to add one
     /// directory would throw away the context the user is steering.
