@@ -394,4 +394,33 @@ class AgentAccessPolicyTest {
             assertFalse(message.contains("-Dbrowser4"), "no JVM switch suggestion: $message")
         }
     }
+
+    @DisplayName("withUnrestricted runs with the current OS user's own permissions: no gate, no rails")
+    @Test
+    fun unrestrictedIsPassThrough() {
+        val p = AgentAccessPolicy.serverDefault.withUnrestricted()
+
+        assertTrue(p.unrestricted)
+        assertEquals(AccessPreset.FULL, p.preset)
+        assertTrue(p.allowExternalAccess, "what the OS user may reach is decided by the OS")
+        assertTrue(p.allowNetwork)
+        assertTrue(p.allowDestructive)
+        assertTrue(p.denyTools.isEmpty())
+        assertTrue(p.effectiveProtectedDirs().isEmpty())
+        assertTrue(p.sensitivePaths.isEmpty())
+        // Every gate is open, including the ones the narrow presets refuse.
+        assertTrue(p.allowsTool("coding", "shell"))
+        assertTrue(p.allowsTool("coding", "write"))
+        assertTrue(p.allowsFileMutation())
+        assertTrue(p.allowsExec())
+        assertTrue(p.allowsCommandExecution("rm -rf build"))
+    }
+
+    @DisplayName("withUnrestricted(false) keeps the policy byte for byte")
+    @Test
+    fun unrestrictedCanBeTurnedOff() {
+        val base = policy(AccessPreset.READ)
+
+        assertSame(base, base.withUnrestricted(false))
+    }
 }

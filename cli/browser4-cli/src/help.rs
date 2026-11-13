@@ -1820,6 +1820,23 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    backend-wide browser4.agent.access applies; the preset is reset when the task ends.".to_string(),
         );
         lines.push(
+            "  - --unrestricted runs this task with YOUR own OS permissions: full preset, external"
+                .to_string(),
+        );
+        lines.push(
+            "    access, network, destructive commands, no protected/sensitive rails and no OS"
+                .to_string(),
+        );
+        lines.push(
+            "    sandbox. It removes the rails as well as the scope, so it is opt-in per task, is"
+                .to_string(),
+        );
+        lines.push(
+            "    audited (coding.access), and a --resume of that task keeps it. With -i it applies"
+                .to_string(),
+        );
+        lines.push("    to every task of the session.".to_string());
+        lines.push(
             "  - Reads are wider than writes: Browser4's own folders (the data root, e.g. ~/.browser4".to_string(),
         );
         lines.push(

@@ -186,6 +186,24 @@ browser4-cli agent run "Summarize every file in the corpus" --coding --add-dir D
 - **Available mid-session too.** In `agent run -i`, `/add-dir <dir>` grants the following tasks a folder without restarting the session (`/dirs` lists the grants, `/dirs clear` drops them). The session banner shows the grants it started with.
 - **The sandbox agrees.** With `-Dbrowser4.agent.sandbox=windows-acl` the sandbox account is granted the same folders, so an OS denial cannot contradict a step the boundary allowed.
 
+### `--unrestricted` — no boundary at all
+
+A task started with `--unrestricted` runs with the current OS user's own permissions:
+
+```bash
+browser4-cli agent run "Move the cache into D:/corpus and fix the symlinks" --coding --unrestricted
+```
+
+The boundary described above is replaced with a pass-through one (no workspace scope, no
+readable-root list, no need for `--add-dir`), the protected and credential rails are dropped, and
+the OS sandbox (`browser4.agent.sandbox`) is **not** applied — child processes inherit the
+backend's own token, so a command reaches exactly what you could reach from the same terminal.
+The OS is then the only limit: on Windows with `windows-acl` configured, that confinement is what
+you are switching off, so prefer an added folder when the task only needs one more directory.
+The flag is scoped to the task (the backend default is restored afterwards) and inherited by
+`agent run --resume <id>`; [agent-access.md](agent-access.md#unrestricted-tasks--agent-run---unrestricted)
+covers the capability side.
+
 ### Deliverable format
 
 There is **no spreadsheet writer**, and `.xlsx` output is out of scope by decision. A

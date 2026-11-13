@@ -105,6 +105,13 @@ class CommandToolExecutor(
                         "narrows the derived default.",
                 ),
                 ToolSpec.Arg(
+                    "unrestricted", "Boolean?", "null",
+                    "Run this task with the current OS user's own permissions (`agent run " +
+                        "--unrestricted`): full preset, external access, network, destructive commands " +
+                        "and no protected/sensitive rails, and the OS sandbox is not applied. Opt-in per " +
+                        "task and audited; inherited by `resumeTaskId`. Omit to keep the normal rails.",
+                ),
+                ToolSpec.Arg(
                     "resumeTaskId", "String?", "null",
                     "Resume an interrupted task by id: the new run starts from that task's checkpoint — " +
                         "its instruction, workspace and the files already written — and inherits its " +
@@ -276,7 +283,7 @@ class CommandToolExecutor(
                     args,
                     allowed = setOf(
                         "command", "async", "noopLimit", "engine", "coding", "freshWorkspace", "sharedWorkspace",
-                        "access", "unattended", "resumeTaskId", "tokenBudget", "addDirs",
+                        "access", "unattended", "resumeTaskId", "tokenBudget", "addDirs", "unrestricted",
                     ) + SESSION_ARG,
                     // `agent run --resume <id>` may omit the task text: the instruction
                     // comes from the interrupted task's checkpoint. Validated below.
@@ -327,6 +334,9 @@ class CommandToolExecutor(
                 // Plan P4-1: nobody is watching a submitted job by default, so it derives the
                 // documented access default. The interactive CLI passes false on a TTY.
                 val unattended = paramBool(args, "unattended", functionName, required = false, default = true) ?: true
+                // `--unrestricted` is a capability opt-in, so it is parsed strictly: a non-boolean
+                // value must fail rather than silently leaving the rails in place (or, worse, off).
+                val unrestricted = paramBool(args, "unrestricted", functionName, required = false, default = null)
                 // Per-task token budget: a negative value is not a budget, so it is
                 // rejected rather than silently becoming "unlimited".
                 val tokenBudget = paramLong(args, "tokenBudget", functionName, required = false, default = null)
@@ -340,12 +350,12 @@ class CommandToolExecutor(
                 if (isAsync) {
                     service.submitPlainCommand(
                         sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
-                        resumeTaskId, tokenBudget, addDirs,
+                        resumeTaskId, tokenBudget, addDirs, unrestricted,
                     )
                 } else {
                     val status = service.executePlainCommand(
                         sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
-                        resumeTaskId, tokenBudget, addDirs,
+                        resumeTaskId, tokenBudget, addDirs, unrestricted,
                     )
                     pulsarObjectMapper().writeValueAsString(status)
                 }

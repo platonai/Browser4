@@ -474,6 +474,7 @@ The live view is a convenience over a task that keeps running server-side, so th
 | `-i`, `--interactive` | `agent run` | Open an interactive session (see above); an optional task runs immediately |
 | `--coding` | `agent run` | Explicitly mark the task as a coding task (plain file/build work; no browser page). Omitted (the default) the task is a browser task — task type is never auto-detected |
 | `--access <preset>` | `agent run` | Access preset for this task's coding tools: `full` (default), `write`, `read-build`, `read`. Omitted, the backend's `browser4.agent.access` applies. Scoped to the task and reset when it ends — see [Permissions](#permissions---access) |
+| `--unrestricted` | `agent run` | Run this task with the current OS user's own permissions: `full` preset, external access, network and destructive commands, no protected/sensitive rails, no OS sandbox. Opt-in per task, audited, inherited by `--resume` — see [agent-access.md](agent-access.md#unrestricted-tasks--agent-run---unrestricted) |
 | `--json` | `agent status`, `agent result`, `agent list` | Emit the envelope as JSON instead of the human rendering |
 | `--all` | `agent list --clear` | Also untrack tasks that are not finished (they keep running server-side) |
 | `--schema <json>` | `extract` | Enforce a JSON output schema for the extraction |

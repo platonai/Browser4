@@ -1,6 +1,7 @@
 package ai.platon.pulsar.coding
 
 import org.slf4j.LoggerFactory
+import ai.platon.pulsar.coding.sandbox.ExecutionSandbox
 import ai.platon.pulsar.coding.sandbox.ExecutionSandboxes
 import ai.platon.pulsar.coding.sandbox.ProcessLauncher
 import ai.platon.pulsar.coding.sandbox.ProcessSpec
@@ -60,6 +61,23 @@ class CodingAgentShell(
      * enforced here.
      */
     private val allowNetworkProvider: (() -> Boolean)? = null,
+    /**
+     * OS sandbox seam for this shell instance (`agent run --unrestricted`).
+     *
+     * `null` — the default — keeps the process-wide [ExecutionSandboxes] choice from
+     * `browser4.agent.sandbox`, so every other task behaves exactly as before. An unrestricted
+     * task passes the pass-through sandbox explicitly: that is what makes its commands run with
+     * the current OS user's own permissions instead of the confined profile.
+     */
+    private val sandbox: ExecutionSandbox? = null,
+    /**
+     * OS sandbox seam for this shell instance (`agent run --unrestricted`).
+     *
+     * `null` — the default — keeps the process-wide [ExecutionSandboxes] choice from
+     * `browser4.agent.sandbox`, so every other task behaves exactly as before. An unrestricted
+     * task passes the pass-through sandbox explicitly: that is what makes its commands run with
+     * the current OS user's own permissions instead of the confined profile.
+     */
     private val allowDestructive: Boolean = true,
     /** v0.3: when false the shell's working directory is constrained to [baseDir]
      *  by lexical prefix matching (junction-aware, so module subdirectories
@@ -2039,7 +2057,7 @@ class CodingAgentShell(
         val environment = SandboxEnvironment.build(System.getenv(), sessionEnv + extraEnv)
         val workspace = runCatching { baseDir.toRealPath() }
             .getOrElse { baseDir.toAbsolutePath() }
-        val spec = ExecutionSandboxes.current().prepare(
+        val spec = (sandbox ?: ExecutionSandboxes.current()).prepare(
             ProcessSpec(commandLine, workDir.toPath(), environment),
             workspace,
             networkAllowed(),

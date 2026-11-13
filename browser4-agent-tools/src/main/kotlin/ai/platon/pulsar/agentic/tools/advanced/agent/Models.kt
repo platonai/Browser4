@@ -213,6 +213,13 @@ data class AgentTaskStatus(
     var accessPreset: String? = null
 
     /**
+     * Whether this task ran with the current OS user's own permissions (`agent run --unrestricted`),
+     * null for rows written before the field existed. Persisted so `agent run --resume <id>` keeps
+     * the grant the interrupted instruction was written against.
+     */
+    var unrestricted: Boolean? = null
+
+    /**
      * Extra folders granted to this task besides its workspace (`agent run --add-dir`),
      * as absolute paths (null when none were granted).
      *
@@ -426,6 +433,7 @@ fun AgentTaskStatus.detachedSnapshot(includeHistory: Boolean = true): AgentTaskS
     // `agent run --resume` inherits and the artifacts an aborted run produced.
     snapshot.codingMode = codingMode
     snapshot.accessPreset = accessPreset
+    snapshot.unrestricted = unrestricted
     snapshot.addedDirs = addedDirs
     snapshot.resumedFrom = resumedFrom
     snapshot.deliverables = deliverables

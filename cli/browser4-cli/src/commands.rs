@@ -4254,6 +4254,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "shared-workspace", description: "Run this task in the shared workspace (the old default) instead of its own per-task workspace, so it sees and mutates previous tasks' files. --resume still uses the interrupted task's workspace", is_bool: true, short: None },
                 OptionDef { name: "access", description: "Access preset for this task's coding tools: full (default), write (no shell), read-build (read + project build, no shell, no file mutation), read. Omit to use the server-wide browser4.agent.access default. Reset when the task ends", is_bool: false, short: None },
                 OptionDef { name: "add-dir <dir>", description: "Grant this task's agent an extra folder besides its workspace: readable, writable and usable as a shell working directory. Repeatable (one flag per folder); relative paths resolve against the current shell directory and ~ expands to the home directory. The folder must already exist on the backend machine, and the OS credential stores (~/.ssh, ~/.aws, ~/.gnupg, ~/.config/gcloud) stay refused. The grant lasts for this task only and is reset when it ends", is_bool: false, short: None },
+                OptionDef { name: "unrestricted", description: "Run this task with the current OS user's own permissions: full preset, external access, network, destructive commands, no protected/sensitive rails and no OS sandbox. Opt-in per task, audited, inherited by --resume; with -i it applies to every task of the session", is_bool: true, short: None },
                 OptionDef { name: "resume", description: "Resume an interrupted task by id: the new run is seeded with that task's instruction, workspace and files already written (the checkpoint must exist on the same backend). The task description may be omitted. After a budget abort, pass a larger --token-budget too, otherwise the run stops at the same cap", is_bool: false, short: None },
                 OptionDef { name: "token-budget", description: "Cache-miss token budget for THIS task (uncached prompt + output; prompt-cache reads do not count), overriding agent.token.budget.total for this run only (0 = unlimited). A per-run override, never a process-wide config change; the next task keeps the configured default", is_bool: false, short: None },
                 OptionDef { name: "engine", description: "Deprecated compatibility option: the CLI tool loop is the only agent engine. `cli` is accepted; the removed `observe-act` engine is rejected", is_bool: false, short: None },
@@ -4303,6 +4304,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                     .collect();
                 if !add_dirs.is_empty() {
                     p["addDirs"] = json!(add_dirs);
+                }
+                // `--unrestricted`: opt in, for THIS task, to running with the current OS
+                // user's own permissions. Only `true` is forwarded: an absent key keeps the
+                // server-wide policy, so the flag can never switch itself on.
+                if get_bool(args, "unrestricted").unwrap_or(false) {
+                    p["unrestricted"] = json!(true);
                 }
                 // Backend-side resume: forwarded as-is. A blank value must not
                 // become a checkpoint id, so only a non-blank one is sent.
@@ -7563,6 +7570,26 @@ mod tests {
             "a relative folder must be resolved against the shell directory, got {relative}"
         );
         assert!(relative.ends_with("shared-libs"), "got {relative}");
+    }
+
+    /// `--unrestricted` is a per-task opt-in: forwarded as `true` when given, and
+    /// absent (never `false`) when it is not, so an unnamed flag cannot look like a
+    /// decision the user made.
+    #[test]
+    fn test_agent_run_forwards_unrestricted_only_when_set() {
+        let map = commands_map();
+        let cmd = map.get("agent-run").unwrap();
+
+        let mut set = HashMap::new();
+        set.insert("task".to_string(), json!("collect"));
+        set.insert("unrestricted".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&set);
+        assert_eq!(params["unrestricted"], true, "got {params}");
+
+        let mut absent = HashMap::new();
+        absent.insert("task".to_string(), json!("collect"));
+        let params = (cmd.tool_params_fn)(&absent);
+        assert!(params.get("unrestricted").is_none(), "got {params}");
     }
 
     /// A single `--add-dir` is still one folder, and no flag at all leaves the key

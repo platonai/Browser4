@@ -2586,6 +2586,9 @@ struct Repl {
     /// repeatable); empty keeps the workspace-only boundary. Each value is the
     /// absolute path the command definition resolved.
     add_dirs: Vec<String>,
+    /// `--unrestricted`: every task this session submits runs with the current
+    /// OS user's own permissions. Opt-in per session, never defaulted.
+    unrestricted: bool,
     tty: bool,
     quiet: bool,
     /// `/verbose on`: the step renderer also shows round markers and fast
@@ -2656,6 +2659,10 @@ impl Repl {
             .map(str::to_string);
         let token_budget = params.get("tokenBudget").and_then(|v| v.as_i64());
         let add_dirs = crate::add_dirs_of(params.get("addDirs"));
+        let unrestricted = params
+            .get("unrestricted")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         Self {
             client: client.clone(),
@@ -2671,6 +2678,7 @@ impl Repl {
             token_budget,
             access,
             add_dirs,
+            unrestricted,
             tty: io::stdin().is_terminal(),
             quiet: quiet_enabled(),
             verbose: false,
@@ -2743,6 +2751,10 @@ impl Repl {
             // The folders are long absolute paths, so the banner says how many and
             // names them after the other knobs instead of hiding the grant.
             line.push_str(&format!(" · add-dir={}", self.add_dirs.join(",")));
+        }
+        if self.unrestricted {
+            // A session-wide power grant must never be silent.
+            line.push_str(" · unrestricted");
         }
         if let Some(budget) = self.token_budget.filter(|budget| *budget > 0) {
             line.push_str(&format!(" · budget={}", format_token_amount(budget as u64)));
@@ -3154,6 +3166,9 @@ impl Repl {
         // Extra folders granted with `--add-dir`: every task of this session keeps
         // the grant, exactly like `--access` does. The list is already absolute.
         crate::apply_add_dirs(&mut extra, &self.add_dirs);
+        // `--unrestricted` is a session-wide grant, exactly like `--add-dir`: every
+        // task this REPL submits carries it until `-i` exits.
+        crate::apply_unrestricted(&mut extra, self.unrestricted);
         extra
     }
 

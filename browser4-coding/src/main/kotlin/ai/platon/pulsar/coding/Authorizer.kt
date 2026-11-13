@@ -73,6 +73,14 @@ sealed interface Decision {
 class Authorizer(
     capabilities: List<Capability>,
     private val clock: () -> Instant = Instant::now,
+    /**
+     * When true every request is allowed without consulting [capabilities].
+     *
+     * This is the `agent run --unrestricted` boundary: the task keeps the current OS user's own
+     * permissions, so the in-process boundary stops narrowing and the kernel remains the only
+     * ceiling. It is never derived from a JVM property — a caller has to ask for it explicitly.
+     */
+    private val allowAll: Boolean = false,
 ) {
 
     private val ordered: List<Capability> = capabilities.sortedBy { it.id.value }
@@ -89,6 +97,7 @@ class Authorizer(
      * @param consumed budget already spent per capability, usually from the task's audit trail
      */
     fun decide(request: Request, consumed: Map<CapabilityId, Cost> = emptyMap()): Decision {
+        if (allowAll) return Decision.Allow
         if (request.effects.isEmpty()) return Decision.Allow
 
         val now = clock()
@@ -255,6 +264,19 @@ class Authorizer(
             private fun root(path: Path, canonicalize: Boolean): Path =
                 if (canonicalize) canonicalPath(path) else path.toAbsolutePath().normalize()
         }
+    }
+
+    companion object {
+        /**
+         * The pass-through boundary used by `agent run --unrestricted`.
+         *
+         * Every request is allowed, so the in-process boundary stops narrowing and the current OS
+         * user's own permissions are the only ceiling. It carries no capabilities by design: a
+         * pass-through that still enumerated grants would be a second source of truth. Callers
+         * must ask for it explicitly — it is never property-derived.
+         */
+        fun unrestricted(clock: () -> Instant = Instant::now): Authorizer =
+            Authorizer(emptyList(), clock, allowAll = true)
     }
 }
 

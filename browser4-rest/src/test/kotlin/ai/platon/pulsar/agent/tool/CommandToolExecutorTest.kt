@@ -343,6 +343,30 @@ class CommandToolExecutorTest {
     }
 
     @Test
+    @DisplayName("run forwards --unrestricted so the task runs with the OS user's own permissions")
+    fun runForwardsUnrestricted() {
+        runBlocking {
+            `when`(
+                runner.submitPlainCommand(
+                    "s1", "upgrade the plugins", null, null, null, null, null, true, null, null,
+                    addDirs = emptyList(), unrestricted = true,
+                )
+            ).thenReturn("t-unrestricted")
+
+            val taskId = call(
+                "run",
+                mapOf("command" to "upgrade the plugins", "sessionId" to "s1", "unrestricted" to true)
+            )
+
+            assertEquals("t-unrestricted", taskId)
+            Mockito.verify(runner).submitPlainCommand(
+                "s1", "upgrade the plugins", null, null, null, null, null, true, null, null,
+                addDirs = emptyList(), unrestricted = true,
+            )
+        }
+    }
+
+    @Test
     @DisplayName("run rejects an unknown access preset instead of silently granting full")
     fun runRejectsUnknownAccessPreset() {
         val ex = assertThrows<IllegalArgumentException> {

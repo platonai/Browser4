@@ -15961,6 +15961,19 @@ fn apply_add_dirs(extra: &mut Value, add_dirs: &[String]) {
     }
 }
 
+/// Forward `--unrestricted` into the `command.run` payload.
+///
+/// The flag is the per-task opt-in to run with the current OS user's own
+/// permissions: full preset, external access, network, destructive commands, no
+/// protected/sensitive rails and no OS sandbox. Only `true` is forwarded -- an
+/// absent key keeps the backend's server-wide policy, so the rails can never be
+/// removed by omission.
+fn apply_unrestricted(extra: &mut Value, unrestricted: bool) {
+    if unrestricted {
+        extra["unrestricted"] = json!(true);
+    }
+}
+
 /// Submit one agent task in async mode and return its task id.
 ///
 /// Shared by the one-shot forms and the interactive session, so every mode
@@ -16116,6 +16129,10 @@ async fn handle_agent_run(
     );
     apply_resume_task_id(&mut extra, resume_task_id);
     apply_add_dirs(&mut extra, &add_dirs_of(tool_params.get("addDirs")));
+    apply_unrestricted(
+        &mut extra,
+        tool_params.get("unrestricted").and_then(|v| v.as_bool()) == Some(true),
+    );
     let task_id = submit_agent_task(client, base_url, task, extra).await?;
 
     // Say which session the task was bound to.  A silent submission is exactly
@@ -42645,6 +42662,21 @@ linkGroups:
 
         apply_add_dirs(&mut absent, &add_dirs_of(None));
         assert!(absent.get("addDirs").is_none(), "got {absent}");
+    }
+
+    /// `--unrestricted` reaches the backend only when the task asked for it; the key
+    /// is omitted otherwise so the server-wide policy stays in force.
+    #[test]
+    fn apply_unrestricted_forwards_only_an_explicit_opt_in() {
+        let mut set =
+            build_agent_run_extra("cli", None, false, false, false, None, None, None, None);
+        apply_unrestricted(&mut set, true);
+        assert_eq!(set["unrestricted"], json!(true));
+
+        let mut absent =
+            build_agent_run_extra("cli", None, false, false, false, None, None, None, None);
+        apply_unrestricted(&mut absent, false);
+        assert!(absent.get("unrestricted").is_none(), "got {absent}");
     }
 
     #[test]

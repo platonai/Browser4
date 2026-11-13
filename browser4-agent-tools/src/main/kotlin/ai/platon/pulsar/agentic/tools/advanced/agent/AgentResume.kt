@@ -14,6 +14,7 @@ import java.time.Instant
  * @property toolExecutions how many tool calls it had executed
  * @property codingMode whether it was a coding task
  * @property accessPreset the access preset it ran under
+ * @property unrestricted whether it ran with the current OS user's own permissions
  * @property additionalDirs extra folders it was granted besides its workspace
  * @property files a bounded listing of the files already in the workspace
  */
@@ -25,6 +26,7 @@ internal data class ResumeCheckpoint(
     val toolExecutions: Int,
     val codingMode: Boolean?,
     val accessPreset: String?,
+    val unrestricted: Boolean? = null,
     val additionalDirs: List<String> = emptyList(),
     val files: List<String>,
 )
@@ -67,6 +69,7 @@ internal fun resumeCheckpointOf(status: AgentTaskStatus, maxFiles: Int = RESUME_
         toolExecutions = status.toolExecutions,
         codingMode = status.codingMode,
         accessPreset = status.accessPreset,
+        unrestricted = status.unrestricted,
         // `--add-dir` grants are inherited like the preset: the continued instruction refers to
         // the same folders, and a resume that lost them would fail on paths it could previously use.
         additionalDirs = status.addedDirs.orEmpty(),

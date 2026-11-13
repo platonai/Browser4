@@ -85,6 +85,8 @@ class ToolAccessDeniedException(
  * new surface cannot be reached by a restricted preset by default.
  *
  * @property preset the overall access preset
+ * @property unrestricted when true the whole policy is pass-through and the task runs with the
+ *   current OS user's own permissions (`agent run --unrestricted`); see [withUnrestricted]
  * @property allowExternalAccess when true, file tools may resolve paths outside the workspace
  * @property allowDestructive when false, `delete`/`copy`/`move` are refused; this is **not** a read-only switch
  * @property allowNetwork when true, the shell may use network-capable commands
@@ -99,6 +101,17 @@ class ToolAccessDeniedException(
  */
 data class AgentAccessPolicy(
     val preset: AccessPreset = AccessPreset.FULL,
+    /**
+     * When true this task runs with the current OS user's own permissions.
+     *
+     * Every policy rail becomes pass-through: the preset gate, `allowExternalAccess`,
+     * `denyTools` and the protected/sensitive path lists no longer restrict anything, and the
+     * file system / shell boundary is built without the workspace sandbox. The OS user's own
+     * rights stay the ceiling — this cannot grant more than the process already has.
+     *
+     * Opt-in per task (`agent run --unrestricted`); see [withUnrestricted].
+     */
+    val unrestricted: Boolean = false,
     val allowExternalAccess: Boolean = false,
     val allowDestructive: Boolean = true,
     val allowNetwork: Boolean = false,
@@ -122,6 +135,9 @@ data class AgentAccessPolicy(
      * [AccessPreset.FULL] so a newly added tool fails closed.
      */
     fun allowsTool(domain: String, method: String): Boolean {
+        if (unrestricted) {
+            return true
+        }
         if (isDenied(domain, method)) {
             return false
         }
@@ -139,11 +155,12 @@ data class AgentAccessPolicy(
      * build output such as `target/`; this predicate is about source-file mutation, not build artifacts.
      */
     fun allowsFileMutation(): Boolean =
-        presetAllows(AccessPreset.WRITE) || operatorCovers(Effect.FS_WRITE)
+        unrestricted || presetAllows(AccessPreset.WRITE) || operatorCovers(Effect.FS_WRITE)
 
     /** Whether the shell and arbitrary code execution are allowed. Only [AccessPreset.FULL] grants them. */
     fun allowsExec(): Boolean =
-        presetAllows(AccessPreset.FULL) || operatorCovers(Effect.FS_EXEC) || operatorCovers(Effect.PROC_SPAWN)
+        unrestricted || presetAllows(AccessPreset.FULL) ||
+            operatorCovers(Effect.FS_EXEC) || operatorCovers(Effect.PROC_SPAWN)
 
     /**
      * Whether an active operator grant covers [effect] at [target].
@@ -178,7 +195,8 @@ data class AgentAccessPolicy(
      * protected/sensitive paths remain enforced by the file system itself.
      */
     fun allowsMutationOf(path: Path): Boolean =
-        presetAllows(AccessPreset.WRITE) || operatorAllows(Effect.FS_WRITE, Target.PathTarget(path))
+        unrestricted || presetAllows(AccessPreset.WRITE) ||
+            operatorAllows(Effect.FS_WRITE, Target.PathTarget(path))
 
     /**
      * Whether [command] may be executed.
@@ -188,7 +206,7 @@ data class AgentAccessPolicy(
      * program name, the same granularity [AccessApprovals.commandRail] approves.
      */
     fun allowsCommandExecution(command: String): Boolean {
-        if (presetAllows(AccessPreset.FULL)) return true
+        if (unrestricted || presetAllows(AccessPreset.FULL)) return true
         val trimmed = command.trim()
         val program = trimmed.substringBefore(' ').trim('"', '\'')
         if (program.isEmpty()) return false
@@ -199,7 +217,7 @@ data class AgentAccessPolicy(
     }
 
     /** Whether an active operator grant carries [Effect.NET_CONNECT]; the host scope stays advisory. */
-    fun hasActiveNetworkGrant(): Boolean = operatorCovers(Effect.NET_CONNECT)
+    fun hasActiveNetworkGrant(): Boolean = unrestricted || operatorCovers(Effect.NET_CONNECT)
 
     /** Returns the gate for a `coding.*` method, or `null` when the method is not in the matrix. */
     fun gateOf(method: String): ToolGate? = when (method) {
@@ -234,6 +252,31 @@ data class AgentAccessPolicy(
         copy(preset = preset ?: this.preset)
 
     /**
+     * Runs this task with the current OS user's own permissions (`agent run --unrestricted`).
+     *
+     * The returned policy is pass-through: `full` preset, external access, destructive operations
+     * and network commands allowed, no denied tools and no protected/sensitive path rails. What
+     * the OS user may actually reach is still decided by the operating system, so this widens the
+     * agent's capability to exactly the user's own — never beyond it.
+     */
+    fun withUnrestricted(unrestricted: Boolean = true): AgentAccessPolicy =
+        if (!unrestricted) {
+            this
+        } else {
+            copy(
+                preset = AccessPreset.FULL,
+                unrestricted = true,
+                allowExternalAccess = true,
+                allowDestructive = true,
+                allowNetwork = true,
+                denyTools = emptySet(),
+                protectedFiles = emptySet(),
+                protectedDirs = emptySet(),
+                sensitivePaths = emptySet(),
+            )
+        }
+
+    /**
      * Grants this task extra folders besides its workspace (`agent run --add-dir`).
      *
      * The folders are **scope**, not power: they join both boundary grants for reads and writes
@@ -262,6 +305,7 @@ data class AgentAccessPolicy(
      * enforces and observes.
      */
     fun denial(domain: String, method: String): ToolAccessDeniedException? {
+        if (unrestricted) return null
         if (isDenied(domain, method)) {
             return ToolAccessDeniedException(
                 domain, method, preset,
@@ -549,3 +593,28 @@ data class AgentAccessPolicy(
             }
     }
 }
+
+/**
+ * Protected directories for this policy: the configured set plus operator additions, or none at
+ * all when the task is unrestricted.
+ *
+ * A package-level extension rather than a private helper inside [CodingComponents] so the policy
+ * tests can assert on exactly what a task's file system will refuse.
+ */
+internal fun AgentAccessPolicy.effectiveProtectedDirs(): Set<String> =
+    if (unrestricted) emptySet() else protectedDirs + extraProtectedEntries()
+
+/**
+ * Operator additions to the protected set:
+ * `-Dbrowser4.agent.protected.extra=<path>[,<path>…]`, workspace-relative.
+ *
+ * One property for both files and directories — the caller's intent is "this path is launch/build
+ * infrastructure", not "a file" or "a folder". Entries are normalised to forward slashes and no
+ * leading slash so they match the workspace-relative form the file system compares against.
+ */
+internal fun extraProtectedEntries(): Set<String> =
+    System.getProperty("browser4.agent.protected.extra", "")
+        .split(',')
+        .map { it.trim().replace('\\', '/').trimStart('/').trimEnd('/') }
+        .filter { it.isNotEmpty() }
+        .toSet()

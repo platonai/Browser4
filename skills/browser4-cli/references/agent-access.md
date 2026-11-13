@@ -46,6 +46,44 @@ browser4-cli agent run "Fix the failing test" --coding --access read-build --fol
 An unknown `--access` value is rejected with an error instead of silently falling back — a
 typo must not quietly grant `full`.
 
+### Unrestricted tasks — `agent run --unrestricted`
+
+`--unrestricted` is the escape hatch for a task that genuinely needs everything the **current
+OS user** can do: a one-off repair on a dev box, a migration that must reach services outside the
+workspace, a task that installs tooling.
+
+```bash
+browser4-cli agent run "Upgrade the pinned Maven plugins and run the full build" --coding --unrestricted
+```
+
+It is not another preset — it is applied **on top of** `--access` and replaces the rails with
+pass-through ones for that one task:
+
+| Rail | Normally | With `--unrestricted` |
+|---|---|---|
+| preset gate | `--access` / backend default | `full` — every tool domain |
+| path boundary | workspace + readable roots + `--add-dir` | every path the OS user can reach |
+| protected / sensitive paths | refused | allowed (the OS still governs) |
+| network, destructive commands | per preset | allowed |
+| OS sandbox (`browser4.agent.sandbox`) | applied | **not** applied — plain child processes |
+
+What it does **not** do:
+
+- It never widens another task: the policy is applied when the task starts and the backend
+  default is restored when it ends.
+- It does not escalate the OS user. `~/.ssh`, browser credential stores and cloud token files
+  are readable only if that user can read them; nothing runs as root/Administrator that would
+  not from the same shell.
+- It is inherited by `agent run --resume <id>` — a continued instruction must not lose the grant
+  it was written against — and recorded on the task row (`unrestricted`) so `agent status` and
+  `coding.permissions` can report it.
+- It is audited: the first time the policy is applied the backend writes a `coding.access`
+  approval event with `source=flag`.
+
+Prefer the narrow tools when the task needs *one* extra capability: `--access read-build` /
+`write`, `--add-dir <path>`, or an operator approval through `coding.requestAccess`.
+`--unrestricted` is all-or-nothing and belongs in scripts, not in an agent's default invocation.
+
 ### Which tool domains the presets gate
 
 The presets bound **workspace power**, so they gate the domains that can write, execute or

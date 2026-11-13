@@ -192,6 +192,7 @@ class UserCommandExecutor(
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
         addDirs: List<Path> = emptyList(),
+        unrestricted: Boolean? = null,
     ): CommandStatus {
         // A resume may omit the task text entirely: the instruction comes from the
         // interrupted task's checkpoint on the backend.
@@ -205,6 +206,7 @@ class UserCommandExecutor(
                 freshWorkspace = freshWorkspace, sharedWorkspace = sharedWorkspace,
                 access = access, unattended = unattended,
                 resumeTaskId = resumeTaskId, tokenBudget = tokenBudget, addDirs = addDirs,
+                unrestricted = unrestricted,
             )
             .toCommandStatus()
     }
@@ -232,6 +234,7 @@ class UserCommandExecutor(
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
         addDirs: List<Path> = emptyList(),
+        unrestricted: Boolean? = null,
     ): String {
         val command = plainCommand.trim()
 
@@ -246,7 +249,7 @@ class UserCommandExecutor(
 
         return submitAgentTask(
             sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId,
-            tokenBudget, addDirs,
+            tokenBudget, addDirs, unrestricted,
         )
     }
 
@@ -279,6 +282,7 @@ class UserCommandExecutor(
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
         addDirs: List<Path> = emptyList(),
+        unrestricted: Boolean? = null,
     ): String {
         val runner = ensureAgentRunner(sessionId)
         val status = runner.create()
@@ -292,7 +296,7 @@ class UserCommandExecutor(
         )
         runner.submit(
             plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId,
-            tokenBudget, addDirs,
+            tokenBudget, addDirs, unrestricted,
         )
         return status.id
     }

@@ -297,9 +297,10 @@ object CodingComponents {
         policy: AgentAccessPolicy = AgentAccessPolicy.serverDefault,
         sessionEnv: Map<String, String> = emptyMap(),
     ): CodingAgentShell {
-        val boundary = boundaryAuthorizer(root, policy.additionalDirs)
+        val boundary = policy.boundaryOrUnrestricted(root)
         return CodingAgentShell(
             baseDir = root,
+            sandbox = if (policy.unrestricted) ExecutionSandboxes.of("off") else null,
             allowNetwork = policy.allowNetwork,
             allowNetworkProvider = { policy.allowNetwork || policy.hasActiveNetworkGrant() },
             allowDestructive = policy.allowDestructive,
@@ -308,7 +309,7 @@ object CodingComponents {
             allowExecutionProvider = { policy.allowsExec() },
             commandAllowedProvider = { policy.allowsCommandExecution(it) },
             sensitivePaths = policy.sensitivePaths,
-            protectedDirs = policy.protectedDirs + extraProtectedEntries(),
+            protectedDirs = policy.effectiveProtectedDirs(),
             boundaryAuthorizer = boundary,
             initialSessionEnv = sessionEnv,
             readableRoots = ReadablePaths.roots().toSet(),
@@ -344,9 +345,10 @@ object CodingComponents {
         // approves one program; reusing it would make a permitted build fail on `mvn` because a
         // grant for `git` does not cover it.
         if (policy.preset == AccessPreset.FULL) return modelShell ?: shell(root, policy)
-        val boundary = boundaryAuthorizer(root, policy.additionalDirs)
+        val boundary = policy.boundaryOrUnrestricted(root)
         return CodingAgentShell(
             baseDir = root,
+            sandbox = if (policy.unrestricted) ExecutionSandboxes.of("off") else null,
             buildOnly = true,
             allowNetwork = policy.allowNetwork,
             allowNetworkProvider = { policy.allowNetwork || policy.hasActiveNetworkGrant() },
@@ -380,7 +382,7 @@ object CodingComponents {
         policy: AgentAccessPolicy = AgentAccessPolicy.serverDefault,
         persistSnapshots: Boolean = false,
     ): CodingAgentFileSystem {
-        val boundary = boundaryAuthorizer(root, policy.additionalDirs)
+        val boundary = policy.boundaryOrUnrestricted(root)
         return CodingAgentFileSystem(
             workspaceRoot = root,
             allowExternalAccess = policy.allowExternalAccess,
@@ -389,7 +391,7 @@ object CodingComponents {
             readOnlyProvider = { !policy.allowsFileMutation() },
             writeAllowedProvider = { policy.allowsMutationOf(it) },
             protectedFiles = policy.protectedFiles + extraProtectedEntries(),
-            protectedDirs = policy.protectedDirs + extraProtectedEntries(),
+            protectedDirs = policy.effectiveProtectedDirs(),
             sensitivePaths = policy.sensitivePaths,
             persistSnapshots = persistSnapshots,
             boundaryAuthorizer = boundary,
@@ -399,18 +401,13 @@ object CodingComponents {
     }
 
     /**
-     * Operator additions to the protected set:
-     * `-Dbrowser4.agent.protected.extra=<path>[,<path>…]`, workspace-relative.
+     * The boundary this policy's file system and shell must enforce.
      *
-     * One property for both files and directories — the caller's intent is "this path
-     * is launch/build infrastructure", not "a file" or "a folder". Entries are
-     * normalised to forward slashes and no leading slash so they match the
-     * workspace-relative form the file system compares against.
+     * Under [AgentAccessPolicy.unrestricted] the in-process boundary is a pass-through so the
+     * task runs with the OS user's own permissions; every other policy keeps the workspace
+     * boundary plus its `--add-dir` grants.
      */
-    internal fun extraProtectedEntries(): Set<String> =
-        System.getProperty("browser4.agent.protected.extra", "")
-            .split(',')
-            .map { it.trim().replace('\\', '/').trimStart('/').trimEnd('/') }
-            .filter { it.isNotEmpty() }
-            .toSet()
+    private fun AgentAccessPolicy.boundaryOrUnrestricted(root: Path): Authorizer =
+        if (unrestricted) Authorizer.unrestricted() else boundaryAuthorizer(root, additionalDirs)
+
 }

@@ -507,11 +507,12 @@ open class StatefulAgentRunner(
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
         addDirs: List<Path> = emptyList(),
+        unrestricted: Boolean? = null,
     ): AgentTaskStatus {
         val status = create()
         execute(
             plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId,
-            tokenBudget, addDirs,
+            tokenBudget, addDirs, unrestricted,
         )
         return status
     }
@@ -537,11 +538,12 @@ open class StatefulAgentRunner(
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
         addDirs: List<Path> = emptyList(),
+        unrestricted: Boolean? = null,
     ): Job {
         val job = taskScope.launch(start = CoroutineStart.LAZY) {
             execute(
                 plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
-                resumeTaskId, tokenBudget, addDirs,
+                resumeTaskId, tokenBudget, addDirs, unrestricted,
             )
         }
         runningJobs[status.id] = job
@@ -615,12 +617,13 @@ open class StatefulAgentRunner(
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
         addDirs: List<Path> = emptyList(),
+        unrestricted: Boolean? = null,
     ) {
         try {
             runMutex.withLock {
                 executeSerialized(
                     plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
-                    resumeTaskId, tokenBudget, addDirs,
+                    resumeTaskId, tokenBudget, addDirs, unrestricted,
                 )
             }
         } catch (e: CancellationException) {
@@ -849,6 +852,7 @@ open class StatefulAgentRunner(
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
         addDirs: List<Path> = emptyList(),
+        unrestricted: Boolean? = null,
     ) {
         val agent = session.companionAgent
 
@@ -890,6 +894,10 @@ open class StatefulAgentRunner(
         val addedDirs: List<Path> = addDirs.ifEmpty {
             resume?.additionalDirs.orEmpty().mapNotNull { runCatching { Path.of(it) }.getOrNull() }
         }
+        // `agent run --unrestricted`: an explicit per-task opt-in to run with the current OS user's
+        // own permissions. Inherited on resume exactly like the preset and the added folders, and
+        // never widened for another task: the policy is applied and restored per task below.
+        val effectiveUnrestricted: Boolean = unrestricted ?: resume?.unrestricted ?: false
 
         // The companion agent keeps ONE cumulative stateHistory across every task
         // executed in the session. Remember where this task's states begin so the
@@ -915,6 +923,7 @@ open class StatefulAgentRunner(
             // inheritance, and `resumedFrom` links the two task ids.
             status.codingMode = codingMode
             status.accessPreset = accessPreset?.id
+            status.unrestricted = effectiveUnrestricted
             status.addedDirs = addedDirs.map { it.toString() }.takeIf { it.isNotEmpty() }
             status.resumedFrom = resume?.taskId
             // The submit-time row says "created"; record the transition to
@@ -1022,7 +1031,23 @@ open class StatefulAgentRunner(
                             "allowNetwork=${effectivePolicy.allowNetwork} source=default task=${status.id}",
                     )
                 }
-                it.agentToolManager.applyAccessPolicy(effectivePolicy, status.id)
+                // `--unrestricted` is the last word: the pass-through policy (full preset, no
+                // protected/sensitive rails, external access, network and destructive commands
+                // allowed) is applied on top of the preset and the added folders. It is audited,
+                // because "run with the operator's own permissions" is exactly the grant a reviewer
+                // must be able to find later.
+                val taskPolicy = if (effectiveUnrestricted) {
+                    ai.platon.pulsar.coding.PermissionAudit.writeEvent(
+                        tool = "coding.access",
+                        code = ai.platon.pulsar.coding.PermissionAudit.CODE_ACCESS_APPROVED,
+                        detail = "unrestricted: task=${status.id} source=flag " +
+                            "basePreset=${effectivePolicy.preset.id}",
+                    )
+                    effectivePolicy.withUnrestricted()
+                } else {
+                    effectivePolicy
+                }
+                it.agentToolManager.applyAccessPolicy(taskPolicy, status.id)
                 // Explicit coding flag, never auto-detected: the coding flag is
                 // opt-in per call (`command_run`'s coding argument, e.g. the CLI's
                 // agent run --coding). A resumed run inherits it from its checkpoint.
