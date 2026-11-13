@@ -19,7 +19,10 @@ import java.util.concurrent.atomic.AtomicInteger
  *   configuration can change it, and asking for `fs.exec` would not help — the one exception is
  *   `agent run --unrestricted`, which lifts the whole syntax gate
  *   ([CodingAgentShell]'s `allowUnsupportedSyntax`): the line is handed to the platform shell
- *   verbatim, so no syntax refusal is produced and nothing is counted here.
+ *   verbatim, so no syntax refusal is produced and nothing is counted here. That lift is not a
+ *   blank cheque either — the vetoes that protect the run's own runtime (killing the backend,
+ *   rebuilding it, rewriting the workspace topology) still refuse the line
+ *   ([CodingAgentShell.liftedSyntaxGuardViolation]).
  *
  * Reporting the second as the first was a real defect, observed in a live run (2026-10-28): the
  * model was refused `if exist …` with `code=COMMAND_NOT_ALLOWED`, treated it as a permission

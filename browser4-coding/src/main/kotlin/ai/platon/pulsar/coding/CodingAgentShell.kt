@@ -84,6 +84,10 @@ class CodingAgentShell(
      * Policy refusals (hardcoded blocked patterns, explicit deny, protected paths, tier checks) are
      * untouched — only the syntax family is bypassed.
      *
+     * The vetoes that keep a task from destroying its own runtime are *not* syntax either and
+     * survive the lift ([liftedSyntaxGuardViolation]): a `for` body still may not `taskkill` the
+     * backend that runs the task, or rebuild it with `b4w build`.
+     *
      * Defaults to `false`, so every other task keeps exactly the historical behaviour.
      */
     private val allowUnsupportedSyntax: Boolean = false,
@@ -1023,6 +1027,16 @@ class CodingAgentShell(
     private val CMD_CONTROL_KEYWORDS = setOf("if", "for")
 
     /**
+     * Tokens after which a program starts inside a body the `--unrestricted` lift hands over
+     * verbatim (`for … do <program>`, `( <program> )`, `cmd1 & <program>`, POSIX `then`/`else`).
+     *
+     * Used by [liftedSyntaxGuardViolation] to keep its scan from reading ordinary arguments as
+     * programs.
+     */
+    private val LIFTED_PROGRAM_PREFIXES =
+        setOf("do", "then", "else", "(", ")", "&", "&&", "|", "||", ";")
+
+    /**
      * Directory-creation builtins, always allowed (the workspace boundary still applies).
      *
      * `mkdir`/`md` are cmd.exe builtins, so on Windows there is no `mkdir.exe` for the PATH
@@ -1048,7 +1062,12 @@ class CodingAgentShell(
      */
     private fun validateCommand(command: String): String? {
         val violation = validateCommandRaw(command) ?: return null
-        return if (allowUnsupportedSyntax && isSyntaxViolation(violation)) null else violation
+        if (!allowUnsupportedSyntax || !isSyntaxViolation(violation)) return violation
+        // The syntax gate is lifted, so this line is handed to the platform shell verbatim. The
+        // vetoes that protect the runtime this task runs *inside* are not policy rails and are not
+        // lifted with it: a `for` loop's body can still hold `taskkill /PID <backend>`, and the OS
+        // cannot refuse that for us. See [liftedSyntaxGuardViolation].
+        return liftedSyntaxGuardViolation(command)
     }
 
     /**
@@ -1070,6 +1089,68 @@ class CodingAgentShell(
         return violation.startsWith(SYNTAX_PREFIX) ||
             violation.startsWith(NESTED_SCRIPT_PREFIX) ||
             violation == EMPTY_COMMAND_VIOLATION
+    }
+
+    /**
+     * The vetoes that survive the `--unrestricted` syntax lift.
+     *
+     * Lifting the syntax gate means "hand this shape to the platform shell", because the checker
+     * cannot decompose it. Three vetoes are not policy rails and must survive that hand-off — the
+     * OS cannot replace them:
+     *
+     * - [processKillViolation] — killing the backend (or a JVM that may be it) ends the very run
+     *   that submitted the loop; `for %f in (1) do taskkill /PID <backend> /F` is exactly the line
+     *   the per-command validator never sees;
+     * - [bootstrapViolation] — `b4w build/stop/...` and `bin/build.ps1` rewrite or restart the
+     *   runtime the task is executing inside;
+     * - [FORBIDDEN_COMMANDS] — link/mount tools rewrite the workspace topology the framework
+     *   provisions (and a normal command never gets them approved away either).
+     *
+     * The scan is coarse, and coarse in one direction only: a *program position* is checked (the
+     * first token of a segment, or the token after `do`/`then`/`else`/`(`/`&`/`|`/`;`), plus every
+     * inline-script body recursively — an undecomposable body is precisely the program position
+     * the parser cannot name. An ordinary argument is not a program, so `echo b4w build failed`
+     * stays allowed. Past [MAX_INLINE_SCRIPT_DEPTH] the guard can no longer prove the line safe and
+     * refuses it: the lift stops where the inspection stops.
+     *
+     * @param command the line that is about to be handed to the platform shell
+     * @param depth inline-script recursion depth, capped by [MAX_INLINE_SCRIPT_DEPTH]
+     * @return a violation that must still refuse the line, or null when nothing protected is reachable
+     */
+    internal fun liftedSyntaxGuardViolation(command: String, depth: Int = 0): String? {
+        if (depth > MAX_INLINE_SCRIPT_DEPTH) {
+            return "nested inline shell script exceeds $MAX_INLINE_SCRIPT_DEPTH levels — refusing to guess"
+        }
+        // Already applied to the line by [validateCommandRaw]; re-applied here so an inline-script
+        // body — which the lift would otherwise hand over unexamined — gets the same whole-line vetoes.
+        blockedPatternViolation(command)?.let { return it }
+        for (segment in splitSimpleCommands(command)) {
+            val tokens = tokenize(segment)
+            for (index in tokens.indices) {
+                if (!isLiftedProgramPosition(tokens, index)) continue
+                val base = normalizeCommandName(tokens[index])
+                if (base in FORBIDDEN_COMMANDS) return forbiddenCommandViolation(base)
+                inlineScript(tokens.subList(index, tokens.size))?.let { inner ->
+                    liftedSyntaxGuardViolation(inner, depth + 1)?.let { return it }
+                }
+                processKillViolation(command, tokens.subList(index, tokens.size))?.let { return it }
+                bootstrapViolation(command, tokens, index)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    /**
+     * Whether [index] in [tokens] is a place where a program can start.
+     *
+     * The guard must not read an ordinary argument as a program (`echo b4w build failed` is not a
+     * bootstrap step), so only the first token of a segment and the token after a control-flow
+     * keyword or a separator counts.
+     */
+    private fun isLiftedProgramPosition(tokens: List<String>, index: Int): Boolean {
+        if (index == 0) return true
+        val previous = tokens[index - 1].trim('"', '\'').lowercase()
+        return previous in LIFTED_PROGRAM_PREFIXES
     }
 
     /**
@@ -1576,6 +1657,16 @@ class CodingAgentShell(
             "processes from outside the task, or name an explicit pid that is not the backend."
     }
 
+    /**
+     * The refusal for a program this shell never runs, whatever the flags say.
+     *
+     * Shared by [validateSimpleCommandTier] and [liftedSyntaxGuardViolation], so the message a
+     * lifted line gets is byte-for-byte the one a normal command gets.
+     */
+    private fun forbiddenCommandViolation(baseCommand: String): String =
+        "'$baseCommand' is disabled — workspace links are provisioned by the framework, " +
+            "not by the agent"
+
     private fun validateSimpleCommand(segment: String, depth: Int): String? {
         val tierViolation = validateSimpleCommandTier(segment, depth)
         if (tierViolation != null) return tierViolation
@@ -1624,8 +1715,7 @@ class CodingAgentShell(
 
         // Absolute vetoes that no flag, allow-list entry or PATH lookup can lift.
         if (baseCommand in FORBIDDEN_COMMANDS) {
-            return "'$baseCommand' is disabled — workspace links are provisioned by the framework, " +
-                "not by the agent"
+            return forbiddenCommandViolation(baseCommand)
         }
         // A task must not destroy the runtime that executes it. `b4.run` already refuses the
         // CLI's own lifecycle commands; `coding.shell` was the remaining way in — a live run
