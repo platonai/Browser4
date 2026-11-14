@@ -588,7 +588,9 @@ docker run -d -p 18182:18182 `
     on a TTY keeps `browser4.agent.access`. Widening a refused effect is the operator's call, not
     an automatic ceiling: the agent files `coding.requestAccess` and an operator approves it
     (see [agent-access.md](../skills/browser4-cli/references/agent-access.md)). An unknown value is
-    logged (once) and leaves the derived default at `full`.
+    logged (once) and leaves the derived default at `full`. How the presets are enforced internally —
+    the five enforcement layers, the rails, the approval capabilities and the OS sandbox — is
+    described in [agent-permissions.md](agent-permissions.md).
   - `browser4.agent.allowExternalAccess` *(default: `false`)* — **deprecated**, prefer `access`.
     Whether file tools may resolve paths outside the workspace; projected into every preset.
     Advisory only: it relaxes a string-layer check, so it does not widen what the OS sandbox

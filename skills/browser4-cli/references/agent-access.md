@@ -349,6 +349,45 @@ coding.permissions()      # preset, granted tools, protections, pending requests
 Use this when the agent keeps hitting refusals: it is the same view a client gets, so the
 answer to "why was this refused" is one call away.
 
+### One example per preset
+
+Pick the narrowest preset whose row in the table above covers every tool the task must call.
+The four commands differ only in `--access`; what changes is what the run may do on its next step.
+
+**`full` — fix it, run the test, commit it.** The only preset that can execute the commands it
+reasons about, which is why it is also the one to keep off an untrusted repository:
+
+```bash
+browser4-cli agent run "Fix XTest#loadsTheProfile, run that test, then commit the change" \
+  --coding --access full
+```
+
+**`write` — edit the files and let the build check them.** `mvnBuild`/`verify` still run (a
+`write` task can compile and run project tests), but there is no shell: `git`, `npm install`,
+`coding.runCode` and skill scripts are gone, so review with `coding.diff` / `coding.checksum`
+instead of `git diff`:
+
+```bash
+browser4-cli agent run "Rename the preset ids across browser4-coding, then verify the module compiles" \
+  --coding --access write
+```
+
+**`read-build` — diagnose with compile evidence.** Reads and builds, never edits; a step that
+really needs a write files a `coding.requestAccess` request instead of failing the task. Remember
+the build executes the repository's own code, so this is a guard against mistakes, not a sandbox:
+
+```bash
+browser4-cli agent run "Which module fails to compile, and why?" --coding --access read-build
+```
+
+**`read` — answer, touch nothing.** No build either, so a "does it compile" conclusion has to be
+argued from the source and belongs in `problems` when the task cannot settle it. Reading is
+independent of the preset, so Browser4's own logs and task ledger are in scope:
+
+```bash
+browser4-cli agent run "Read the previous task's log and explain why it failed" --coding --access read
+```
+
 ## Flags
 
 | Flag / property | Applies to | Effect |
@@ -377,3 +416,4 @@ answer to "why was this refused" is one call away.
 - [agent.md](agent.md) — `agent run|status|result`, `--coding`, `--follow`
 - [agent-workspace.md](agent-workspace.md) — the path boundary, sensitive and protected locations
 - [config.md](config.md) — `config` command family and server-side overrides
+- [agent-permissions.md](../../../docs/agent-permissions.md) — internals: the enforcement layers, the rails, approval capabilities, the OS sandbox
