@@ -243,30 +243,17 @@ class ToolOutcomeTest {
     }
 
     @Test
-    @DisplayName("a syntax refusal is a failure too, but never reads as a permission problem")
-    fun testSyntaxRefusalIsFailure() {
-        // The shell answers a shape it cannot parse with UNSUPPORTED_SYNTAX (one command per call,
-        // no blocks/parentheses/else). The command did not run, so the step must be [fail] — and
-        // because nothing can be approved into a grammar, it must not look like a policy refusal.
-        val refusal = "Error: " + ai.platon.pulsar.coding.UnsupportedSyntax.format(
-            tool = "coding.shell",
-            detail = "Command not executed — unsupported syntax: 'if' is cmd.exe flow control",
-        )
+    @DisplayName("a leftover syntax-shaped message is ordinary output, not a refusal")
+    fun testSyntaxShapedMessageIsNotARefusal() {
+        // There is no syntax gate any more: `coding.shell` hands an undecomposable shape to the
+        // platform shell instead of refusing it. A body that merely contains the old envelope is
+        // data, and must not flip an otherwise successful step to [fail].
+        val text = "UNSUPPORTED_SYNTAX | code=SYNTAX_NOT_SUPPORTED | tool=coding.shell | detail=legacy"
 
-        val outcome = ToolOutcome.from(result(refusal), domain = "coding", method = "shell")
+        val outcome = ToolOutcome.from(result(text), domain = "coding", method = "shell")
 
-        assertFalse(outcome.ok, "a refusal must not be reported as success")
-        val rendered = outcome.render()
-        assertTrue(rendered.startsWith("coding.shell [fail]"), rendered)
-        assertTrue(
-            rendered.contains(ai.platon.pulsar.coding.UnsupportedSyntax.CODE),
-            "the syntax code must survive: $rendered",
-        )
-        assertFalse(
-            rendered.contains(ai.platon.pulsar.coding.PermissionAudit.DENIED),
-            "a grammar limit is not a policy refusal: $rendered",
-        )
-        assertTrue(rendered.contains("hint="), "the supported routes must survive: $rendered")
+        assertTrue(outcome.ok, outcome.render())
+        assertFalse(outcome.render().startsWith("coding.shell [fail]"), outcome.render())
     }
 
     @Test

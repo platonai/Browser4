@@ -1,7 +1,6 @@
 package ai.platon.pulsar.agentic.model
 
 import ai.platon.pulsar.coding.PermissionAudit
-import ai.platon.pulsar.coding.UnsupportedSyntax
 import ai.platon.pulsar.common.Strings
 
 /**
@@ -17,9 +16,8 @@ import ai.platon.pulsar.common.Strings
  *
  * A `PERMISSION_DENIED | code=…` refusal counts as a failure ([ok] is false) even
  * though the tool call itself did not throw: a refusal the model reads as success
- * is a refusal the model retries. The same holds for the syntax family
- * (`UNSUPPORTED_SYNTAX | code=SYNTAX_NOT_SUPPORTED`): the command did not run, so
- * reporting the step as `[ok]` would hide it from `--follow` and from the model.
+ * is a refusal the model retries. The command did not run, so reporting the step
+ * as `[ok]` would hide it from `--follow` and from the model.
  */
 data class ToolOutcome(
     val domain: String,
@@ -165,12 +163,11 @@ data class ToolOutcome(
         }
 
         /**
-         * True when [raw] **starts** with a refusal envelope — `PERMISSION_DENIED | code=…`
-         * ([PermissionAudit]) or `UNSUPPORTED_SYNTAX | code=…` ([UnsupportedSyntax]).
+         * True when [raw] **starts** with the policy refusal envelope — `PERMISSION_DENIED | code=…`
+         * ([PermissionAudit]).
          *
-         * Both mean the call did not take effect. The syntax family is a failure for the same
-         * reason the policy family is: the command never ran, and a step rendered `[ok]` would be
-         * invisible to `--follow` and to the model's own history.
+         * A refusal means the call did not take effect: a step rendered `[ok]` would be invisible to
+         * `--follow` and to the model's own history.
          *
          * The envelope must lead the text: `memory.read` returns JSON that *contains*
          * earlier refusal events, and matching anywhere in the first line marked a
@@ -181,9 +178,7 @@ data class ToolOutcome(
         private fun isRefusal(raw: String): Boolean {
             val firstLine = raw.lineSequence().firstOrNull { it.isNotBlank() }?.trimStart() ?: return false
             val candidate = firstLine.removePrefix("Error: ").trimStart()
-            if (!candidate.contains("| code=")) return false
-            return candidate.startsWith(PermissionAudit.DENIED) ||
-                candidate.startsWith(UnsupportedSyntax.PREFIX)
+            return candidate.contains("| code=") && candidate.startsWith(PermissionAudit.DENIED)
         }
 
         /**

@@ -13,17 +13,17 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * `agent run --unrestricted` lifts the command **tier**, not only the syntax gate.
+ * `agent run --unrestricted` lifts the command **tier** — the shell's only spelling rule.
  *
  * Origin (2026-11-14, live supervision run): the task was started with
  * `./b4w -Rebuild agent run -i --coding --unrestricted`, the model-facing prompt promised that
  * inline scripts "run as written", and the first attempt to read a file —
  * `powershell -NoProfile -Command "Get-Content browser4-coding/..."` — came back
  * `PERMISSION_DENIED | code=COMMAND_NOT_ALLOWED ... inline script via 'powershell' rejected —
- * command 'get-content' is not allowed`. The syntax lift only ever covered the *syntax* family
- * ([CodingAgentShell.isSyntaxViolation]), so the inline body was still matched against the
- * SAFE/DEV tier — a list no PowerShell cmdlet is in, and `where Get-Content` finds nothing because a
- * cmdlet is not a PATH executable either.
+ * command 'get-content' is not allowed`. The inline body was still matched against the SAFE/DEV
+ * tier — a list no PowerShell cmdlet is in, and `where Get-Content` finds nothing because a cmdlet
+ * is not a PATH executable either. (Command shapes the decomposer cannot parse are handed to the
+ * platform shell in every mode now, so they never reach this verdict at all.)
  *
  * The tier is a spelling rule, not a boundary: the same body already ran unexamined through
  * `powershell -File`, and `python -c` is on the list. Under the flag the tier verdict is therefore

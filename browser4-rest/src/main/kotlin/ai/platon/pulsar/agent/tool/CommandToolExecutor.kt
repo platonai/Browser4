@@ -109,8 +109,9 @@ class CommandToolExecutor(
                     "Run this task with the current OS user's own permissions (`agent run " +
                         "--unrestricted`): full preset, external access, network, destructive commands, " +
                         "no protected/sensitive rails, the OS sandbox is not applied, and the coding " +
-                        "shell's own rules (syntax gate, command allow-list) are off too, so inline " +
-                        "scripts and PowerShell cmdlets run as written. Opt-in per task and audited; " +
+                        "shell's command allow-list is off too, so inline scripts and PowerShell " +
+                        "cmdlets run as written (shapes it cannot decompose are handed to the platform " +
+                        "shell in every mode). Opt-in per task and audited; " +
                         "inherited by `resumeTaskId`. Omit to keep the normal rails.",
                 ),
                 ToolSpec.Arg(

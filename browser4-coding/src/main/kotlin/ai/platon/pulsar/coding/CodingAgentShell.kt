@@ -47,6 +47,14 @@ import kotlin.io.path.isDirectory
  * - **network** — network-accessing tools require explicit opt-in ([allowNetwork])
  * - **destructive** — write/delete operations require explicit opt-in ([allowDestructive])
  *
+ * There is **no syntax gate**. A command line is decomposed into the simple commands it executes
+ * (`&&`, `|`, substitutions, inline scripts) and every one of them is checked; a shape the
+ * decomposer cannot parse (`for` loops, `else if`, nested blocks, `goto`/`call` payloads) is handed
+ * to the platform shell verbatim, and the shell's own parse error is the feedback. The vetoes that
+ * do not need the decomposition — [BLOCKED_PATTERNS], credentials and protected paths, a disabled
+ * network/destructive tier, and the runtime vetoes (do not kill or rebuild the backend that runs
+ * this task, do not re-link the workspace) — still apply to a handed-off line.
+ *
  * Environment variables can be injected per-session or per-command.
  */
 class CodingAgentShell(
@@ -74,26 +82,22 @@ class CodingAgentShell(
     /**
      * Whether this task runs with the caller's own OS permissions (`agent run --unrestricted`).
      *
-     * Two of the shell's *own* rules are not rails the flag keeps, and both are lifted here:
-     *
-     * - the **syntax** gate: [validateCommandRaw] refuses shapes this module cannot decompose
-     *   (`for %f in (...) do ...`, `if exist x (...)`, command substitution, inline scripts), because
-     *   it must validate every program a command line can reach. The platform shell parses the line
-     *   itself, so such a shape is handed over verbatim and the shell reports its own parse error;
-     * - the **tier** allow-list: a program that is neither [SAFE_COMMANDS] nor [DEV_COMMANDS] nor on
-     *   `PATH` (a PowerShell cmdlet such as `Get-Content`, or `wmic`) is handed over like any other.
-     *   Keeping it refused made the flag's documented promise false — `powershell -Command
-     *   "Get-Content x"` failed with `COMMAND_NOT_ALLOWED` while the model had been told that inline
-     *   scripts run as written (2026-11-14 supervision run). The list is a *spelling* rule, not a
-     *   boundary: the same body already runs unexamined through `powershell -File`.
+     * The only shell rule this flag lifts is the **tier** allow-list: a program that is neither
+     * [SAFE_COMMANDS] nor [DEV_COMMANDS] nor on `PATH` (a PowerShell cmdlet such as `Get-Content`, or
+     * `wmic`) is handed over like any other. Keeping it refused made the flag's documented promise
+     * false — `powershell -Command "Get-Content x"` failed with `COMMAND_NOT_ALLOWED` while the model
+     * had been told that inline scripts run as written (2026-11-14 supervision run). The list is a
+     * *spelling* rule, not a boundary: the same body already runs unexamined through `powershell -File`.
      *
      * Everything else keeps applying, and the order in [validateSimpleCommandTier] is what guarantees
      * it: hardcoded blocked patterns, explicit deny, deny patterns, credential and protected paths,
      * [FORBIDDEN_COMMANDS], [processKillViolation] and [bootstrapViolation] are all checked before
      * the tier verdict, so a lifted line can reach nothing they would not have reached anyway. The
-     * vetoes survive the *syntax* lift through [liftedSyntaxGuardViolation] for the same reason.
+     * same vetoes are re-checked at program positions for a line the decomposer cannot parse
+     * ([handOffVetoViolation]) — that hand-off happens in every mode, because there is no syntax
+     * gate to lift.
      *
-     * Defaults to `false`, so every other task keeps exactly the historical behaviour.
+     * Defaults to `false`, so every other task keeps exactly the historical tier behaviour.
      */
     private val unrestricted: Boolean = false,
     /**
@@ -272,21 +276,19 @@ class CodingAgentShell(
         private const val PROTECTED_PATH_PREFIX = "protected path: "
 
         /**
-         * Prefix of every violation that is about **syntax**, not policy.
+         * Prefix of the marker that says "the decomposer could not parse this shape".
          *
-         * A command the shell cannot parse must not be reported as a permission refusal: the policy
-         * never said no, and neither a wider preset nor an operator grant would make it runnable.
-         * [commandRefusal] turns this prefix into an [UnsupportedSyntax] envelope and keeps it out of
-         * the policy counters.
+         * The marker never reaches the model: [validateCommand] turns it into a hand-off to the
+         * platform shell ([handOffVetoViolation]), because there is no syntax gate. It is a private
+         * signal between [validateSegments], [conditionalViolation] and that hand-off.
          */
-        private const val SYNTAX_PREFIX = "unsupported syntax: "
+        private const val UNPARSED_PREFIX = "cannot parse: "
 
         /**
-         * Prefixes of the remaining syntax-family refusals.
+         * Prefixes of the remaining decomposer markers.
          *
-         * They come from the same decomposer as [SYNTAX_PREFIX] and mean "this shape cannot be
-         * validated", not "the policy said no": [isSyntaxViolation] collects the whole family so
-         * `--unrestricted` can hand the line to the platform shell.
+         * They mean "this shape cannot be decomposed", not "the policy said no": [isUnparsed]
+         * collects the whole family so [validateCommand] knows the line has to be handed over.
          */
         private const val SUBSTITUTION_PREFIX = "command substitution rejected"
 
@@ -295,9 +297,9 @@ class CodingAgentShell(
         private const val EMPTY_COMMAND_VIOLATION = "empty or invalid command"
 
         /**
-         * Prefix of the recursion-limit refusals (`nested inline shell script …`, `nested command
-         * substitution …`): the decomposer stopped rather than guessing, which is a syntax limit,
-         * not a policy decision.
+         * Prefix of the recursion-limit markers (`nested inline shell script …`, `nested command
+         * substitution …`): the decomposer stopped rather than guessing. It belongs to the unparsed
+         * family; the hand-off then refuses if its own scan stops at the same depth.
          */
         private const val NESTED_SCRIPT_PREFIX = "nested "
 
@@ -846,13 +848,14 @@ class CodingAgentShell(
     fun explain(command: String): String {
         val violation = validateCommand(command)
         if (violation != null) {
-            // Keep "denied" for policy refusals only: a shape this shell cannot parse must not
-            // read as a policy decision (see [UnsupportedSyntax]).
-            return if (violation.contains(SYNTAX_PREFIX)) {
-                "'$command' is NOT SUPPORTED — $violation"
-            } else {
-                "'$command' is DENIED — $violation"
-            }
+            return "'$command' is DENIED — $violation"
+        }
+        // The decomposer gave up on this shape, so the line is handed to the platform shell. Say so
+        // instead of explaining the first token of a command line that was never decomposed.
+        if (unparsedMarker(command) != null) {
+            return "'$command' is ALLOWED — the shell cannot decompose this shape, so the line is " +
+                "handed to the platform shell verbatim; the runtime vetoes (backend kill, bootstrap, " +
+                "workspace links) and a disabled network/destructive tier still apply"
         }
 
         val base = extractBaseCommand(command)
@@ -946,32 +949,10 @@ class CodingAgentShell(
      * wrapped in a structured envelope so the model, the CLI and `FailureCategory` can all tell a
      * structural refusal from a command that simply failed.
      *
-     * Two families are produced, and they must not be conflated:
-     *
-     * - `PERMISSION_DENIED | code=…` ([PermissionAudit]) — the policy refused the command. A wider
-     *   preset or an operator grant can lift it, and it is counted in `coding.permissions`;
-     * - `UNSUPPORTED_SYNTAX | code=SYNTAX_NOT_SUPPORTED` ([UnsupportedSyntax]) — the shell cannot
-     *   parse the shape. Nothing but `--unrestricted` can lift it (that switch does not report the
-     *   refusal at all, it hands the line to the platform shell), so it is not counted as a policy
-     *   denial.
+     * Only policy verdicts arrive here: a shape the decomposer cannot parse is handed to the
+     * platform shell by [validateCommand], never reported as a refusal.
      */
     private fun commandRefusal(violation: String): String {
-        // A syntax refusal is NOT a permission refusal. Reporting it as one was a real defect:
-        // the model was told `code=COMMAND_NOT_ALLOWED`, went looking for an approval it could
-        // never get, and `coding.permissions` counted policy friction that did not exist.
-        //
-        // The classification lives in ONE place — [isSyntaxViolation], the same predicate the
-        // `--unrestricted` lift uses — so the whole family (`unsupported syntax: …`, `nested …`,
-        // `empty or invalid command`, and a wrapper that carries either) is reported the same way.
-        // Matching on `unsupported syntax: ` alone left `nested inline shell script exceeds …`
-        // arriving as a policy denial, which is the defect this family exists to prevent.
-        // Checked before the policy codes so it cannot be reclassified by a wrapper.
-        if (isSyntaxViolation(violation)) {
-            return UnsupportedSyntax.refused(
-                tool = SHELL_TOOL,
-                detail = "Command not executed — $violation",
-            )
-        }
         // A veto that no flag, preset or approval can lift gets its own hint. Sending the model to
         // `coding.requestAccess` for one of these is a dead end it will retry: the refusal is
         // permanent by design, so the hint names what is permanent and the route that stays open.
@@ -1152,13 +1133,12 @@ class CodingAgentShell(
     private val CMD_CONTROL_KEYWORDS = setOf("if", "for")
 
     /**
-     * Tokens after which a program starts inside a body the `--unrestricted` lift hands over
+     * Tokens after which a program starts inside a body that is handed to the platform shell
      * verbatim (`for … do <program>`, `( <program> )`, `cmd1 & <program>`, POSIX `then`/`else`).
      *
-     * Used by [liftedSyntaxGuardViolation] to keep its scan from reading ordinary arguments as
-     * programs.
+     * Used by [handOffVetoViolation] to keep its scan from reading ordinary arguments as programs.
      */
-    private val LIFTED_PROGRAM_PREFIXES =
+    private val HAND_OFF_PROGRAM_PREFIXES =
         setOf("do", "then", "else", "(", ")", "&", "&&", "|", "||", ";")
 
     /**
@@ -1187,36 +1167,42 @@ class CodingAgentShell(
      */
     private fun validateCommand(command: String): String? {
         val violation = validateCommandRaw(command) ?: return null
-        if (!unrestricted || !isSyntaxViolation(violation)) return violation
-        // The syntax gate is lifted, so this line is handed to the platform shell verbatim. The
-        // vetoes that protect the runtime this task runs *inside* are not policy rails and are not
-        // lifted with it: a `for` loop's body can still hold `taskkill /PID <backend>`, and the OS
-        // cannot refuse that for us. See [liftedSyntaxGuardViolation].
-        return liftedSyntaxGuardViolation(command)
+        // There is no syntax gate: a shape the decomposer cannot parse is handed to the platform
+        // shell verbatim, in every mode, and the shell reports its own parse error. The vetoes that
+        // protect the runtime this task runs *inside* are not grammar rules and are not dropped
+        // with the gate: a `for` loop's body can still hold `taskkill /PID <backend>`, and the OS
+        // cannot refuse that for us. See [handOffVetoViolation].
+        if (!isUnparsed(violation)) return violation
+        return handOffVetoViolation(command)
     }
 
     /**
-     * Whether [violation] belongs to the syntax family rather than to the policy.
+     * Whether [violation] is the decomposer's own marker — "this shape cannot be parsed" — rather
+     * than a policy verdict.
      *
-     * A syntax refusal means "this module cannot decompose the shape"; it is not a permission
-     * decision, so neither a wider preset nor an operator grant would lift it, and no policy
-     * counter is incremented for it ([commandRefusal]). Under `--unrestricted` ([unrestricted]) the
-     * whole family is handed to the platform shell instead.
+     * Such a marker never reaches the model: [validateCommand] hands the line to the platform shell
+     * ([handOffVetoViolation]) instead. `empty or invalid command` is deliberately **not** in the
+     * family — there is nothing to hand over, so it stays an ordinary refusal.
      */
-    private fun isSyntaxViolation(violation: String): Boolean {
+    private fun isUnparsed(violation: String): Boolean {
         val leaf = leafViolation(violation)
-        return leaf.startsWith(SYNTAX_PREFIX) ||
-            leaf.startsWith(NESTED_SCRIPT_PREFIX) ||
-            leaf == EMPTY_COMMAND_VIOLATION
+        return leaf.startsWith(UNPARSED_PREFIX) ||
+            leaf.startsWith(SUBSTITUTION_PREFIX) ||
+            leaf.startsWith(INLINE_SCRIPT_PREFIX) ||
+            leaf.startsWith(NESTED_SCRIPT_PREFIX)
     }
+
+    /** The decomposer's marker for [command], or null when the line parsed. */
+    private fun unparsedMarker(command: String): String? =
+        validateCommandRaw(command)?.takeIf { isUnparsed(it) }
 
     /**
      * The innermost reason of a wrapped violation (`inline script via 'sh' rejected — …`).
      *
      * The wrapper carries the inner reason after an em-dash; classifying *that* one keeps a policy
-     * veto nested inside `$(...)` or `sh -c "..."` from being lifted by accident
+     * veto nested inside `$(...)` or `sh -c "..."` from being handed over by accident
      * (`echo $(rm -rf /)` must stay refused under `--unrestricted`, too). One helper for every
-     * classifier, so the syntax lift and the hint family always agree about which rule produced the
+     * classifier, so the hand-off and the hint family always agree about which rule produced the
      * refusal.
      */
     private fun leafViolation(violation: String): String {
@@ -1231,51 +1217,67 @@ class CodingAgentShell(
     }
 
     /**
-     * The vetoes that survive the `--unrestricted` syntax lift.
+     * The vetoes that apply to a line handed to the platform shell undecomposed.
      *
-     * Lifting the syntax gate means "hand this shape to the platform shell", because the checker
-     * cannot decompose it. Three vetoes are not policy rails and must survive that hand-off — the
-     * OS cannot replace them:
+     * When the decomposer cannot parse a shape (`for` loops, `else if`, nested blocks, `goto`/`call`
+     * payloads), the line is handed over verbatim and the platform shell reports its own parse
+     * error. The command tier cannot judge such a line — it never names the programs it runs — but
+     * the vetoes that do not need the grammar still apply, and they are checked at every *program
+     * position* (the first token of a segment, or the token after `do`/`then`/`else`/`(`/`&`/`|`/
+     * `;`), plus every inline-script body recursively:
      *
+     * - [FORBIDDEN_COMMANDS] — link/mount tools rewrite the workspace topology the framework
+     *   provisions (and a normal command never gets them approved away either);
      * - [processKillViolation] — killing the backend (or a JVM that may be it) ends the very run
      *   that submitted the loop; `for %f in (1) do taskkill /PID <backend> /F` is exactly the line
      *   the per-command validator never sees;
      * - [bootstrapViolation] — `b4w build/stop/...` and `bin/build.ps1` rewrite or restart the
      *   runtime the task is executing inside;
-     * - [FORBIDDEN_COMMANDS] — link/mount tools rewrite the workspace topology the framework
-     *   provisions (and a normal command never gets them approved away either).
+     * - the network and destructive tier vetoes, when those tiers are disabled — `curl` or `rm`
+     *   hidden behind `do` is still a network/destructive command;
+     * - the credential/protected-path guards and the workspace boundary, applied to every segment's
+     *   tokens — a `for` body is not a licence to name `~/.ssh` or `.browser4`.
      *
-     * The scan is coarse, and coarse in one direction only: a *program position* is checked (the
-     * first token of a segment, or the token after `do`/`then`/`else`/`(`/`&`/`|`/`;`), plus every
-     * inline-script body recursively — an undecomposable body is precisely the program position
-     * the parser cannot name. Block parentheses are stripped from the program token, so a veto
-     * cannot hide behind `( … )`. An ordinary argument is not a program, so `echo b4w build failed`
-     * stays allowed. Past [MAX_INLINE_SCRIPT_DEPTH] the guard can no longer prove the line safe and
-     * refuses it: the lift stops where the inspection stops.
+     * Block parentheses are stripped from the program token, so a veto cannot hide behind `( … )`.
+     * An ordinary argument is not a program, so `echo b4w build failed` stays allowed. Past
+     * [MAX_INLINE_SCRIPT_DEPTH] the scan can no longer prove the line safe and refuses it.
      *
      * @param command the line that is about to be handed to the platform shell
      * @param depth inline-script recursion depth, capped by [MAX_INLINE_SCRIPT_DEPTH]
      * @return a violation that must still refuse the line, or null when nothing protected is reachable
      */
-    internal fun liftedSyntaxGuardViolation(command: String, depth: Int = 0): String? {
+    internal fun handOffVetoViolation(command: String, depth: Int = 0): String? {
         if (depth > MAX_INLINE_SCRIPT_DEPTH) {
-            return "nested inline shell script exceeds $MAX_INLINE_SCRIPT_DEPTH levels — refusing to guess"
+            return "nested inline shell script exceeds $MAX_INLINE_SCRIPT_DEPTH levels — " +
+                "refusing to hand over unverified"
         }
         // Already applied to the line by [validateCommandRaw]; re-applied here so an inline-script
-        // body — which the lift would otherwise hand over unexamined — gets the same whole-line vetoes.
+        // body — which the hand-off would otherwise pass over unexamined — gets the same vetoes.
         blockedPatternViolation(command)?.let { return it }
         for (segment in splitSimpleCommands(command)) {
             val tokens = tokenize(segment)
+            if (tokens.isEmpty()) continue
+            // The decomposer returned at the offending segment, so anything after it was never
+            // checked by the tier: run the guards that do not need the grammar over every segment.
+            argumentPathViolation(tokens)?.let { return it }
+            protectedPathViolation(tokens)?.let { return it }
+            workspaceBoundaryViolation(tokens)?.let { return it }
             for (index in tokens.indices) {
-                if (!isLiftedProgramPosition(tokens, index)) continue
+                if (!isHandOffProgramPosition(tokens, index)) continue
                 val programTokens = programTokensAt(tokens, index)
                 val base = normalizeCommandName(programTokens[index])
                 if (base in FORBIDDEN_COMMANDS) return forbiddenCommandViolation(base)
                 inlineScript(programTokens.subList(index, programTokens.size))?.let { inner ->
-                    liftedSyntaxGuardViolation(inner, depth + 1)?.let { return it }
+                    handOffVetoViolation(inner, depth + 1)?.let { return it }
                 }
                 processKillViolation(command, programTokens.subList(index, programTokens.size))?.let { return it }
                 bootstrapViolation(command, programTokens, index)?.let { return it }
+                if (base in NETWORK_COMMANDS && !networkAllowed()) {
+                    return "'$base' $VETO_NETWORK_DISABLED (inside a shape coding.shell cannot decompose)"
+                }
+                if (base in DESTRUCTIVE_COMMANDS && !allowDestructive) {
+                    return "'$base' $VETO_DESTRUCTIVE_DISABLED (inside a shape coding.shell cannot decompose)"
+                }
             }
         }
         return null
@@ -1286,8 +1288,8 @@ class CodingAgentShell(
      *
      * `for %f in (1) do (mklink …)` tokenizes the program as `(mklink`, and `(taskkill … /F)` as
      * `(taskkill`: without this, a veto inside a block would be invisible to the guard — the one
-     * place a lifted line can hide a program. The caller's list is returned unchanged when there is
-     * nothing to strip, so the common path does not copy.
+     * place a handed-off line can hide a program. The caller's list is returned unchanged when there
+     * is nothing to strip, so the common path does not copy.
      */
     private fun programTokensAt(tokens: List<String>, index: Int): List<String> {
         val raw = tokens[index]
@@ -1303,14 +1305,15 @@ class CodingAgentShell(
      * bootstrap step), so only the first token of a segment and the token after a control-flow
      * keyword or a separator counts.
      */
-    private fun isLiftedProgramPosition(tokens: List<String>, index: Int): Boolean {
+    private fun isHandOffProgramPosition(tokens: List<String>, index: Int): Boolean {
         if (index == 0) return true
         val previous = tokens[index - 1].trim('"', '\'').lowercase()
-        return previous in LIFTED_PROGRAM_PREFIXES
+        return previous in HAND_OFF_PROGRAM_PREFIXES
     }
 
     /**
-     * The unfiltered command validator — see [validateCommand] for the policy/syntax split.
+     * The unfiltered command validator — see [validateCommand] for the hand-off of shapes the
+     * decomposer cannot parse.
      *
      * @return a human-readable violation reason, or null when allowed
      */
@@ -1318,7 +1321,7 @@ class CodingAgentShell(
         // Normalize first so a policy query (`isAllowed` / `explain`) agrees with what
         // would actually be executed: `echo.` is cmd's blank-line idiom for `echo`.
         val normalizedCommand = normalizeShellCommand(command)
-        if (normalizedCommand.isBlank()) return "empty or invalid command"
+        if (normalizedCommand.isBlank()) return EMPTY_COMMAND_VIOLATION
 
         // 1. Hardcoded blocked patterns — whole string, cannot be overridden
         blockedPatternViolation(normalizedCommand)?.let { return it }
@@ -1360,7 +1363,7 @@ class CodingAgentShell(
         blockedPatternViolation(command)?.let { return it }
 
         val segments = splitSimpleCommands(command)
-        if (segments.isEmpty()) return "empty or invalid command"
+        if (segments.isEmpty()) return EMPTY_COMMAND_VIOLATION
         for (segment in segments) {
             validateSimpleCommand(segment, depth)?.let { return it }
         }
@@ -1816,8 +1819,8 @@ class CodingAgentShell(
     /**
      * The refusal for a program this shell never runs, whatever the flags say.
      *
-     * Shared by [validateSimpleCommandTier] and [liftedSyntaxGuardViolation], so the message a
-     * lifted line gets is byte-for-byte the one a normal command gets.
+     * Shared by [validateSimpleCommandTier] and [handOffVetoViolation], so the message a
+     * handed-off line gets is byte-for-byte the one a normal command gets.
      */
     private fun forbiddenCommandViolation(baseCommand: String): String =
         "'$baseCommand' is disabled — $VETO_WORKSPACE_LINK"
@@ -1833,7 +1836,7 @@ class CodingAgentShell(
 
     private fun validateSimpleCommandTier(segment: String, depth: Int): String? {
         val tokens = tokenize(segment)
-        if (tokens.isEmpty()) return "empty or invalid command"
+        if (tokens.isEmpty()) return EMPTY_COMMAND_VIOLATION
 
         // Argument-path guard: the working directory is contained, but nothing stopped an
         // argument like `~/.ssh/id_rsa` from naming a credential location (plan P0-3).
@@ -1847,11 +1850,11 @@ class CodingAgentShell(
         // Skip leading env assignments (VAR=value cmd ...).
         var index = 0
         while (index < tokens.size && ENV_ASSIGNMENT.matches(tokens[index])) index++
-        if (index >= tokens.size) return "empty or invalid command"
+        if (index >= tokens.size) return EMPTY_COMMAND_VIOLATION
 
         val rawToken = tokens[index]
         val baseCommand = normalizeCommandName(rawToken)
-        if (baseCommand.isEmpty()) return "empty or invalid command"
+        if (baseCommand.isEmpty()) return EMPTY_COMMAND_VIOLATION
 
         // Inline script (`sh -c "..."`, `pwsh -Command "..."`, `cmd /c ...`):
         // the wrapper and the inner script must both be validated. Checking only the
@@ -1892,17 +1895,17 @@ class CodingAgentShell(
         // re-validated by the same tier and boundary rules a top-level command gets, so supporting
         // the shape does not create a first-token blind spot. Only the shallow forms are parsed
         // (one command, optionally in parentheses with one `else`) — anything deeper needs a cmd
-        // grammar, and a half-parser that validates the wrong token is worse than a refusal.
-        // `for` stays refused: its body is a loop over a command substitution, which the string
-        // layer cannot judge. See [UnsupportedSyntax] for the family this refusal belongs to.
+        // grammar, and a half-parser that validates the wrong token is worse than handing the line
+        // to the platform shell, which is what [validateCommand] does with these markers.
+        // `for` is not parsed: its body is a loop over a command substitution, which the string
+        // layer cannot judge.
         if (isWindowsHost()) {
             if (baseCommand == "if") {
                 return conditionalViolation(tokens.subList(index, tokens.size), depth)
             }
             if (baseCommand in CMD_CONTROL_KEYWORDS) {
-                return SYNTAX_PREFIX +
-                    "'$baseCommand' is cmd.exe flow control — coding.shell parses `if` (a condition " +
-                    "plus one command) but not loops; use a script file run by path, or a tool"
+                return UNPARSED_PREFIX +
+                    "'$baseCommand' is cmd.exe flow control coding.shell does not parse"
             }
         }
         // `set` (cmd built-in): allowed without arguments or with NAME=value
@@ -1998,14 +2001,15 @@ class CodingAgentShell(
      * ```
      *
      * Everything else — nested blocks, `else if`, `&`/`|` inside a block, `goto`/`call` payloads —
-     * is refused as [UnsupportedSyntax]. Those are exactly the shapes that would need a cmd
-     * grammar; guessing at them would validate the wrong token while looking successful.
+     * is an [UNPARSED_PREFIX] marker: those are exactly the shapes that would need a cmd grammar,
+     * and guessing at them would validate the wrong token while looking successful. [validateCommand]
+     * hands such a line to the platform shell instead.
      *
      * @return null when the statement is supported and every payload passed, else a violation
      */
     private fun conditionalViolation(tokens: List<String>, depth: Int): String? {
         if (depth > MAX_INLINE_SCRIPT_DEPTH) {
-            return SYNTAX_PREFIX + "nested conditionals exceed $MAX_INLINE_SCRIPT_DEPTH levels"
+            return UNPARSED_PREFIX + "nested conditionals exceed $MAX_INLINE_SCRIPT_DEPTH levels"
         }
 
         var i = 1 // skip `if`
@@ -2016,17 +2020,17 @@ class CodingAgentShell(
         when (keyword) {
             "exist", "defined", "errorlevel" -> {
                 val operand = tokens.getOrNull(i + 1)
-                    ?: return SYNTAX_PREFIX + "'if $keyword' is missing its operand"
+                    ?: return UNPARSED_PREFIX + "'if $keyword' is missing its operand"
                 if (keyword == "errorlevel" && operand.any { !it.isDigit() }) {
-                    return SYNTAX_PREFIX + "'if errorlevel' expects a number, not '$operand'"
+                    return UNPARSED_PREFIX + "'if errorlevel' expects a number, not '$operand'"
                 }
                 i += 2
             }
             else -> {
-                val expr = keyword ?: return SYNTAX_PREFIX + "'if' is missing its condition"
+                val expr = keyword ?: return UNPARSED_PREFIX + "'if' is missing its condition"
                 // `<a>==<b>` is the remaining supported condition form.
                 if (!expr.contains("==")) {
-                    return SYNTAX_PREFIX + "unsupported 'if' condition '$expr' — supported: exist, " +
+                    return UNPARSED_PREFIX + "unsupported 'if' condition '$expr' — supported: exist, " +
                         "defined, errorlevel and <a>==<b>"
                 }
                 i += 1
@@ -2035,9 +2039,9 @@ class CodingAgentShell(
 
         val body = tokens.subList(i, tokens.size)
         if (body.isEmpty()) {
-            return SYNTAX_PREFIX + "'if' needs a command after its condition"
+            return UNPARSED_PREFIX + "'if' needs a command after its condition"
         }
-        val groups = splitConditionalBody(body) ?: return SYNTAX_PREFIX +
+        val groups = splitConditionalBody(body) ?: return UNPARSED_PREFIX +
             "unsupported 'if' body — one command, optionally `<cond> (<cmd>)` with one " +
             "`else (<cmd>)`; nested blocks, 'else if' and '&'/'|' inside a block are not parsed"
 
@@ -2048,7 +2052,7 @@ class CodingAgentShell(
             // jump leaves the linear check entirely (`goto` lands on a line this validator never
             // saw), so both are refused rather than validated half-way.
             if (base in CMD_CONTROL_KEYWORDS || base == "goto" || base == "call") {
-                return SYNTAX_PREFIX + "'if' body starts with '$base' — control-flow and label-jump " +
+                return UNPARSED_PREFIX + "'if' body starts with '$base' — control-flow and label-jump " +
                     "payloads are not parsed; put the block in a script file run by path"
             }
             validateSimpleCommand(command, depth + 1)?.let { return it }

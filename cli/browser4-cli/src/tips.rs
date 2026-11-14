@@ -342,7 +342,7 @@ const TIPS_AGENT: &[Tip] = &[
         text: "`agent run <task> --add-dir <folder>` lets the task read, write and execute in a folder besides its workspace (repeat the flag for more); the folder must exist on the backend machine, credential stores stay refused, and `--access` still decides whether it is read-only. In `agent run -i`, `/add-dir <folder>` grants one mid-session and `/dirs [clear]` lists or drops the grants",
     },
     Tip {
-        text: "`agent run <task> --unrestricted` runs the task with YOUR OS permissions — full preset, no workspace/protected rails, no OS sandbox — and the shell's own rules are off too (syntax gate AND command allow-list), so `for` loops, blocks, inline scripts and PowerShell cmdlets run as written. It is audited and inherited by `--resume`; OS credential stores (`~/.ssh`, `~/.aws`, …) and commands that would kill or rebuild the backend stay refused",
+        text: "`agent run <task> --unrestricted` runs the task with YOUR OS permissions — full preset, no workspace/protected rails, no OS sandbox — and the shell's command allow-list is off too, so inline scripts and PowerShell cmdlets run as written (shapes the checker cannot decompose, such as `for` loops and blocks, are handed to the platform shell in every mode). It is audited and inherited by `--resume`; OS credential stores (`~/.ssh`, `~/.aws`, …) and commands that would kill or rebuild the backend stay refused",
     },
     Tip {
         text: "`agent result <id>` exits non-zero for a failed task — read `errorCode` and the `resume:` line, or pass `--allow-failed` to exit 0 while still seeing the failed payload",

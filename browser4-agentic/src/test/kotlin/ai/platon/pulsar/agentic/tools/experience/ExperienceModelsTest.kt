@@ -145,25 +145,6 @@ class ExperienceModelsTest {
         }
 
         @Test
-        @DisplayName("a syntax refusal is not classified as a permission problem")
-        fun testStructuredSyntaxRefusal() {
-            // `coding.shell` refuses a block it does not parse with UNSUPPORTED_SYNTAX. Filing it
-            // as PERMISSION_DENIED sent the model looking for an approval that cannot exist, and
-            // the recovery is genuinely different: rewrite the step, do not widen the policy.
-            val text = ai.platon.pulsar.coding.UnsupportedSyntax.format(
-                tool = "coding.shell",
-                detail = "Command not executed — unsupported syntax: 'if' is cmd.exe flow control",
-            )
-
-            assertEquals(FailureCategory.UNSUPPORTED_SYNTAX, FailureCategory.classify(text))
-            assertTrue(
-                FailureCategory.UNSUPPORTED_SYNTAX.recoverable,
-                "a supported spelling of the same intent exists",
-            )
-            assertNotEquals(FailureCategory.PERMISSION_DENIED, FailureCategory.classify(text))
-        }
-
-        @Test
         @DisplayName("null or blank message returns UNKNOWN")
         fun testNullMessage() {
             assertEquals(FailureCategory.UNKNOWN, FailureCategory.classify(null))

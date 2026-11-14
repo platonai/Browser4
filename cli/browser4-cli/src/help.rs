@@ -1828,11 +1828,15 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    shell's own rules are off too (syntax gate, command allow-list), so `for` loops,"
+            "    shell's command allow-list is off too, so inline scripts and PowerShell cmdlets run"
                 .to_string(),
         );
         lines.push(
-            "    blocks, inline scripts and PowerShell cmdlets run as written. It removes the rails"
+            "    as written (shapes the checker cannot decompose are handed to the platform shell)."
+                .to_string(),
+        );
+        lines.push(
+            "    It removes the rails"
                 .to_string(),
         );
         lines.push(

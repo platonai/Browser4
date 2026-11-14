@@ -64,18 +64,19 @@ pass-through ones for that one task:
 | preset gate | `--access` / backend default | `full` — every tool domain |
 | path boundary | workspace + readable roots + `--add-dir` | every path the OS user can reach |
 | protected paths | refused | allowed (the OS still governs) |
-| shell's own rules (syntax gate, command allow-list) | applied | **not** applied — `for` loops, inline scripts and programs the list never knew (`Get-Content`, `wmic`) run as written |
+| shell's own rule (command allow-list) | applied | **not** applied — programs the list never knew (`Get-Content`, `wmic`) run as written; shapes it cannot decompose are handed to the platform shell in every mode |
 | OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) | refused | **still refused** — see below |
 | network, destructive commands | per preset | allowed |
 | OS sandbox (`browser4.agent.sandbox`) | applied | **not** applied — plain child processes |
 | runtime-protection vetoes (`taskkill` on the backend, `b4w build/stop`, `bin/build.ps1`, `mklink`/`ln`/`mount`) | refused | **still refused** |
 
-The shell's own rules are the two that only look like rails: the syntax gate and the command
-allow-list. Neither confines a process — the same script body already ran unexamined through
-`powershell -File`, and `python -c` is on the list — so refusing `powershell -Command "Get-Content
-x"` only cost rounds (2026-11-14 run). Every row marked **still refused** above keeps refusing, and
-the shell's `hint=` says `no approval lifts this` instead of offering a request that cannot be
-granted.
+The shell's remaining rule is the command allow-list, and it only looks like a rail: it does not
+confine a process — the same script body already ran unexamined through `powershell -File`, and
+`python -c` is on the list — so refusing `powershell -Command "Get-Content x"` only cost rounds
+(2026-11-14 run). Command shapes the checker cannot decompose (`for` loops, blocks) are handed to
+the platform shell in every mode, not only under this flag. Every row marked **still refused** above
+keeps refusing, and the shell's `hint=` says `no approval lifts this` instead of offering a request
+that cannot be granted.
 
 What it does **not** do:
 
@@ -187,16 +188,15 @@ also carries `needed=…` and the raw OS evidence stays in the log). A refusal i
 it must not be retried with different quoting or an interpreter. `coding.permissions` prints
 the same view MCP clients get — the preset, the allowed routes and the protections.
 
-A refusal about **syntax** is a different family and is reported apart from policy:
-`UNSUPPORTED_SYNTAX | code=SYNTAX_NOT_SUPPORTED`. A single-line Windows `if` **is** supported
-(`if [not] exist <path> <cmd>`, `if [/i] [not] <a>==<b> <cmd>`, `if [not] defined <var> <cmd>`,
-`if [not] errorlevel <n> <cmd>`, optionally `(<cmd>)` with one `else (<cmd>)`) and its payload is
-validated like a top-level command. What is not parsed — `for` loops, `else if`, nested blocks,
-`&`/`|` inside a block, `goto`/`call` payloads — is refused as syntax: no preset, approval or
-property lifts it, so `coding.requestAccess` is not the answer. Put those in a script file and run
-it by path (`.\run.cmd`, `./run.sh`), or decide with a tool (`coding.stat` reports existence,
-`coding.mvnBuild`/`verify` return the build status). Syntax refusals are counted on their own
-`unsupported syntax` line in `coding.permissions`, never among the policy counters.
+There is **no syntax gate**. A single-line Windows `if` **is** parsed (`if [not] exist <path> <cmd>`,
+`if [/i] [not] <a>==<b> <cmd>`, `if [not] defined <var> <cmd>`, `if [not] errorlevel <n> <cmd>`,
+optionally `(<cmd>)` with one `else (<cmd>)`) and its payload is validated like a top-level command.
+What is not parsed — `for` loops, `else if`, nested blocks, `&`/`|` inside a block, `goto`/`call`
+payloads — is handed to the platform shell **verbatim**, and the shell reports its own parse error.
+The vetoes that do not need the decomposition still refuse (blocked patterns, the command tier,
+credentials and protected paths, and killing or rebuilding this backend), and those are ordinary
+policy refusals. Use a script file run by path (`.\run.cmd`, `./run.sh`) when the shell's parse
+error is in the way.
 
 ### Operator approval: `coding.requestAccess`
 

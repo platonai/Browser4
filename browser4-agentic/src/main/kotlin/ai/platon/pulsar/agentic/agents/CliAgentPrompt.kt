@@ -334,22 +334,21 @@ internal object CliAgentPrompt {
                     "refusal is structural: do NOT retry it, re-quote it, or reach for an interpreter " +
                     "to do the same thing — its `hint=` names the route that is still open. " +
                     (if (policy.unrestricted)
-                        "This run is unrestricted, so the shell's own spelling rules are off: the *syntax* " +
-                            "gate is lifted AND the command allow-list no longer applies, so `for` loops, " +
-                            "parenthesised blocks, inline scripts (`powershell -Command ...`) and programs the " +
-                            "list never knew (a PowerShell cmdlet such as Get-Content, or `wmic`) run as " +
-                            "written — use them when one command per call would take several steps. Every " +
-                            "in-process rail is off as well (workspace boundary, protected dirs), so the OS " +
-                            "user's own permissions are the only limit: be deliberate about what you delete or " +
-                            "overwrite. Two families still refuse, and both are permanent: the OS credential " +
-                            "stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) — never read them " +
-                            "into your context — and destroying the runtime you run inside (`taskkill` on the " +
-                            "backend, `b4w build/stop`, `bin/build.ps1`, `mklink`/`ln`/`mount`)."
+                        "This run is unrestricted, so the shell's command allow-list no longer applies: " +
+                            "programs the list never knew (a PowerShell cmdlet such as Get-Content, or " +
+                            "`wmic`) run as written — use them when one command per call would take " +
+                            "several steps. Every in-process rail is off as well (workspace boundary, " +
+                            "protected dirs), so the OS user's own permissions are the only limit: be " +
+                            "deliberate about what you delete or overwrite. Two families still refuse, and " +
+                            "both are permanent: the OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, " +
+                            "`~/.config/gcloud`) — never read them into your context — and destroying the " +
+                            "runtime you run inside (`taskkill` on the backend, `b4w build/stop`, " +
+                            "`bin/build.ps1`, `mklink`/`ln`/`mount`)."
                     else
-                        "A `UNSUPPORTED_SYNTAX` refusal is a different family: the shell runs one command " +
-                            "per call and cannot parse blocks, parentheses or `else`, so rewriting the step IS " +
-                            "the fix — one command per call, a tool instead (coding.stat, coding.mvnBuild), or " +
-                            "a script file run by path.")
+                        "A command shape the checker cannot decompose (`for` loops, `else if`, nested blocks, " +
+                            "goto/call payloads) is handed to the platform shell verbatim — the shell's own " +
+                            "parse error is the feedback, so rewrite the step if it fails. The command tier, " +
+                            "blocked patterns, credentials/protected paths and the runtime vetoes still refuse.")
             )
             appendLine(
                 "- Run coding.permissions to see exactly what is allowed before planning a step that " +

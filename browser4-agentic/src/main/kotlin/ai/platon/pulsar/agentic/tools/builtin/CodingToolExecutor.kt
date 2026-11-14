@@ -34,7 +34,6 @@ import ai.platon.pulsar.coding.Request
 import ai.platon.pulsar.coding.SkeletonExtractor
 import ai.platon.pulsar.coding.TokenEstimator
 import ai.platon.pulsar.coding.ToolAccessDeniedException
-import ai.platon.pulsar.coding.UnsupportedSyntax
 import ai.platon.pulsar.coding.CodingTokenStats
 import ai.platon.pulsar.coding.ValidationResult
 import ai.platon.pulsar.coding.VerificationReport
@@ -232,13 +231,11 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "supported — `if [not] exist <path> <cmd>`, `if [/i] [not] <a>==<b> <cmd>`, " +
                 "`if [not] defined <var> <cmd>`, `if [not] errorlevel <n> <cmd>`, optionally `(<cmd>)` with one " +
                 "`else (<cmd>)` — and the command behind the condition is validated like a top-level one. " +
-                "`for` loops, `else if`, nested blocks and goto/call payloads are refused as UNSUPPORTED_SYNTAX " +
-                "(a syntax limit, not a permission one, so requesting access will not help): put those in a " +
-                "script file and run it by path (e.g. .\\run.cmd), or decide with tools " +
-                "(coding.stat reports whether a path exists, coding.mvnBuild/coding.verify return the build status). " +
-                "Exception: under `agent run --unrestricted` both the syntax gate and the command " +
-                "allow-list are lifted, so a command line (blocks, `for` loops, inline scripts, a " +
-                "PowerShell cmdlet) is handed to the platform shell verbatim."
+                "A shape the checker cannot decompose (`for` loops, `else if`, nested blocks, goto/call " +
+                "payloads) is handed to the platform shell verbatim, and the shell's own parse error is the " +
+                "feedback; the command tier, blocked patterns, credentials/protected paths and the runtime " +
+                "vetoes (killing or rebuilding this backend, mklink/ln/mount) still refuse. " +
+                "Under `agent run --unrestricted` the command allow-list is lifted as well."
         )
         toolSpec["shellOutput"] = ToolSpec(
             domain = domain, method = "shellOutput",
@@ -2293,17 +2290,8 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "  env passthrough   : ${count("coding.env", PermissionAudit.CODE_ENV_PASSTHROUGH)} " +
                     "(secret-shaped variables explicitly passed to a child process)"
             )
-            // Syntax is reported apart from policy on purpose: no preset and no approval lifts a
-            // grammar, so counting it with the policy codes made the report answer a question
-            // nobody asked ("is the scope too narrow?"). The single exception is a per-task
-            // `--unrestricted` run, which hands such a line to the platform shell verbatim — then
-            // nothing is counted here at all.
-            appendLine(
-                "  unsupported syntax: ${UnsupportedSyntax.snapshot()["coding.shell"] ?: 0} " +
-                    "(NOT a policy denial — coding.shell runs one command per call and does not " +
-                    "parse blocks/parentheses; rewrite, use a tool, or run a script file by path; " +
-                    "an `--unrestricted` task passes the line to the platform shell instead)"
-            )
+            // Shapes the decomposer cannot parse are handed to the platform shell, so they produce
+            // no refusal and no counter here: the only refusals this view reports are policy ones.
             appendLine(
                 if (policy.unrestricted) {
                     // Report the sandbox THIS task's shell runs under, not the process-wide

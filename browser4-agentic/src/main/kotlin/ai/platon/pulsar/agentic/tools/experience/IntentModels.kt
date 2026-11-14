@@ -209,20 +209,6 @@ enum class FailureCategory(
         recoverable = false,
         suggestedRecovery = "Page requires elevated access; cannot auto-recover",
     ),
-    /**
-     * The tool cannot express what was asked: `coding.shell` refused a block/one-liner shape it
-     * does not parse (`UNSUPPORTED_SYNTAX | code=SYNTAX_NOT_SUPPORTED`).
-     *
-     * Kept apart from [PERMISSION_DENIED] on purpose: no preset or approval lifts a syntax limit, so
-     * filing it as a permission problem sent the model looking for access it could never get. It is
-     * recoverable — the same intent has a supported spelling (one command per call, a tool such as
-     * `coding.stat`, or a script file run by path).
-     */
-    UNSUPPORTED_SYNTAX(
-        "Unsupported Syntax",
-        recoverable = true,
-        suggestedRecovery = "Rewrite as one command per call, or run a script file by path",
-    ),
     OVERLAY_BLOCKED(
         "Overlay Blocked",
         recoverable = true,
@@ -281,16 +267,6 @@ enum class FailureCategory(
                 // Auth
                 anyWordIn(msg, "login", "sign in", "log in", "authenticate",
                     "unauthorized", "401", "403", "access denied", "forbidden") -> AUTH_REQUIRED
-
-                // Syntax. The shell answers a shape it cannot parse with
-                // `UNSUPPORTED_SYNTAX | code=SYNTAX_NOT_SUPPORTED` (a cmd.exe block, parentheses,
-                // `else`). Checked BEFORE the permission patterns: nothing can be approved into a
-                // grammar the tool does not have, so filing it as a permission problem is wrong.
-                anyWordIn(
-                    msg,
-                    "unsupported_syntax", "unsupported syntax", "syntax_not_supported",
-                    "does not parse", "flow control"
-                ) -> UNSUPPORTED_SYNTAX
 
                 // Permission. `permission_denied` is the machine-readable refusal prefix the
                 // coding access policy emits (`PERMISSION_DENIED | code=… | tool=…`); without it a

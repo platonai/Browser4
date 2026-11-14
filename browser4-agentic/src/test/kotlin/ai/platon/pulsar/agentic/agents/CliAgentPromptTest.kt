@@ -208,20 +208,19 @@ class CliAgentPromptTest {
     }
 
     @Test
-    @DisplayName("an unrestricted prompt names the lifted syntax gate and the vetoes that still refuse")
-    fun unrestrictedPromptNamesTheLiftedGateAndTheSurvivingVetoes() {
-        // `--unrestricted` lifts the syntax gate, so the `UNSUPPORTED_SYNTAX` advice would be
-        // wrong here — but the prompt must not promise a blank cheque either: the OS credential
-        // stores still refuse, and killing the backend or rebuilding the runtime still refuses
-        // (CodingAgentShell.liftedSyntaxGuardViolation).
+    @DisplayName("an unrestricted prompt names the lifted command list and the vetoes that still refuse")
+    fun unrestrictedPromptNamesTheLiftedTierAndTheSurvivingVetoes() {
+        // `--unrestricted` lifts the command allow-list, so the prompt must not promise a blank
+        // cheque either: the OS credential stores still refuse, and killing the backend or
+        // rebuilding the runtime still refuses (CodingAgentShell.handOffVetoViolation).
         val prompt = CliAgentPrompt.hygiene(true, workspace, AgentAccessPolicy().withUnrestricted())
 
         assertTrue(prompt.contains("unrestricted"), prompt)
-        assertTrue(prompt.contains("syntax"), prompt)
+        assertTrue(prompt.contains("command allow-list"), prompt)
         assertTrue(prompt.contains("b4w build"), "the surviving vetoes must be named: $prompt")
         assertTrue(prompt.contains("taskkill"), prompt)
         assertTrue(prompt.contains("~/.ssh"), "the credential rail must be named: $prompt")
-        assertFalse(prompt.contains("UNSUPPORTED_SYNTAX"), "a lifted gate must not be advertised: $prompt")
+        assertFalse(prompt.contains("UNSUPPORTED_SYNTAX"), "a removed gate must not be advertised: $prompt")
     }
 
     @Test

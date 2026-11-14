@@ -198,9 +198,10 @@ The boundary described above is replaced with a pass-through one (no workspace s
 readable-root list, no need for `--add-dir`), the protected rails are dropped, and
 the OS sandbox (`browser4.agent.sandbox`) is **not** applied — child processes inherit the
 backend's own token, so a command reaches exactly what you could reach from the same terminal.
-The shell's own rules go too: the syntax gate and the command allow-list are lifted, so `for`
-loops, inline scripts and PowerShell cmdlets run as written (neither rule is a boundary — the same
-body already ran unexamined through `powershell -File`).
+The shell's command allow-list goes too, so programs it never knew — a PowerShell cmdlet included —
+run as written (the list is not a boundary: the same body already ran unexamined through
+`powershell -File`). Command shapes the checker cannot decompose, `for` loops and inline scripts
+included, are handed to the platform shell in every mode.
 The OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) are the exception:
 they stay refused, because "my permissions" must not become "my secrets" in a model's context.
 The OS is then the only limit: on Windows with `windows-acl` configured, that confinement is what

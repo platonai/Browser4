@@ -14,8 +14,8 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * cmd.exe built-ins that a Windows agent legitimately needs, and the ones it must not
- * run as a one-liner.
+ * cmd.exe built-ins that a Windows agent legitimately needs, and the shapes it cannot use as a
+ * one-liner.
  *
  * Origin (2026-10-28 run): `set` was refused as unknown, `echo.` (cmd's blank-line
  * idiom) was refused because the allow-list only knows `echo`, and `if`/`for` were
@@ -24,12 +24,10 @@ import java.nio.file.Path
  *
  * `if` is parsed as a condition prefix: the payload goes through the same tier and boundary
  * checks a top-level command gets, so `if exist x (del …)` is still refused (as a destructive
- * command, not as a grammar limit). Only the shallow forms are supported; `for`, `else if`,
- * nested blocks and `goto`/`call` payloads are refused as UNSUPPORTED_SYNTAX rather than
- * PERMISSION_DENIED — no preset, approval or property lifts a grammar. The one exception is the
- * per-task `agent run --unrestricted` switch, which lifts the syntax gate together with the
- * permission gate ([CodingAgentShell]'s `unrestricted`): the line is then handed to
- * cmd.exe verbatim. The refusals below are asserted on a default shell, where nothing is lifted.
+ * command, not as a grammar limit). Only the shallow forms are parsed; `for`, `else if`, nested
+ * blocks and `goto`/`call` payloads are handed to the platform shell verbatim (see
+ * [CodingAgentShellUnparsedHandOffTest]). The refusals below are asserted on a default shell,
+ * where the command tier still applies.
  *
  * Plan P1-4 adds the Windows execution coverage: `cmd /c`, `powershell -Command` and a
  * `runCode` interpreter subprocess all go through the same sandbox seam, so the suite stays
@@ -139,7 +137,6 @@ class CodingAgentShellWindowsBuiltinTest {
             "the payload is a policy refusal, not syntax: $destructive",
         )
         assertTrue(destructive.contains("destructive"), destructive)
-        assertFalse(destructive.contains(UnsupportedSyntax.PREFIX), destructive)
 
         val network = s.execute("if exist out.csv (curl http://example.com)")
         assertTrue(network.startsWith("Error: ${PermissionAudit.DENIED}"), network)
@@ -177,14 +174,13 @@ class CodingAgentShellWindowsBuiltinTest {
     }
 
     @Test
-    @DisplayName("unsupported control-flow shapes are refused as syntax, never executed")
-    fun unsupportedControlFlowIsASyntaxRefusal() = runBlocking {
+    @DisplayName("unsupported control-flow shapes are handed to the platform shell, not refused")
+    fun unsupportedControlFlowIsHandedToThePlatformShell() {
         assumeTrue(isWindows, "cmd.exe control flow")
         val s = shell()
-        // The two counters must stay independent: a shape the shell cannot parse is not a
-        // policy decision, and the fix is "rewrite", never "ask for access".
+        // The command tier cannot judge a shape it cannot decompose, so the line is handed over —
+        // and a hand-off must not be reported as a policy denial or increment a policy counter.
         val policyBefore = PermissionAudit.snapshot()["coding.shell:${PermissionAudit.CODE_COMMAND_NOT_ALLOWED}"] ?: 0
-        val syntaxBefore = UnsupportedSyntax.snapshot()["coding.shell"] ?: 0
 
         for (command in listOf(
             "if exist out.csv",                                        // no payload
@@ -193,37 +189,19 @@ class CodingAgentShellWindowsBuiltinTest {
             "if exist out.csv goto :eof",                              // label jump
             "if exist out.csv call :run",
             "if exist out.csv (echo yes) trailing",                    // tokens after the block
-            "for %f in (*.csv) do echo %f",                            // loops stay unsupported
+            "for %f in (*.csv) do echo %f",                            // loops
         )) {
-            assertFalse(s.isAllowed(command), "must stay refused: $command")
+            assertTrue(s.isAllowed(command), "must be handed over: $command — ${s.explain(command)}")
             assertTrue(
-                s.explain(command).contains("NOT SUPPORTED"),
-                "a syntax refusal must not read as a denial: ${s.explain(command)}",
+                s.explain(command).contains("handed to the platform shell"),
+                s.explain(command),
             )
-
-            val refusal = s.execute(command)
-            assertTrue(
-                refusal.startsWith("Error: ${UnsupportedSyntax.PREFIX}"),
-                "the envelope must be the syntax family: $refusal",
-            )
-            assertTrue(refusal.contains("code=${UnsupportedSyntax.CODE}"), refusal)
-            assertFalse(
-                refusal.contains(PermissionAudit.DENIED),
-                "a grammar limit must not read as a policy refusal: $refusal",
-            )
-            assertTrue(refusal.contains("coding.stat"), "must name the tool route: $refusal")
-            assertTrue(refusal.contains(".\\run.cmd"), "must name the script-by-path route: $refusal")
         }
 
         assertEquals(
             policyBefore,
             PermissionAudit.snapshot()["coding.shell:${PermissionAudit.CODE_COMMAND_NOT_ALLOWED}"] ?: 0,
-            "a syntax refusal must not increment a policy counter",
-        )
-        assertEquals(
-            syntaxBefore + 7,
-            UnsupportedSyntax.snapshot()["coding.shell"] ?: 0,
-            "each refused command is counted once, separately from policy",
+            "a handed-off shape must not increment a policy counter",
         )
     }
 
