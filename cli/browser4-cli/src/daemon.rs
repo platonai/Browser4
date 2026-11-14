@@ -61,15 +61,35 @@ const BACKEND_CREATION_FLAGS: u32 = {
 
 /// Windows: creation flags for the background AOT training run.
 ///
-/// The training process has the same lifetime problem as the backend — an
-/// attached console is torn down when the CLI's terminal goes away, and the
-/// process is force-terminated while `-XX:AOTCacheOutput` may still be
-/// writing.  `CREATE_BELOW_NORMAL_PRIORITY_CLASS` keeps it from competing
-/// with the server launch the user is waiting on.
+/// The training run has the same lifetime problem as the backend — an attached
+/// console is torn down when the CLI's terminal goes away, and the process is
+/// force-terminated while `-XX:AOTCacheOutput` may still be writing.  So it
+/// must not share the caller's console.
+///
+/// It must not put a console *window* on the user's desktop either, and here
+/// it cannot reuse [`BACKEND_CREATION_FLAGS`]: the training run is not the
+/// direct child.  [`spawn_aot_training`] starts `cmd.exe /d /c training.cmd`
+/// and the JVM is what `cmd.exe` launches, so `DETACHED_PROCESS` would only
+/// strip the console from `cmd.exe`.  Windows gives a console-subsystem
+/// program started by a console-less parent a brand-new console, and the
+/// default terminal host displays that as a visible terminal tab titled with
+/// the java command line for the whole run (measured: a fresh `conhost.exe`
+/// parented by `java.exe` plus a visible `CASCADIA_HOSTING_WINDOW_CLASS`
+/// window over ~60–180 s of training).
+///
+/// `CREATE_NO_WINDOW` gives `cmd.exe` a console of its own that has no window;
+/// the JVM inherits it, nothing is ever displayed, and the console is still
+/// not the caller's — the lifetime guarantee stays.  The two flags are not
+/// additive: with both set, `DETACHED_PROCESS` wins and the window comes back
+/// (measured), so `DETACHED_PROCESS` must stay out of this set.
+/// `CREATE_BELOW_NORMAL_PRIORITY_CLASS` keeps the run from competing with the
+/// server launch the user is waiting on.
 #[cfg(windows)]
 const AOT_TRAINING_CREATION_FLAGS: u32 = {
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const CREATE_BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
-    BACKEND_CREATION_FLAGS | CREATE_BELOW_NORMAL_PRIORITY_CLASS
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_BELOW_NORMAL_PRIORITY_CLASS
 };
 
 /// Windows: `HANDLE_FLAG_INHERIT` — the bit `SetHandleInformation` toggles.
@@ -7457,7 +7477,7 @@ fn posix_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-/// Spawn the detached JVM that trains the AOT cache, without waiting for it.
+/// Spawn the background JVM that trains the AOT cache, without waiting for it.
 ///
 /// The training run reuses the same JVM flags and classpath as production
 /// (required for cache validity), but binds a random port, runs in AOT
@@ -7467,11 +7487,15 @@ fn posix_single_quote(value: &str) -> String {
 /// `-XX:AOTCacheOutput` peak (2× heap) bounded; heap size is not part of the
 /// AOT cache validity check.
 ///
-/// The run is detached on Windows (`DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`
-/// via [`AOT_TRAINING_CREATION_FLAGS`]); dropping the `Child` handle only gives
-/// up waiting, it does not detach anything by itself.  Detaching matters because
-/// the JVM dumps the cache during shutdown — an attached console would kill the
-/// process mid-write.
+/// On Windows the run is started in a console of its own that has no window
+/// (`CREATE_NO_WINDOW` via [`AOT_TRAINING_CREATION_FLAGS`]); dropping the
+/// `Child` handle only gives up waiting, it does not detach anything by
+/// itself.  That console is not the caller's, so closing the terminal the CLI
+/// ran in does not kill the run — the JVM dumps the cache during shutdown,
+/// and an attached caller console used to take the process down mid-write.
+/// `DETACHED_PROCESS` cannot be used here: the direct child is `cmd.exe`, so
+/// it would leave the JVM to allocate a *visible* console window of its own
+/// (see [`AOT_TRAINING_CREATION_FLAGS`]).
 ///
 /// The JVM writes [`AOT_TRAINING_OUTPUT_FILE_NAME`], not the cache itself;
 /// [`aot_training_script_file`] renames it to `app.aot` only when the JVM
@@ -7594,8 +7618,9 @@ fn spawn_aot_training(
             // long as the training JVM it waits on, so a later launch can
             // detect a dead (or PID-recycled) run and retrain immediately.
             write_aot_training_pid(key, child.id());
-            // Dropping the handle only gives up waiting; the run is detached
-            // from any console by AOT_TRAINING_CREATION_FLAGS.
+            // Dropping the handle only gives up waiting; the run keeps its own
+            // (windowless) console from AOT_TRAINING_CREATION_FLAGS, so it
+            // outlives this CLI and shows nothing on the desktop.
             drop(child);
             eprintln!(
                 "AOT cache training started in the background (log: {}) — \
@@ -10791,19 +10816,34 @@ mod tests {
         assert_eq!(windows_quote_arg(r#"say "hi""#), "\"say \\\"hi\\\"\"");
     }
 
-    /// The training run has the same console-lifetime problem as the backend,
-    /// and it is the process the JVM dumps the AOT cache from — a console
-    /// teardown mid-dump used to leave a truncated cache that the launch path
-    /// attaches blindly (it only checks `is_file`).
+    /// The training run must never put a console window on the user's desktop,
+    /// and it must still outlive the terminal the CLI ran in.
+    ///
+    /// It is a *grandchild* (`cmd.exe /d /c training.cmd` → `java.exe`), which
+    /// is why `DETACHED_PROCESS` is the wrong flag here: it only strips the
+    /// console from `cmd.exe`, and Windows gives a console-subsystem program
+    /// started by a console-less parent a fresh console — displayed as a
+    /// visible terminal tab for the whole training run. `CREATE_NO_WINDOW`
+    /// gives `cmd.exe` a hidden console that the JVM inherits; the two are not
+    /// additive (measured: `DETACHED_PROCESS` wins and the window returns), so
+    /// this test pins both halves of the decision and then re-checks the real
+    /// process tree's console.
     #[cfg(windows)]
     #[test]
-    fn aot_training_launch_detaches_from_the_callers_console() {        const DETACHED_PROCESS: u32 = 0x0000_0008;
+    fn aot_training_launch_shows_no_console_window() {
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         const CREATE_BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        assert_eq!(
+            AOT_TRAINING_CREATION_FLAGS & CREATE_NO_WINDOW,
+            CREATE_NO_WINDOW,
+            "the training run must own a console that has no window"
+        );
         assert_eq!(
             AOT_TRAINING_CREATION_FLAGS & DETACHED_PROCESS,
-            DETACHED_PROCESS,
-            "the training run must not die with the caller's console"
+            0,
+            "DETACHED_PROCESS overrides CREATE_NO_WINDOW and brings the console window back"
         );
         assert_eq!(
             AOT_TRAINING_CREATION_FLAGS & CREATE_NEW_PROCESS_GROUP,
@@ -10815,6 +10855,118 @@ mod tests {
             CREATE_BELOW_NORMAL_PRIORITY_CLASS,
             "training must not compete with the server launch"
         );
+
+        let report = run_aot_console_probe();
+        assert!(
+            report.contains("hwnd=0") && report.contains("visible=0"),
+            "the training process tree must not own a visible console, got: {report}"
+        );
+    }
+
+    /// Env var that turns the test binary into the console probe of
+    /// [`run_aot_console_probe`]; unset during a normal suite run.
+    #[cfg(windows)]
+    const AOT_CONSOLE_PROBE_ENV: &str = "BROWSER4_AOT_CONSOLE_PROBE_OUT";
+
+    /// Grandchild half of [`aot_training_launch_shows_no_console_window`]:
+    /// report the console this process was given. It is re-invoked through the
+    /// same `cmd.exe` wrapper shape [`spawn_aot_training`] uses, so the console
+    /// Windows hands it is the one the training JVM would get.
+    #[cfg(windows)]
+    #[test]
+    fn aot_training_console_probe_child() {
+        let Ok(report_path) = std::env::var(AOT_CONSOLE_PROBE_ENV) else {
+            // Normal suite run: this only exists to be re-invoked as a probe.
+            return;
+        };
+        let (hwnd, visible) = current_console_window();
+        write(
+            &report_path,
+            format!("hwnd={hwnd}\nvisible={}\n", u8::from(visible)),
+        )
+        .expect("write console probe report");
+    }
+
+    /// Console window handle of this process and whether Windows shows it.
+    /// `(0, false)` means "attached to a console that has no window", which is
+    /// what `CREATE_NO_WINDOW` creates and what the training run must use.
+    #[cfg(windows)]
+    fn current_console_window() -> (isize, bool) {
+        extern "system" {
+            fn GetConsoleWindow() -> *mut core::ffi::c_void;
+        }
+        #[link(name = "user32")]
+        extern "system" {
+            fn IsWindowVisible(hwnd: *mut core::ffi::c_void) -> i32;
+        }
+
+        // SAFETY: both calls only take or return handles; no pointer is
+        // dereferenced.
+        unsafe {
+            let hwnd = GetConsoleWindow();
+            let visible = !hwnd.is_null() && IsWindowVisible(hwnd) != 0;
+            (hwnd as isize, visible)
+        }
+    }
+
+    /// Run the real training process tree — `cmd.exe /d /c wrapper.cmd` with
+    /// [`AOT_TRAINING_CREATION_FLAGS`], wrapper → console probe — and return
+    /// the probe's report.
+    #[cfg(windows)]
+    fn run_aot_console_probe() -> String {
+        let exe = std::env::current_exe().expect("path of the test binary");
+        let dir = TempDir::new().expect("probe temp dir");
+        let report_path = dir.path().join("console.txt");
+        let wrapper = dir.path().join("probe.cmd");
+        write(
+            &wrapper,
+            format!(
+                "@echo off\r\nset \"{env}={report}\"\r\n\"{exe}\" --exact daemon::tests::aot_training_console_probe_child\r\n",
+                env = AOT_CONSOLE_PROBE_ENV,
+                report = report_path.display(),
+                exe = exe.display()
+            ),
+        )
+        .expect("write probe wrapper");
+
+        let mut cmd = Command::new("cmd.exe");
+        cmd.arg("/d").arg("/c").arg(&wrapper).stdin(Stdio::null());
+        // Same stdio shape as `spawn_aot_training`: both streams go to a log
+        // file, so a regression cannot hide behind a different redirect.
+        let log_path = dir.path().join("probe.log");
+        match fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&log_path)
+        {
+            Ok(log) => {
+                let stderr = log.try_clone().expect("clone the probe log handle");
+                cmd.stdout(Stdio::from(log));
+                cmd.stderr(Stdio::from(stderr));
+            }
+            Err(_) => {
+                cmd.stdout(Stdio::null());
+                cmd.stderr(Stdio::null());
+            }
+        }
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(AOT_TRAINING_CREATION_FLAGS);
+        }
+        let mut child = cmd.spawn().expect("spawn the training-shaped tree");
+
+        let mut report = String::new();
+        for _ in 0..600 {
+            if let Ok(text) = fs::read_to_string(&report_path) {
+                report = text;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(!report.is_empty(), "the console probe did not run");
+        report
     }
 
     /// The wrapper is the only place that sees the training exit code, so the

@@ -505,6 +505,49 @@ POSIX:    sh  -c 'java ... > training.log 2>&1 && mv app.aot.tmp app.aot'
 
 脚本语义实测（临时目录 + `cmd /d /c`）：0 字节 tmp → `exit=1`、`app.aot` 未生成、tmp 保留；tmp 缺失 → `exit=1`；2 MiB tmp → `exit=0` 且提交为 `app.aot`。
 
-> 上限说明：尺寸下限只能覆盖"完全写不出 / 被截断为近 0"这类失败，无法识别"写到一半被杀"的部分文件（真实缓存约 91 MB，1 MiB 下限对部分写不敏感）。这部分由批次 1 的 `DETACHED_PROCESS` 消除控制台强杀路径，叠加 JVM 加载不匹配时静默回退，最坏结果是"没有加速"而非启动失败。
+> 上限说明：尺寸下限只能覆盖"完全写不出 / 被截断为近 0"这类失败，无法识别"写到一半被杀"的部分文件（真实缓存约 91 MB，1 MiB 下限对部分写不敏感）。这部分由批次 1 的脱管控制台（2026-11-14 起为 `CREATE_NO_WINDOW` 隐藏控制台，见 §8.10）消除控制台强杀路径，叠加 JVM 加载不匹配时静默回退，最坏结果是"没有加速"而非启动失败。
 
 > 另注：本机遗留的扁平布局产物（91 MB）在新布局下不再被附加——`aot-cache/` 根目录未命中 key 目录即触发一次性重训（§8.6 的 legacy 策略）。
+
+### 8.10 批次 5：训练不再弹出控制台窗口（2026-11-14）
+
+**现象**：Windows 交互式桌面上，`install` / 首次 `open` 触发 AOT 训练后，会出现一个终端标签页/窗口，标题就是训练 JVM 的命令行，持续到训练结束（实测全程 60–180s）。
+
+**根因**：§4.1 的 `DETACHED_PROCESS` 只作用于**直接子进程**。训练的命令树是 `cmd.exe /d /c training.cmd` → `java.exe`：
+
+1. `DETACHED_PROCESS` 让 `cmd.exe` 无控制台（这部分是对的，控制台关闭不会再杀训练）；
+2. 但 Windows 会给"父进程无控制台的控制台子系统程序"分配一个**新控制台**，`java.exe` 于是拿到自己的控制台；
+3. 默认终端宿主（Windows Terminal）把它显示为可见窗口/标签页——`Win32_Process.Create` 那条后端路径当初需要 `SW_HIDE` 的正是同一个机制。
+
+**实测**（本机 Windows，精确复刻 spawn 形状：`cmd /d /c wrapper.cmd` → 控制台探针，stdout/stderr 重定向到日志、继承句柄）：
+
+| 创建 flags | 新 conhost 的父进程 | 探针看到的控制台 |
+| --- | --- | --- |
+| `0x4208`（旧：`DETACHED\|NEWPG\|BELOW`） | `java.exe` | `hwnd` 非 0、`visible=true` → **可见窗口** |
+| `0x8004200`（新：`NO_WINDOW\|NEWPG\|BELOW`） | `cmd.exe` | `hwnd=0`、`GetConsoleProcessList=2` → 隐藏控制台，无窗口 |
+| `0x8004208`（`DETACHED\|NO_WINDOW\|…`） | `java.exe` | 可见窗口——**两者不叠加，DETACHED 胜出** |
+| 直启 `java.exe` + `DETACHED` | 无新 conhost | 无控制台（后端直启路径因此本来就没事） |
+
+**改动**：
+
+| 位置 | 改动 |
+| --- | --- |
+| `AOT_TRAINING_CREATION_FLAGS` | 不再复用 `BACKEND_CREATION_FLAGS`：改为 `CREATE_NO_WINDOW \| CREATE_NEW_PROCESS_GROUP \| CREATE_BELOW_NORMAL_PRIORITY_CLASS`，注释记录"为何不能用 DETACHED、为何两者不能叠加" |
+| `spawn_aot_training` 文档注释 | 从"detached"改为"自有隐藏控制台"，并说明生命周期保证来自哪里 |
+| 测试 | 旧 `aot_training_launch_detaches_from_the_callers_console` → `aot_training_launch_shows_no_console_window`：先钉住 flag 组合（含 `DETACHED_PROCESS` 必须缺席），再用**真实进程树**跑一遍 `cmd.exe → 控制台探针`，断言探针拿到的控制台没有窗口 |
+| 探针 | 用测试二进制自身当探针（`--exact daemon::tests::aot_training_console_probe_child` + 环境变量回传报告），需要 `GetConsoleWindow` / `IsWindowVisible` 两个 P/Invoke；正常跑测试时该用例因环境变量缺失直接返回 |
+
+**验证**：
+
+1. 单测：`cargo test --bin browser4-cli aot` → 10 passed；把探针临时改回旧 flags 后该用例失败（`hwnd=5967762 visible=1`），证明断言不是空跑；全量 `cargo test --bin browser4-cli` → 2208 passed / 0 failed / 4 ignored。
+2. 真机端到端（2026-11-14，本机 Windows + 已安装 runtime v4.16.6 / Temurin 25.0.5）：用修复后的 CLI 执行 `browser4-cli install --tag v4.16.6`（复用已安装 runtime → 触发真实 `spawn_aot_training`），同时以 1s 间隔采样可见控制台窗口、conhost 归属与训练进程：
+
+| 观测 | 结果 |
+| --- | --- |
+| 可见控制台窗口集合（115 个采样，覆盖训练全程 13:45:47–13:48:57） | **始终只有** harness 自己的一个窗口，从未变化 |
+| 训练进程树 | `cmd.exe 81740`（父 = CLI）+ `java.exe 21232`（父 = cmd），`training.pid=81740` |
+| conhost 归属 | 只有 `78920<-81740`（cmd.exe 的隐藏控制台）在训练期间存在；**从未**出现父进程为 java 的 conhost（与 §8.10 表中 `DETACHED` 的行为相反） |
+| 训练结果 | 190s 完成，`app.aot` 87,818,240 字节由包装脚本 `move` 提交，`training.log` 结尾为 `AOTCache creation is complete ... 87818240 bytes` |
+| 二次 `install` | 1s 返回，无新训练进程；`training.pid` / `training-args.txt` / `training.lock` 被清理，`app.aot` 保留 → 缓存晋升路径正常 |
+
+**遗留**：POSIX 未改（`sh training.sh` 不涉及终端窗口，也仍未 `setsid`，终端关闭时的 SIGHUP 风险与本次修复无关）。
