@@ -1537,13 +1537,17 @@ class CodingAgentFileSystem(
 
     /**
      * Fallback boundary [Authorizer] used when none was injected. Holds a single canonical-scope
-     * grant over the workspace real root and every mirrored module root [MirrorRoots] finds, plus
-     * the readable roots for reads only ([ReadablePaths]) and the folders `agent run --add-dir`
-     * granted for reads and writes. Built lazily so the mirror scan runs once per instance and only
-     * when a path is actually resolved.
+     * grant over the workspace real root, every mirrored module root [MirrorRoots] finds, the
+     * checkout those mirrors come from ([MirrorRoots.sourceRoot] — writable, so a self-development
+     * task can edit the repository it runs from), plus the readable roots for reads only
+     * ([ReadablePaths]) and the folders `agent run --add-dir` granted for reads and writes. Built
+     * lazily so the mirror scan runs once per instance and only when a path is actually resolved.
      */
     private val fallbackBoundaryAuthorizer: Authorizer by lazy {
-        val roots = (setOf(canonicalRoot) + MirrorRoots.derive(workspaceRoot) + resolvedAdditionalDirs).toSet()
+        val roots = (
+            setOf(canonicalRoot) + MirrorRoots.derive(workspaceRoot) +
+                listOfNotNull(MirrorRoots.sourceRoot(workspaceRoot)) + resolvedAdditionalDirs
+            ).toSet()
         Authorizer(
             listOf(
                 Capability(

@@ -82,6 +82,52 @@ class CodingAgentFileSystemMirrorBoundaryTest {
     }
 
     @Test
+    @DisplayName("MirrorRoots.sourceRoot walks a nested module up to the checkout it belongs to")
+    fun derivesSourceRoot() {
+        // A reactor layout: checkout → browser4-tests → pulsar-tests-common, every level a project.
+        val checkout = Files.createDirectories(tempDir.resolve("checkout"))
+        Files.writeString(checkout.resolve("pom.xml"), "<project/>")
+        val aggregate = Files.createDirectories(checkout.resolve("browser4-tests"))
+        Files.writeString(aggregate.resolve("pom.xml"), "<project/>")
+        val module = Files.createDirectories(aggregate.resolve("pulsar-tests-common"))
+        Files.writeString(module.resolve("pom.xml"), "<project/>")
+        val workspace = Files.createDirectories(tempDir.resolve("workspace"))
+        link(workspace.resolve("pulsar-tests-common"), module)
+
+        assertEquals(checkout.toRealPath(), MirrorRoots.sourceRoot(workspace))
+    }
+
+    @Test
+    @DisplayName("a module with no checkout above it yields no source root")
+    fun noSourceRootWithoutACheckout() {
+        val real = Files.createDirectories(tempDir.resolve("plain-module"))
+        val workspace = Files.createDirectories(tempDir.resolve("workspace"))
+        link(workspace.resolve("plain-module"), real)
+
+        assertNull(MirrorRoots.sourceRoot(workspace))
+    }
+
+    @Test
+    @DisplayName("the checkout the workspace mirrors is writable, so a self-development task edits itself")
+    fun writeIntoSourceCheckoutAllowed() = runBlocking {
+        val checkout = Files.createDirectories(tempDir.resolve("checkout"))
+        Files.writeString(checkout.resolve("pom.xml"), "<project/>")
+        val module = Files.createDirectories(checkout.resolve("browser4-coding"))
+        Files.writeString(module.resolve("pom.xml"), "<project/>")
+        val workspace = Files.createDirectories(tempDir.resolve("workspace"))
+        link(workspace.resolve("browser4-coding"), module)
+
+        val fs = CodingAgentFileSystem(workspace)
+        // The absolute spelling of a checkout path: the mirror only links the module, and `.git`,
+        // `bin/`, `cli/` and `docs/` exist at the root only (2026-11-14 run: PATH_DENIED).
+        val target = checkout.resolve("NOTES.md")
+        val result = fs.writeFile(target.toString(), "self")
+
+        assertFalse(result.startsWith("Error:"), "write should succeed: $result")
+        assertEquals("self", Files.readString(target))
+    }
+
+    @Test
     @DisplayName("a genuinely external absolute path is still refused")
     fun externalPathRefused() = runBlocking {
         val workspace = Files.createDirectories(tempDir.resolve("workspace"))
