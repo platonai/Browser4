@@ -208,10 +208,12 @@ java -XX:AOTCache=app.aot -cp lib/* MainClass --server.port=8182</pre>
 <tr><th>方案</th><th>预期端口就绪</th><th>插件</th><th>JDK</th><th>改造成本</th><th>建议</th></tr>
 <tr><td>现状（懒加载 + C1）</td><td>~2.0s</td><td class="risk-low">完整</td><td>21</td><td>—</td><td>基线</td></tr>
 <tr><td>+ AppCDS（JDK 17–21 回退）</td><td>~1.3–1.5s</td><td class="risk-low">完整</td><td>17–21</td><td>低</td><td>升 JDK 前的过渡</td></tr>
-<tr><td>+ JVM AOT cache（JEP 483/515）</td><td>~1.0–1.4s</td><td class="risk-low">完整</td><td>25</td><td>中（daemon.rs ~150–200 行）</td><td class="p0">P0 首选</td></tr>
+<tr><td>+ JVM AOT cache（JEP 483/515）</td><td>~1.0–1.4s（2026-11-15 实测 <code>Started</code> 1.12s）</td><td class="risk-low">完整</td><td>25</td><td>中（daemon.rs ~150–200 行）</td><td class="p0">P0 首选</td></tr>
 <tr><td>+ Spring AOT + AOT cache</td><td>~0.6–0.9s</td><td class="risk-high">无第三方插件</td><td>25</td><td>高</td><td class="p1">P1 无插件形态</td></tr>
 <tr><td>GraalVM native</td><td>~0.1–0.5s</td><td class="risk-high">无</td><td>GraalVM</td><td>高</td><td class="p2">P2 场景化</td></tr>
 </table>
+
+<p><strong>实测校正（2026-11-15，v4.16.7 + Temurin 25.0.5，Windows，暖盘）</strong>：JVM AOT cache 已作为默认路径落地（install/首次启动后台训练，~197 s、90.8 MB）。Spring <code>Started ... in N seconds</code> <strong>2.00 s → 1.12 s</strong>（−43.9%），JVM uptime <strong>2.89 s → 1.68 s</strong>（−41.7%）；但按 CLI 真正判定的“可用”口径（<code>/actuator/health</code> 为 UP <strong>且</strong> <code>/mcp/tools</code> 就绪）是 <strong>3.59 s → 2.25 s</strong>（中位，−37.5%）。也就是说：上下文就绪的估计成立，而“CLI 可调用”还要再加上约 1.0–1.1 s 的端点挂载/工具注册表时间。详见 <a href="aot-cache-startup-benchmark-2026-11-15.md">JVM AOT Cache 启动收益实测</a>。</p>
 
 <h2>6. 关键发现（与既有《启动优化评估》的差异）</h2>
 <ul>

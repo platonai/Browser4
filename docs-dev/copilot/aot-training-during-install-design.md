@@ -36,7 +36,7 @@ sync_skills_for_runtime()           main.rs:14330   (2–5s)
 sync_skills_to_agents_dir()         main.rs:14344   (1–2s)
 ```
 
-本机实测 install 总时长 ~20–40s；AOT 训练（完整 Spring Boot 启动 + AOTCache 写出）实测 60–180s。
+本机实测 install 总时长 ~20–40s；AOT 训练（完整 Spring Boot 启动 + AOTCache 写出）实测 60–180s（v4.16.7 上另测 197 s，见 [实测记录](aot-cache-startup-benchmark-2026-11-15.md)）。
 
 ### 2.2 现有 AOT 机制（上一轮已落地，本设计直接复用）
 
@@ -86,6 +86,7 @@ ensure_aot_cache_trained(&runtime);   // NEW
 - 训练在 install 尾部即开始（与 Chrome 检查、skills 同步并行），install 返回后 ~1–3min 完成。
 - "装完稍后才用"（看文档/配 key/装插件——主流路径）的用户：**首次 `open` 直接命中缓存，秒级启动**。
 - "装完立即 open" 的用户：与现状一致（open 不阻塞，训练继续跑），无回退。
+- **实测（2026-11-15，v4.16.7 / Temurin 25.0.5，见 [aot-cache-startup-benchmark-2026-11-15.md](aot-cache-startup-benchmark-2026-11-15.md)）**：训练 197 s、产出 90.8 MB；命中缓存后 Spring `Started in` 2.00 s → 1.12 s，**CLI 判定"后端可用"（`/actuator/health` UP 且 `/mcp/tools` 就绪）3.59 s → 2.25 s（中位）**，降幅约 40%。
 - 与 open 路径（`resolve_server_launch_spec` → ensure）**天然去重**：marker 锁保证只训一次，
   先到者胜出，后到者打印一条 "already in progress" 后正常继续。
 - 升级场景：新版本 jar 列表变化 → key 变化 → 自动重训（现有逻辑）。
