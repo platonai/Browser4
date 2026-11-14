@@ -85,7 +85,10 @@ locations is still refused).
 
 Readable but never writable by the model (`code=PROTECTED_PATH`): `VERSION`, `AGENTS.md`,
 `CLAUDE.md`, the root `pom.xml`, `browser4-dependencies/pom.xml`,
-`.github/workflows/ci.yml`, and the `.browser4/`, `.github/workflows/` subtrees.
+`.github/workflows/ci.yml`, and the `.browser4/`, `.github/workflows/` subtrees. The shell applies
+the same split — it refuses the **write** shapes there (a redirection target, a mutating command's
+path argument, `cd` into the subtree) and allows reads, so `type .browser4/…` and `coding.read` both
+reach the previous task's ledger.
 
 Binary files (`.xlsx`, `.pdf`, `.zip`, images) are not read as text by `coding.read`.
 
@@ -172,7 +175,7 @@ preset instead: only `access=full` allows them.
 
 ### Extra folders granted with `--add-dir`
 
-A task's boundary is its own workspace (plus its mirrored module roots and the readable roots). To let a run work on a folder that lives somewhere else, grant it explicitly:
+A task's boundary is its own workspace (plus its mirrored module roots, the checkout those mirrors come from — writable, so a self-development task edits the code it runs from — and the readable roots). To let a run work on a folder that lives somewhere else, grant it explicitly:
 
 ```bash
 browser4-cli agent run "Port the helpers in ../shared-libs into this repo" --coding --add-dir ../shared-libs
@@ -200,8 +203,9 @@ the OS sandbox (`browser4.agent.sandbox`) is **not** applied — child processes
 backend's own token, so a command reaches exactly what you could reach from the same terminal.
 The shell's command allow-list goes too, so programs it never knew — a PowerShell cmdlet included —
 run as written (the list is not a boundary: the same body already ran unexamined through
-`powershell -File`). Command shapes the checker cannot decompose, `for` loops and inline scripts
-included, are handed to the platform shell in every mode.
+`powershell -File`). An inline-script body (`powershell -Command …`, `bash -c …`) is not judged by
+that list in **any** mode, and a shape the checker cannot decompose, `for` loops included, is handed
+to the platform shell in every mode.
 The OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) are the exception:
 they stay refused, because "my permissions" must not become "my secrets" in a model's context.
 The OS is then the only limit: on Windows with `windows-acl` configured, that confinement is what

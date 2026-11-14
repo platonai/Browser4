@@ -61,6 +61,61 @@ internal object MirrorRoots {
         return roots
     }
 
+    /**
+     * The checkout [workspaceRoot] mirrors, or `null` when the workspace is not a mirror.
+     *
+     * The mirrored module roots are all paths *inside* one checkout, so the checkout is the common
+     * ancestor of the modules the workspace links. It is then walked up while the parent is itself a
+     * Maven project (`browser4-tests/pulsar-tests-common` is a module of `browser4-tests`, which is
+     * a module of the reactor), and only accepted when the result really looks like a checkout root
+     * ([CHECKOUT_MARKERS]) — a link to an unrelated directory must not turn its parent into a grant.
+     *
+     * This is the "code this task is developing" root: the mirror makes the scratch workspace *look*
+     * like the repository, but only the real checkout has `.git`, the non-module folders (`bin/`,
+     * `cli/`, `docs/`) and the untracked fixtures a self-development task has to edit. Its write
+     * scope is a boundary grant ([CodingComponents.scopeManifest]'s `SOURCE` entry); the protected
+     * files/dirs and the credential rails stay in force.
+     *
+     * @param workspaceRoot the agent workspace (`<app data>/agent/<date>/<uuid>/workspace.<task>`)
+     */
+    fun sourceRoot(workspaceRoot: Path): Path? {
+        val mirrors = derive(workspaceRoot)
+        if (mirrors.isEmpty()) return null
+        var candidate = commonAncestor(mirrors)?.toAbsolutePath()?.normalize() ?: return null
+        var hops = 0
+        while (hops < MAX_SOURCE_ROOT_HOPS) {
+            val parent = candidate.parent ?: break
+            if (!Files.isRegularFile(parent.resolve("pom.xml"))) break
+            candidate = parent
+            hops++
+        }
+        return candidate.takeIf { isCheckoutRoot(it) }
+    }
+
+    /** Depth limit for walking a nested module up to its reactor root. */
+    private const val MAX_SOURCE_ROOT_HOPS = 4
+
+    /** Files/dirs that make a directory a checkout root rather than a module or an accident. */
+    private val CHECKOUT_MARKERS = listOf("pom.xml", "Cargo.toml", "package.json")
+
+    private fun isCheckoutRoot(dir: Path): Boolean =
+        Files.isDirectory(dir.resolve(".git")) || CHECKOUT_MARKERS.any { Files.isRegularFile(dir.resolve(it)) }
+
+    /** The deepest directory that contains every path in [paths], or `null` for mixed roots. */
+    private fun commonAncestor(paths: Collection<Path>): Path? {
+        val normalized = paths.map { it.toAbsolutePath().normalize() }
+        val first = normalized.firstOrNull() ?: return null
+        var common: Path = first
+        for (path in normalized.drop(1)) {
+            var candidate: Path? = common
+            while (candidate != null && !path.startsWith(candidate)) {
+                candidate = candidate.parent
+            }
+            common = candidate ?: return null
+        }
+        return common
+    }
+
     private fun samePath(a: Path, b: Path): Boolean {
         val win = System.getProperty("os.name").lowercase().contains("win")
         return if (win) a.toString().equals(b.toString(), ignoreCase = true) else a == b

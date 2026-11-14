@@ -501,6 +501,48 @@ class CodingAgentShell(
         )
 
         /**
+         * Commands that create, replace or delete files.
+         *
+         * Used by [protectedPathViolation]: a protected subtree (`.browser4`, `.github/workflows`)
+         * is off limits to **writes**, so the guard only has to recognise write shapes. A command
+         * in this set is treated conservatively — all of its path arguments count as write
+         * positions. [DESTRUCTIVE_COMMANDS] is a different question (a global "may this category
+         * run" veto that includes process killers and mounts), so the two lists are kept apart.
+         */
+        private val MUTATING_COMMANDS = setOf(
+            // cmd.exe / Windows
+            "del", "erase", "rmdir", "rd", "ren", "rename", "move", "copy", "xcopy", "robocopy",
+            "mkdir", "md", "attrib", "icacls", "takeown",
+            // POSIX
+            "rm", "mv", "cp", "tee", "touch", "mkdir", "rmdir", "chmod", "chown", "chgrp",
+            "truncate", "shred", "unlink", "install", "patch", "ln",
+        )
+
+        /**
+         * PowerShell file cmdlets, matched by verb prefix because the tier cannot see cmdlets as
+         * programs at all (`Set-Content`, `Remove-Item`, `Out-File`, `Export-Csv`, …).
+         */
+        private val MUTATING_CMDLET_PREFIXES = listOf(
+            "set-", "set-item", "add-", "remove-", "clear-", "new-", "rename-", "copy-", "move-",
+            "out-file", "export-",
+        )
+
+        /**
+         * Commands that re-base the chain's working directory (`cd .browser4 && …`).
+         *
+         * Kept apart from [MUTATING_COMMANDS] because navigation writes nothing itself: it changes
+         * what every later *relative* write means, so [writeTargets] has to judge the directory.
+         * `Set-Location` is covered by [MUTATING_CMDLET_PREFIXES] too and is listed anyway, because
+         * the reason it is refused here is navigation, not mutation.
+         */
+        private val NAVIGATION_COMMANDS = setOf(
+            "cd", "chdir", "pushd", "set-location", "push-location",
+        )
+
+        /** `>`, `>>`, `2>`, `2>>`, `&>` — a bare redirection operator between two tokens. */
+        private val REDIRECTION_TARGET_OPERATOR = Regex("""^[0-9&]?>>?$""")
+
+        /**
          * Commands the coding shell NEVER runs, whatever the flags say.
          *
          * Link/mount tools rewrite the workspace *topology*: a link the agent
@@ -894,8 +936,10 @@ class CodingAgentShell(
      *
      * Rules:
      * - No argument → canonicalBaseDir (always valid, auto-creates).
-     * - Absolute path → must already exist AND must lie lexically inside canonicalBaseDir, inside a
-     *   folder granted with `agent run --add-dir`, or anywhere when allowExternalAccess=true.
+     * - Absolute path → must already exist AND must be inside the shell's boundary scope — the
+     *   workspace, a folder granted with `agent run --add-dir`, or the checkout the workspace
+     *   mirrors ([isWorkingDirInScope]; a toolchain location is not a project directory) — or
+     *   anywhere when allowExternalAccess=true.
      * - Relative path → resolved against canonicalBaseDir; the resulting
      *   path must be lexically inside canonicalBaseDir; non-parent directories
      *   are auto-created (agent is expected to want a new subdir); absolute
@@ -912,7 +956,7 @@ class CodingAgentShell(
             raw.isAbsolute -> raw.normalize()
             else -> canonicalBaseDir.resolve(raw).normalize()
         }
-        if (!allowExternalAccess && !candidate.startsWith(canonicalBaseDir) && !isInAddedDir(candidate)) {
+        if (!allowExternalAccess && !isWorkingDirInScope(candidate)) {
             throw WorkspaceEscapeException(candidate, canonicalBaseDir)
         }
         // A working directory inside a protected subtree would make every relative path in the
@@ -1356,7 +1400,7 @@ class CodingAgentShell(
     }
 
     /** Recursively validate every simple command inside [command]. */
-    private fun validateSegments(command: String, depth: Int): String? {
+    private fun validateSegments(command: String, depth: Int, inlineBody: Boolean = false): String? {
         if (depth > MAX_INLINE_SCRIPT_DEPTH) {
             return "nested inline shell script exceeds $MAX_INLINE_SCRIPT_DEPTH levels — refusing to guess"
         }
@@ -1365,7 +1409,7 @@ class CodingAgentShell(
         val segments = splitSimpleCommands(command)
         if (segments.isEmpty()) return EMPTY_COMMAND_VIOLATION
         for (segment in segments) {
-            validateSimpleCommand(segment, depth)?.let { return it }
+            validateSimpleCommand(segment, depth, inlineBody)?.let { return it }
         }
         return null
     }
@@ -1393,6 +1437,45 @@ class CodingAgentShell(
      */
     private fun isInAddedDir(candidate: Path): Boolean =
         resolvedAdditionalDirs.any { candidate.startsWith(it) }
+
+    /**
+     * The roots a command may treat as its project directory.
+     *
+     * The workspace, its mirrored module roots ([MirrorRoots]) and the checkout those mirrors come
+     * from ([MirrorRoots.sourceRoot]) — plus every folder granted with `agent run --add-dir`. This
+     * is what makes `cd <checkout> && mvn -pl :browser4-rest test` (or `git status` in the real
+     * repository, where `.git` lives) possible; before, a working directory outside the workspace
+     * was refused with `working directory … is outside the allowed workspace`, while the *same*
+     * directory was readable through the argument guard (2026-11-14 run, two wasted rounds).
+     *
+     * A **toolchain** location ([CodingComponents.toolchainRoots]: the JDK, `~/.m2`, `~/.gradle`,
+     * `~/.cache`, the temp directory, the OS directory) and a **readable** root
+     * ([ReadablePaths]) are deliberately not in it. The boundary grant covers the toolchain roots
+     * for *arguments*, because a build reads the JDK and writes its caches; a command *launched*
+     * there would resolve every relative path into a shared cache (`cd %TEMP% && echo forged > …`),
+     * and no build runs from `C:\Windows`. Keeping the working directory to the project roots also
+     * keeps the `--add-dir` contract honest: a granted folder is "a valid working directory", an
+     * ungranted temp folder stays an escape.
+     *
+     * Resolved once per shell: the mirror scan must not run on every command.
+     */
+    private val workingDirRoots: List<Path> by lazy {
+        (
+            listOf(canonicalBaseDir) + MirrorRoots.derive(baseDir) +
+                listOfNotNull(MirrorRoots.sourceRoot(baseDir)) + resolvedAdditionalDirs
+            ).distinct()
+    }
+
+    /**
+     * Whether [candidate] may be used as the command's working directory.
+     *
+     * A working directory is where a command writes its output, so only a **project** root
+     * ([workingDirRoots]) qualifies; a read-only or shared-toolchain root does not. The sandbox
+     * seam receives the same workspace root, so an enabled OS sandbox can still refuse the launch —
+     * this only stops the *string* layer from refusing a directory the task already owns.
+     */
+    private fun isWorkingDirInScope(candidate: Path): Boolean =
+        workingDirRoots.any { candidate.startsWith(it) }
 
     /** Absolute roots of [protectedDirs] under the workspace base. */
     private val protectedRoots: List<Path> by lazy {
@@ -1573,9 +1656,10 @@ class CodingAgentShell(
 
     /**
      * Fallback boundary [Authorizer] used when none was injected. Holds a single lexical-scope
-     * grant over the workspace, its mirrored module roots ([MirrorRoots]) and the toolchain
-     * locations (B4), with launchers exempt (B3) — plus the readable roots ([ReadablePaths]) for
-     * reads only. The credential and protected-dir rails stay separate
+     * grant over the workspace, its mirrored module roots ([MirrorRoots]), the checkout those
+     * mirrors come from ([MirrorRoots.sourceRoot] — the code a self-development task edits) and the
+     * toolchain locations (B4), with launchers exempt (B3) — plus the readable roots
+     * ([ReadablePaths]) for reads only. The credential and protected-dir rails stay separate
      * ([argumentPathViolation], [protectedPathViolation]) — they are orthogonal guardrails,
      * not capability scope.
      *
@@ -1584,6 +1668,7 @@ class CodingAgentShell(
     private val fallbackBoundaryAuthorizer: Authorizer by lazy {
         val roots = (
             listOf(canonicalBaseDir) + CodingComponents.toolchainRoots() + MirrorRoots.derive(baseDir) +
+                listOfNotNull(MirrorRoots.sourceRoot(baseDir)) +
                 additionalDirs.map { it.toAbsolutePath().normalize() }
             ).toSet()
         Authorizer(
@@ -1605,27 +1690,92 @@ class CodingAgentShell(
     }
 
     /**
-     * Rejects any argument that names a workspace-protected directory (`.browser4`,
+     * Rejects a command that **writes** inside a workspace-protected directory (`.browser4`,
      * `.github/workflows`).
      *
-     * The file tools already refuse to write there; the shell did not, so
-     * `echo forged > .browser4/data/agent/agent-tasks.jsonl` rewrote the agent's own task ledger
-     * and `cp pom.xml .github/workflows/ci.yml` replaced a CI definition without ever touching a
-     * `coding.*` file tool. Redirection targets are inspected like any other argument, and both
-     * reads and writes are refused: the shell has no business in the bookkeeping tree, and the
-     * read tools are still available for it.
+     * The rail is about mutation, not about knowledge. The file tools refuse writes there and read
+     * freely; the shell used to refuse both, which cost a run its own state: the task could not copy
+     * `<workspace>/.browser4/task-<id>/state-history.jsonl` — the ledger of the task before it —
+     * while `coding.read` returned the same bytes
+     * (`PERMISSION_DENIED | code=PROTECTED_PATH`, 2026-11-14 run). "What did the previous task do?"
+     * is exactly a read of the bookkeeping tree, so only write shapes are refused now:
+     *
+     * - a redirection target (`> .browser4/x`, `2>> …`), which writes whatever the command is;
+     * - any path argument of a mutating command ([isMutatingCommand]), which is conservative on
+     *   purpose: `cp` reads one path and writes the other, and guessing which is which from the
+     *   argument order of every tool is not worth the exposure;
+     * - the target of a navigation command ([isNavigationCommand]): `cd .browser4 && echo forged >
+     *   agent-tasks.jsonl` writes through a *relative* path, so the directory being entered — not
+     *   the file name the shell cannot resolve — is what the rail has to judge.
+     *
+     * No write is widened: `echo forged > .browser4/…` and `cp pom.xml .github/workflows/ci.yml`
+     * stay refused, which is what the M0 decision baseline pins.
      */
     private fun protectedPathViolation(tokens: List<String>): String? {
         if (protectedRoots.isEmpty()) return null
-        for (token in tokens) {
+        val writeTargets = writeTargets(tokens)
+        if (writeTargets.isEmpty()) return null
+        for (token in writeTargets) {
             val candidate = pathLikeValue(token) ?: continue
             val hit = protectedRootOf(candidate) ?: continue
             return PROTECTED_PATH_PREFIX +
                 "'$token' is inside protected directory '${canonicalBaseDir.relativize(hit).toString().replace('\\', '/')}' — " +
-                "the shell may not read or write it; use the coding.* file tools instead"
+                "the shell may not modify it (reads are fine); use the coding.* file tools for the change"
         }
         return null
     }
+
+    /**
+     * The tokens of [tokens] that this segment can **write**, or an empty list when it writes
+     * nothing the protected rail cares about.
+     *
+     * Redirection targets come first: `echo forged > .browser4/x` writes regardless of what `echo`
+     * is. Only when there is no redirection does the command itself decide — a mutating program
+     * writes through its arguments ([MUTATING_COMMANDS]).
+     */
+    private fun writeTargets(tokens: List<String>): List<String> {
+        val redirected = tokens.filterIndexed { index, token ->
+            isRedirectionTarget(tokens, index) && pathLikeValue(token) != null
+        }
+        if (redirected.isNotEmpty()) return redirected
+        val base = tokens.firstOrNull { !ENV_ASSIGNMENT.matches(it) }
+            ?.let { normalizeCommandName(it) }
+            ?: return emptyList()
+        return if (isMutatingCommand(base) || isNavigationCommand(base)) tokens else emptyList()
+    }
+
+    /**
+     * Whether [index] in [tokens] is a redirection **target**: `> file` (two tokens) or `>file` /
+     * `2>>file` (one token). `<` is a read and stays out of it.
+     */
+    private fun isRedirectionTarget(tokens: List<String>, index: Int): Boolean {
+        val token = tokens[index].trim('"', '\'')
+        if (REDIRECTION_PREFIX.find(token)?.range?.first == 0 && token.length > 1) return true
+        val previous = tokens.getOrNull(index - 1)?.trim('"', '\'') ?: return false
+        return REDIRECTION_TARGET_OPERATOR.matches(previous)
+    }
+
+    /**
+     * Whether [base] (a normalized base command) creates, replaces or deletes files.
+     *
+     * Covers the cmd.exe and POSIX file tools plus the PowerShell file cmdlets, which the tier
+     * cannot see as programs at all. Not exhaustive by construction — an interpreter can always
+     * write what its script says — but it covers every shape a model reaches for first
+     * (`del`, `rm`, `cp`, `mv`, `Set-Content`, `Remove-Item`, `Out-File`).
+     */
+    private fun isMutatingCommand(base: String): Boolean =
+        base in MUTATING_COMMANDS || MUTATING_CMDLET_PREFIXES.any { base.startsWith(it) }
+
+    /**
+     * Commands that change the chain's working directory.
+     *
+     * `cd .browser4 && echo forged > agent-tasks.jsonl` writes through a *relative* path: the file
+     * name alone resolves inside the workspace, and only the directory being entered makes it a
+     * protected write. The shell does not track a chain's cwd (the segments are validated
+     * independently and the platform shell performs the `cd`), so navigation into a protected tree
+     * is judged as a write — the absolute spelling of the file is still judged as one too.
+     */
+    private fun isNavigationCommand(base: String): Boolean = base in NAVIGATION_COMMANDS
 
     /**
      * The protected root [candidate] lands in, or null.
@@ -1825,8 +1975,8 @@ class CodingAgentShell(
     private fun forbiddenCommandViolation(baseCommand: String): String =
         "'$baseCommand' is disabled — $VETO_WORKSPACE_LINK"
 
-    private fun validateSimpleCommand(segment: String, depth: Int): String? {
-        val tierViolation = validateSimpleCommandTier(segment, depth)
+    private fun validateSimpleCommand(segment: String, depth: Int, inlineBody: Boolean = false): String? {
+        val tierViolation = validateSimpleCommandTier(segment, depth, inlineBody)
         if (tierViolation != null) return tierViolation
         // The command itself is permitted: the workspace boundary now applies to its
         // arguments. Checking after the tier rules keeps their specific messages
@@ -1834,7 +1984,7 @@ class CodingAgentShell(
         return workspaceBoundaryViolation(tokenize(segment))
     }
 
-    private fun validateSimpleCommandTier(segment: String, depth: Int): String? {
+    private fun validateSimpleCommandTier(segment: String, depth: Int, inlineBody: Boolean = false): String? {
         val tokens = tokenize(segment)
         if (tokens.isEmpty()) return EMPTY_COMMAND_VIOLATION
 
@@ -1860,12 +2010,21 @@ class CodingAgentShell(
         // the wrapper and the inner script must both be validated. Checking only the
         // body let `sh -c "mvn ..."` through the build-only profile, where `sh` is
         // precisely the arbitrary-execution surface BUILD_COMMANDS removes.
+        //
+        // The body runs as a program, not as a command line this tier can judge: a shell script
+        // reaches `Get-Content`, `Set-Location`, a `for` loop, whatever the project's own scripts
+        // use, and the same body already runs unexamined through `pwsh script.ps1`. So the body is
+        // validated with the same vetoes a top-level line gets (blocked patterns, credentials,
+        // protected subtrees, the boundary, FORBIDDEN commands, the runtime vetoes, the
+        // network/destructive tiers) but its **tier spelling** verdict is skipped — that verdict is
+        // what refused `powershell -Command "Get-Content x"` while the identical body ran through
+        // `-File` (2026-11-14 run).
         inlineScript(tokens.subList(index, tokens.size))?.let { inner ->
             if (buildOnly && !devToolAllowed(baseCommand)) {
                 return "'$baseCommand' is not allowed in the build-only profile " +
                     "(inline-script hosts are not build tools)"
             }
-            validateSegments(inner, depth + 1)?.let { violation ->
+            validateSegments(inner, depth + 1, inlineBody = true)?.let { violation ->
                 return "inline script via '$baseCommand' rejected — $violation"
             }
             return null
@@ -1968,6 +2127,14 @@ class CodingAgentShell(
         // build-only profile is exempt — that shell belongs to `coding.mvnBuild`/`verify`, not to
         // the model, so unrestricted must not widen it.
         if (unrestricted && !buildOnly) return null
+
+        // An inline-script body ([inlineBody]) gets the same treatment without the flag: the tier
+        // is the shell's spelling rule for the *command line*, and a script is not one. The body
+        // is what the project's own `.ps1`/`.sh` files contain anyway, and the only extra thing it
+        // can reach here is a program this shell would run from a script file. Every veto above
+        // still applied — the network and destructive tiers included — so the capability decision
+        // is unchanged; what disappears is "a PowerShell cmdlet is not a PATH executable".
+        if (inlineBody && !buildOnly) return null
 
         return "command '$baseCommand' is not allowed (safe=${baseCommand in SAFE_COMMANDS}, " +
             "dev=${devToolAllowed(baseCommand)}, " +

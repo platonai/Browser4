@@ -3,6 +3,7 @@ package ai.platon.pulsar.coding
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
@@ -17,9 +18,9 @@ import java.nio.file.Path
  *
  * The behaviour these tests pin is the fix for a real refusal: a run asked to inspect the previous
  * task's log got `PERMISSION_DENIED | code=PATH_DENIED` for `~/.browser4/logs/...`, which is the
- * agent's own bookkeeping. The data root and the checkout are readable by default, an operator can
- * add more with `browser4.agent.readPaths`, and the OS credential stores stay refused whatever is
- * configured.
+ * agent's own bookkeeping. The data root, `~/.browser4` itself, the CLI workspace owning the data
+ * root and the checkout are readable by default, an operator can add more with
+ * `browser4.agent.readPaths`, and the OS credential stores stay refused whatever is configured.
  *
  * Every test saves and restores the JVM properties it touches: [ReadablePaths] resolves them on
  * every call (memoized against their values), so a leaked property would change the scope of every
@@ -116,6 +117,68 @@ class ReadablePathsTest {
 
         assertTrue(ReadablePaths.isReadable(corpus.resolve("notes/a.txt")))
         assertFalse(ReadablePaths.isReadable(tempDir.resolve("other/a.txt")))
+    }
+
+    @Test
+    @DisplayName("~/.browser4 stays readable when --workspace moved the data root elsewhere")
+    fun testBrowser4HomeStaysReadable() {
+        // The managed layout: the data root is <home>/workspaces/<checkout>/app-data, while the task
+        // ledger and the other runs' workspaces stay directly under the home.
+        val home = Files.createDirectories(tempDir.resolve("home"))
+        val data = Files.createDirectories(home.resolve("workspaces/repo/app-data"))
+        val ledger = home.resolve(".browser4/async-tasks.json")
+        Files.createDirectories(ledger.parent)
+        Files.writeString(ledger, """{"tasks":[]}""")
+        System.setProperty("user.home", home.toString())
+        System.setProperty(ReadablePaths.PROP_APP_DATA_DIR, data.toString())
+
+        assertEquals(home.resolve(".browser4").normalize(), ReadablePaths.browser4Home())
+        assertTrue(
+            ReadablePaths.roots().contains(home.resolve(".browser4").normalize()),
+            "the home ledger must be a built-in root whatever app.data.dir says: ${ReadablePaths.roots()}",
+        )
+        assertTrue(ReadablePaths.isReadable(ledger), "the previous task's ledger must be readable")
+    }
+
+    @Test
+    @DisplayName("~/.browser4 is only a built-in root when it exists")
+    fun testBrowser4HomeRequiresTheFolder() {
+        val home = Files.createDirectories(tempDir.resolve("home2"))
+        // The data root must live elsewhere: without app.data.dir, ~/.browser4 *is* the data root
+        // and would be a root for that reason, which is exactly what this test rules out.
+        System.setProperty("user.home", home.toString())
+        System.setProperty(
+            ReadablePaths.PROP_APP_DATA_DIR,
+            Files.createDirectories(tempDir.resolve("elsewhere/app-data")).toString(),
+        )
+
+        assertNull(ReadablePaths.browser4Home(), "a home without .browser4 has no home ledger")
+        assertFalse(
+            ReadablePaths.roots().contains(home.resolve(".browser4").normalize()),
+            "a non-existent home ledger must not be a root: ${ReadablePaths.roots()}",
+        )
+    }
+
+    @Test
+    @DisplayName("the CLI workspace that owns app-data is readable only when it looks like one")
+    fun testRunWorkspaceRootNeedsAMarker() {
+        val runWorkspace = Files.createDirectories(tempDir.resolve("run-workspace"))
+        val data = Files.createDirectories(runWorkspace.resolve("app-data"))
+        System.setProperty(ReadablePaths.PROP_APP_DATA_DIR, data.toString())
+
+        // An `app-data` folder next to an unrelated directory proves nothing.
+        assertNull(ReadablePaths.runWorkspaceRoot())
+        assertFalse(ReadablePaths.roots().contains(runWorkspace.toAbsolutePath().normalize()))
+
+        Files.writeString(runWorkspace.resolve("async-tasks.json"), """{"tasks":[]}""")
+
+        val expected = runWorkspace.toAbsolutePath().normalize()
+        assertEquals(expected, ReadablePaths.runWorkspaceRoot())
+        assertTrue(
+            ReadablePaths.roots().contains(expected),
+            "the run's own ledger folder must be readable: ${ReadablePaths.roots()}",
+        )
+        assertTrue(ReadablePaths.isReadable(runWorkspace.resolve("async-tasks.json")))
     }
 
     @Test

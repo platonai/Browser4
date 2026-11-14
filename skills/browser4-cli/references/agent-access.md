@@ -62,9 +62,9 @@ pass-through ones for that one task:
 | Rail | Normally | With `--unrestricted` |
 |---|---|---|
 | preset gate | `--access` / backend default | `full` — every tool domain |
-| path boundary | workspace + readable roots + `--add-dir` | every path the OS user can reach |
-| protected paths | refused | allowed (the OS still governs) |
-| shell's own rule (command allow-list) | applied | **not** applied — programs the list never knew (`Get-Content`, `wmic`) run as written; shapes it cannot decompose are handed to the platform shell in every mode |
+| path boundary | workspace + mirrored modules + the checkout they mirror + readable roots + `--add-dir` | every path the OS user can reach |
+| protected paths | refused for writes (reads are fine) | allowed (the OS still governs) |
+| shell's own rule (command allow-list) | applied, except inside an inline-script body | **not** applied at all — programs the list never knew (`Get-Content`, `wmic`) run as written; shapes it cannot decompose are handed to the platform shell in every mode |
 | OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) | refused | **still refused** — see below |
 | network, destructive commands | per preset | allowed |
 | OS sandbox (`browser4.agent.sandbox`) | applied | **not** applied — plain child processes |
@@ -73,10 +73,12 @@ pass-through ones for that one task:
 The shell's remaining rule is the command allow-list, and it only looks like a rail: it does not
 confine a process — the same script body already ran unexamined through `powershell -File`, and
 `python -c` is on the list — so refusing `powershell -Command "Get-Content x"` only cost rounds
-(2026-11-14 run). Command shapes the checker cannot decompose (`for` loops, blocks) are handed to
-the platform shell in every mode, not only under this flag. Every row marked **still refused** above
-keeps refusing, and the shell's `hint=` says `no approval lifts this` instead of offering a request
-that cannot be granted.
+(2026-11-14 run). **An inline body is a script, not a command line**, so the allow-list does not
+judge it in any mode: the body is still checked for every veto (blocked patterns, explicit deny,
+credentials, protected writes, the runtime vetoes) but not for the tier spelling. Command shapes the
+checker cannot decompose (`for` loops, blocks) are handed to the platform shell in every mode, not
+only under this flag. Every row marked **still refused** above keeps refusing, and the shell's
+`hint=` says `no approval lifts this` instead of offering a request that cannot be granted.
 
 What it does **not** do:
 
@@ -133,6 +135,8 @@ logs, task data, temp files and checkout are.
 | Root | Default |
 |---|---|
 | Browser4 data root (`app.data.dir`, else `~/.browser4`) | readable — `logs/`, `data/`, `memory/`, the per-task `agent/…/workspace.<id>` trees and Browser4's own `tmp/` |
+| `~/.browser4` itself | readable even when the data root was moved (a managed `--workspace` backend keeps it under `<home>/workspaces/<checkout>/app-data`) — the task ledger (`async-tasks.json`) and the other runs' workspaces live under the home, which is how a task answers "what did the previous task do?" |
+| The CLI workspace owning `app-data` | readable when it holds `async-tasks.json` / `cli-state.json` — the run's own status |
 | Source checkout the backend runs from | readable when one is detected (a packaged runtime has none) |
 | `browser4.agent.readPaths` | operator-added folders: `;`-separated, `~` expanded |
 
@@ -141,11 +145,15 @@ logs, task data, temp files and checkout are.
 BROWSER4_SERVER_OPTS="-Dbrowser4.agent.readPaths=D:/corpus;%TEMP%" browser4-cli open
 ```
 
-These roots are **read-only**. Writes, deletes, copies and moves still happen only in the workspace
-and its mirrored modules; a write into a readable root is refused and counted as `READ_ONLY`. The
-access preset does not change them — `read` and `full` see the same readable roots, because reading
-logs is not workspace power — and `coding.permissions` prints the list in effect while
-`coding.explain(path=…)` dry-runs one path.
+These roots are **read-only**. Writes, deletes, copies and moves never land there; a write into a
+readable root is refused and counted as `READ_ONLY`. Writing happens in the workspace, in its
+mirrored module roots and in the **checkout those mirrors come from** — that last one is a boundary
+grant rather than a readable root: a task whose workspace mirrors a repository may edit the
+repository it is developing (`.git`, `bin/`, `cli/`, `docs/` and the absolute spelling of a module
+path only exist there), while the protected rails still refuse `pom.xml`, `VERSION`,
+`.github/workflows` and friends. The access preset does not change the readable roots — `read` and
+`full` see the same ones, because reading logs is not workspace power — and `coding.permissions`
+prints the list in effect while `coding.explain(path=…)` dry-runs one path.
 
 A readable root that also sits on the sensitive list (the data root does — it is `~/.browser4`) is
 readable by design: that is the relaxation. The OS credential stores stay refused whatever is
@@ -358,7 +366,7 @@ answer to "why was this refused" is one call away.
 |---|---|---|
 | `code=TOOL_DENIED` | the preset does not grant the method | use a wider preset, or call `coding.requestAccess` and have an operator approve that effect |
 | `code=EXEC_DISABLED` | shell/code execution is off under the preset | run the step another way, request `fs.exec` approval, or widen to `full` |
-| `code=COMMAND_NOT_ALLOWED` | the command is outside the shell's tier | use the project build (`mvnBuild`), an allowed equivalent (`type`/`cat`/`dir`/`grep`) or a `coding.*` file tool, a script file, or a different command — under `--unrestricted` the tier does not apply at all; a `no approval lifts this` hint means the command is a permanent veto (runtime/credential/deny) |
+| `code=COMMAND_NOT_ALLOWED` | the command is outside the shell's tier | use the project build (`mvnBuild`), an allowed equivalent (`type`/`cat`/`dir`/`grep`) or a `coding.*` file tool, a script file, or a different command — an inline body (`powershell -Command …`, `bash -c …`) is not tier-checked at all and `--unrestricted` drops the tier on the command line; a `no approval lifts this` hint means the command is a permanent veto (runtime/credential/deny) |
 | `code=PATH_DENIED` | the path is outside the workspace | see [agent-workspace.md](agent-workspace.md) — name the input, use `--coding`, or widen paths |
 | `code=PROTECTED_PATH` / `code=SENSITIVE_PATH` | rails, not capabilities | never approvable; copy the data somewhere allowed |
 | `code=SANDBOX_DENIED` | the OS sandbox refused the operation (the step's `needed` names the granted roots) | keep the command inside the workspace and granted roots; change the sandbox configuration, not the command |

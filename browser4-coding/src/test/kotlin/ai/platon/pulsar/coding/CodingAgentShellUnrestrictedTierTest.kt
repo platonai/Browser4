@@ -26,10 +26,16 @@ import java.nio.file.Path
  * platform shell in every mode now, so they never reach this verdict at all.)
  *
  * The tier is a spelling rule, not a boundary: the same body already ran unexamined through
- * `powershell -File`, and `python -c` is on the list. Under the flag the tier verdict is therefore
- * skipped — and *only* it: every veto checked ahead of that verdict (blocked patterns, explicit
+ * `powershell -File`, and `python -c` is on the list. The tier verdict is therefore skipped for an
+ * inline body — and *only* it: every veto checked ahead of that verdict (blocked patterns, explicit
  * deny, deny patterns, credential and protected paths, the runtime vetoes) still refuses, and the
  * build-only shell behind `coding.mvnBuild`/`verify` is not widened at all.
+ *
+ * **An inline body is a script, not a command line**, so the skip does not need the flag
+ * (2026-11-14, the same run): `powershell -NoProfile -Command "Get-Content …"` is the documented
+ * way to read a file, and refusing it because a PowerShell cmdlet is not a PATH executable made the
+ * cheap route unreachable. `--unrestricted` still lifts the *whole* command line; the inline-body
+ * rule lifts one spelling verdict and nothing else, whatever the flag says.
  */
 class CodingAgentShellUnrestrictedTierTest {
 
@@ -88,25 +94,34 @@ class CodingAgentShellUnrestrictedTierTest {
 
     @Test
     @EnabledOnOs(OS.WINDOWS)
-    @DisplayName("without the flag the same inline body is still refused, with a useful hint")
-    fun theReportedCommandIsRefusedWithoutTheFlag(@TempDir tempDir: Path) = runBlocking {
+    @DisplayName("without the flag the reported command form runs: an inline body is a script")
+    fun theReportedCommandRunsWithoutTheFlag(@TempDir tempDir: Path) = runBlocking {
         Files.writeString(tempDir.resolve("note.txt"), "ALPHA-1")
 
-        val refusal = shell(unrestricted = false, baseDir = tempDir).execute(
+        val result = shell(unrestricted = false, baseDir = tempDir).executeRaw(
             "powershell -NoProfile -Command \"Get-Content note.txt\"",
             workingDir = tempDir.toString(),
         )
 
-        assertTrue(refusal.contains(PermissionAudit.CODE_COMMAND_NOT_ALLOWED), refusal)
-        assertTrue(refusal.contains("inline script via 'powershell' rejected"), refusal)
-        assertTrue(
-            refusal.contains("coding.read"),
-            "the hint must name the cheap route: $refusal",
+        assertEquals(0, result.exitCode, result.stderr)
+        assertTrue(result.stdout.contains("ALPHA-1"), result.stdout)
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    @DisplayName("an inline body lifts the tier verdict only: the credential and protected rails still refuse")
+    fun anInlineBodyKeepsTheVetoesWithoutTheFlag(@TempDir tempDir: Path) = runBlocking {
+        val shell = shell(unrestricted = false, baseDir = tempDir)
+
+        val credential = shell.execute("powershell -NoProfile -Command \"Get-Content ~/.ssh/id_rsa\"")
+        assertTrue(credential.contains(PermissionAudit.CODE_COMMAND_PATH_DENIED), credential)
+
+        // A PowerShell cmdlet is not a PATH executable, so the write-shape classifier has to read
+        // the cmdlet itself — `Set-Content` writes into `.browser4` just like `>` does.
+        val protectedWrite = shell.execute(
+            "powershell -NoProfile -Command \"Set-Content .browser4/data/agent/agent-tasks.jsonl forged\"",
         )
-        assertFalse(
-            refusal.contains("coding.requestAccess"),
-            "no approval widens the tier, so the hint must not offer one: $refusal",
-        )
+        assertTrue(protectedWrite.contains(PermissionAudit.CODE_PROTECTED_PATH), protectedWrite)
     }
 
     @Test

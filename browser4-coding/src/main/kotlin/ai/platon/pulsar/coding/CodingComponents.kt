@@ -147,11 +147,13 @@ object CodingComponents {
      * The effective boundary scope for [root] as named entries (plan P0-2).
      *
      * The workspace and its mirrored module roots are in both grants (the file system canonicalises
-     * and the shell judges spelling); toolchain roots are shell-only, which is why the two grants
-     * have different scopes at all; the readable roots ([ReadablePaths]) are in both grants for
-     * **reads only**. This is the list observation data attaches to and the list
-     * [ScopeNarrowing] advises on — it is derived, not yet declared, so P0-1 output can turn the
-     * toolchain entries into explicit declared roots without moving anything else.
+     * and the shell judges spelling), as is the checkout those mirrors come from
+     * ([ScopeKind.SOURCE] — the code a self-development task edits); toolchain roots are
+     * shell-only, which is why the two grants have different scopes at all; the readable roots
+     * ([ReadablePaths]) are in both grants for **reads only**. This is the list observation data
+     * attaches to and the list [ScopeNarrowing] advises on — it is derived, not yet declared, so
+     * P0-1 output can turn the toolchain entries into explicit declared roots without moving
+     * anything else.
      *
      * @param root the workspace root
      * @param readableRoots the readable roots in effect; defaults to [ReadablePaths.roots]
@@ -169,11 +171,17 @@ object CodingComponents {
         val mirrors = MirrorRoots.derive(realRoot).sortedBy { it.toString() }.map {
             ScopeEntry("mirror:$it", it, ScopeKind.MIRROR, BOUNDARY_EFFECTS, boundaryGrants)
         }
+        // The checkout the mirror is built from: the code this task develops. Read+write in both
+        // grants, because a self-development task edits the repository it runs from and the mirror
+        // only links the reactor modules — `.git`, `bin/`, `cli/`, `docs/` and the absolute spelling
+        // of a module path exist there only. Null for a workspace that mirrors nothing.
+        val source = MirrorRoots.sourceRoot(realRoot)
+            ?.let { ScopeEntry("source:$it", it, ScopeKind.SOURCE, BOUNDARY_EFFECTS, boundaryGrants) }
         val toolchain = toolchainEntries()
-        // A readable root that is already an exact workspace/mirror/toolchain entry adds nothing;
-        // the entry would only duplicate the id space. Ancestors are kept: the data root that
-        // contains the workspace grants reads *beyond* it, which is the whole point.
-        val known = (listOf(workspace) + mirrors + toolchain)
+        // A readable root that is already an exact workspace/mirror/source/toolchain entry adds
+        // nothing; the entry would only duplicate the id space. Ancestors are kept: the data root
+        // that contains the workspace grants reads *beyond* it, which is the whole point.
+        val known = (listOf(workspace) + mirrors + listOfNotNull(source) + toolchain)
             .map { runCatching { it.path.toRealPath() }.getOrDefault(it.path) }
             .toSet()
         val readable = readableRoots
@@ -208,7 +216,7 @@ object CodingComponents {
                     grants = boundaryGrants,
                 )
             }
-        return listOf(workspace) + mirrors + toolchain + readable + added
+        return listOf(workspace) + mirrors + listOfNotNull(source) + toolchain + readable + added
     }
 
     /**
