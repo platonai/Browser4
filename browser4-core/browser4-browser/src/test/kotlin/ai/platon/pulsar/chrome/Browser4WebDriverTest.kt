@@ -1111,9 +1111,16 @@ class Browser4WebDriverTest {
     fun viDataStatusJsShortCircuitsOnComputedData() {
         val js = Browser4WebDriver.viDataStatusJs()
 
+        val computeIndex = js.indexOf("u.compute()")
+        val staleIndex = js.indexOf("u.isLayoutStale")
         assertTrue(
-            js.indexOf("u._viDataComputed === true") < js.indexOf("u.compute()"),
-            "an already annotated document must not be computed again: $js"
+            staleIndex >= 0 && computeIndex > staleIndex,
+            "the staleness check must run before the document is computed: $js"
+        )
+        val shortCircuitIndex = js.indexOf("u._viDataComputed !== true")
+        assertTrue(
+            shortCircuitIndex in 0 until computeIndex,
+            "a runtime without isLayoutStale() must skip an already annotated document: $js"
         )
         assertTrue(
             js.contains("status = '${Browser4WebDriver.VI_DATA_COMPUTED}'"),
