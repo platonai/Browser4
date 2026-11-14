@@ -11044,8 +11044,11 @@ mod tests {
     }
 
     /// The fallback must actually run when the hidden attempt fails: a script
-    /// that always fails plays the hidden attempt, a real `ping` plays the
-    /// backend created by the plain attempt.
+    /// that always fails plays the hidden attempt, a live console-free process
+    /// plays the backend created by the plain attempt (see
+    /// `console_free_sleeper` — a console-app payload here pops a real terminal
+    /// window on every test run, because the plain script carries no
+    /// `Win32_ProcessStartup`).
     #[cfg(windows)]
     #[test]
     fn wmi_create_fallback_creates_the_backend_after_a_hidden_attempt_failure() {
@@ -11055,8 +11058,11 @@ mod tests {
 
         let failing_script =
             "$ErrorActionPreference = 'Stop'; [Console]::Error.Write('simulated rejection'); exit 1";
-        let plain_script =
-            windows_wmi_create_script("ping -n 20 127.0.0.1", temp.path(), false);
+        let plain_script = windows_wmi_create_script(
+            &console_free_sleeper(temp.path()),
+            temp.path(),
+            false,
+        );
         let pid = run_wmi_create_with_fallback(failing_script, &plain_script, &startup_log_path)
             .expect("the plain attempt must create the backend after the hidden one fails");
 
@@ -11331,6 +11337,35 @@ mod tests {
             .output()
             .expect("tasklist must be available on Windows");
         String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))
+    }
+
+    /// Command line for a surrogate process that owns **no console**.
+    ///
+    /// `Win32_Process.Create` allocates a console for a console-subsystem child
+    /// and the default terminal host (Windows Terminal on current Windows) hands
+    /// that console a window. A surrogate therefore has to be GUI-subsystem,
+    /// otherwise every `cargo test` run of a test that creates a process
+    /// *without* `Win32_ProcessStartup` pops a terminal tab on the developer's
+    /// desktop for the surrogate's whole lifetime — the exact noise
+    /// `windows_wmi_create_script(.., hide_console = true)` exists to avoid in
+    /// production. What such a test needs to prove is that
+    /// `Win32_Process.Create` still creates a live process when the startup
+    /// info is absent, not that a console app can be started.
+    ///
+    /// `wscript.exe` is GUI-subsystem and `//B` runs the script in batch mode
+    /// without dialogs, so a `WScript.Sleep` gives the surrogate the lifetime
+    /// the liveness assertion needs and never puts a window on the desktop. The
+    /// script lives in the caller's temp dir, so it disappears with it.
+    ///
+    /// A host without a script engine (`wscript.exe` missing) fails this loudly
+    /// through `Win32_Process.Create`'s non-zero return value rather than
+    /// silently skipping the assertion.
+    #[cfg(windows)]
+    fn console_free_sleeper(dir: &Path) -> String {
+        let script_path = dir.join("wmi-sleeper.vbs");
+        std::fs::write(&script_path, "WScript.Sleep 20000\n")
+            .expect("write the console-free sleeper script");
+        format!("wscript //B \"{}\"", script_path.display())
     }
 
     /// The parent pid of a live process via WMI; `0` when it cannot be read.
