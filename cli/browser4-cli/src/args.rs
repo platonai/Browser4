@@ -51,21 +51,20 @@ pub struct BatchArgs {
 /// - `--version` / `-v` → version flag (returned in `args`)
 /// - Everything else is forwarded unchanged in `args`
 pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
-    let mut flags = GlobalFlags::default();
+    let mut flags = parse_global_flags_from_argv(argv);
+    apply_env_defaults(&mut flags);
+    flags
+}
 
-    // Default session name and server URL from environment variables
-    if let Ok(env_session) = std::env::var("BROWSER4_CLI_SESSION") {
-        if !env_session.is_empty() {
-            flags.session_name = Some(env_session);
-        }
-    }
-    if flags.server_url.is_none() {
-        if let Ok(env_server) = std::env::var("BROWSER4_CLI_SERVER") {
-            if !env_server.is_empty() {
-                flags.server_url = Some(env_server);
-            }
-        }
-    }
+/// Parse only the global flags that literally appear in `argv`.
+///
+/// Environment defaults (`BROWSER4_CLI_SESSION`, `BROWSER4_CLI_SERVER`) are
+/// **not** folded in: callers that must distinguish "the user asked for this"
+/// from "the shell happens to export it" use this function.  Batch step
+/// compilation is the main one — an ambient `BROWSER4_CLI_SERVER` must not be
+/// mistaken for a per-step `--server` override, which batch rejects.
+pub fn parse_global_flags_from_argv(argv: &[String]) -> GlobalFlags {
+    let mut flags = GlobalFlags::default();
 
     // `--json` is only a global flag when it appears *before* the command
     // name.  After the command it is passed through so sub-commands like
@@ -155,6 +154,25 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
         i += 1;
     }
     flags
+}
+
+/// Fold environment defaults into `flags` without overriding anything the
+/// command line already set.
+fn apply_env_defaults(flags: &mut GlobalFlags) {
+    if flags.session_name.is_none() {
+        if let Ok(env_session) = std::env::var("BROWSER4_CLI_SESSION") {
+            if !env_session.is_empty() {
+                flags.session_name = Some(env_session);
+            }
+        }
+    }
+    if flags.server_url.is_none() {
+        if let Ok(env_server) = std::env::var("BROWSER4_CLI_SERVER") {
+            if !env_server.is_empty() {
+                flags.server_url = Some(env_server);
+            }
+        }
+    }
 }
 
 /// Build a mapping from short option names (e.g. `"y"`) to their long
@@ -1109,6 +1127,59 @@ pub fn parse_batch_json_commands(input: &str) -> Result<Vec<Vec<String>>, String
 mod tests {
     use super::*;
 
+    // -----------------------------------------------------------------------
+    // Environment isolation
+    // -----------------------------------------------------------------------
+
+    /// Environment keys that `parse_global_flags` applies as defaults.
+    const ENV_DEFAULT_KEYS: [&str; 2] = ["BROWSER4_CLI_SESSION", "BROWSER4_CLI_SERVER"];
+
+    /// Saves the CLI env defaults, removes them for the scope, and restores them on drop.
+    ///
+    /// The argv tests below assert on what a *command line* produces, but
+    /// `parse_global_flags` also layers `BROWSER4_CLI_SESSION` / `BROWSER4_CLI_SERVER`
+    /// on top.  A developer shell (or CI job) that exports one of them would otherwise
+    /// flip assertions such as `session_name == None`, so every argv-only test runs
+    /// with the defaults suppressed.  The guard holds the shared env lock from
+    /// `crate::test_env` so concurrent env-mutating tests cannot interleave.
+    struct EnvDefaultsGuard {
+        prev: Vec<(&'static str, Option<String>)>,
+        _lock: crate::test_env::EnvLock,
+    }
+
+    impl EnvDefaultsGuard {
+        fn clear() -> Self {
+            let lock = crate::test_env::lock();
+            let prev = ENV_DEFAULT_KEYS
+                .iter()
+                .map(|key| (*key, std::env::var(key).ok()))
+                .collect();
+            for key in ENV_DEFAULT_KEYS {
+                std::env::remove_var(key);
+            }
+            Self { prev, _lock: lock }
+        }
+    }
+
+    impl Drop for EnvDefaultsGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.prev {
+                match value {
+                    Some(val) => std::env::set_var(key, val),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    /// `parse_global_flags` with the environment defaults suppressed.
+    fn parse_global_flags_no_env(argv: &[String]) -> GlobalFlags {
+        let _guard = EnvDefaultsGuard::clear();
+        parse_global_flags(argv)
+    }
+
+
+
     #[test]
     fn test_parse_global_flags_session_name() {
         let argv = vec![
@@ -1116,7 +1187,7 @@ mod tests {
             "goto".to_string(),
             "https://example.com".to_string(),
         ];
-        let flags = parse_global_flags(&argv);
+        let flags = parse_global_flags_no_env(&argv);
         assert_eq!(flags.session_name.as_deref(), Some("mysession"));
         assert_eq!(flags.args, vec!["goto", "https://example.com"]);
     }
@@ -1129,7 +1200,7 @@ mod tests {
             "goto".to_string(),
             "https://example.com".to_string(),
         ];
-        let flags = parse_global_flags(&argv);
+        let flags = parse_global_flags_no_env(&argv);
         assert_eq!(flags.timeout_secs, Some(60));
         assert_eq!(flags.args, vec!["goto", "https://example.com"]);
     }
@@ -1146,7 +1217,7 @@ mod tests {
             "10".to_string(),
             "status".to_string(),
         ];
-        let flags = parse_global_flags(&argv);
+        let flags = parse_global_flags_no_env(&argv);
         assert_eq!(flags.timeout_secs, None);
         assert_eq!(
             flags.args,
@@ -1157,7 +1228,7 @@ mod tests {
     #[test]
     fn test_parse_global_flags_timeout_equals_after_command_is_forwarded() {
         let argv = vec!["loop".to_string(), "--timeout=30".to_string(), "status".to_string()];
-        let flags = parse_global_flags(&argv);
+        let flags = parse_global_flags_no_env(&argv);
         assert_eq!(flags.timeout_secs, None);
         assert_eq!(flags.args, vec!["loop", "--timeout=30", "status"]);
     }
@@ -1170,7 +1241,7 @@ mod tests {
             "goto".to_string(),
         ];
 
-        let flags = parse_global_flags(&argv);
+        let flags = parse_global_flags_no_env(&argv);
 
         assert_eq!(flags.session_name.as_deref(), Some("mysession"));
         assert_eq!(flags.args, vec!["goto"]);
@@ -1180,7 +1251,7 @@ mod tests {
     fn test_parse_global_flags_long_session_name_equals() {
         let argv = vec!["--session=mysession".to_string(), "goto".to_string()];
 
-        let flags = parse_global_flags(&argv);
+        let flags = parse_global_flags_no_env(&argv);
 
         assert_eq!(flags.session_name.as_deref(), Some("mysession"));
         assert_eq!(flags.args, vec!["goto"]);
@@ -1194,7 +1265,7 @@ mod tests {
             "goto".to_string(),
         ];
 
-        let flags = parse_global_flags(&argv);
+        let flags = parse_global_flags_no_env(&argv);
 
         assert_eq!(flags.session_name.as_deref(), Some("mysession"));
         assert_eq!(flags.args, vec!["goto"]);
@@ -1216,7 +1287,7 @@ mod tests {
             "1+1".to_string(),
         ];
 
-        let flags = parse_global_flags(&argv);
+        let flags = parse_global_flags_no_env(&argv);
 
         assert_eq!(flags.session_name, None);
         assert_eq!(
@@ -1243,7 +1314,7 @@ mod tests {
             "eval".to_string(),
         ];
 
-        let flags = parse_global_flags(&argv);
+        let flags = parse_global_flags_no_env(&argv);
 
         assert_eq!(flags.session_name, None);
         assert_eq!(flags.args, vec!["loop", "--", "-s=price-watch", "eval"]);
@@ -1255,7 +1326,7 @@ mod tests {
             "--server=http://localhost:9090".to_string(),
             "open".to_string(),
         ];
-        let flags = parse_global_flags(&argv);
+        let flags = parse_global_flags_no_env(&argv);
         assert_eq!(flags.server_url.as_deref(), Some("http://localhost:9090"));
         assert_eq!(flags.args, vec!["open"]);
     }
@@ -1267,7 +1338,7 @@ mod tests {
             "http://localhost:9090".to_string(),
             "open".to_string(),
         ];
-        let flags = parse_global_flags(&argv);
+        let flags = parse_global_flags_no_env(&argv);
         assert_eq!(flags.server_url.as_deref(), Some("http://localhost:9090"));
         assert_eq!(flags.args, vec!["open"]);
     }
@@ -2479,5 +2550,69 @@ mod tests {
 
         let raw = parse_raw_args(&["upload".to_string(), "e5".to_string()], None, None);
         assert!(build_upload_args(&raw).is_err());
+    }
+    // -----------------------------------------------------------------------
+    // Environment defaults (BROWSER4_CLI_SESSION / BROWSER4_CLI_SERVER)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_global_flags_applies_environment_defaults() {
+        let _clean = EnvDefaultsGuard::clear();
+        std::env::set_var("BROWSER4_CLI_SESSION", "env-session");
+        std::env::set_var("BROWSER4_CLI_SERVER", "http://env-host:1234");
+
+        let argv = vec!["goto".to_string(), "https://example.com".to_string()];
+        let flags = parse_global_flags(&argv);
+
+        assert_eq!(flags.session_name.as_deref(), Some("env-session"));
+        assert_eq!(flags.server_url.as_deref(), Some("http://env-host:1234"));
+        assert_eq!(flags.args, vec!["goto", "https://example.com"]);
+    }
+
+    #[test]
+    fn test_parse_global_flags_argv_overrides_environment_defaults() {
+        let _clean = EnvDefaultsGuard::clear();
+        std::env::set_var("BROWSER4_CLI_SESSION", "env-session");
+        std::env::set_var("BROWSER4_CLI_SERVER", "http://env-host:1234");
+
+        let argv = vec![
+            "--session=cli-session".to_string(),
+            "--server".to_string(),
+            "http://cli-host:5678".to_string(),
+            "goto".to_string(),
+            "https://example.com".to_string(),
+        ];
+        let flags = parse_global_flags(&argv);
+
+        assert_eq!(flags.session_name.as_deref(), Some("cli-session"));
+        assert_eq!(flags.server_url.as_deref(), Some("http://cli-host:5678"));
+        assert_eq!(flags.args, vec!["goto", "https://example.com"]);
+    }
+
+    #[test]
+    fn test_parse_global_flags_ignores_empty_environment_defaults() {
+        let _clean = EnvDefaultsGuard::clear();
+        std::env::set_var("BROWSER4_CLI_SESSION", "");
+        std::env::set_var("BROWSER4_CLI_SERVER", "");
+
+        let argv = vec!["goto".to_string()];
+        let flags = parse_global_flags(&argv);
+
+        assert_eq!(flags.session_name, None);
+        assert_eq!(flags.server_url, None);
+    }
+
+    #[test]
+    fn test_parse_global_flags_from_argv_ignores_environment_defaults() {
+        let _clean = EnvDefaultsGuard::clear();
+        std::env::set_var("BROWSER4_CLI_SESSION", "env-session");
+        std::env::set_var("BROWSER4_CLI_SERVER", "http://env-host:1234");
+
+        let argv = vec!["goto".to_string(), "https://example.com".to_string()];
+        let flags = parse_global_flags_from_argv(&argv);
+
+        assert_eq!(flags.session_name, None);
+        assert_eq!(flags.server_url, None);
+        assert_eq!(flags.args, vec!["goto", "https://example.com"]);
     }
 }

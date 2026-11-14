@@ -50,7 +50,8 @@ use serde_json::{json, Value};
 use args::{
     build_command_args, build_short_option_map, build_upload_args, parse_batch_args,
     parse_batch_json_commands, COMMAND_ARG_ALIASES,
-    parse_command_string, parse_global_flags, parse_raw_args, GlobalFlags,
+    parse_command_string, parse_global_flags, parse_global_flags_from_argv, parse_raw_args,
+    GlobalFlags,
 };
 use commands::{commands_map, is_element_reference};
 use daemon::{
@@ -32097,7 +32098,10 @@ fn compile_batch_step(
     command_map: &HashMap<String, commands::CommandDef>,
     stdin_available: bool,
 ) -> Result<BatchStepPlan, String> {
-    let nested_global = parse_global_flags(&spec.tokens);
+    // Parse only the step's own tokens: ambient `BROWSER4_CLI_SERVER` /
+    // `BROWSER4_CLI_SESSION` defaults must not look like per-step overrides
+    // (a shell that exports them would otherwise reject every batch step).
+    let nested_global = parse_global_flags_from_argv(&spec.tokens);
     if nested_global.server_url.is_some() {
         return Err("Batch subcommands cannot override --server.".to_string());
     }
@@ -45806,8 +45810,32 @@ linkGroups:
         );
     }
 
+    #[test]
+    fn compile_batch_step_ignores_ambient_server_env() {
+        // `BROWSER4_CLI_SERVER` is a *top-level* default.  A step's tokens never carry
+        // `--server`, so an exported variable must not be read as a per-step override —
+        // doing so rejected every step of a `batch` run in a shell that exports it.
+        let _env = set_env("BROWSER4_CLI_SERVER", "http://localhost:8283");
+
+        let spec = BatchCommandSpec {
+            display: "tab-close".to_string(),
+            tokens: vec!["tab-close".to_string()],
+        };
+
+        let plan = compile_batch_step(&spec, &commands_map(), true)
+            .expect("ambient env defaults must not fail a batch step");
+
+        match plan.action {
+            BatchStepAction::Tool { tool_name, .. } => {
+                assert_eq!(tool_name, "browser_tabs");
+            }
+            other => panic!("expected a tool step, got {other:?}"),
+        }
+    }
+
     // -------------------------------------------------------------------
     // format_csv tests
+
     // -------------------------------------------------------------------
 
     #[test]

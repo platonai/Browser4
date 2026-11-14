@@ -43,6 +43,16 @@ development mode). Precedence for the server URL is unchanged:
 --server / BROWSER4_CLI_SERVER  >  config set server  >  this checkout's dev port
 ```
 
+`BROWSER4_CLI_SERVER` and `BROWSER4_CLI_SESSION` are **top-level defaults**: they are
+applied once, to the CLI's own command line, and never to `batch` steps or to the
+payload a `loop` forwards. A batch step therefore cannot trip over an exported
+variable, and the only way to point a run at another backend stays the top-level
+`--server`. The unit tests are expected to pass with either variable exported
+(`cargo test --lib`, `cargo test --bin browser4-cli`). Tests that assert on argv
+semantics call `parse_global_flags_no_env()` (or the shared `crate::test_env` lock
+directly), so an exported variable can neither change an assertion nor race a test
+that sets it on purpose.
+
 Escape hatches: `--server <url>` (or `config set server <url>`) targets a
 specific backend, `BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1` disables development mode
 entirely (production ports and the flat `~/.browser4` state), and
