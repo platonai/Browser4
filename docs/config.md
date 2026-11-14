@@ -601,21 +601,30 @@ docker run -d -p 18182:18182 `
     (`~/.ssh`, `~/.aws`, `~/.browser4`, …). This check is a fast-fail UX, not a security
     boundary: prompt-injected scripts can spell a path it never sees, so enforcement comes from
     the OS sandbox (`browser4.agent.sandbox`). It does **not** relax the protected subtrees:
-    `.browser4` and `.github/workflows` are refused as shell arguments, redirection targets and
-    working directories whatever this property says. Only for local debugging; leave it on.
+    `.browser4` and `.github/workflows` are refused as shell **writes** — a redirection target, a
+    path argument of a mutating command (`del`, `cp`, `Set-Content`, `Remove-Item`, …) and a `cd`
+    into them — whatever this property says. Reading there is allowed: the ledger of the previous
+    task is a read, and `type .browser4/…` / `coding.read` must both work. Only for local
+    debugging; leave it on.
 
   ```bash
   BROWSER4_SERVER_OPTS="-Dbrowser4.agent.access=read-build" browser4-cli open
   ```
 
-* **`browser4.agent.readPaths`** *(JVM system property; default: the Browser4 data root + the
-  source checkout)*
+* **`browser4.agent.readPaths`** *(JVM system property; default: the Browser4 data root,
+  `~/.browser4`, the CLI workspace owning the data root + the source checkout)*
   Folders the coding tools may **read** although they are outside the task workspace. The built-in
   roots already cover Browser4's own folders, which is what makes "read the previous task's log" or
   "inspect the runtime temp files" work at all:
 
   - the data root — `app.data.dir` when set, else `~/.browser4` (`logs/`, `data/`, `memory/`, the
     per-task `agent/…/workspace.<id>` trees and Browser4's own `tmp/`);
+  - `~/.browser4` itself, always: a managed (`--workspace`) backend puts its data root under
+    `<home>/workspaces/<checkout>/app-data`, while the task ledger (`async-tasks.json`) and the
+    other runs' workspaces stay under the home — without this root a task could not answer "what
+    happened to the previous task?";
+  - the CLI workspace that owns `<app data>` (accepted only when it holds `async-tasks.json` /
+    `cli-state.json`), so a task asked to report its own status can read the ledger;
   - the source checkout the backend was started from, when there is one (a packaged runtime has
     none; a task workspace mirrors the checkout, but the real tree also has `.git` and untracked
     fixtures).
@@ -628,9 +637,13 @@ docker run -d -p 18182:18182 `
   ```
 
   The roots are **read-only**: `write`/`append`/`replace`/`delete`/`copy`/`move` stay confined to
-  the workspace and its mirrored module roots, and a write into a readable root is refused (the
-  audit counts it as `READ_ONLY`; the model gets `PERMISSION_DENIED | code=PATH_DENIED` with the
-  hint). Use `browser4.agent.allowExternalAccess=true` for a deliberate, audited write escape
+  the workspace, its mirrored module roots and the **checkout those mirrors come from** (a task that
+  mirrors a repository may edit the repository it is developing — a boundary grant, not a readable
+  root), and a write into a readable root is refused (the audit counts it as `READ_ONLY`; the model
+  gets `PERMISSION_DENIED | code=PATH_DENIED` with the hint). The shell's *working directory* is
+  restricted to those project roots too: the checkout is a valid `workingDir`, a toolchain cache
+  (`%TEMP%`, `~/.m2`, the JDK, `C:\Windows`) is not. Use
+  `browser4.agent.allowExternalAccess=true` for a deliberate, audited write escape
   hatch. Reading is independent of the preset — `--access read` narrows workspace *power*, not the
   readable roots — and `coding.permissions` prints the roots in effect. The OS credential stores
   (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) stay refused even when a readable root
