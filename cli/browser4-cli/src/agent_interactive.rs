@@ -2721,8 +2721,8 @@ impl Repl {
         }
     }
 
-    /// The opening banner: the session, the engine, and only the knobs this
-    /// session actually changed.
+    /// The opening banner: the session and only the knobs this session actually
+    /// changed.
     ///
     /// It used to list one fixed sentence, so a session started with `--coding`,
     /// `--access read-build` or a token budget looked exactly like a default one —
@@ -2740,7 +2740,9 @@ impl Repl {
     /// The banner's two lines, pure so the knobs can be tested without a terminal.
     fn banner_lines(&self) -> Vec<String> {
         let session = self.session_id().unwrap_or_else(|| "default".to_string());
-        let mut line = format!("Browser4 agent · session={session} · engine={}", self.engine);
+        // No engine field: the CLI tool loop is the only engine left, so naming it
+        // on every banner would be noise.
+        let mut line = format!("Browser4 agent · session={session}");
         if self.coding {
             line.push_str(" · coding=on");
         }
@@ -5248,7 +5250,9 @@ mod tests {
         let lines = default_repl.banner_lines();
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(lines[0].contains("session=default"), "{lines:?}");
-        for knob in ["coding=", "access=", "budget=", "quiet"] {
+        // `engine=` is gone from the banner entirely: the CLI tool loop is the only
+        // engine left, so there is nothing for the reader to choose or compare.
+        for knob in ["engine=", "coding=", "access=", "budget=", "quiet"] {
             assert!(!lines[0].contains(knob), "default shows no {knob}: {lines:?}");
         }
         assert!(

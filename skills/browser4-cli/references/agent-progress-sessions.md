@@ -172,7 +172,7 @@ Every task of a session is a new agent run, so the backend hands it a compacted 
 
 What the session's own chrome says:
 
-- **The banner lists only what you changed.** `Browser4 agent · session=abc · engine=cli` plus `· coding=on`, `· access=read-build`, `· budget=5.00M`, `· quiet` when they apply — then `  type a task · /help for commands · Ctrl+C cancels the running task`. A default session prints no knob at all, so the line that does appear is the one that matters.
+- **The banner lists only what you changed.** `Browser4 agent · session=abc` plus `· coding=on`, `· access=read-build`, `· budget=5.00M`, `· quiet` when they apply — then `  type a task · /help for commands · Ctrl+C cancels the running task`. A default session prints no knob at all, so the line that does appear is the one that matters. There is no `engine=` field: the CLI tool loop is the only engine.
 - **Each task starts on a blank line**, headed `▶ task 5b0c3f2a — Summarize the pricing page` (the task text is collapsed to one line and capped at 60 characters).
 - **`/status` is one line**: `task 5b0c3f2a · running · 12 step(s) — collecting product details` (no message → no tail, never a trailing space).
 - **A failure names its cause and the way out**: `✖ failed · 5b0c3f2a · 3.2s — page_blocked: the page was blocked` followed, when the backend says the run can continue, by `    resume: agent run --resume 5b0c3f2a · /status for the envelope`.
