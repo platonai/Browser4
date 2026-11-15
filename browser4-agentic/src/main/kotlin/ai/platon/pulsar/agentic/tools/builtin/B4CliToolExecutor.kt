@@ -150,6 +150,11 @@ class B4CliToolExecutor(
                 "every step's output is returned, a failing step is reported as " +
                 "`Batch command N failed (<command>): <reason>`, the batch then continues unless " +
                 "bail=true, and the exit code is 5 when at least one step failed. " +
+                "STEPS ARE PAGE/DOM ACTIONS plus `goto`. Session and harness commands are refused " +
+                "by the CLI in batch mode (`open`, `close`, `attach`, cookie/storage/state, " +
+                "snapshot-file, network, crawl/agent/…), so a batch cannot start a browser: open " +
+                "the page first with b4.run(args=\"open --headless <url>\"), then batch the actions " +
+                "on it (or make `goto <url>` the first step when a page is already up). " +
                 "TRADE-OFF: you get every step's output, but you cannot adapt between steps — " +
                 "a command whose arguments depend on what an earlier command returned must stay " +
                 "a separate b4.run call. A step cannot use `--stdin` (stdin carries the command " +

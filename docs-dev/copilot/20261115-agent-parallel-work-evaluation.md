@@ -836,6 +836,26 @@ batch --json <<< ["eval document.title","eval document.URL","eval 1+1"]
 
 三条省 ≈87 ms，和上面的估算同向；省的是固定开销，`server` 那 20 ms 两种方式都要付。
 
+**端到端跑了一次 `agent run`（模型 + 真后端 + 这个工具），抓到一个真限制。** 提示词要求"只用一次
+b4.batch"完成 `open` + 两条 `eval`，模型照做了，结果是：
+
+```
+b4_batch({"commands":"open --headless https://example.com\neval document.title\neval document.URL"})
+[timing] launch=71ms startup=22ms http=3145ms server=3132ms net=13ms calls=2 total=3173ms
+stderr: Batch command 1 failed (open --headless https://example.com):
+        Command 'open' is not supported in batch mode. Batch mode only supports DOM operations.
+```
+
+这条同时证明了整条链：工具 → `CliRunRequest.stdin` → 子进程 stdin → CLI 的 `batch --json` →
+后端 → `X-Browser4-Duration-Ms` → 管理器补 `launch=` → 结果里那行 `[timing]`，而 `bail` 没开时
+后两条照样执行（`calls=2`）、退出码 5 正确变成 `[fail]`。**同时**它暴露了文档没写对的地方：
+CLI 的 batch 模式**不接受 `open`**（连同 `close`/`attach`/cookie/storage/state/网络/crawl/agent 等
+162 个命令），也就是说**批不能开浏览器**。`goto` 是支持的（单独验过：`goto` + 2 条 `eval` =
+一个进程、`calls=12`、`server=2787ms`）。工具描述已改成：批的步骤只能是页面/DOM 动作加 `goto`，
+**先用 `b4.run(args="open --headless <url>")` 把页面打开**，再批动作；或页面已开着时把 `goto`
+作为第一步。没有在工具里复制一份"哪些命令能进批"的清单——那会随 CLI 变化而腐烂，CLI 自己的报错
+已经点名了第几步。
+
 **代价（就是 §13.2 说的那个决定）**：**每一步的输出都在**（CLI 逐条打印，失败行是
 `Batch command N failed (<command>): <reason>`，退出码 5 表示至少一步失败），**丢的是
 "步与步之间的判断"**——后一条命令的参数如果要依赖前一条的返回值，就不能批。所以规则很简单：
@@ -883,12 +903,15 @@ refused: …`）。用 `PermissionAudit` 的信封而不是自造前缀，是因
 然后直接调 CLI，读 `[timing]`——`server` 段在真实页面上出现（`server=1009ms` / `http=1016ms`），
 `batch --json` 一个进程跑完三条命令，本 workspace 的后端活着时端口决策一次探测都不做。
 原始输出见 [e3-dev-startup/real-backend.txt](20261115-wait-split-experiments/e3-dev-startup/real-backend.txt)。
-这一步同时验证了 `X-Browser4-Duration-Ms` 两端接得上（后端新代码 + CLI 新代码），以及
-`batch --json` 在真后端上确实逐条执行、逐条打印。
 
-**没有做的**：通过 `agent run` 端到端跑一次 `b4.run(stdin=…)`/`b4.batch`（那需要真实模型，工具层
-由 `B4CliBatchTest` 与上面的 CLI 级验证覆盖，中间只剩一层 `CliRunRequest` 透传）；`--file` 作为
-payload 通道的工具封装（`stdin` 已覆盖，`--file` 一直可用）。
+**模型也跑过一遍**：一次 `agent run`（DeepSeek + 真后端 + `-Dbrowser4.agent.b4.timing=true`）让模型
+只用一次 `b4.batch`，工具结果里出现了完整的 `[timing] launch=71ms startup=22ms http=3145ms
+server=3132ms net=13ms calls=2 total=3173ms`——`X-Browser4-Duration-Ms` 两端接得上、
+`stdin` 载荷进了 CLI、`launch=` 由管理器补齐、退出码 5 变成了 `[fail]`。这次还抓到了 §14.4 那个
+"批不能 `open`" 的限制，工具描述已据此改。
+
+**没有做的**：另一个 checkout 那 1 s 的复测已补（§14.1）；`--file` 作为 payload 通道的工具封装
+（`stdin` 已覆盖，`--file` 一直可用）。
 
 ## 附录：本文引用的数据
 

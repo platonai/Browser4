@@ -80,3 +80,44 @@ pwsh ./b4w.ps1 -Rebuild goto https://example.com       # rebuild + start + one p
 '["eval document.title","eval document.URL","eval 1+1"]' | & $exe batch --json
 pwsh ./b4w.ps1 stop
 ```
+
+## One `agent run`, model included (2026-11-15 23:54, task 3665606a-87fe-4958-b2fd-ab2b92164df4)
+
+Backend started with `BROWSER4_SERVER_OPTS="-Dbrowser4.agent.b4.timing=true"` (the line below is
+the tool result text as the model saw it). Prompt: "Use exactly ONE b4.batch call to do all of
+this in order: (1) open https://example.com headless, (2) eval document.title, (3) eval
+document.URL."
+
+```
+b4_batch({"commands":"open --headless https://example.com\neval document.title\neval document.URL"})
+  ↳ #1 b4_batch failed after 3.5s: b4.batch [fail] failed: CLI exited with code 5
+    Batch command 1 failed (open --headless https://example.com):
+      Command 'open' is not supported in batch mode. Batch mode only supports DOM operations.
+    [timing] launch=71ms startup=22ms http=3145ms server=3132ms net=13ms calls=2 total=3173ms
+    - CLI exited with code 5
+```
+
+What this one result proves, all at once:
+
+- the tool's `commands` argument reached the CLI as the JSON list on **stdin** (that is why step 1
+  could be compiled at all);
+- the CLI ran the remaining steps with `--bail` off (`calls=2`) and reported exit code 5, which
+  `b4.batch` turned into `[fail]`;
+- `X-Browser4-Duration-Ms` is populated by the new backend (`server=3132ms` of `http=3145ms`);
+- `launch=71ms` is the manager's share (subprocess duration minus the CLI's own `total`), i.e. the
+  value the CLI cannot observe itself;
+- `-Dbrowser4.agent.b4.timing=true` is what puts the line in front of the model (default: metrics
+  only).
+
+And it found a real limitation: **a batch cannot `open` a browser.** The CLI's batch mode
+accepts page/DOM actions (162 commands are excluded, `open`/`close`/`attach`/cookie/storage/
+state/network/crawl/agent among them). `goto` *is* accepted:
+
+```
+'["goto https://example.com","eval document.title","eval document.URL"]' | & $exe batch --json
+  : ... Example Domain / https://example.com/
+  [timing] startup=21ms http=2868ms server=2787ms net=81ms calls=12 total=2786ms
+```
+
+So the tool description now says: open the page first (`b4.run(args="open --headless <url>")`) or
+use `goto` as the first step when a page is already up.
