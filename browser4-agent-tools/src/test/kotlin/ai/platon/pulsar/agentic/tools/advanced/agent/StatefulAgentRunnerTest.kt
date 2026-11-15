@@ -592,6 +592,16 @@ class StatefulAgentRunnerTest {
             AgentHistory()
         }
         val runner = StatefulAgentRunner(mockSession(agent))
+        // The coding path would otherwise isolate this test's task in a real worktree of
+        // the checkout it runs in (`<repo>/.browser4/worktrees/<taskId>`, with a stash
+        // baseline) — a test must not create checkouts in the developer's repository.
+        // A throwaway workspace plus the documented opt-out keeps it in the temp dir.
+        val workspace = Files.createDirectories(tempDir.resolve("coding-workspace"))
+        every { agent.baseDir } returns workspace
+        val previousWorkspace = System.getProperty("browser4.agent.workspace")
+        val previousIsolation = System.getProperty("browser4.agent.workspace.isolation")
+        System.setProperty("browser4.agent.workspace", workspace.toString())
+        System.setProperty("browser4.agent.workspace.isolation", "off")
         try {
             val status = AgentTaskStatus()
             runner.execute("fix pom.xml", status, coding = true)
@@ -599,6 +609,10 @@ class StatefulAgentRunnerTest {
             assertEquals(true, codingDuringRun, "the coding flag must be in force while the agent runs")
             assertEquals(false, agent.codingMode, "the coding-mode override must reset when the task ends")
         } finally {
+            if (previousWorkspace == null) System.clearProperty("browser4.agent.workspace")
+            else System.setProperty("browser4.agent.workspace", previousWorkspace)
+            if (previousIsolation == null) System.clearProperty("browser4.agent.workspace.isolation")
+            else System.setProperty("browser4.agent.workspace.isolation", previousIsolation)
             runner.close()
         }
     }

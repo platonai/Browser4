@@ -72,17 +72,19 @@ class WorktreeRetentionTest {
     private fun writeManifest(
         worktree: Path,
         merge: String?,
+        ageDays: Long = 0,
         state: WorkspaceState = WorkspaceState.COMPLETE,
         status: TaskStatus = TaskStatus.COMPLETE,
         runningTask: Boolean = false,
     ) {
+        val endedAt = Instant.now().minus(ageDays, ChronoUnit.DAYS)
         val snapshot = TaskSnapshot(
             taskId = worktree.fileName.toString(),
             instruction = "do the task",
             coding = true,
-            startedAt = Instant.now().minusSeconds(600),
+            startedAt = endedAt.minusSeconds(600),
             status = if (runningTask) null else status,
-            endedAt = if (runningTask) null else Instant.now().minusSeconds(60),
+            endedAt = if (runningTask) null else endedAt,
             isolation = "worktree",
             worktree = worktree.toString(),
             merge = merge,
@@ -103,7 +105,7 @@ class WorktreeRetentionTest {
     /** Create a managed worktree whose directory mtime is [ageDays] days old. */
     private fun addWorktree(id: String, ageDays: Long, merge: String? = "applied"): Path {
         val path = createWorktree(id)
-        writeManifest(path, merge)
+        writeManifest(path, merge, ageDays = ageDays)
         ageByDays(path, ageDays)
         return path
     }
@@ -249,13 +251,33 @@ class WorktreeRetentionTest {
     @DisplayName("the tree of a still-running task is kept even when it is old")
     fun activeWorktreeIsKept() {
         val active = createWorktree("t-active")
-        writeManifest(active, merge = null, state = WorkspaceState.ACTIVE, runningTask = true)
+        writeManifest(active, merge = null, ageDays = 30, state = WorkspaceState.ACTIVE, runningTask = true)
         ageByDays(active, 30)
 
         val report = WorktreeRetention.sweep(repo, keep = 0, maxAgeDays = 0, dryRun = false)
 
         assertEquals(listOf(active), report.unmerged)
         assertTrue(Files.isDirectory(active))
+    }
+
+    @Test
+    @DisplayName("retention order follows the task ledger, not the directory timestamp")
+    fun orderingFollowsTheLedger() {
+        // A checkout's directory mtime freezes at creation, so a long task that only edited
+        // existing files looks older than an idle tree it is in fact newer than.
+        val recentlyFinished = createWorktree("t-recent-task")
+        writeManifest(recentlyFinished, merge = "applied", ageDays = 1)
+        ageByDays(recentlyFinished, 30)          // the directory looks old…
+
+        val oldTask = createWorktree("t-old-task")
+        writeManifest(oldTask, merge = "applied", ageDays = 30)
+        ageByDays(oldTask, 0)                    // …and this one looks new
+
+        val report = WorktreeRetention.sweep(repo, keep = 1, maxAgeDays = 0, dryRun = false)
+
+        assertEquals(listOf(recentlyFinished), report.kept, "the newer task must be the tree kept")
+        assertTrue(Files.isDirectory(recentlyFinished))
+        assertFalse(Files.exists(oldTask), "the older task's tree must be reclaimed")
     }
 
     @Test

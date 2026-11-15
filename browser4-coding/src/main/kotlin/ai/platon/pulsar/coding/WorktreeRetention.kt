@@ -16,7 +16,8 @@ import java.time.Instant
  * model already had.
  *
  * Rules:
- * 1. keep the newest [keep] worktrees by modification time, always;
+ * 1. keep the newest [keep] worktrees by last activity — the task ledger's end/start
+ *    time, falling back to the directory mtime;
  * 2. keep anything younger than [maxAgeDays] (so a reviewer is never surprised);
  * 3. **never reclaim a tree that still holds the only copy of a change**: a tree
  *    whose manifest says the task did not merge (refused, failed, cancelled,
@@ -125,9 +126,13 @@ object WorktreeRetention {
         }
         val excluded = exclude?.toAbsolutePath()?.normalize()
 
-        // Newest first: index < keep is retained before age is even considered.
+        // Newest first: index < keep is retained before age is even considered. The task
+        // ledger is the clock, not the directory mtime: a checkout's directory stops
+        // changing as soon as it is created, so a long task that only edited existing
+        // files would look older than an idle tree it is in fact newer than — and the
+        // age rule below would evict it first.
         val ordered = entries
-            .map { it.toAbsolutePath().normalize() to lastModified(it) }
+            .map { it.toAbsolutePath().normalize() to lastActivity(it) }
             .sortedByDescending { it.second }
         val now = Instant.now()
 
@@ -196,6 +201,19 @@ object WorktreeRetention {
             )
         }
         return Report(kept, removed, skipped, errors, unmerged, unknown)
+    }
+
+    /**
+     * When the tree was last worked in: the task's end (or its start, while it still
+     * runs) from the manifest, falling back to the directory mtime for a tree without a
+     * readable ledger.
+     */
+    private fun lastActivity(worktree: Path): Instant {
+        val manifest = runCatching { WorkspaceManifestStore().read(worktree) }.getOrNull()
+        val fromLedger = manifest?.let { m ->
+            m.lastTask?.endedAt ?: m.lastTask?.startedAt ?: m.currentTask?.startedAt
+        }
+        return fromLedger ?: lastModified(worktree)
     }
 
     private fun lastModified(path: Path): Instant =

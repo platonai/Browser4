@@ -58,6 +58,12 @@ requirement is met with a git worktree instead of a copy: every write is disposa
 `git status`/`git diff` work, and a change that does not pass `coding.verify` is never
 merged into the checkout.
 
+**A workspace that is not a git work tree cannot run isolated at all.** The coding task
+fails and says so: install git, or set `-Dbrowser4.agent.workspace.isolation=off`. It
+does not fall back to the mirror, because mirroring links the checkout's modules into the
+scratch workspace — every write would land in your tree with no merge step and no
+`merge`/`isolatedWorkspace` in the result.
+
 **Where a coding task's change lands.** `agent result` reports `workspace` = the
 **main repository** (the checkout the patch was applied to), `isolatedWorkspace` = the
 worktree, and `merge` = `applied` | `refused` | `pending`. `refused` means nothing was

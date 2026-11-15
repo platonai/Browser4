@@ -72,17 +72,19 @@ BeforeAll {
         & git -C $Repo worktree add --detach --force $path HEAD 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "could not create worktree $Id" }
         # A real isolated run leaves its task ledger inside the tree; the sweeper reads
-        # it to decide whether the change reached the checkout. 'unknown' = legacy tree.
+        # it to decide whether the change reached the checkout (and when the tree was
+        # last worked in — the manifest is the clock, not the directory timestamp).
         if ($Manifest -ne 'unknown') {
             $merge = if ($Manifest -eq 'merged') { 'applied' } else { 'refused' }
+            $endedAt = (Get-Date).AddDays(-$AgeDays)
             $doc = [ordered]@{
                 schema = 2; workspaceId = $Id; agentUuid = 'agent'; engine = 'cli'
                 state = 'COMPLETE'; currentTask = $null
                 lastTask = [ordered]@{
                     taskId = $Id; instruction = 'task'; coding = $true
-                    startedAt = (Get-Date).AddMinutes(-10).ToString('o')
+                    startedAt = $endedAt.AddMinutes(-10).ToString('o')
                     status = 'COMPLETE'
-                    endedAt = (Get-Date).ToString('o')
+                    endedAt = $endedAt.ToString('o')
                     filesChanged = @(); mutations = 0
                     isolation = 'worktree'; worktree = $path; merge = $merge
                 }

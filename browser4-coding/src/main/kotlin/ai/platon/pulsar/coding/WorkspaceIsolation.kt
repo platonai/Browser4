@@ -5,6 +5,8 @@ import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /** Result of one `git` invocation (argument array, no shell). */
@@ -15,20 +17,36 @@ private data class GitOutcome(val exitCode: Int, val stdout: String, val stderr:
 /**
  * Run git in [dir]. Git is invoked directly with an argument array: no shell, no
  * quoting, and no way for a path to turn into a command.
+ *
+ * **Both pipes are drained while git runs.** Waiting for the process first deadlocks as
+ * soon as its output exceeds the OS pipe buffer (4 KiB for an anonymous pipe on Windows):
+ * git blocks writing, this thread blocks waiting, and only the timeout ends it. That made
+ * `git status --porcelain` on a wide change set look like "no changes to merge" and a
+ * >4 KiB `diff --cached --binary` look like a timeout — i.e. real changes silently failed
+ * to merge.
  */
 private fun runGit(dir: Path, args: List<String>): GitOutcome = runCatching {
     val process = ProcessBuilder(listOf("git") + args)
         .directory(dir.toFile())
         .redirectErrorStream(false)
         .start()
-    // git is fast; a hung git is a broken environment, not a slow task.
-    if (!process.waitFor(120, TimeUnit.SECONDS)) {
-        process.destroyForcibly()
-        return GitOutcome(-1, "", "git ${args.joinToString(" ")} timed out")
+    val readers = Executors.newVirtualThreadPerTaskExecutor()
+    val stdout = readers.submit(Callable { process.inputStream.bufferedReader().use { it.readText() } })
+    val stderr = readers.submit(Callable { process.errorStream.bufferedReader().use { it.readText() } })
+    try {
+        // git is fast; a hung git is a broken environment, not a slow task.
+        if (!process.waitFor(120, TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            return GitOutcome(-1, "", "git ${args.joinToString(" ")} timed out")
+        }
+        GitOutcome(
+            process.exitValue(),
+            stdout.get(30, TimeUnit.SECONDS),
+            stderr.get(30, TimeUnit.SECONDS),
+        )
+    } finally {
+        readers.shutdownNow()
     }
-    val stdout = process.inputStream.bufferedReader().use { it.readText() }
-    val stderr = process.errorStream.bufferedReader().use { it.readText() }
-    GitOutcome(process.exitValue(), stdout, stderr)
 }.getOrElse { GitOutcome(-1, "", it.message ?: it.javaClass.simpleName) }
 
 /**
@@ -94,6 +112,13 @@ class WorkspaceIsolation private constructor(
 
         /** Refs that make "undo this task" and "these are my changes" durable. */
         const val REF_PREFIX = "refs/b4"
+
+        /**
+         * Upper bound on the patch [applyToMain] will produce and apply (32 MiB of patch
+         * text): the diff is built in memory, so a stray binary dump in the change set is
+         * refused by name instead of exhausting the backend's heap.
+         */
+        const val MAX_PATCH_CHARS = 32 * 1024 * 1024
 
         /**
          * Pathspecs excluded from every changed-file / patch computation.
@@ -169,6 +194,23 @@ class WorkspaceIsolation private constructor(
         /** Whether [candidateRoot] can be isolated right now. */
         fun isAvailable(candidateRoot: Path): Boolean =
             resolveRepoRoot(candidateRoot) != null
+
+        /**
+         * Why a coding task cannot run isolated in [workspaceRoot], or null when it can.
+         *
+         * A coding task that cannot get a worktree must **fail**, not fall back to the
+         * mirror: mirroring links the checkout's modules into the scratch workspace, so
+         * every write lands in the user's tree — the isolation the operator asked for
+         * silently stops existing, and the result carries no `merge`/`isolatedWorkspace`
+         * to say so. The caller turns this into the task's failure message.
+         */
+        fun isolationUnavailableReason(workspaceRoot: Path): String? {
+            if (isAvailable(workspaceRoot)) return null
+            return "$workspaceRoot is not a git work tree, so a coding task cannot run in an " +
+                "isolated worktree. Install git and run inside the checkout, or set " +
+                "-Dbrowser4.agent.workspace.isolation=off to run in place (its writes then reach the " +
+                "checkout through the workspace mirror, and nothing merges a patch)."
+        }
 
         /**
          * Whether [path] points into a managed worktree directory
@@ -389,8 +431,16 @@ class WorkspaceIsolation private constructor(
      *
      * @param taskId task identity used for the patch name and the pre-merge ref
      * @param keepWorktree false merges like the legacy `commit()` and removes the tree
+     * @param maxPatchChars refuse a change whose binary patch is larger than this. The
+     *   patch is produced and applied in memory, so an accidental data/binary dump
+     *   (fixtures, `*.jar`, model weights) would cost gigabytes; a refusal that names
+     *   the size is more useful than an OOM, and the caller keeps the tree to inspect.
      */
-    suspend fun applyToMain(taskId: String, keepWorktree: Boolean = true): Outcome = withContext(Dispatchers.IO) {
+    suspend fun applyToMain(
+        taskId: String,
+        keepWorktree: Boolean = true,
+        maxPatchChars: Int = MAX_PATCH_CHARS,
+    ): Outcome = withContext(Dispatchers.IO) {
         val changed = changedFiles()
         if (changed.isEmpty()) {
             if (!keepWorktree) cleanupWorktree()
@@ -408,6 +458,16 @@ class WorkspaceIsolation private constructor(
         )
         if (staged.exitCode != 0 || staged.stdout.isBlank()) {
             return@withContext Outcome(false, changed, "Could not produce the isolated patch: ${staged.output.takeLast(400)}")
+        }
+        if (staged.stdout.length > maxPatchChars) {
+            return@withContext Outcome(
+                false,
+                changed,
+                "the isolated change is too large to merge as a patch " +
+                    "(${staged.stdout.length} chars > $maxPatchChars): keep build output, fixtures and " +
+                    "binary assets out of the change set, or split the task. Nothing was applied; the " +
+                    "worktree is kept at $isolatedRoot",
+            )
         }
         val patch = repoRoot.resolve(PATCH_DIR).resolve("${sanitize(taskId)}.patch")
         runCatching { Files.createDirectories(patch.parent) }

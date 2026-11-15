@@ -650,9 +650,9 @@ open class StatefulAgentRunner(
      * already changed are what the new run continues from. That tree is the **only**
      * copy of those files until a merge, so a resume that cannot reopen it fails the
      * task instead of quietly starting a fresh tree (which would look successful and
-     * leave the interrupted work behind). Any other failure to start isolation is
-     * logged and degrades to the per-task workspace — never to writing straight into
-     * the user's checkout.
+     * leave the interrupted work behind). A workspace that cannot be isolated at all
+     * (no git work tree) fails the task too: the mirror fallback would write the
+     * user's checkout with no merge step to apply.
      */
     private suspend fun startIsolation(
         taskId: String,
@@ -695,9 +695,12 @@ open class StatefulAgentRunner(
         }
         val source = runCatching { CodingWorkspace.workspaceRoot }.getOrNull()
             ?: return IsolationStart(null, null)
-        if (!WorkspaceIsolation.isAvailable(source)) {
-            logger.info("Agent task {}: {} is not a git work tree; running in the per-task workspace", taskId, source)
-            return IsolationStart(null, null)
+        // Isolation was requested but cannot be provided: fail instead of silently
+        // degrading. The per-task workspace is a mirror of the checkout (its module
+        // entries link back into the real tree), so "no isolation" would write the user's
+        // checkout with no merge step and no `merge`/`isolatedWorkspace` in the result.
+        WorkspaceIsolation.isolationUnavailableReason(source)?.let { reason ->
+            throw IllegalStateException("task $taskId: $reason")
         }
         // Throws when another coding task holds the checkout: running this one
         // unisolated would collide at merge time and in the Maven build cache.

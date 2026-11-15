@@ -406,6 +406,35 @@ function Get-WorktreeRetention {
 }
 
 <#
+    When a managed worktree was last worked in: the task ledger's end (or start, while it
+    still runs) time, falling back to the directory timestamp. The backend sweeper orders
+    by the same clock (a checkout's directory mtime freezes at creation, so a long task
+    that only edited existing files would otherwise look older than an idle tree it is in
+    fact newer than).
+#>
+function Get-WorktreeLastActivity {
+    param([string]$Worktree)
+
+    $manifest = Join-Path $Worktree '.browser4/workspace.json'
+    if (Test-Path -LiteralPath $manifest) {
+        try {
+            $doc = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
+            $stamp = $null
+            if ($null -ne $doc.lastTask) {
+                $stamp = $doc.lastTask.endedAt
+                if (-not $stamp) { $stamp = $doc.lastTask.startedAt }
+            } elseif ($null -ne $doc.currentTask) {
+                $stamp = $doc.currentTask.startedAt
+            }
+            if ($stamp) {
+                return [datetimeoffset]::Parse($stamp, [cultureinfo]::InvariantCulture).LocalDateTime
+            }
+        } catch { }
+    }
+    return (Get-Item -LiteralPath $Worktree).LastWriteTime
+}
+
+<#
     Reclaim stale isolated worktrees with the same rule the backend applies
     (`browser4.agent.isolation.keep` / `.maxAgeDays`), but on demand: the backend
     only sweeps at the start of a coding task.
@@ -426,7 +455,11 @@ function Invoke-Prune {
         return 0
     }
     $managedFull = (Resolve-Path $managed).Path
-    $entries = @(Get-ChildItem -LiteralPath $managedFull -Directory | Sort-Object LastWriteTime -Descending)
+    # Newest first by last activity (the task ledger, falling back to the directory time):
+    # the backend's sweeper uses the same clock, so both reclaim the same trees.
+    $entries = @(Get-ChildItem -LiteralPath $managedFull -Directory | ForEach-Object {
+        [pscustomobject]@{ Dir = $_; Activity = (Get-WorktreeLastActivity -Worktree $_.FullName) }
+    } | Sort-Object Activity -Descending)
     if ($entries.Count -eq 0) {
         Write-Host 'recover: no managed worktrees'
         return 0
@@ -440,29 +473,30 @@ function Invoke-Prune {
     $unknown = 0
     for ($i = 0; $i -lt $entries.Count; $i++) {
         $entry = $entries[$i]
+        $dir = $entry.Dir
         if ($i -lt $Keep) { $kept++; continue }
-        $ageDays = ($now - $entry.LastWriteTime).TotalDays
+        $ageDays = ($now - $entry.Activity).TotalDays
         if ($ageDays -lt $MaxAgeDays) { $kept++; continue }
-        if (-not $entry.FullName.StartsWith($managedFull)) { continue }
+        if (-not $dir.FullName.StartsWith($managedFull)) { continue }
 
-        $retention = Get-WorktreeRetention -Worktree $entry.FullName
+        $retention = Get-WorktreeRetention -Worktree $dir.FullName
         if ($retention -ne 'merged' -and -not $Force) {
             if ($retention -eq 'unmerged') {
                 $unmerged++
-                Write-Host "  kept $($entry.Name): its change never merged into the checkout" -ForegroundColor Yellow
+                Write-Host "  kept $($dir.Name): its change never merged into the checkout" -ForegroundColor Yellow
             } else {
                 $unknown++
-                Write-Host "  kept $($entry.Name): no manifest, so it cannot be proven disposable" -ForegroundColor Yellow
+                Write-Host "  kept $($dir.Name): no manifest, so it cannot be proven disposable" -ForegroundColor Yellow
             }
             continue
         }
 
         if ($DryRun) {
-            Write-Host "  would remove $($entry.FullName) (age $([math]::Round($ageDays,1))d)" -ForegroundColor DarkGray
+            Write-Host "  would remove $($dir.FullName) (age $([math]::Round($ageDays,1))d)" -ForegroundColor DarkGray
             $kept++
             continue
         }
-        $remove = Invoke-Git $RepoRoot @('worktree', 'remove', '--force', $entry.FullName)
+        $remove = Invoke-Git $RepoRoot @('worktree', 'remove', '--force', $dir.FullName)
         if ($remove.ExitCode -eq 0) {
             $removed++
             Write-Host "  removed $($entry.Name) (age $([math]::Round($ageDays,1))d)" -ForegroundColor DarkGray
