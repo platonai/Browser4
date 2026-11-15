@@ -3,10 +3,14 @@ package ai.platon.pulsar.coding
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory
 import java.net.InetAddress
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import java.time.Duration
 import java.time.Instant
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * One coding task per checkout at a time.
@@ -18,10 +22,16 @@ import java.time.Instant
  * collide at merge time and in the build cache. This lock serialises them.
  *
  * Lock file: `<repo>/.git/b4-coding.lock` (beside git's own locks, never tracked).
- * It records `pid`, `host`, `taskId` and `startedAt`, so a task that blocks
- * another can say exactly who holds it. A lock is **stale** when its process is
- * gone or it is older than `browser4.agent.lock.staleHours` (default 12) — the
- * takeover is logged with the old holder, never silent.
+ * It records `pid`, `host`, `taskId`, `startedAt` and a per-acquire `token`, so a
+ * task that blocks another can say exactly who holds it, and a release can only
+ * remove the record it wrote. The file is claimed with
+ * `CREATE_NEW` — a check-then-write would let two processes (two backends on one
+ * checkout, or two sessions of one backend) both see "no lock" and both win.
+ *
+ * Staleness: the age limit `browser4.agent.lock.staleHours` (default 12) applies
+ * always; the pid probe applies **only on the host that wrote the lock**, because
+ * pids are not globally unique and a dead-looking pid on another machine says
+ * nothing about that holder. A takeover is logged with the old holder, never silent.
  *
  * Acquire before creating the worktree; release in the task's `finally`.
  */
@@ -29,7 +39,9 @@ class RepoLock private constructor(
     val repoRoot: Path,
     val lockFile: Path,
     val taskId: String,
-    private val holderPid: Long,
+    val holderPid: Long,
+    /** Nonce identifying THIS acquisition; only the writer may release the file. */
+    private val token: String,
 ) : AutoCloseable {
 
     companion object {
@@ -38,6 +50,19 @@ class RepoLock private constructor(
 
         const val LOCK_FILE = ".git/b4-coding.lock"
         const val STALE_HOURS_PROPERTY = "browser4.agent.lock.staleHours"
+
+        /** Claim attempts before giving up: a takeover may itself lose a race. */
+        internal const val ACQUIRE_ATTEMPTS = 3
+
+        /**
+         * Locks held by THIS JVM, keyed by lock file.
+         *
+         * The file protocol alone leaves a check-then-write window between
+         * coroutines sharing a process (the runner mutex is per session, so two
+         * sessions of one backend can arrive here together). The map is the
+         * authoritative answer inside the process; the file covers everything else.
+         */
+        private val held = ConcurrentHashMap<Path, RepoLock>()
 
         /**
          * Acquire the checkout's coding lock.
@@ -53,43 +78,82 @@ class RepoLock private constructor(
             val root = repoRoot.toAbsolutePath().normalize()
             val lockFile = root.resolve(LOCK_FILE)
             val pid = ProcessHandle.current().pid()
-            val now = Instant.now()
 
-            val previous = read(lockFile)
-            if (previous != null) {
-                if (!isStale(previous, staleHours, now)) {
-                    throw IllegalStateException(
-                        "another coding task is already running in $root: " +
-                            "task=${previous.taskId} pid=${previous.pid} started=${previous.startedAt}. " +
-                            "Wait for it to finish, or delete $lockFile if that process is gone."
-                    )
-                }
-                logger.warn(
-                    "Taking over a stale coding lock in {} (task={} pid={} started={})",
-                    root, previous.taskId, previous.pid, previous.startedAt,
+            held[lockFile]?.let { live ->
+                throw IllegalStateException(
+                    "another coding task is already running in $root: " +
+                        "task=${live.taskId} pid=${live.holderPid}. " +
+                        "Wait for it to finish."
                 )
             }
 
             runCatching { Files.createDirectories(lockFile.parent) }
-            val record = LockRecord(pid, hostName(), taskId, now.toString())
-            Files.writeString(lockFile, JSON.writeValueAsString(record.toJsonMap()))
-            logger.info("coding lock acquired: {} (task={}, pid={})", lockFile, taskId, pid)
-            return RepoLock(root, lockFile, taskId, pid)
+            val token = UUID.randomUUID().toString()
+
+            repeat(ACQUIRE_ATTEMPTS) {
+                val now = Instant.now()
+                val record = LockRecord(pid, hostName(), taskId, now.toString(), token)
+                try {
+                    // CREATE_NEW is the atomic claim: exactly one writer creates the
+                    // file, everyone else gets FileAlreadyExistsException.
+                    Files.writeString(
+                        lockFile,
+                        JSON.writeValueAsString(record.toJsonMap()),
+                        StandardOpenOption.CREATE_NEW,
+                    )
+                } catch (e: FileAlreadyExistsException) {
+                    val previous = read(lockFile) ?: return@repeat  // vanished mid-check: retry
+                    if (!isStale(previous, staleHours, now)) {
+                        throw IllegalStateException(
+                            "another coding task is already running in $root: " +
+                                "task=${previous.taskId} pid=${previous.pid} started=${previous.startedAt}. " +
+                                "Wait for it to finish, or delete $lockFile if that process is gone."
+                        )
+                    }
+                    logger.warn(
+                        "Taking over a stale coding lock in {} (task={} pid={} started={})",
+                        root, previous.taskId, previous.pid, previous.startedAt,
+                    )
+                    runCatching { Files.deleteIfExists(lockFile) }.onFailure { e2 ->
+                        throw IllegalStateException(
+                            "could not take over the stale coding lock $lockFile: ${e2.message}"
+                        )
+                    }
+                    return@repeat
+                }
+                val lock = RepoLock(root, lockFile, taskId, pid, token)
+                held.putIfAbsent(lockFile, lock)
+                logger.info("coding lock acquired: {} (task={}, pid={})", lockFile, taskId, pid)
+                return lock
+            }
+            throw IllegalStateException(
+                "could not acquire the coding lock at $lockFile after $ACQUIRE_ATTEMPTS attempts " +
+                    "(another task keeps claiming it)"
+            )
         }
 
         /** The current holder, or null when the checkout is free. */
         fun holder(repoRoot: Path): LockRecord? = read(repoRoot.toAbsolutePath().normalize().resolve(LOCK_FILE))
 
-        /** Whether [holder] can be taken over: dead process, or older than [staleHours]. */
+        /**
+         * Whether [holder] can be taken over: older than [staleHours], or — on this
+         * host — a pid that no longer exists.
+         *
+         * The pid probe is skipped for a lock written by another host: that pid means
+         * nothing here (it is either absent or belongs to an unrelated process), and a
+         * false takeover runs two live coding tasks against one checkout.
+         */
         fun isStale(
             holder: LockRecord,
             staleHours: Long = staleHoursFromConfig(),
             now: Instant = Instant.now(),
         ): Boolean {
-            val alive = ProcessHandle.of(holder.pid).map { it.isAlive }.orElse(false)
-            if (!alive) return true
             val started = runCatching { Instant.parse(holder.startedAt) }.getOrNull() ?: return true
-            return Duration.between(started, now).toHours() >= staleHours
+            if (Duration.between(started, now).toHours() >= staleHours) return true
+            val localHost = hostName()
+            if (holder.host.isNotBlank() && !holder.host.equals(localHost, ignoreCase = true)) return false
+            val alive = ProcessHandle.of(holder.pid).map { it.isAlive }.orElse(false)
+            return !alive
         }
 
         fun staleHoursFromConfig(): Long =
@@ -105,20 +169,33 @@ class RepoLock private constructor(
                 host = node.path("host").asText(""),
                 taskId = node.path("taskId").asText(""),
                 startedAt = node.path("startedAt").asText(""),
+                token = node.path("token").asText(""),
             )
         }.getOrNull()
 
-        private fun hostName(): String = runCatching { InetAddress.getLocalHost().hostName }
+        /** This machine's name, as written into the lock record. */
+        internal fun hostName(): String = runCatching { InetAddress.getLocalHost().hostName }
             .getOrNull()
+            ?.takeIf { it.isNotBlank() }
             ?: System.getenv("COMPUTERNAME")
             ?: System.getenv("HOSTNAME")
             ?: "unknown"
     }
 
-    /** Release the lock, but only when this instance still owns it. */
+    /**
+     * Release the lock, but only when this instance still owns it.
+     *
+     * Ownership is the record this acquisition wrote (pid + taskId + token): after a
+     * takeover the file belongs to another task, and deleting it there would let a
+     * third coding task in while the second is still running.
+     */
     fun release() {
+        held.remove(lockFile, this)
         val current = read(lockFile) ?: return
-        if (current.pid != holderPid || current.taskId != taskId) {
+        val ownsIt = current.pid == holderPid &&
+            current.taskId == taskId &&
+            (current.token.isEmpty() || current.token == token)
+        if (!ownsIt) {
             logger.debug(
                 "coding lock at {} is held by task={} pid={}; not releasing it from task={} pid={}",
                 lockFile, current.taskId, current.pid, taskId, holderPid,
@@ -137,12 +214,15 @@ class RepoLock private constructor(
         val host: String,
         val taskId: String,
         val startedAt: String,
+        /** Nonce of the acquisition; empty for a record written before it existed. */
+        val token: String = "",
     ) {
         internal fun toJsonMap(): Map<String, Any> = linkedMapOf(
             "pid" to pid,
             "host" to host,
             "taskId" to taskId,
             "startedAt" to startedAt,
+            "token" to token,
         )
     }
 }

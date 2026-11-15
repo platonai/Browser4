@@ -143,4 +143,28 @@ class ModuleGraphTest {
         assertEquals("browser4-pdk", info.artifactId, "own artifact, not the parent's")
         assertEquals("browser4", info.parentArtifactId)
     }
+
+    @Test
+    @DisplayName("the pom scan never descends into kept worktrees or agent scratch dirs")
+    fun scanSkipsManagedWorktrees(@org.junit.jupiter.api.io.TempDir tmp: java.nio.file.Path) {
+        // A kept coding worktree is a FULL checkout under `.browser4/worktrees/<id>`.
+        // Scanning it made every module of every finished task a live module of this
+        // repository, which corrupted `coding.moduleGraph`, `coding.impact` and the
+        // dev-task planner on any machine that had run a coding task (and made the
+        // module-map drift check fail on a developer's own checkout).
+        fun write(relative: String) {
+            val dir = tmp.resolve(relative)
+            java.nio.file.Files.createDirectories(dir)
+            java.nio.file.Files.writeString(dir.resolve("pom.xml"), "<project><artifactId>$relative</artifactId></project>")
+        }
+        write("")
+        write("browser4-coding")
+        write(".browser4/worktrees/task-1/browser4-coding")
+        write(".b4scratch/helper")
+        write(".b4build/bundle")
+
+        val scanned = ModuleGraph.scanPomFiles(tmp).keys
+
+        assertEquals(setOf("browser4", "browser4-coding"), scanned, "agent bookkeeping is not a module: $scanned")
+    }
 }

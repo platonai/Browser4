@@ -647,9 +647,12 @@ open class StatefulAgentRunner(
      * plan §D1), or null when the task must run in its per-task directory.
      *
      * Resume re-attaches to the interrupted task's worktree, so the files it
-     * already changed are what the new run continues from. Any other failure to
-     * start isolation is logged and degrades to the per-task workspace — never to
-     * writing straight into the user's checkout.
+     * already changed are what the new run continues from. That tree is the **only**
+     * copy of those files until a merge, so a resume that cannot reopen it fails the
+     * task instead of quietly starting a fresh tree (which would look successful and
+     * leave the interrupted work behind). Any other failure to start isolation is
+     * logged and degrades to the per-task workspace — never to writing straight into
+     * the user's checkout.
      */
     private suspend fun startIsolation(
         taskId: String,
@@ -657,7 +660,11 @@ open class StatefulAgentRunner(
         resumeWorkspace: Path?,
         sharedWorkspace: Boolean?,
     ): IsolationStart {
-        if (!CodingWorkspace.isIsolationEnabled()) {
+        val isolationEnabled = CodingWorkspace.isIsolationEnabled()
+        // Throws when the resume names a managed worktree but isolation is off: no
+        // merge step would run, so the change could never reach the checkout.
+        val resumable = resumeWorktreeOf(taskId, resumeWorkspace, isolationEnabled)
+        if (!isolationEnabled) {
             return IsolationStart(null, null)
         }
         if (sharedWorkspace == true) {
@@ -670,20 +677,21 @@ open class StatefulAgentRunner(
                     "set -Dbrowser4.agent.workspace.isolation=off to run in place."
             )
         }
-        val resumable = resumeWorkspace?.takeIf {
-            it.toString().replace('\\', '/').contains("/.browser4/worktrees/")
-        }
         if (resumable != null) {
             val reopened = runCatching { WorkspaceIsolation.reopen(resumable, taskId) }
                 .onFailure { logger.warn("Agent task {}: could not reopen worktree {}: {}", taskId, resumable, it.message) }
                 .getOrNull()
-            if (reopened != null) {
-                // The lock is acquired on the MAIN checkout, not on the worktree.
-                val lock = RepoLock.acquire(reopened.repoRoot, taskId)
-                sweepWorktrees(reopened.repoRoot, exclude = resumable, taskId = taskId)
-                logger.info("Agent task {}: resuming the isolated worktree at {}", taskId, resumable)
-                return IsolationStart(reopened, lock)
-            }
+                ?: throw IllegalStateException(
+                    "task $taskId: the isolated worktree of the resumed task is gone ($resumable). Its " +
+                        "unmerged changes are the only copy and cannot be recovered, so the task was not " +
+                        "started. Re-run without --resume to start from the current checkout, or run " +
+                        "`b4w recover --status` to see what is left."
+                )
+            // The lock is acquired on the MAIN checkout, not on the worktree.
+            val lock = RepoLock.acquire(reopened.repoRoot, taskId)
+            sweepWorktrees(reopened.repoRoot, exclude = resumable, taskId = taskId)
+            logger.info("Agent task {}: resuming the isolated worktree at {}", taskId, resumable)
+            return IsolationStart(reopened, lock)
         }
         val source = runCatching { CodingWorkspace.workspaceRoot }.getOrNull()
             ?: return IsolationStart(null, null)

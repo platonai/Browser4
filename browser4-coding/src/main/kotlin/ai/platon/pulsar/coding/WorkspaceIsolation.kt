@@ -171,6 +171,25 @@ class WorkspaceIsolation private constructor(
             resolveRepoRoot(candidateRoot) != null
 
         /**
+         * Whether [path] points into a managed worktree directory
+         * (`<repo>/.browser4/worktrees/<runId>`), whatever the OS separator style.
+         *
+         * A run that ended in a worktree has its files **only** there, so a
+         * `--resume` must continue in exactly that tree: starting a fresh one (or
+         * running without isolation) would silently drop everything the
+         * interrupted task had already written. The caller uses this to tell
+         * "resume a worktree task" from "resume an ordinary per-task directory".
+         */
+        fun isManagedWorktree(path: Path): Boolean {
+            val text = runCatching { path.toAbsolutePath().normalize() }
+                .getOrNull()
+                ?.toString()
+                ?.replace('\\', '/')
+                ?: return false
+            return text.contains("/$WORKTREE_DIR/")
+        }
+
+        /**
          * Re-attach to a worktree created by an earlier (possibly crashed) run,
          * so a resumed task can commit or discard it.
          *

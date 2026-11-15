@@ -360,4 +360,15 @@ class WorkspaceIsolationTest {
         assertTrue(WorkspaceIsolation.isAvailable(tempDir))
         assertNotNull(WorkspaceIsolation.resolveRepoRoot(tempDir))
     }
+
+    @Test
+    @DisplayName("only paths under the managed worktree directory are recognized as isolated trees")
+    fun managedWorktreeDetection() {
+        // What a `--resume` must reopen: the interrupted task's files exist only there.
+        assertTrue(WorkspaceIsolation.isManagedWorktree(tempDir.resolve(".browser4/worktrees/task-1")))
+
+        // An ordinary per-task workspace and a plain checkout are not isolated trees.
+        assertFalse(WorkspaceIsolation.isManagedWorktree(tempDir.resolve("workspace.task-1")))
+        assertFalse(WorkspaceIsolation.isManagedWorktree(tempDir))
+    }
 }

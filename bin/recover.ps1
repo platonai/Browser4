@@ -53,7 +53,14 @@
     Reclaim stale isolated worktrees using the same rule as the backend
     (`browser4.agent.isolation.keep` / `maxAgeDays`): keep the newest -Keep and
     anything younger than -MaxAgeDays, remove the rest with `git worktree remove`.
+    A worktree whose task did not merge (refused, failed, cancelled, crashed) and
+    one with no manifest are never reclaimed: those files are the only copy of
+    that work. Use -Force to reclaim them anyway.
     Refuses while a coding task holds the checkout lock.
+
+.PARAMETER Force
+    With -Prune: also remove worktrees whose change never merged (and trees with
+    no manifest). This deletes unmerged work that no patch can restore.
 
 .PARAMETER Keep
     Worktrees always retained by -Prune (default 3).
@@ -89,6 +96,7 @@ param(
     [int]$Keep = 3,
     [int]$MaxAgeDays = 7,
     [switch]$DryRun,
+    [switch]$Force,
     # Explicit checkout root. Defaults to the script's own checkout (`b4w recover`
     # always runs from one); tests and cross-checkout use point it elsewhere.
     [string]$Repo,
@@ -114,6 +122,7 @@ for ($i = 0; $i -lt $Rest.Count; $i++) {
         '^--?keep$' { $i++; if ($i -lt $Rest.Count) { $Keep = [int]$Rest[$i] } }
         '^--?max-?age-?days$' { $i++; if ($i -lt $Rest.Count) { $MaxAgeDays = [int]$Rest[$i] } }
         '^--?dry-?run$' { $DryRun = $true }
+        '^--?force$' { $Force = $true }
         '^--?yes$' { $Yes = $true }
         default {
             Write-Host "recover: unknown option '$token'" -ForegroundColor Red
@@ -365,12 +374,44 @@ function Invoke-Remote {
 }
 
 <#
+    Whether one managed worktree may be reclaimed.
+
+    'merged'   — its task finished and its change reached the checkout (a patch
+                 exists, so the tree is disposable);
+    'unmerged' — refused, failed, cancelled, crashed, or no merge recorded: the
+                 tree still holds the only copy of that work;
+    'unknown'  — no readable manifest, so it cannot be proven either way.
+
+    Mirrors `WorktreeRetention.isDisposable` in `browser4-coding` (and the same
+    predicate `SessionWorktree.isReusable` uses), so the backend sweep and this
+    command never disagree about what is safe to delete.
+#>
+function Get-WorktreeRetention {
+    param([string]$Worktree)
+
+    $manifest = Join-Path $Worktree '.browser4/workspace.json'
+    if (-not (Test-Path -LiteralPath $manifest)) { return 'unknown' }
+    try {
+        $doc = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
+    } catch {
+        return 'unknown'
+    }
+    if ($doc.state -ne 'COMPLETE') { return 'unmerged' }
+    if ($null -ne $doc.currentTask) { return 'unmerged' }
+    $last = $doc.lastTask
+    if ($null -eq $last) { return 'unmerged' }
+    if ($last.status -ne 'COMPLETE') { return 'unmerged' }
+    if ($last.merge -ne 'applied') { return 'unmerged' }
+    return 'merged'
+}
+
+<#
     Reclaim stale isolated worktrees with the same rule the backend applies
     (`browser4.agent.isolation.keep` / `.maxAgeDays`), but on demand: the backend
     only sweeps at the start of a coding task.
 #>
 function Invoke-Prune {
-    param([string]$RepoRoot, [int]$Keep, [int]$MaxAgeDays, [switch]$DryRun)
+    param([string]$RepoRoot, [int]$Keep, [int]$MaxAgeDays, [switch]$DryRun, [switch]$Force)
 
     $lockFile = Join-Path $RepoRoot '.git/b4-coding.lock'
     if (Test-Path $lockFile) {
@@ -395,12 +436,26 @@ function Invoke-Prune {
     $kept = 0
     $removed = 0
     $errors = 0
+    $unmerged = 0
+    $unknown = 0
     for ($i = 0; $i -lt $entries.Count; $i++) {
         $entry = $entries[$i]
         if ($i -lt $Keep) { $kept++; continue }
         $ageDays = ($now - $entry.LastWriteTime).TotalDays
         if ($ageDays -lt $MaxAgeDays) { $kept++; continue }
         if (-not $entry.FullName.StartsWith($managedFull)) { continue }
+
+        $retention = Get-WorktreeRetention -Worktree $entry.FullName
+        if ($retention -ne 'merged' -and -not $Force) {
+            if ($retention -eq 'unmerged') {
+                $unmerged++
+                Write-Host "  kept $($entry.Name): its change never merged into the checkout" -ForegroundColor Yellow
+            } else {
+                $unknown++
+                Write-Host "  kept $($entry.Name): no manifest, so it cannot be proven disposable" -ForegroundColor Yellow
+            }
+            continue
+        }
 
         if ($DryRun) {
             Write-Host "  would remove $($entry.FullName) (age $([math]::Round($ageDays,1))d)" -ForegroundColor DarkGray
@@ -418,7 +473,10 @@ function Invoke-Prune {
     }
     if (-not $DryRun) { Invoke-Git $RepoRoot @('worktree', 'prune') | Out-Null }
 
-    Write-Host "worktree prune$(if ($DryRun) { ' (dry-run)' }): kept=$kept removed=$removed errors=$errors"
+    $retained = ''
+    if ($unmerged -gt 0) { $retained += " unmerged=$unmerged" }
+    if ($unknown -gt 0) { $retained += " unknown=$unknown" }
+    Write-Host "worktree prune$(if ($DryRun) { ' (dry-run)' }): kept=$kept removed=$removed errors=$errors$retained"
     if ($errors -gt 0) { return $script:ExitNeedsHuman }
     return 0
 }
@@ -436,7 +494,7 @@ if ($Revert -and $Hard) {
 }
 
 try {
-    if ($Prune) { exit (Invoke-Prune $repoRoot $Keep $MaxAgeDays -DryRun:$DryRun) }
+    if ($Prune) { exit (Invoke-Prune $repoRoot $Keep $MaxAgeDays -DryRun:$DryRun -Force:$Force) }
     if ($Revert) { exit (Invoke-Revert $repoRoot $Revert) }
     if ($Hard) { exit (Invoke-HardReset $repoRoot $Hard) }
     if ($UseLastGood) { exit (Invoke-UseLastGood $repoRoot) }

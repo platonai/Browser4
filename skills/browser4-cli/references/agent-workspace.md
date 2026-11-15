@@ -65,6 +65,15 @@ applied — the run's files exist only in `isolatedWorkspace` — so a client mu
 `workspace` as containing the work. A refused merge also fails the task, with the reason
 in `problems`/the failure message.
 
+**Unmerged work is never swept away.** The backend keeps the newest
+`browser4.agent.isolation.keep` worktrees and anything younger than
+`browser4.agent.isolation.maxAgeDays`, and reclaims the rest — but only those whose
+manifest proves the task merged. A tree whose change never reached the checkout (refused,
+failed, cancelled, crashed, still running) is retained, and so is one with no manifest to
+prove otherwise: a refused run has no patch until a merge is attempted, so that tree is
+the only copy of the work. `b4w recover --status` lists what is retained;
+`b4w recover --prune --force` deletes it deliberately.
+
 `agent result <task-id>` names the directory (`workspace`) and lists the files **this
 run** reported (`filesChanged`); a run that aborted without reporting them still lists
 the files it wrote (from its mutation log), never older ones. The workspace lives on the

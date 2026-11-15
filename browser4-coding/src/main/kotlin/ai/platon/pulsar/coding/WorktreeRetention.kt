@@ -18,10 +18,18 @@ import java.time.Instant
  * Rules:
  * 1. keep the newest [keep] worktrees by modification time, always;
  * 2. keep anything younger than [maxAgeDays] (so a reviewer is never surprised);
- * 3. never touch a path outside `<repo>/.browser4/worktrees`;
- * 4. remove through `git worktree remove --force` (a plain directory delete would
+ * 3. **never reclaim a tree that still holds the only copy of a change**: a tree
+ *    whose manifest says the task did not merge (refused, failed, cancelled,
+ *    crashed) — or that has no manifest to prove otherwise — is retained
+ *    ([Report.unmerged] / [Report.unknown]). This is the rule that makes the
+ *    "failure never loses work" promise hold: a refused merge keeps its files only
+ *    here, and a run that never reached a merge attempt has no patch either. An
+ *    operator who really wants the disk back passes [includeUnmerged] (`b4w recover
+ *    --prune --force`);
+ * 4. never touch a path outside `<repo>/.browser4/worktrees`;
+ * 5. remove through `git worktree remove --force` (a plain directory delete would
  *    leave stale metadata in `.git/worktrees` and `git worktree list` broken);
- * 5. patches and the `refs/b4/...` refs are *not* deleted — they are kilobytes and remain
+ * 6. patches and the `refs/b4/...` refs are *not* deleted — they are kilobytes and remain
  *    valid revert handles after the worktree is gone.
  *
  * It runs at the start of a coding task, after the checkout lock is acquired, so
@@ -42,11 +50,20 @@ object WorktreeRetention {
         val removed: List<Path> = emptyList(),
         val skipped: List<Path> = emptyList(),
         val errors: List<String> = emptyList(),
+        /** Retained: the task's change never reached the main checkout (running,
+         *  refused, failed, cancelled or crashed). */
+        val unmerged: List<Path> = emptyList(),
+        /** Retained: no manifest, so the tree cannot be proven disposable. */
+        val unknown: List<Path> = emptyList(),
     ) {
         val changed: Boolean get() = removed.isNotEmpty()
-        fun summary(): String =
-            "worktree gc: kept=${kept.size} removed=${removed.size} skipped=${skipped.size}" +
-                if (errors.isEmpty()) "" else " errors=${errors.size}"
+
+        fun summary(): String = buildString {
+            append("worktree gc: kept=${kept.size} removed=${removed.size} skipped=${skipped.size}")
+            if (errors.isNotEmpty()) append(" errors=${errors.size}")
+            if (unmerged.isNotEmpty()) append(" unmerged=${unmerged.size}")
+            if (unknown.isNotEmpty()) append(" unknown=${unknown.size}")
+        }
     }
 
     fun keepFromConfig(): Int =
@@ -62,6 +79,20 @@ object WorktreeRetention {
         System.getProperty(DRY_RUN_PROPERTY, "false").trim().equals("true", ignoreCase = true)
 
     /**
+     * Whether [worktree]'s manifest proves the tree is disposable.
+     *
+     * `true` — a finished task whose change reached the main checkout (the same
+     * predicate that makes a session worktree reusable), `false` — a tree whose task
+     * has not fully merged (still running, refused, failed, cancelled, crashed), so it
+     * may hold the only copy of that work, `null` — no readable manifest, so it cannot
+     * be proven either way and is retained as well.
+     */
+    internal fun isDisposable(worktree: Path): Boolean? {
+        val manifest = runCatching { WorkspaceManifestStore().read(worktree) }.getOrNull() ?: return null
+        return SessionWorktree.isReusable(manifest)
+    }
+
+    /**
      * Sweep the managed worktrees.
      *
      * @param repoRoot the checkout the worktrees were created from
@@ -69,6 +100,8 @@ object WorktreeRetention {
      * @param maxAgeDays retain anything younger than this
      * @param dryRun report only, delete nothing
      * @param exclude the current task's worktree, if any (never swept)
+     * @param includeUnmerged reclaim trees whose change never merged, and trees with
+     *   no manifest. Off by default: those trees are the only copy of that work.
      */
     fun sweep(
         repoRoot: Path,
@@ -76,6 +109,7 @@ object WorktreeRetention {
         maxAgeDays: Long = maxAgeDaysFromConfig(),
         dryRun: Boolean = isDryRun(),
         exclude: Path? = null,
+        includeUnmerged: Boolean = false,
     ): Report {
         val root = repoRoot.toAbsolutePath().normalize()
         val managed = root.resolve(WorkspaceIsolation.WORKTREE_DIR)
@@ -101,6 +135,8 @@ object WorktreeRetention {
         val removed = mutableListOf<Path>()
         val skipped = mutableListOf<Path>()
         val errors = mutableListOf<String>()
+        val unmerged = mutableListOf<Path>()
+        val unknown = mutableListOf<Path>()
 
         ordered.forEachIndexed { index, (path, modified) ->
             if (excluded != null && path == excluded) {
@@ -114,6 +150,22 @@ object WorktreeRetention {
             if (Duration.between(modified, now).toDays() < maxAgeDays) {
                 kept.add(path)
                 return@forEachIndexed
+            }
+            if (!includeUnmerged) {
+                // The tree may be the only copy of a change that never reached the
+                // checkout: keep it and say why, instead of reclaiming the disk at
+                // the cost of the work.
+                when (isDisposable(path)) {
+                    true -> Unit
+                    false -> {
+                        unmerged.add(path)
+                        return@forEachIndexed
+                    }
+                    null -> {
+                        unknown.add(path)
+                        return@forEachIndexed
+                    }
+                }
             }
             if (!path.startsWith(managed)) {
                 // Defensive: a symlinked entry could resolve elsewhere.
@@ -132,16 +184,18 @@ object WorktreeRetention {
             }
         }
 
-        if (removed.isNotEmpty()) {
+        if (removed.isNotEmpty() || unmerged.isNotEmpty() || unknown.isNotEmpty()) {
             logger.info(
-                "worktree gc under {}: removed=[{}] kept={} skipped={}",
+                "worktree gc under {}: removed=[{}] kept={} skipped={} unmerged=[{}] unknown=[{}]",
                 managed,
                 removed.joinToString(", ") { it.fileName.toString() },
                 kept.size,
                 skipped.size,
+                unmerged.joinToString(", ") { it.fileName.toString() },
+                unknown.joinToString(", ") { it.fileName.toString() },
             )
         }
-        return Report(kept, removed, skipped, errors)
+        return Report(kept, removed, skipped, errors, unmerged, unknown)
     }
 
     private fun lastModified(path: Path): Instant =

@@ -1,5 +1,7 @@
 package ai.platon.pulsar.agentic.tools.advanced.agent
 
+import ai.platon.pulsar.coding.CodingWorkspace
+import ai.platon.pulsar.coding.WorkspaceIsolation
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
@@ -120,6 +122,38 @@ internal fun taskWorkspaceFor(
     resumeWorkspace != null -> resumeWorkspace
     sharedWorkspace == true -> null
     else -> baseDir.resolve("workspace.$taskId")
+}
+
+/**
+ * The managed worktree a resumed coding task must continue in, or `null` when the
+ * interrupted task did not run in one.
+ *
+ * A run that ended in a worktree has its files **only** there (the main checkout
+ * was never written). Resuming it is therefore only meaningful inside that same
+ * tree, and the caller reopens it; everything else would report success while the
+ * change sits in a directory nothing merges, or worse, start from the current
+ * checkout and silently drop the interrupted task's files.
+ *
+ * @throws IllegalArgumentException when the resume points into a worktree but
+ *   isolation is switched off (`-Dbrowser4.agent.workspace.isolation=off`): that run
+ *   would edit the isolated tree and never merge it
+ */
+internal fun resumeWorktreeOf(
+    taskId: String,
+    resumeWorkspace: Path?,
+    isolationEnabled: Boolean,
+): Path? {
+    val managed = resumeWorkspace?.takeIf { WorkspaceIsolation.isManagedWorktree(it) } ?: return null
+    if (!isolationEnabled) {
+        throw IllegalArgumentException(
+            "task $taskId: the interrupted task ran in the isolated worktree $managed, but workspace " +
+                "isolation is off (${CodingWorkspace.isolationMode}). Continuing there would edit a tree " +
+                "nothing merges, so the run would end with the change still outside the checkout. " +
+                "Re-enable it (-Dbrowser4.agent.workspace.isolation=worktree) and resume again with " +
+                "--resume, or start a new task instead of resuming this one."
+        )
+    }
+    return managed
 }
 
 /**

@@ -62,13 +62,13 @@ class WorkspaceManifestStore {
                 workspaceId = node.get("workspaceId")?.asText() ?: workspaceRoot.fileName?.toString() ?: "unknown",
                 agentUuid = node.get("agentUuid")?.asText() ?: "unknown",
                 engine = node.get("engine")?.asText() ?: "unknown",
-                sourceRepo = node.get("sourceRepo")?.asText(),
+                sourceRepo = node.textOrNull("sourceRepo"),
                 createdAt = node.get("createdAt")?.asText()?.let { runCatching { Instant.parse(it) }.getOrNull() }
                     ?: Instant.now(),
                 state = node.get("state")?.asText()?.let { runCatching { WorkspaceState.valueOf(it.uppercase()) }.getOrNull() }
                     ?: WorkspaceState.COMPLETE,
-                currentTask = node.get("currentTask")?.let { parseTask(it) },
-                lastTask = node.get("lastTask")?.let { parseTask(it) },
+                currentTask = node.taskOrNull("currentTask"),
+                lastTask = node.taskOrNull("lastTask"),
             )
         }.onFailure { logger.warn("workspace manifest unreadable at $file, treating as legacy", it) }
             .getOrNull()
@@ -77,7 +77,14 @@ class WorkspaceManifestStore {
     /** Parse a [TaskSnapshot] from a [JsonNode] manually. We avoid
      *  `treeToValue(TaskSnapshot::class.java)` because this module only has
      *  `jackson-databind` (no kotlin module) and data classes without a
-     *  no-arg constructor can't be constructed by the default databind. */
+     *  no-arg constructor can't be constructed by the default databind.
+     *
+     *  Every nullable field must be read back: the isolation bookkeeping
+     *  (`isolation`/`worktree`/`baseline`/`preRef`/`patch`/`merge`) is what the
+     *  worktree sweeper and the session-reuse check decide on, and a field that is
+     *  written but not parsed silently reads as "this task never merged" — which
+     *  either disables reuse or, worse, makes a tree with unmerged work look
+     *  disposable. */
     private fun parseTask(node: JsonNode): TaskSnapshot = TaskSnapshot(
         taskId = node.get("taskId")?.asText() ?: "",
         instruction = node.get("instruction")?.asText() ?: "",
@@ -89,7 +96,34 @@ class WorkspaceManifestStore {
         filesChanged = node.get("filesChanged")?.takeIf { it.isArray }?.mapNotNull { it.asText() } ?: emptyList(),
         mutations = node.get("mutations")?.asInt(0) ?: 0,
         baselineCaptured = node.get("baselineCaptured")?.asBoolean(false) ?: false,
+        isolation = node.textOrNull("isolation"),
+        worktree = node.textOrNull("worktree"),
+        baseline = node.textOrNull("baseline"),
+        preRef = node.textOrNull("preRef"),
+        patch = node.textOrNull("patch"),
+        merge = node.textOrNull("merge"),
     )
+
+    /**
+     * A task snapshot field, or null when it is absent or JSON `null`.
+     *
+     * `get(...)` returns a `NullNode` for an explicit JSON `null`, and parsing
+     * that produced a bogus empty task — which made `currentTask != null` (the
+     * "a task is running" guard) true for every finished workspace, so nothing
+     * was ever reclaimable and no session worktree was ever reusable.
+     */
+    private fun JsonNode.taskOrNull(name: String): TaskSnapshot? =
+        get(name)?.takeIf { it.isObject }?.let { parseTask(it) }
+
+    /**
+     * A textual field, or null when it is absent or JSON `null`.
+     *
+     * `JsonNode.asText()` turns a `NullNode` into the string `"null"`, so a plain
+     * `get(...)?.asText()` on a nullable field yields a *value* where the caller
+     * expects absence — the reason `sourceRepo` used to come back as `"null"`.
+     */
+    private fun JsonNode.textOrNull(name: String): String? =
+        get(name)?.takeIf { it.isTextual }?.asText()?.takeIf { it.isNotBlank() }
 
     /** Atomically write [manifest] to `<workspace>/.browser4/workspace.json`. */
     fun write(workspaceRoot: Path, manifest: WorkspaceManifest) {
