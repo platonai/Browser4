@@ -400,7 +400,7 @@ docker run -d -p 18182:18182 `
 
   > For `DEFAULT`, `SYSTEM_DEFAULT`, and `PROTOTYPE` browser contexts, this value is **1**.
 
-* **`browser.max.active.tabs`** *(default: 8)*
+* **`browser.max.open.tabs`** *(default: 8; env var `BROWSER_MAX_OPEN_TABS`)*
   Maximum number of tabs per browser instance.
 
   > For `DEFAULT`, `SYSTEM_DEFAULT`, and `PROTOTYPE` browser contexts, there is **no limit**.

@@ -178,7 +178,7 @@ default, each on its own tab leased from the driver pool; `--parallel <n>` bound
 in flight (omitted = server default 4, `1` = sequential, `2`–`32` = up to `<n>` concurrently).
 
 * **Each unit needs its own tab.** The driver pool (`browser.context.number` ×
-  `browser.max.active.tabs`, 2 × 8 by default) is the hard ceiling: asking for more yields a lower
+  `browser.max.open.tabs`, 2 × 8 by default) is the hard ceiling: asking for more yields a lower
   *observed* peak, which the report shows — a peak of `1` on a multi-unit crawl means the
   collection was serial, and that is called out explicitly.
 * **Values are validated before submitting.** `0`/non-numeric values exit non-zero with a hint
@@ -228,7 +228,7 @@ the crawl's browser, which the backend arranges per load (a borrowed tab is used
 closed; a tab the unit opened is closed as soon as the page's content is captured).
 
 That is also the axis to size: `--parallel N` opens up to N tabs in that context, and the
-browser's own tab budget (`browser.max.active.tabs`, default 8) caps what can really
+browser's own tab budget (`browser.max.open.tabs`, default 8) caps what can really
 overlap.  Measured on a local fixture whose server answers in 1s, six pages took **25.5s at
 `--parallel 6` vs 32.1s at `--parallel 1`** — the tabs do overlap, but a page also pays a
 fixed pipeline cost, so raise `--parallel` for *overlap*, not as a multiplier.

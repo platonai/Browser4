@@ -28,7 +28,7 @@ data class CrawlRequest @JsonCreator constructor(
      * rounds), so the units are parallelizable in principle; the fetch layer only
      * realizes it when each unit owns its own tab.  This value is the budget the
      * crawl enforces on itself, and the browser driver pool
-     * (`browser.context.number` x `browser.max.active.tabs`) is the hard ceiling
+     * (`browser.context.number` x `browser.max.open.tabs`) is the hard ceiling
      * above it.
      *
      * `null` (the default) uses [CrawlService.DEFAULT_PARALLEL_TABS], and `1`
