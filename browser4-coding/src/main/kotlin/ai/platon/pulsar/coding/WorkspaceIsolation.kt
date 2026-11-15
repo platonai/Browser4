@@ -131,6 +131,15 @@ class WorkspaceIsolation private constructor(
          * `.browser4` holds snapshots/manifests. `.browser4` and `target/` are
          * git-ignored too; stating the exclusions here keeps the merge correct even
          * if the ignore file changes.
+         *
+         * **These are reporting pathspecs, never `git add` pathspecs.** `git add` exits 1
+         * with "The following paths are ignored by one of your .gitignore files" as soon as
+         * a pathspec names a path its ignore rules already skip, and the top-level
+         * spellings do name the directory: a trailing `**` also matches `.browser4`
+         * itself. Passing them to `git add` therefore fails the whole merge in a checkout
+         * whose `.gitignore` already covers those directories — while `git status` with
+         * exactly the same pathspecs is fine. [applyToMain] stages [changedFilesOf]'s paths
+         * instead.
          */
         private val EXCLUDES = listOf(
             ":(exclude).b4scratch/**",
@@ -295,6 +304,45 @@ class WorkspaceIsolation private constructor(
         internal fun sanitize(runId: String): String =
             runId.replace(Regex("[^A-Za-z0-9._-]"), "-").take(64).ifBlank { "task" }
 
+        /**
+         * Pathspec characters one `git add` may carry.
+         *
+         * Windows caps a whole process command line at 32 KiB and the spawn fails above it
+         * (`CreateProcess error=206`), so a wide change set (a package rename over a few
+         * thousand files) is staged in several batches: the index is the same, and the patch
+         * is produced only after every batch succeeded.
+         */
+        private const val STAGE_BATCH_CHARS = 12 * 1024
+
+        /**
+         * Split [paths] into `git add` batches under [maxChars] of pathspec text.
+         *
+         * A path longer than the budget still gets a batch of its own: a pathspec must never
+         * be dropped, and an empty batch would degenerate into a bare `git add -A` of the
+         * whole tree.
+         */
+        internal fun stageBatches(
+            paths: List<String>,
+            maxChars: Int = STAGE_BATCH_CHARS,
+        ): List<List<String>> {
+            val batches = mutableListOf<List<String>>()
+            var batch = mutableListOf<String>()
+            var chars = 0
+            for (path in paths) {
+                // `:(literal)` prefix plus the argument separator, rounded up.
+                val cost = path.length + 12
+                if (batch.isNotEmpty() && chars + cost > maxChars) {
+                    batches += batch
+                    batch = mutableListOf()
+                    chars = 0
+                }
+                batch += path
+                chars += cost
+            }
+            if (batch.isNotEmpty()) batches += batch
+            return batches
+        }
+
         /** `refs/b4/pre/<runId>` — the main-tree `HEAD` captured before a merge. */
         fun preRef(runId: String): String = "$REF_PREFIX/pre/${sanitize(runId)}"
 
@@ -421,7 +469,7 @@ class WorkspaceIsolation private constructor(
      * Apply the isolated change to the main work tree (plan S1 merge protocol).
      *
      * Steps, all-or-nothing for the main tree:
-     * 1. stage the isolated tree (agent bookkeeping excluded),
+     * 1. stage the change set `git status` reported (agent bookkeeping never appears in it),
      * 2. produce `git diff --cached --binary <baseline>`,
      * 3. keep it at `<repo>/.browser4/patches/<taskId>.patch` and record
      *    `refs/b4/pre/<taskId>`,
@@ -449,7 +497,7 @@ class WorkspaceIsolation private constructor(
             if (!keepWorktree) cleanupWorktree()
             return@withContext Outcome(true, emptyList(), "No changes to merge (isolated tree unchanged)")
         }
-        val add = runGit(isolatedRoot, listOf("add", "-A", "--", ".") + EXCLUDES)
+        val add = stageChangeSet(changed)
         if (add.exitCode != 0) {
             return@withContext Outcome(false, changed, "git add failed: ${add.output.takeLast(400)}")
         }
@@ -548,6 +596,27 @@ class WorkspaceIsolation private constructor(
             preRef,
             keepWorktree,
         )
+    }
+
+    /**
+     * Stage exactly [paths] in the isolated worktree: the change set the patch is built from.
+     *
+     * `git add -A -- . <excludes>` looks simpler but fails the whole merge in a checkout whose
+     * `.gitignore` already covers the bookkeeping directories — see [EXCLUDES]. Git refuses a
+     * pathspec that names an ignored path and exits 1 even though it staged everything else, so
+     * the merge reported "Changes were NOT applied" for a change set that was correct and
+     * already staged. Staging the reported paths keeps [changedFilesOf] as the single source of
+     * truth for what merges, never walks an ignored directory, and cannot stage bookkeeping the
+     * change set already dropped. `:(literal)` keeps a path that begins with `:` or contains
+     * `*`/`[` from being read as pathspec magic.
+     */
+    private fun stageChangeSet(paths: List<String>): GitOutcome {
+        var last = GitOutcome(0, "", "")
+        for (batch in stageBatches(paths)) {
+            last = runGit(isolatedRoot, listOf("add", "-A", "--") + batch.map { ":(literal)$it" })
+            if (last.exitCode != 0) return last
+        }
+        return last
     }
 
     /**

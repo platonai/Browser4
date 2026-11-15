@@ -200,6 +200,40 @@ class WorkspaceIsolationTest {
     }
 
     @Test
+    @DisplayName("a merge succeeds when .gitignore already covers the bookkeeping directories")
+    fun mergeWithIgnoredBookkeepingDirectories() = runBlocking {
+        // The real checkout ignores `.browser4/` and `/.b4scratch/` and both directories exist in
+        // the worktree at merge time (snapshots, helper scripts). Handing the bookkeeping pathspecs
+        // to `git add` made git exit 1 with "The following paths are ignored by one of your
+        // .gitignore files" — a trailing `**` matches the ignored directory itself — so the merge
+        // reported "Changes were NOT applied" for a change set that was correct and already staged.
+        Files.writeString(tempDir.resolve(".gitignore"), ".browser4/\n.b4scratch/\n")
+        git("add", ".gitignore")
+        git("commit", "-m", "ignore the agent bookkeeping directories")
+        val isolation = WorkspaceIsolation.begin(tempDir, "run-ignored")
+        try {
+            Files.writeString(isolation.isolatedRoot.resolve("a.txt"), "changed\n")
+            Files.createDirectories(isolation.isolatedRoot.resolve(".b4scratch"))
+            Files.writeString(isolation.isolatedRoot.resolve(".b4scratch/helper.py"), "print(1)\n")
+            Files.createDirectories(isolation.isolatedRoot.resolve(".browser4"))
+            Files.writeString(isolation.isolatedRoot.resolve(".browser4/workspace.json"), "{}\n")
+
+            val outcome = isolation.applyToMain("task-ignored")
+
+            assertTrue(outcome.ok, "merge failed: ${outcome.message}")
+            assertEquals(listOf("a.txt"), outcome.changedFiles)
+            assertEquals("changed\n", read(tempDir.resolve("a.txt")))
+            val patch = Files.readString(Path.of(outcome.patchPath!!))
+            assertFalse(
+                patch.contains(".b4scratch") || patch.contains(".browser4"),
+                "agent bookkeeping must never reach the patch: ${patch.take(500)}",
+            )
+        } finally {
+            isolation.rollback()
+        }
+    }
+
+    @Test
     @DisplayName("applyToMain merges, keeps the worktree, keeps the patch and records the pre-merge ref")
     fun applyToMainKeepsRecoveryHandles() = runBlocking {
         val isolation = WorkspaceIsolation.begin(tempDir, "run-merge")
@@ -352,6 +386,27 @@ class WorkspaceIsolationTest {
         assertEquals("a-b-c", WorkspaceIsolation.sanitize("a:b/c"))
         assertFalse(WorkspaceIsolation.sanitize("x".repeat(200)).length > 64)
         assertEquals("task", WorkspaceIsolation.sanitize(""))
+    }
+
+    @Test
+    @DisplayName("staging batches keep every path and stay under the command-line budget")
+    fun stagingBatchesStayUnderTheCommandLineBudget() {
+        val paths = (1..1_000).map { "browser4-coding/src/main/kotlin/ai/platon/pulsar/coding/File$it.kt" }
+
+        val batches = WorkspaceIsolation.stageBatches(paths, maxChars = 4_096)
+
+        assertEquals(paths, batches.flatten(), "batching must not drop or reorder a path")
+        assertTrue(batches.size > 1, "a change set this wide must be split: ${batches.size}")
+        assertTrue(
+            batches.all { batch -> batch.size == 1 || batch.sumOf { it.length + 12 } <= 4_096 },
+            "every batch must stay under the budget: ${batches.map { it.size }}",
+        )
+        assertTrue(WorkspaceIsolation.stageBatches(emptyList()).isEmpty(), "no paths, no git call")
+        assertEquals(
+            listOf(listOf("x".repeat(200))),
+            WorkspaceIsolation.stageBatches(listOf("x".repeat(200)), maxChars = 64),
+            "an over-long path is still staged exactly once",
+        )
     }
 
     @Test
