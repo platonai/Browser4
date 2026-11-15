@@ -18,6 +18,7 @@ import ai.platon.pulsar.coding.AccessPreset
 import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.coding.CodingWorkspace
 import ai.platon.pulsar.coding.IsolationGate
+import ai.platon.pulsar.coding.MavenBuildSupport
 import ai.platon.pulsar.coding.RepoLock
 import ai.platon.pulsar.coding.SessionWorktree
 import ai.platon.pulsar.coding.ShadowBoot
@@ -940,6 +941,11 @@ open class StatefulAgentRunner(
         // waiting" decision needs those seconds to have names.
         val phaseClock = RunPhaseClock()
 
+        // C1: the speculative-build counters are process-wide. The task reports the delta
+        // between entry and exit, otherwise the second task in a JVM inherits the first one's
+        // numbers and an A/B cannot tell the arms apart.
+        val speculativeAtStart = MavenBuildSupport().speculativeStats()
+
         try {
             status.refresh(ResourceStatus.SC_PROCESSING)
             // Record what this run is: the effective flags decide a later resume's
@@ -1311,6 +1317,9 @@ open class StatefulAgentRunner(
             status.timings = (loopTimings?.toMap() ?: emptyMap<String, Any?>()).toMutableMap().apply {
                 put("phases", phases.toMap())
                 put("runOverheadMs", (phases.runMs - (loopTimings?.totalMs ?: 0L)).coerceAtLeast(0L))
+                // C1: what the speculative builds cost and whether the requests used them.
+                // `reuseRatio` is the keep-or-drop metric; `speculativeMs` is the CPU bill.
+                put("speculative", MavenBuildSupport().speculativeStats().deltaSince(speculativeAtStart).toMap())
             }
             status.errorCode = AgentTaskStatus.errorCodeOf(status.failureReason, status.cancelled)
             status.resumable = if (status.cancelled || status.failureReason != null) {
