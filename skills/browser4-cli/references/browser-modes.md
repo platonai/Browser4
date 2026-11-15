@@ -194,7 +194,7 @@ endpoint is verified — page targets, and the browser family against the reques
 | `--interact-level` | `FASTEST` … `DEFAULT` … `BEST_DATA` | Selects an interaction profile and delay preset: higher = more human-like, more complete data, slower. The main "behave less like a bot" knob. |
 | `--max-browser-contexts` / `--max-open-tabs` | swarm: 2 contexts × 8 tabs | Each context is a browser instance — this is the throughput/memory dial. |
 | Browser contexts (server) | `browser.context.number=2`, `browser.max.active.tabs=8` | Global defaults for managed browsers. |
-| Proxy rotation | `proxy.rotation.url`, only for `SEQUENTIAL`/`TEMPORARY` | IP rotation requires giving up the shared `DEFAULT` profile. |
+| Proxy rotation | `proxy.rotation.url`, only for `SEQUENTIAL`/`TEMPORARY` | IP rotation requires giving up the shared `DEFAULT` profile. A single fixed proxy is `browser.launch.chrome.args=--proxy-server=…`; full guide: [ip-proxy.md](../../../docs/ip-proxy.md). |
 | Browser channel | managed = Chrome (default) or ego lite via `open --channel ego-lite`; attach = chrome*/msedge*/ego-lite | Managed ego lite needs the browser installed (or `ego.path` set on the backend); Edge/Canary/Electron/cloud → attach only. |
 | Platform | GUI-less envs force headless; sandboxed shells need writable `BROWSER4_RUNTIME_DIR` / `BROWSER4_CLI_STATE_DIR` | Determines whether headed is even possible and whether the backend can start. |
 | Lifecycle | `close` (one session) · `close-all` · `swarm close` | `swarm close` also aborts pending tasks; forgetting it holds contexts and the worker pool. |

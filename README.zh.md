@@ -899,6 +899,10 @@ export PROXY_ROTATION_URL=https://your-proxy-provider.com/rotation-endpoint
 每次访问这个轮换 URL 时，它都应返回一个或多个新的代理 IP。
 如果你需要这种 URL，请联系你的代理服务商。
 
+单条固定代理（`--proxy-server`）、代理认证、轮换端点必须返回的格式、以及出口 IP 的验证方法，
+见 **[docs/ip-proxy.zh.md](docs/ip-proxy.zh.md)**（[English](docs/ip-proxy.md)）。
+注意 `browser4-cli --proxy` 是**下载**代理，不会让页面流量走代理。
+
 </details>
 
 ---

@@ -460,6 +460,7 @@ When adding a new CLI option or changing command behavior, always check these lo
 - [Testing Taxonomy](docs/TESTING.md)
 - [Build from Source](docs/build-from-source.md)
 - [Configuration Guide](docs/config.md)
+- [IP Proxy & Egress IP](docs/ip-proxy.md) / [IP 代理与出口 IP](docs/ip-proxy.zh.md)
 - [CLI Skill Guide](skills/browser4-cli/SKILL.md)
 - [ARIA Snapshots](docs/aria-snapshots.md)
 - [HTML Snapshot](docs/htmlsnapshot-inspect-summary.md)

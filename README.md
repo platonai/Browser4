@@ -907,6 +907,10 @@ export PROXY_ROTATION_URL=https://your-proxy-provider.com/rotation-endpoint
 Each time you access this rotation URL, it should return a response containing one or more fresh proxy IPs.
 If you need this type of URL, please contact your proxy service provider.
 
+For a single fixed proxy (`--proxy-server`), proxy authentication, the format the rotation
+endpoint must return, and how to verify the egress IP, see **[docs/ip-proxy.md](docs/ip-proxy.md)**.
+Note that `browser4-cli --proxy` is a *download* proxy — it does not route page traffic.
+
 </details>
 
 ---

@@ -391,6 +391,7 @@ docker run -d -p 18182:18182 `
   Defines the URL provided by your proxy service.
   Each time the rotation URL is accessed, it should return a response containing one or more fresh proxy IPs.
   Ask your proxy provider for such a URL.
+  For a single fixed proxy, proxy authentication, the response formats and the verification steps, see **[ip-proxy.md](ip-proxy.md)** ([中文](ip-proxy.zh.md)).
 
 * **`browser.context.number`** *(default: 2)*
   [**Advanced**] Only for `SEQUENTIAL` and `TEMPORARY` modes.
