@@ -547,16 +547,31 @@ async fn call_tool_with_timeout(
         request
     };
 
+    // E-4: the first tool request ends the "startup" segment, and the round trip
+    // itself is split into the backend's own handler time (page action) and the
+    // rest (dispatch, sockets, serialization) as soon as the response arrives.
+    crate::timing::note_tool_request();
+    let request_started = std::time::Instant::now();
+
     let response = request
         .send()
         .await
         .map_err(|e| format_mcp_transport_error(tool, &url, &args, timeout, &e))?;
 
     let status = response.status();
+    // `X-Browser4-Duration-Ms`: how long the backend needed for the tool itself.
+    // Absent on older backends and non-Browser4 servers → `server` stays 0 and
+    // the whole round trip is reported as network.
+    let server_ms = response
+        .headers()
+        .get("x-browser4-duration-ms")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok());
     let response_text = response
         .text()
         .await
         .map_err(|e| format!("Failed to read response body: {e}"))?;
+    crate::timing::record_http(request_started.elapsed().as_millis() as u64, server_ms);
 
     if !status.is_success() {
         // A rejected REST call can still carry the structured failure fields

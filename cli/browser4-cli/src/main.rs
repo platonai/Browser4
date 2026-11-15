@@ -36,6 +36,7 @@ mod tips;
 mod update_check;
 mod agent_interactive;
 mod agent_result;
+mod timing;
 
 use std::collections::{HashMap, HashSet};
 use std::io::{IsTerminal, Read};
@@ -32676,8 +32677,12 @@ fn apply_config_defaults(global: &mut GlobalFlags) {
 }
 
 fn main() {
+    // First statement in the process: every segment reported by `[timing]` is
+    // measured from here. Off unless BROWSER4_CLI_TIMING / TRACE is set.
+    timing::init();
     install_broken_pipe_panic_hook();
     init_root_search_start_dir_from_startup();
+    timing::mark("hooks");
 
     // Run the command on a manually created tokio runtime and drop it
     // explicitly before exiting. With `#[tokio::main]`, the macro-owned
@@ -32699,6 +32704,7 @@ fn main() {
 
     let exit_code = runtime.block_on(async {
         let raw_args: Vec<String> = std::env::args().skip(1).collect();
+        timing::mark("runtime");
 
         // Git Bash rewrites '/'-leading arguments into paths under the Git
         // installation directory before spawning this process.  The original
@@ -32726,6 +32732,7 @@ fn main() {
         }
         apply_config_defaults(&mut global);
         let json_mode = global.json;
+        timing::mark("flags");
 
         // Plugin-declared CLI commands (ToolSpec.cliName, spaced form like
         // `profile import`): resolved BEFORE normalize so the spaced name
@@ -32767,6 +32774,7 @@ fn main() {
 
         let (command, effective_global, from_spaced_prefix) =
             normalize_command_invocation(&global);
+        timing::mark("invocation");
 
         let declared_command = command.clone();
         match declared_result {
@@ -32793,6 +32801,9 @@ fn main() {
     drop(runtime);
     use std::io::Write;
     let _ = std::io::stdout().flush();
+    // One machine-readable line on stderr (never stdout: --json output must stay
+    // parseable). `CliProcessManager` parses it out of the child's stderr.
+    timing::emit_footer();
     std::process::exit(exit_code);
 }
 

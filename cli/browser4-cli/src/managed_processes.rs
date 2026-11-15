@@ -2345,31 +2345,44 @@ fn parse_pid_list(stdout: &[u8]) -> Vec<u32> {
 // Platform-specific process control
 // ---------------------------------------------------------------------------
 
+/// True when a process with [pid] is alive.
+///
+/// Liveness is asked on the hot path — the development-mode port decision checks
+/// it for every `b4.run` (evaluation §12.5, E-3), and `tasklist`, which this used
+/// to spawn on Windows, costs 250+ ms per call: the "cheap registry check" was
+/// the expensive part. `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` answers
+/// the same question in microseconds. Only the *exit* status is needed, never the
+/// image name (`tasklist` was chosen for the name), so the syscall is enough.
 fn is_process_running(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
     #[cfg(unix)]
     {
-        use std::process::Command;
-        // SIGCHECK (signal 0) returns success if process exists.
-        // Suppress stderr to avoid "kill: No such process" noise when the
-        // process has already exited.
-        let status = Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .stderr(std::process::Stdio::null())
-            .status();
-        status.map(|s| s.success()).unwrap_or(false)
+        // Signal 0 performs error checking but sends no signal: 0 while the
+        // process exists, -1 with ESRCH once it is gone.
+        extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        unsafe { kill(pid as i32, 0) == 0 }
     }
     #[cfg(windows)]
     {
-        use std::process::Command;
-        let output = Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
-            .output();
-        match output {
-            Ok(out) => {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                stdout.contains(&pid.to_string())
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        const ERROR_ACCESS_DENIED: i32 = 5;
+        extern "system" {
+            fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> isize;
+            fn CloseHandle(hObject: isize) -> i32;
+        }
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle != 0 {
+                CloseHandle(handle);
+                return true;
             }
-            Err(_) => false,
+            // A process we may not open still exists: access denied is evidence
+            // of life, while "invalid parameter" (a reused or exited pid) is not.
+            std::io::Error::last_os_error().raw_os_error() == Some(ERROR_ACCESS_DENIED)
         }
     }
 }

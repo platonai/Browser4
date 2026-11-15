@@ -1464,10 +1464,19 @@ pub const DEV_SERVER_PORT_START: u16 = 8282;
 /// up (8282–8313).
 pub const DEV_SERVER_PORT_SCAN_LIMIT: u16 = 32;
 
-/// Timeout for a single loopback probe during port allocation.  Short on
-/// purpose: a closed port refuses immediately, and an unusable port must not
-/// stall the scan.
-const DEV_PORT_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
+/// Timeout for a single loopback probe during port allocation.
+///
+/// This budget is the per-command price of the development-mode port decision,
+/// so it is deliberately tiny. A listening loopback socket completes the TCP
+/// handshake in kernel time (sub-millisecond), so "no answer within this budget"
+/// already meant "not ours" long before the number was lowered. What it costs is
+/// the opposite case: on a host whose loopback filters SYNs, a *closed* port only
+/// reports ECONNREFUSED after ~2 s (measured here), so every probe of a free port
+/// burns the whole budget. At 250 ms that was the 256 ms that every development
+/// command paid inside a checkout (evaluation §12.5, E-3); at 30 ms it is noise.
+/// Reuse of a port this workspace already owns no longer probes at all (see
+/// `dev_port_is_usable`).
+const DEV_PORT_PROBE_TIMEOUT: Duration = Duration::from_millis(30);
 
 static DEV_WORKSPACE_ROOT: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
 
@@ -1537,8 +1546,25 @@ fn is_tcp_port_in_use(port: u16) -> bool {
 /// True when [port] is usable by this checkout: nothing is listening, or the
 /// listener is a Browser4 server this checkout started (registry entry with a
 /// live PID — the registry itself is per-workspace).
+///
+/// The registry is consulted first and *replaces* the TCP probe when it answers:
+/// a live entry proves the port is ours, and reading it is a small local JSON
+/// file (sub-millisecond), while the probe costs a full timeout on a host that
+/// filters loopback SYNs (E-3). Every `b4.run` inside a development checkout goes
+/// through this function, so the difference is per-action.
 fn dev_port_is_usable(port: u16) -> bool {
-    !is_tcp_port_in_use(port) || crate::managed_processes::managed_port_has_live_server(port)
+    let ours = crate::managed_processes::managed_port_has_live_server(port);
+    if crate::timing::tracing() {
+        crate::timing::mark(&format!("port-{port}-registry"));
+    }
+    if ours {
+        return true;
+    }
+    let in_use = is_tcp_port_in_use(port);
+    if crate::timing::tracing() {
+        crate::timing::mark(&format!("port-{port}-connect"));
+    }
+    !in_use
 }
 
 /// First port in `DEV_SERVER_PORT_START..+DEV_SERVER_PORT_SCAN_LIMIT` that this
@@ -10363,10 +10389,12 @@ pub fn resolve_base_url_with_origin(
     session_name: Option<&str>,
 ) -> ResolvedBaseUrl {
     let state = read_state(None, session_name);
+    crate::timing::mark("state");
     let recorded = state.base_url.trim_end_matches('/').to_string();
     // "A state file recorded a choice" is different from "the state struct has
     // a default": only a persisted record can be rejected as stale.
     let has_state = crate::state::has_persisted_state(session_name);
+    crate::timing::mark("persisted-state");
 
     let (url, source) = if let Some(flag_url) = override_url.filter(|u| !u.trim().is_empty()) {
         (flag_url.trim_end_matches('/').to_string(), BaseUrlSource::ServerFlag)
@@ -10377,12 +10405,14 @@ pub fn resolve_base_url_with_origin(
     {
         (configured.trim_end_matches('/').to_string(), BaseUrlSource::Config)
     } else if is_dev_mode() {
+        crate::timing::mark("dev-mode");
         let (url, decision) = decide_dev_base_url(
             &recorded,
             has_state,
             &dev_port_is_usable,
             &first_available_dev_port,
         );
+        crate::timing::mark("dev-port");
         let source = match decision {
             DevBaseUrlDecision::Allocated => BaseUrlSource::DevAllocation,
             DevBaseUrlDecision::ReusedRecorded => BaseUrlSource::RecordedState,
