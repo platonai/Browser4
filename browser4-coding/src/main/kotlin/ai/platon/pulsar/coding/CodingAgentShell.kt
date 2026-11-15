@@ -2703,21 +2703,40 @@ class CodingAgentShell(
         return SafeText.take(output, MAX_OUTPUT_CHARS) + "\n... (output truncated at $MAX_OUTPUT_CHARS chars) ..."
     }
 
+    /**
+     * One-line status header, then the captured output.
+     *
+     * This used to be a fixed five/six-line envelope — `Session:`, `Status:`,
+     * `Exit Code:`, `Duration:` plus a `--- stdout ---` banner. A baseline of
+     * five interactive coding sessions measured those lines at 12.7% of all
+     * tool output, and the model re-read them on every call: the session id,
+     * the outcome, the exit code and the duration fit on the header line, and
+     * the body starts on the very next one.
+     *
+     * Stream markers survive only where they carry information: a single
+     * stream prints straight after the header (the header says `stderr` when it
+     * is the only stream), and two streams keep one `--- stderr ---` divider so
+     * the model can still tell them apart.
+     */
     private fun formatResult(result: ShellResult): String {
         val status = if (result.success) "SUCCESS" else "FAILED"
+        val sep = " · "
+        val stdout = result.stdout.trimEnd()
+        val stderr = result.stderr.trimEnd()
         return buildString {
-            appendLine("Session: ${result.sessionId}")
-            appendLine("Status: $status")
-            appendLine("Exit Code: ${result.exitCode}")
-            appendLine("Duration: ${result.durationMs}ms")
-            if (result.timedOut) appendLine("⚠️ Command timed out")
-            if (result.stdout.isNotBlank()) {
-                appendLine("--- stdout ---")
-                appendLine(result.stdout)
-            }
-            if (result.stderr.isNotBlank()) {
-                appendLine("--- stderr ---")
-                appendLine(result.stderr)
+            append(if (result.success) "✓ " else "✗ ")
+            append(result.sessionId).append(sep).append(status)
+            append(sep).append("exit ").append(result.exitCode)
+            append(sep).append(result.durationMs).append("ms")
+            if (result.timedOut) append(sep).append("TIMED OUT")
+            if (stdout.isBlank() && stderr.isNotBlank()) append(sep).append("stderr")
+            when {
+                stdout.isBlank() && stderr.isBlank() -> Unit
+                stdout.isBlank() -> appendLine().append(stderr)
+                stderr.isBlank() -> appendLine().append(stdout)
+                else -> appendLine().append(stdout)
+                    .appendLine().append("--- stderr ---")
+                    .appendLine().append(stderr)
             }
         }.trimEnd()
     }

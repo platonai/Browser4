@@ -158,6 +158,17 @@ data class VerificationReport(
 
     fun toJson(): String = JSON.writeValueAsString(toJsonMap())
 
+  /**
+   * The machine contract on its own: one `VERDICT_JSON:` line.
+   *
+   * `coding.verify` echoes this instead of [format]. The human summary
+   * repeated per-check lines that the finish card and this very verdict line
+   * already carried, so a passing verify read as a five-line report where one
+   * line is the answer. Everything the summary showed — check status,
+   * evidence, diagnostics, failure reason — is inside the JSON.
+   */
+  fun formatVerdict(): String = VERDICT_PREFIX + toJson()
+
     /**
      * Human summary, followed by the machine-readable verdict line so a
      * supervisor can `grep VERDICT_JSON` without parsing prose.
@@ -217,6 +228,7 @@ data class VerificationReport(
             val json = extractJson(text) ?: text.trim().takeIf { it.startsWith("{") } ?: return null
             return fromJson(json)
         }
+
 
         /**
          * Rebuild a [VerificationReport] from its JSON form.
@@ -539,7 +551,10 @@ class VerificationRunner(
             )
         }
         val started = System.currentTimeMillis()
-        val hits = mutableListOf<String>()
+        // The advisory text travels with the hit: `coding.verify` echoes the
+        // verdict line only, so this JSON line is the model's copy of the
+        // guidance (no duplicated prose, no lost advisory).
+        val hits = mutableListOf<Pair<CdpTrapCheck.Trap, String>>()
         val unreadable = mutableListOf<String>()
         for (file in targets) {
             val content = fs.readFile(file)
@@ -547,7 +562,7 @@ class VerificationRunner(
                 unreadable += file
                 continue
             }
-            CdpTrapCheck.check(content).forEach { hits += "${it.id}@$file" }
+            CdpTrapCheck.check(content).forEach { hits += it to file }
         }
         val ok = unreadable.isEmpty()
         return VerificationCheck(
@@ -559,7 +574,8 @@ class VerificationRunner(
             evidence = when {
                 !ok -> "unreadable: ${unreadable.joinToString(", ")}"
                 hits.isEmpty() -> "no CDP pitfalls"
-                else -> "${hits.size} advisory: ${hits.joinToString(", ")}"
+                else -> "${hits.size} advisory: " +
+                    hits.joinToString("; ") { (trap, file) -> "${trap.id}@$file: ${trap.advisory}" }
             },
             detail = if (ok) null else "could not read ${unreadable.joinToString(", ")}",
         )
