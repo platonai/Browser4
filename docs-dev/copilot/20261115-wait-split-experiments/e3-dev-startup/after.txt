@@ -39,6 +39,22 @@ outside checkout: 50, 33, 28
 Before: 278–358 ms inside, 14–25 ms outside. The checkout-only 256 ms is gone; what is
 left is the same 20–50 ms an installed CLI pays plus one bounded probe.
 
+The *other* checkout §12.4 measured at 1,007 ms (`Browser4-4.16-feat`, 23 worktrees) was
+re-measured with this same fixed binary, run from inside that directory so it resolves that
+checkout's state and dev port:
+
+```
+fixed CLI, in Browser4-4.16-feat: 64, 60, 61, 61
+[startup] dev-mode=5ms
+[startup] port-8282-registry=6ms
+[startup] port-8282-connect=47ms
+[startup] dev-port=47ms
+[timing] startup=48ms ... total=48ms
+```
+
+1,007 ms → 60–64 ms. Nothing about that checkout was different: it was the same 250 ms per
+probe, paid three or four times as the scan walked past free ports.
+
 ## 3. E-1: direct exec vs shell, same static command
 
 Startup *inside* the CLI (`BROWSER4_CLI_TIMING=1`), so the launcher is not counted:

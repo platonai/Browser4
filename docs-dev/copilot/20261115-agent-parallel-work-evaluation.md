@@ -546,7 +546,7 @@ T2 有 5 次带耗时的 `b4_run` 合计 34.7 s（占该任务 tool 桶 52 s 的
    - **CLI 那 282 ms 是 dev 模式独有的**：同一个 exe 在 checkout 外只要 15–22 ms。
      进 dev 模式的判定一触发（在 checkout 里、且没显式 `--server`），每次调用多付 ≈256 ms；
      `BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1` 把它压回 24 ms。
-     另一个 checkout（`Browser4-4.16-feat`，23 个 worktree）实测 **1,007 ms**，说明这笔开销随 checkout 状态变化。
+     另一个 checkout（`Browser4-4.16-feat`，23 个 worktree）实测 **1,007 ms**，说明这笔开销随 checkout 状态变化（修完后同一个二进制在那边是 60–64 ms，§14.1）。
    - 所以**生产等价**的每动作固定开销是 ≈0.22 s（199 + ≈20），dev 下才是 ≈0.48 s。
    - **这两段后来都降了**（§14.1 / §14.3）：dev 的 CLI 启动 278–358 → 50–78 ms，带 payload 的命令
      也不再起外壳。dev 下每个动作的固定开销从 ≈0.48 s 变成 ≈0.05 s，生产等价 ≈0.02 s。
@@ -707,8 +707,9 @@ RST**，SYN 被丢掉，`ECONNREFUSED` 要 ~2 s 才回来（实测 8283/8284/181
 | `is_process_running`：`tasklist` → `OpenProcess` | 见上，1 s → 1 ms |
 
 **结果**：checkout 里的 `--version` 从 278–358 ms 降到 **50–78 ms**（trace 的 `total` 是 50 ms；
-checkout 外 14–25 ms，差的那 30 ms 就是"这台机器上探一个空闲端口"的地板）。另一个 checkout 的
-1 s 是同一段代码在更多端口被占时的表现，这次没有单独复测。
+checkout 外 14–25 ms，差的那 30 ms 就是"这台机器上探一个空闲端口"的地板）。那个 1,007 ms 的
+checkout（`Browser4-4.16-feat`，23 个 worktree）用同一个修好的二进制在它自己的目录里重测是
+**60–64 ms**——它当时贵只是同一段 250 ms 预算被端口扫描连付了三、四次，与 checkout 里有什么无关。
 
 **自己的后端活着时是 0 ms（后补测的）。** 上面的 30 ms 是"没有后端在跑"那一侧。后端起来之后
 `BROWSER4_CLI_TRACE_STARTUP=1` 只剩注册表那一条，**连 `port-8283-connect` 都不出现**——即
@@ -885,10 +886,9 @@ refused: …`）。用 `PermissionAudit` 的信封而不是自造前缀，是因
 这一步同时验证了 `X-Browser4-Duration-Ms` 两端接得上（后端新代码 + CLI 新代码），以及
 `batch --json` 在真后端上确实逐条执行、逐条打印。
 
-**没有做的**：另一个 checkout 那 1 s 的单独复测；通过 `agent run` 端到端跑一次
-`b4.run(stdin=…)`/`b4.batch`（那需要真实模型，工具层由 `B4CliBatchTest` 与上面的 CLI 级验证覆盖，
-中间只剩一层 `CliRunRequest` 透传）；`--file` 作为 payload 通道的工具封装（`stdin` 已覆盖，
-`--file` 一直可用）。
+**没有做的**：通过 `agent run` 端到端跑一次 `b4.run(stdin=…)`/`b4.batch`（那需要真实模型，工具层
+由 `B4CliBatchTest` 与上面的 CLI 级验证覆盖，中间只剩一层 `CliRunRequest` 透传）；`--file` 作为
+payload 通道的工具封装（`stdin` 已覆盖，`--file` 一直可用）。
 
 ## 附录：本文引用的数据
 
