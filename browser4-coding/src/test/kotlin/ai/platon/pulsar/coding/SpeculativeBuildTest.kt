@@ -233,6 +233,31 @@ class SpeculativeBuildTest {
     }
 
     @Test
+    @DisplayName("a guess that beats the request is counted apart from a joined one")
+    fun unclaimedFlightsAreVisible() = runBlocking {
+        // The blind spot (evaluation §11.4b): a speculative build that finishes before the
+        // model asks for the build can never be joined, so the request lands on BuildCache and
+        // `reused` stays 0 — the join metric then reads as "the guess was wasted" while it
+        // actually served the task. The flight outcome names that case.
+        val registry = registry(enabled = true)
+        val gate = CompletableDeferred<Unit>()
+
+        assertTrue(registry.schedule("ws-unclaimed", "fp") { gate.await(); result() })
+        awaitInFlight(registry, "ws-unclaimed")
+        gate.complete(Unit)
+        awaitIdle(registry, "ws-unclaimed")
+
+        val stats = registry.stats()
+        assertEquals(1, stats.speculativeBuilds)
+        assertEquals(0, stats.reused, "nobody was waiting, so nothing could be joined")
+        assertEquals(0.0, stats.reuseRatio, "this is exactly what made the metric unreadable")
+        assertEquals(0, stats.flightsUsed)
+        assertEquals(1, stats.flightsUnclaimed, "the next build of this tree is a cache hit")
+        assertEquals(1, stats.toMap()["flightsUnclaimed"])
+        assertEquals(stats.speculativeBuilds, stats.flightsUsed + stats.flightsUnclaimed, "the two shares add up")
+    }
+
+    @Test
     @DisplayName("stats carry the keep-or-drop ratio the plan decides on")
     fun statsShape() = runBlocking {
         val registry = registry(enabled = true)
@@ -252,6 +277,9 @@ class SpeculativeBuildTest {
         assertEquals(1, stats.reused)
         assertEquals(1.0, stats.reuseRatio, "the guessed build was used by the request: keep the feature")
         assertEquals(1.0, stats.toMap()["reuseRatio"])
+        assertEquals(1, stats.flightsUsed, "the flight had a joiner")
+        assertEquals(0, stats.flightsUnclaimed)
+        assertEquals(1, stats.toMap()["flightsUsed"])
         assertEquals(stats.speculativeMs, stats.toMap()["speculativeMs"], "the CPU bill travels too")
         assertEquals(0, stats.cancelled)
         assertEquals(0, stats.failed)

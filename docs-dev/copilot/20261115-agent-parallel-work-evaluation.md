@@ -265,7 +265,11 @@ coding 任务在 worktree 隔离下 `target/` 是冷的，N 个并行任务 = N 
 
 **怎么读 `timings.speculative`**
 
-- `reuseRatio = reused / speculativeBuilds`：判死线。低于 0.5 说明猜的构建大多没人要。
+- `flightsUsed` / `flightsUnclaimed`：**先看这两个**。前者是"有人在等"的投机构建（真正重叠了模型等待），
+  后者是"跑完了还没人来要"的——它**不是浪费**：请求随后到达时会走 `BuildCache`（`cached@<fp>`），
+  所以 `reused` 不会增。两者相加 = 投机航班数（另有 `cancelled` / `failed`）。
+- `reuseRatio = reused / speculativeBuilds`：**按请求**算的加入率，可以大于 1（一次航班被多个调用者加入）。
+  单看它会把"跑在请求前面"的那一半读成"没人要"，所以它不再单独当判死线用（§11.4b）。
 - `speculativeMs`：猜的 CPU 账单。它**不是**省下的时间——省下的是 `reused` 次构建本会花的墙钟。
 - 计数是进程级，结果里是**任务区间增量**（`Stats.deltaSince`，并向下钳零）。不做增量，
   同一 JVM 里第二个任务会继承第一个任务的数字，A/B 两个臂就分不开。
@@ -411,11 +415,14 @@ remote-resources 不是线程安全的；并行 `mvn test` 省几秒却可能换
 `wallMs must be milliseconds, was 62905400`）。修完后同一任务报 `wall = 30,689 ms`、
 `setup 725 / isolation 459 / run 29,056 / merge 776 / finalize 132`，分区仍然成立。
 
-**（b）`reuseRatio` 看不到"缓存命中"这种胜利。** 若投机构建在模型提出请求之前就跑完了，按需构建
-会走 `BuildCache` 短路（毫秒级返回 `cached`），此时 `reused` 不增——因为 `reused` 只统计**加入在途
-航班**。玩具仓库构建只有 ~2.5 s、模型一轮 ~1 s，本来就有一半概率落在这一侧；真实工作负载
-（构建 31–84 s）基本不会。读报告时要知道：`reuseRatio = 0` 不等于"投机没用"，还要看构建是否
-`cached`。
+**（b）`reuseRatio` 看不到"缓存命中"这种胜利——已修复。** 若投机构建在模型提出请求之前就跑完了，
+按需构建会走 `BuildCache` 短路（毫秒级返回 `cached`），此时 `reused` 不增——因为 `reused` 只统计
+**加入在途航班**。玩具仓库构建只有 ~2.5 s、模型一轮 ~1 s，本来就有一半概率落在这一侧；真实工作负载
+（构建 31–84 s）基本不会。
+
+修复：结果里多了两个**按航班**计的字段——`flightsUsed`（有人在等）和 `flightsUnclaimed`
+（跑完了还没人来要，后续请求由缓存应答），两者相加 = 投机航班数。`reuseRatio` 保留原语义
+（按请求），但不再单独当判死线；读报告先看这两个计数（§8）。
 
 ### 11.5 复现方式
 

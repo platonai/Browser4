@@ -60,6 +60,10 @@ class SpeculativeBuild(
         internal val result = CompletableDeferred<BuildResult>()
         internal var job: Job? = null
 
+        /** Joiners served by this flight; 0 when it completes means nobody was waiting. */
+        @Volatile
+        internal var joins: Int = 0
+
         /** A write invalidated the sources: the result must not be used or joined. */
         @Volatile
         internal var cancelled: Boolean = false
@@ -70,12 +74,18 @@ class SpeculativeBuild(
      *
      * [builds] counts every Maven invocation coordinated here, [speculativeBuilds] the share
      * of it that nobody had asked for yet, [reused] the callers served by a build already in
-     * flight, and [speculativeMs] the CPU time those guesses spent. `reused /
-     * speculativeBuilds` is the keep-or-drop metric for the feature: a speculative build
-     * that no one joins was wasted CPU.
+     * flight, and [speculativeMs] the CPU time those guesses spent.
+     *
+     * `reused / speculativeBuilds` is the join metric, and it is NOT the whole keep-or-drop
+     * story: a guess that finishes before the model asks for the build cannot be joined, so
+     * the request then lands on `BuildCache` (`cached@<fp>`) and `reused` stays 0 while the
+     * guess did serve the task. Measured on toy-shaped workspaces (evaluation §11.4b) that is
+     * a regular half of the outcomes, so the two flight outcomes are counted separately:
+     * [flightsUsed] (someone was waiting) and [flightsUnclaimed] (nothing was waiting when it
+     * finished — the next request is the cache's, not the coordinator's).
      *
      * Counters are process-wide, so a task reports the **delta** between two snapshots
-     * ([minus]) rather than the running total — otherwise the second task in a JVM would
+     * ([deltaSince]) rather than the running total — otherwise the second task in a JVM would
      * inherit the first one's numbers.
      */
     data class Stats(
@@ -85,6 +95,10 @@ class SpeculativeBuild(
         val cancelled: Int = 0,
         val failed: Int = 0,
         val speculativeMs: Long = 0,
+        /** Speculative flights at least one caller joined. */
+        val flightsUsed: Int = 0,
+        /** Speculative flights that finished with nobody waiting; see the class KDoc. */
+        val flightsUnclaimed: Int = 0,
     ) {
         /** 0.0 when nothing speculative started, so a report never divides by zero. */
         val reuseRatio: Double
@@ -104,6 +118,8 @@ class SpeculativeBuild(
             cancelled = (cancelled - earlier.cancelled).coerceAtLeast(0),
             failed = (failed - earlier.failed).coerceAtLeast(0),
             speculativeMs = (speculativeMs - earlier.speculativeMs).coerceAtLeast(0),
+            flightsUsed = (flightsUsed - earlier.flightsUsed).coerceAtLeast(0),
+            flightsUnclaimed = (flightsUnclaimed - earlier.flightsUnclaimed).coerceAtLeast(0),
         )
 
         fun toMap(): Map<String, Any?> = linkedMapOf(
@@ -116,7 +132,12 @@ class SpeculativeBuild(
             // cost: the plan's A/B is "does the saved build time exceed this, and the wall
             // clock drop by ≥ 2%".
             "speculativeMs" to speculativeMs,
+            // Per-request (can exceed speculativeBuilds when several callers join one flight).
             "reuseRatio" to (Math.round(reuseRatio * 100.0) / 100.0),
+            // Per-flight, so the two add up: used + unclaimed (+ cancelled/failed) is the
+            // number of speculative builds, which is what makes a report readable.
+            "flightsUsed" to flightsUsed,
+            "flightsUnclaimed" to flightsUnclaimed,
         )
     }
 
@@ -145,6 +166,8 @@ class SpeculativeBuild(
     private val cancelledCount = AtomicInteger()
     private val failedCount = AtomicInteger()
     private val speculativeMsCount = java.util.concurrent.atomic.AtomicLong()
+    private val flightsUsedCount = AtomicInteger()
+    private val flightsUnclaimedCount = AtomicInteger()
 
     /** Whether speculative builds may be started at all. */
     val enabled: Boolean get() = enabledProvider()
@@ -159,6 +182,8 @@ class SpeculativeBuild(
         cancelled = cancelledCount.get(),
         failed = failedCount.get(),
         speculativeMs = speculativeMsCount.get(),
+        flightsUsed = flightsUsedCount.get(),
+        flightsUnclaimed = flightsUnclaimedCount.get(),
     )
 
     fun resetStats() {
@@ -168,6 +193,8 @@ class SpeculativeBuild(
         cancelledCount.set(0)
         failedCount.set(0)
         speculativeMsCount.set(0)
+        flightsUsedCount.set(0)
+        flightsUnclaimedCount.set(0)
     }
 
     /**
@@ -187,6 +214,7 @@ class SpeculativeBuild(
                 is Decision.Own -> return own(workspaceKey, decision.flight, block)
                 is Decision.Join -> {
                     reusedCount.incrementAndGet()
+                    decision.flight.joins++
                     // Same inputs as the flight in progress: its answer IS our answer.
                     // A cancellation here means the flight was invalidated mid-run, so the
                     // sources changed under us — retry rather than return a stale success.
@@ -294,6 +322,11 @@ class SpeculativeBuild(
             // than on the success path only.
             if (flight.speculative) {
                 speculativeMsCount.addAndGet((clock() - startedAt).coerceAtLeast(0))
+                // The flight outcome, counted once per flight so the two shares add up. A
+                // flight with no joiner is not a miss: the request usually arrives after the
+                // build ends and `BuildCache` answers it, which `reused` cannot see.
+                if (flight.joins == 0) flightsUnclaimedCount.incrementAndGet()
+                else flightsUsedCount.incrementAndGet()
             }
             // No lock here on purpose: this runs while unwinding (possibly cancelled), and
             // a suspending lock acquisition in a cancelled coroutine could never complete —
