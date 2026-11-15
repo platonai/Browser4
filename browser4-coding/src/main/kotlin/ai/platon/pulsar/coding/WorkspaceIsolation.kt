@@ -190,6 +190,28 @@ class WorkspaceIsolation private constructor(
         }
 
         /**
+         * The repo-relative paths changed in [worktree], agent bookkeeping excluded.
+         *
+         * The exact view the merge uses, exposed so `coding.verify` can record **what**
+         * it verified: the merge gate compares that recording with the tree it is about
+         * to apply, because "verify passed, then the agent kept editing" must not merge.
+         *
+         * Rename entries (`R  old -> new`) are reported by their destination path — the
+         * old path no longer exists, so it must never reach a digest, a module lookup or
+         * a `git apply` pathspec.
+         */
+        fun changedFilesOf(worktree: Path): List<String> {
+            val status = runGit(worktree, listOf("status", "--porcelain", "--", ".") + EXCLUDES)
+            if (status.exitCode != 0) return emptyList()
+            return status.stdout.lineSequence().mapNotNull { line ->
+                if (line.length < 4) return@mapNotNull null
+                val raw = line.substring(3).trim().trim('"')
+                val path = if (raw.contains(" -> ")) raw.substringAfter(" -> ").trim().trim('"') else raw
+                path.replace('\\', '/').takeIf { it.isNotEmpty() }
+            }.toList()
+        }
+
+        /**
          * Re-attach to a worktree created by an earlier (possibly crashed) run,
          * so a resumed task can commit or discard it.
          *
@@ -318,13 +340,7 @@ class WorkspaceIsolation private constructor(
     }
 
     /** Paths (repo-relative) the task changed inside the isolated worktree. */
-    suspend fun changedFiles(): List<String> = withContext(Dispatchers.IO) {
-        val status = runGit(isolatedRoot, listOf("status", "--porcelain", "--", ".") + EXCLUDES)
-        if (status.exitCode != 0) return@withContext emptyList()
-        status.stdout.lineSequence().mapNotNull { line ->
-            if (line.length < 4) null else line.substring(3).trim().trim('"').replace('\\', '/')
-        }.filter { it.isNotEmpty() }.toList()
-    }
+    suspend fun changedFiles(): List<String> = withContext(Dispatchers.IO) { changedFilesOf(isolatedRoot) }
 
     /**
      * Move a reused worktree to the current baseline of the main checkout

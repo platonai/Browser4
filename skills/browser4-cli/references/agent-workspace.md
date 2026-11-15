@@ -63,7 +63,9 @@ merged into the checkout.
 worktree, and `merge` = `applied` | `refused` | `pending`. `refused` means nothing was
 applied — the run's files exist only in `isolatedWorkspace` — so a client must not read
 `workspace` as containing the work. A refused merge also fails the task, with the reason
-in `problems`/the failure message.
+in `problems`/the failure message. The verdict must still describe the tree: a file
+written **after** `coding.verify` refuses the merge ("re-run verify for the final change
+set"), and a change spanning two ecosystems needs one passing verdict per module.
 
 **Unmerged work is never swept away.** The backend keeps the newest
 `browser4.agent.isolation.keep` worktrees and anything younger than

@@ -354,14 +354,21 @@ fn render_sections(
     // A coding task that did not merge must say so BEFORE "Files written": the
     // workspace names the checkout, and a reader who sees files listed under it
     // assumes the checkout contains them (self-development isolation plan §D10).
+    // `pending` is the live state of a task that is still running in its worktree, so
+    // it is stated as such instead of as a refusal.
     let merge = result.get("merge").and_then(|v| v.as_str());
     if let Some(merge) = merge {
-        if merge != "applied" {
-            let isolated = string_of(result.get("isolatedWorkspace"));
-            let line = match isolated.as_deref() {
-                Some(tree) => format!("  Changes NOT applied — isolated tree: {tree}"),
-                None => "  Changes NOT applied to the checkout".to_string(),
-            };
+        let isolated = string_of(result.get("isolatedWorkspace"));
+        let line = match (merge, isolated.as_deref()) {
+            ("applied", _) => None,
+            ("pending", Some(tree)) => {
+                Some(format!("  Merge pending — the task is still running in {tree}"))
+            }
+            ("pending", None) => Some("  Merge pending".to_string()),
+            (_, Some(tree)) => Some(format!("  Changes NOT applied — isolated tree: {tree}")),
+            (_, None) => Some("  Changes NOT applied to the checkout".to_string()),
+        };
+        if let Some(line) = line {
             section(
                 &mut lines,
                 "Merge",
@@ -985,6 +992,37 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("workspace: /repo"), "{text}");
+    }
+
+    /// A running coding task reports `merge=pending`: its tree is live, not refused.
+    #[test]
+    fn pending_merge_names_the_live_worktree() {
+        let body = json!({
+            "taskId": "task-3",
+            "status": "running",
+            "statusCode": 200,
+            "statusTool": "command_status",
+            "resultTool": "command_result",
+            "cancelTool": "command_cancel",
+            "result": {
+                "workspace": "/repo",
+                "isolatedWorkspace": "/repo/.browser4/worktrees/task-3",
+                "isolation": "worktree",
+                "merge": "pending"
+            }
+        })
+        .to_string();
+
+        let text = rendered(body, 100);
+
+        assert!(
+            text.contains("Merge pending — the task is still running in /repo/.browser4/worktrees/task-3"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("Changes NOT applied"),
+            "a running task must not be reported as refused:\n{text}"
+        );
     }
 
     /// The whole point: the envelope's transport plumbing never reaches a human.

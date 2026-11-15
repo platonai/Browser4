@@ -779,8 +779,12 @@ open class StatefulAgentRunner(
         status.isolatedWorkspace = isolation.isolatedRoot.toString()
         status.isolationMode = "worktree"
         val changed = isolation.changedFiles()
-        val verdict = (agent as? BasicBrowserAgent)?.lastInnerVerdictJson
-        val decision = IsolationGate.evaluate(changed, verdict)
+        // Every verdict this run recorded: a change spanning ecosystems is covered by
+        // more than one, and no single module covers both.
+        val verdicts = (agent as? BasicBrowserAgent)?.let { a ->
+            a.innerVerdictJsonList.ifEmpty { listOfNotNull(a.lastInnerVerdictJson) }
+        }.orEmpty()
+        val decision = IsolationGate.evaluate(changed, verdicts, worktree = isolation.isolatedRoot)
         if (!decision.allow) {
             markIsolationRefused(status, isolation, decision.reason, changed)
             return
@@ -996,6 +1000,20 @@ open class StatefulAgentRunner(
                 val startedIsolation = started.isolation
                 isolation = startedIsolation
                 it.workspaceIsolation = startedIsolation
+                // Publish the live isolation facts BEFORE the run: `agent status` used to
+                // learn the worktree only when the merge decided its fate, so an operator
+                // watching a long coding task could not tell where its files were, and a
+                // client could not tell "not applicable" from "in progress".
+                startedIsolation?.let { iso ->
+                    status.sourceRepo = iso.repoRoot.toString()
+                    status.isolatedWorkspace = iso.isolatedRoot.toString()
+                    status.isolationMode = "worktree"
+                    status.isolationMerge = "pending"
+                    runCatching { persistProgress(status, force = true) }
+                        .onFailure { e ->
+                            logger.warn("Agent task {}: persisting the pending isolation row failed: {}", status.id, e.message)
+                        }
+                }
                 val taskWorkspace = startedIsolation?.isolatedRoot
                     ?: taskWorkspaceFor(it.baseDir, status.id, resume?.workspace, sharedWorkspace)
                 if (taskWorkspace != null) {
@@ -1216,6 +1234,12 @@ open class StatefulAgentRunner(
                     status.cancelled -> ai.platon.pulsar.coding.TaskStatus.CANCELLED
                     status.failureReason != null -> ai.platon.pulsar.coding.TaskStatus.FAILED
                     else -> ai.platon.pulsar.coding.TaskStatus.COMPLETE
+                }
+                // A row that still says "pending" means no merge decision was recorded:
+                // nothing reached the checkout, and a terminal row must never claim a merge
+                // was still in flight.
+                if (status.isolationMerge == "pending") {
+                    status.isolationMerge = if (isolation != null) "refused" else null
                 }
                 runCatching {
                     it.agentToolManager.endTask(
