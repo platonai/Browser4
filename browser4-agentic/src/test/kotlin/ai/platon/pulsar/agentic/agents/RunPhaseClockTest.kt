@@ -10,8 +10,9 @@ import org.junit.jupiter.api.Test
  * B2: the phases around the tool loop are measured with boundary marks.
  *
  * The wiring into the runner is thin (five `mark` calls and one `snapshot()`); the
- * arithmetic is what can be wrong, so it is pinned here — with an injected clock, so no
- * test sleeps.
+ * arithmetic is what can be wrong, so it is pinned here — with an injected clock, so the
+ * arithmetic needs no wait. The one exception is [defaultClockIsMilliseconds], which has to
+ * use the real clock: the unit of the *default* clock is what nothing else covers.
  *
  * The invariant that matters is the **partition**: `setup + run + merge + finalize` must
  * equal the wall clock, otherwise a phase silently swallows time and the numbers stop
@@ -116,6 +117,20 @@ class RunPhaseClockTest {
         val values = listOf(p.wallMs, p.setupMs, p.isolationMs, p.runMs, p.mergeMs, p.finalizeMs)
         assertTrue(values.all { it >= 0 }, "no phase may report negative time: $values")
         assertEquals(0L, p.runMs, "the backwards step closes the phase with zero, not -500")
+    }
+
+    @Test
+    @DisplayName("the default clock reports milliseconds, not nanoseconds")
+    fun defaultClockIsMilliseconds() {
+        // Regression, found by the first real A/B run rather than by these tests: the
+        // default clock was `System::nanoTime` while every field is named `*Ms`, so a
+        // 33.7 s task reported `wallMs` 33672370000 — 389 days of phases that still
+        // partitioned the wall clock perfectly. The injected clock every other test uses
+        // feeds milliseconds, which is exactly why nobody noticed.
+        val p = RunPhaseClock().also { Thread.sleep(60) }.snapshot()
+
+        assertTrue(p.wallMs in 50..3_000, "wallMs must be milliseconds, was ${p.wallMs}")
+        assertEquals(p.wallMs, p.setupMs, "everything before the first mark is setup")
     }
 
     @Test

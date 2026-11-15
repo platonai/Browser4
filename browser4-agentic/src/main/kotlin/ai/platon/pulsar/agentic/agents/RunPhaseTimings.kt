@@ -69,11 +69,18 @@ data class RunPhaseTimings(
  * clock is created is setup — that keeps the very first segment from being attributed to a
  * phase that has not started yet.
  *
- * [clock] is injectable so the arithmetic can be pinned without sleeping.
+ * [clock] is injectable so the arithmetic can be pinned without sleeping. It must report
+ * **milliseconds**, the unit every field of [RunPhaseTimings] is named after. The default is
+ * `System.nanoTime()` divided down rather than raw, because raw nanos reported as `*Ms`
+ * inflated a real 33.7 s run into 389 days of "setup + run + merge + finalize" while still
+ * satisfying the partition invariant — the only symptom was a number nobody could read.
  *
  * Not thread-safe by design: it is driven from the task's own coroutine.
  */
-class RunPhaseClock(private val clock: () -> Long = System::nanoTime) {
+class RunPhaseClock(
+    /** Milliseconds since an arbitrary origin; only differences are used. */
+    private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
+) {
 
     private val startedAt = clock()
     private var lastMarkAt = startedAt
