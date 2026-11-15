@@ -158,7 +158,7 @@ volcengine.base.url=https://ark.cn-beijing.volces.com/api/v3  # optional
 
 Windows (PowerShell)
 ```powershell
-$env:BROWSER_CONTEXT_MODE = "SYSTEM_DEFAULT"
+$env:BROWSER_PROFILE_MODE = "SYSTEM_DEFAULT"
 ```
 
 For high-performance parallel crawling:
@@ -166,7 +166,7 @@ For high-performance parallel crawling:
 Linux/MacOS
 ```bash
 export PROXY_ROTATION_URL=https://your-proxy-provider.com/rotation-endpoint
-export BROWSER_CONTEXT_MODE=SEQUENTIAL
+export BROWSER_PROFILE_MODE=SEQUENTIAL
 export BROWSER_CONTEXT_NUMBER=2
 export BROWSER_MAX_OPEN_TABS=8
 export BROWSER_DISPLAY_MODE=HEADLESS
@@ -175,7 +175,7 @@ export BROWSER_DISPLAY_MODE=HEADLESS
 Windows (PowerShell)
 ```powershell
 $env:PROXY_ROTATION_URL = "https://your-proxy-provider.com/rotation-endpoint"
-$env:BROWSER_CONTEXT_MODE = "SEQUENTIAL"
+$env:BROWSER_PROFILE_MODE = "SEQUENTIAL"
 $env:BROWSER_CONTEXT_NUMBER = 2
 $env:BROWSER_MAX_OPEN_TABS = 8
 $env:BROWSER_DISPLAY_MODE = "HEADLESS"
@@ -344,7 +344,7 @@ For Docker deployments, use environment variables in the `docker run` command.
 docker run -d -p 18182:18182 \
   -e OPENROUTER_API_KEY=${OPENROUTER_API_KEY} \
   -e PROXY_ROTATION_URL=https://your-proxy-provider.com/rotation-endpoint \
-  -e BROWSER_CONTEXT_MODE=SEQUENTIAL \
+  -e BROWSER_PROFILE_MODE=SEQUENTIAL \
   -e BROWSER_CONTEXT_NUMBER=2 \
   -e BROWSER_MAX_OPEN_TABS=8 \
   -e BROWSER_DISPLAY_MODE=HEADLESS \
@@ -357,7 +357,7 @@ docker run -d -p 18182:18182 \
 docker run -d -p 18182:18182 `
   -e OPENROUTER_API_KEY=$env:OPENROUTER_API_KEY `
   -e PROXY_ROTATION_URL=https://your-proxy-provider.com/rotation-endpoint `
-  -e BROWSER_CONTEXT_MODE=SEQUENTIAL `
+  -e BROWSER_PROFILE_MODE=SEQUENTIAL `
   -e BROWSER_CONTEXT_NUMBER=2 `
   -e BROWSER_MAX_OPEN_TABS=8 `
   -e BROWSER_DISPLAY_MODE=HEADLESS `
@@ -802,6 +802,11 @@ All are JVM system properties (set with `BROWSER4_SERVER_OPTS` or `-D…` when y
 | `PROTOTYPE` ⚠️ | **[Advanced]** Uses a predefined prototype profile.                         | Acts as the base for `SEQUENTIAL` and `TEMPORARY`.        | Controlled state inheritance |
 | `SEQUENTIAL` ⚠️ | **[Advanced]** Picks a profile from a pool sequentially.                   | Rotates through a pool of pre-initialized directories.     | Avoid session reuse in batch runs |
 | `TEMPORARY` ⚠️  | **[Advanced]** Creates a new, isolated profile for each browser instance. | Discarded after session ends.                             | Maximum isolation / stateless crawling |
+
+Set it as the property `browser.profile.mode` (properties file), as the environment variable
+`BROWSER_PROFILE_MODE`, or per session (`open --profile-mode <mode>`,
+`swarm create --profile-mode SEQUENTIAL|TEMPORARY`). The per-session capability wins over the
+server default.
 
 ---
 

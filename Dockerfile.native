@@ -59,14 +59,14 @@ RUN apk update && apk upgrade && \
     rm -rf /var/cache/apk/*
 
 # Set Chromium environment variables.
-# Ignore BROWSER_CONTEXT_NUMBER, BROWSER_MAX_OPEN_TABS if BROWSER_CONTEXT_MODE is set to DEFAULT.
+# Ignore BROWSER_CONTEXT_NUMBER, BROWSER_MAX_OPEN_TABS if BROWSER_PROFILE_MODE is set to DEFAULT.
 # Note: JAVA_OPTS does not apply to native images.  Heap size is set at build time
 # via the native-image -R:MaxHeapSize option.  To override at runtime, use
 # -Xmx (the native image supports a subset of JVM flags).
 ENV JAVA_OPTS="-Xms2G -Xmx10G -XX:+UseG1GC" \
     OPENROUTER_API_KEY=${OPENROUTER_API_KEY} \
     PROXY_ROTATION_URL=${PROXY_ROTATION_URL} \
-    BROWSER_CONTEXT_MODE=DEFAULT \
+    BROWSER_PROFILE_MODE=DEFAULT \
     BROWSER_CONTEXT_NUMBER=2 \
     BROWSER_MAX_OPEN_TABS=8 \
     BROWSER_DISPLAY_MODE=HEADLESS
