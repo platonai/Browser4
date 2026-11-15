@@ -88,7 +88,7 @@ import kotlin.reflect.KClass
  * - `move(source, dest)` — Move/rename file/directory
  * - `listDir(path?, maxDepth?)` — List directory contents
  * - `glob(pattern)` — Find files by glob pattern
- * - `grep(pattern, path?, filePattern?)` — Search file contents
+ * - `grep(pattern, path?, filePattern?, ignoreCase?, limit?)` — Search file contents
  * - `stat(path)` — Get file/directory info
  * - `diff(path)` — Show changes since snapshot
  * - `changeSummary()` — Show all tracked changes
@@ -503,11 +503,25 @@ class CodingToolExecutor : AbstractToolExecutor() {
             arguments = listOf(
                 ToolSpec.Arg("pattern", "String"),
                 ToolSpec.Arg("path", "String", "\".\""),
-                ToolSpec.Arg("filePattern", "String", "*"),
+                ToolSpec.Arg(
+                    "filePattern", "String", "*",
+                    "File name glob (`*.kt`), or a path glob below `path` when it contains a " +
+                        "separator (`src/**/*.kt`).",
+                ),
                 ToolSpec.Arg("ignoreCase", "Boolean", "false"),
+                ToolSpec.Arg(
+                    "limit", "Int", "100",
+                    "Maximum matches to collect (1..1000); the scan stops when it is reached.",
+                ),
             ),
             returnType = "String",
-            description = "Search file contents for a regex pattern (like grep -r)"
+            description = "Search file contents for a regex pattern (like grep -r). Collects at most " +
+                "`limit` matches (default 100) and stops there; a large tree is scanned under a 10 s " +
+                "budget, and a cut-short result says `partial:` — narrow `path`/`filePattern` " +
+                "instead of re-running the same search. Recursive scans skip build/dependency dirs " +
+                "(target, node_modules, vendor, dist, bin/Debug…) as well as the agent's own " +
+                ".b4scratch/.browser4; name one of them as `path` to search it. Non-UTF-8 files are " +
+                "searched with replacement characters rather than skipped."
         )
         toolSpec["stat"] = ToolSpec(
             domain = domain, method = "stat",
@@ -1205,12 +1219,19 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 fs.glob(paramString(args, "pattern", functionName)!!)
             }
             "grep" -> {
-                validateArgs(args, allowed = setOf("pattern", "path", "filePattern", "ignoreCase"), required = setOf("pattern"), functionName)
+                validateArgs(
+                    args, allowed = setOf("pattern", "path", "filePattern", "ignoreCase", "limit"),
+                    required = setOf("pattern"), functionName
+                )
                 fs.grep(
                     pattern = paramString(args, "pattern", functionName)!!,
                     path = paramString(args, "path", functionName, required = false, default = ".") ?: ".",
                     filePattern = paramString(args, "filePattern", functionName, required = false, default = "*") ?: "*",
                     ignoreCase = paramBool(args, "ignoreCase", functionName, required = false, default = false) ?: false,
+                    maxResults = paramInt(
+                        args, "limit", functionName, required = false,
+                        default = CodingAgentFileSystem.DEFAULT_GREP_LIMIT,
+                    ) ?: CodingAgentFileSystem.DEFAULT_GREP_LIMIT,
                 )
             }
             "stat" -> {

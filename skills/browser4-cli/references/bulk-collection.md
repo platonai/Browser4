@@ -84,6 +84,11 @@ tools ≈1.2 KB), though it now keeps its line structure. That is enough to read
 never a whole batch: write the batch to a file and inspect slices of it (`coding.stat`,
 `coding.grep`, `python -c` printing selected columns).
 
+`coding.grep` is bounded as well: it collects at most `limit` matches (default 100) and stops
+after a 10 s budget on a large tree, printing `partial:` when it stopped early. A partial
+result means "not found *yet*", never "absent" — narrow `path`/`filePattern` and search again
+instead of re-running the same whole-tree scan.
+
 ## Patterns
 
 ### Batch: crawl straight to CSV

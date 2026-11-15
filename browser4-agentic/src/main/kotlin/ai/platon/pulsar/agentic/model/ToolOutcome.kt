@@ -83,7 +83,10 @@ data class ToolOutcome(
             "shell" to 3_000,
             "shellOutput" to 3_000,
             "read" to 1_600,
-            "grep" to 1_600,
+            // Each line is dense (`path:line: text`), so a grep result carries more usable
+            // signal per character than a file body. 1,600 chars showed ~6 matches out of the
+            // up-to-500 the scan used to collect — the rest of the work was discarded here.
+            "grep" to 4_000,
             "diagnostics" to 2_000,
             "ktSymbols" to 1_600,
             "ktReferences" to 1_600,

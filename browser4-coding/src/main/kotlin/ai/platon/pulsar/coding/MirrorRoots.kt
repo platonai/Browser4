@@ -1,7 +1,6 @@
 package ai.platon.pulsar.coding
 
 import java.nio.file.Files
-import java.nio.file.LinkOption
 import java.nio.file.Path
 
 /**
@@ -14,12 +13,40 @@ import java.nio.file.Path
  * out of scope — the whole point of `--fresh-workspace` is to keep the checkout writable through the
  * mirror.
  *
- * This object walks the workspace for directory entries that are links (junctions or symlinks) and
- * resolves where they really point. A target that still lives inside the workspace is not a mirror
- * and is ignored. Links are never descended into, so the walk stays within the small workspace
- * directory itself and never traverses the source tree.
+ * This object looks for directory entries that are links (junctions or symlinks) and resolves where
+ * they really point. A target that still lives inside the workspace is not a mirror and is ignored.
+ * Links are never descended into, so the walk never traverses the source tree.
+ *
+ * ## Bounded on purpose
+ *
+ * The result feeds the boundary [Authorizer] built on the first tool call, so this walk runs on
+ * every cold [CodingAgentFileSystem] / [CodingAgentShell] instance. An unbounded recursive walk was
+ * fine for a mirror workspace (a handful of links) but catastrophic for a workspace that **is** a
+ * large checkout: measured on a 198k-file / 3.4 GB tree, `derive` took 100 s and `sourceRoot` 186 s,
+ * i.e. the first `coding.grep` of the session spent minutes before scanning anything.
+ *
+ * The walk is therefore bounded by [MAX_DERIVE_DEPTH] and [MAX_DERIVE_ENTRIES]: a mirror link can
+ * only live a couple of directories below the workspace root, and files are skipped entirely (they
+ * cannot be mirrored roots), so the cost follows the directory count and not the file count.
  */
 internal object MirrorRoots {
+
+    /**
+     * How deep below the workspace root a mirrored module can sit.
+     *
+     * `WorkspaceMirror` links `<workspace>/<module>` and nested reactor modules such as
+     * `<workspace>/browser4-plugins/browser4-testprobe`; one extra level is kept as margin.
+     */
+    private const val MAX_DERIVE_DEPTH = 3
+
+    /**
+     * Entry budget of one derivation.
+     *
+     * A mirror workspace holds tens of entries, so this never truncates a real mirror; it only
+     * keeps a huge non-mirror workspace from paying a full walk on its first tool call. Measured
+     * on a 198k-file tree, 2,000 entries cost ~1 s (cold metadata); 5,000 cost 2.6 s.
+     */
+    private const val MAX_DERIVE_ENTRIES = 2_000
 
     /**
      * Real paths of the mirrored roots under [workspaceRoot].
@@ -33,10 +60,16 @@ internal object MirrorRoots {
         if (!Files.isDirectory(realRoot)) return emptySet()
 
         val roots = linkedSetOf<Path>()
+        var budget = MAX_DERIVE_ENTRIES
 
-        fun visit(dir: Path) {
+        fun visit(dir: Path, depth: Int) {
+            if (depth > MAX_DERIVE_DEPTH || budget <= 0) return
             val entries = runCatching { Files.list(dir).use { it.toList() } }.getOrDefault(emptyList())
             for (entry in entries) {
+                if (budget-- <= 0) return
+                // Only directories can be mirrored module roots. Skipping files keeps the walk
+                // proportional to the directory count instead of the file count.
+                if (runCatching { Files.isDirectory(entry) }.getOrDefault(false).not()) continue
                 // Detect a link (Unix symlink or Windows junction) by comparing the absolute path
                 // with its real path: a real directory resolves to itself, a link resolves to its
                 // target. This is the same trick CodingAgentFileSystem.resolveLinkTarget uses and it
@@ -46,18 +79,16 @@ internal object MirrorRoots {
                 val real = runCatching { entry.toRealPath() }.getOrNull()
                 val isLink = real != null && !samePath(real, absolute)
                 if (isLink) {
-                    if (Files.isDirectory(entry) && real != null && !real.startsWith(realRoot)) {
+                    if (real != null && !real.startsWith(realRoot)) {
                         roots.add(real.normalize())
                     }
                     continue // never descend into a linked tree
                 }
-                if (Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) {
-                    visit(entry)
-                }
+                visit(entry, depth + 1)
             }
         }
 
-        visit(realRoot)
+        visit(realRoot, 0)
         return roots
     }
 

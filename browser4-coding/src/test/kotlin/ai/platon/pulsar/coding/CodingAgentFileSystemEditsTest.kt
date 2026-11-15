@@ -206,6 +206,145 @@ class CodingAgentFileSystemEditsTest {
         assertFalse(result.contains("vendor"), "custom exclusion leaked: $result")
     }
 
+    @Test
+    @DisplayName("grep stops at the match cap and says so")
+    fun grepStopsAtMatchCap() = runBlocking {
+        for (i in 1..20) write("src/F%02d.txt".format(i), "needle $i\n")
+
+        val result = fs().grep("needle", path = ".", maxResults = 5)
+
+        assertTrue(result.startsWith("Found 5 match(es)"), "result: $result")
+        assertEquals(5, result.lineSequence().count { it.startsWith("  src") }, "result: $result")
+        assertTrue(result.contains("match cap"), "result: $result")
+    }
+
+    @Test
+    @DisplayName("grep reports a partial scan instead of pretending the text is absent")
+    fun grepReportsPartialScan() = runBlocking {
+        // A 1 ms budget cannot page in this many files, so the scan is cut short by definition.
+        for (i in 1..400) write("src/deep/part/F%03d.txt".format(i), "needle $i\n")
+
+        val result = fs().grep("needle", path = ".", budgetMillis = 1)
+
+        assertTrue(result.contains("partial:"), "result: $result")
+        assertTrue(result.contains("INCOMPLETE"), "result: $result")
+    }
+
+    @Test
+    @DisplayName("grep results are ordered by path then line")
+    fun grepResultsAreOrdered() = runBlocking {
+        write("src/z.txt", "x\nneedle z\n")
+        write("src/a.txt", "y\nneedle a\n")
+        write("src/m.txt", "needle m\nneedle m2\n")
+
+        val result = fs().grep("needle").replace('\\', '/')
+
+        val paths = result.lineSequence()
+            .filter { it.startsWith("  src/") }
+            .map { it.trim().substringBefore(':') }
+            .toList()
+        assertEquals(listOf("src/a.txt", "src/m.txt", "src/m.txt", "src/z.txt"), paths, "result: $result")
+    }
+
+    @Test
+    @DisplayName("grep matches a plain literal and a regex alike")
+    fun grepMatchesLiteralAndRegex() = runBlocking {
+        write("src/Lit.txt", "class CodingAgentFileSystem\n")
+
+        val literal = fs().grep("CodingAgentFileSystem")
+        assertTrue(literal.contains("Lit.txt:1"), "literal path: $literal")
+
+        val regex = fs().grep("CodingAgent\\w+")
+        assertTrue(regex.contains("Lit.txt:1"), "regex path: $regex")
+    }
+
+    @Test
+    @DisplayName("grep still finds ASCII needles inside a non-UTF-8 file")
+    fun grepMatchesNonUtf8FileAfterReplacement() = runBlocking {
+        write("src/Utf8.txt", "needle in utf8\n")
+        // Valid GBK, invalid UTF-8: the file must not vanish from the result.
+        val gbk = java.nio.charset.Charset.forName("GBK")
+        write("src/Gbk.txt", "")
+        Files.write(tempDir.resolve("src/Gbk.txt"), "// 中文\nneedle in gbk\n".toByteArray(gbk))
+
+        val result = fs().grep("needle")
+
+        assertTrue(result.contains("Utf8.txt:1"), "result: $result")
+        assertTrue(result.contains("Gbk.txt:2"), "a GBK file must not be dropped: $result")
+        assertTrue(result.contains("not valid UTF-8"), "result: $result")
+    }
+
+    @Test
+    @DisplayName("grep decodes a UTF-16 file with a BOM")
+    fun grepMatchesUtf16File() = runBlocking {
+        write("src/Utf16.txt", "")
+        // Java's "UTF-16" encoder writes a big-endian BOM, which is what detection keys on.
+        val text = "// 中文\nneedle in utf16\n"
+        Files.write(
+            tempDir.resolve("src/Utf16.txt"),
+            text.toByteArray(java.nio.charset.Charset.forName("UTF-16")),
+        )
+
+        val result = fs().grep("needle")
+
+        assertTrue(result.contains("Utf16.txt:2"), "result: $result")
+    }
+
+    @Test
+    @DisplayName("grep searches a repo-level bin/ but skips a build-output one")
+    fun grepSearchesScriptBinButSkipsBuildBin() = runBlocking {
+        write("bin/run.ps1", "needle in scripts\n")
+        write("dotnet/bin/Release/app.txt", "needle in build output\n")
+
+        val result = fs().grep("needle").replace('\\', '/')
+
+        assertTrue(result.contains("bin/run.ps1:1"), "repo scripts must stay searchable: $result")
+        assertFalse(result.contains("build output"), "bin/Release is a build output: $result")
+    }
+
+    @Test
+    @DisplayName("grep skips dependency and agent-scratch directories by default")
+    fun grepSkipsDependencyAndScratchDirs() = runBlocking {
+        write("src/a.js", "needle own code\n")
+        write("vendor/lib/index.js", "needle vendor\n")
+        write("site-packages/pkg/mod.py", "needle dependency\n")
+        write(".b4scratch/probe.js", "needle scratch\n")
+
+        val result = fs().grep("needle")
+
+        assertTrue(result.contains("a.js"), "result: $result")
+        assertFalse(result.contains("vendor"), "result: $result")
+        assertFalse(result.contains("site-packages"), "result: $result")
+        assertFalse(result.contains(".b4scratch"), "result: $result")
+    }
+
+    @Test
+    @DisplayName("filePattern with a separator matches the path below the search root")
+    fun grepFilePatternWithSeparator() = runBlocking {
+        write("src/main/A.kt", "needle kotlin\n")
+        write("src/main/A.txt", "needle text\n")
+        write("other/B.kt", "needle other\n")
+
+        val byPath = fs().grep("needle", filePattern = "src/**/*.kt").replace('\\', '/')
+        assertTrue(byPath.contains("src/main/A.kt"), "result: $byPath")
+        assertFalse(byPath.contains("A.txt"), "result: $byPath")
+        assertFalse(byPath.contains("other"), "result: $byPath")
+
+        val byName = fs().grep("needle", filePattern = "*.kt").replace('\\', '/')
+        assertTrue(byName.contains("src/main/A.kt") && byName.contains("other/B.kt"), "result: $byName")
+    }
+
+    @Test
+    @DisplayName("grep windows a long line around the match instead of hiding it")
+    fun grepWindowsLongLinesAroundTheMatch() = runBlocking {
+        write("src/Long.txt", "x".repeat(300) + " NEEDLE_AT_300\n")
+
+        val result = fs().grep("NEEDLE_AT_300")
+
+        assertTrue(result.contains("NEEDLE_AT_300"), "the match itself must be visible: $result")
+        assertTrue(result.contains("…"), "a windowed line is marked: $result")
+    }
+
     // ==================== collectTextFiles ====================
 
     @Test

@@ -52,6 +52,36 @@ class CodingAgentFileSystemMirrorBoundaryTest {
     }
 
     @Test
+    @DisplayName("MirrorRoots.derive finds a nested reactor module link")
+    fun derivesGroupedModuleRoot() {
+        val real = Files.createDirectories(tempDir.resolve("real-module"))
+        val workspace = Files.createDirectories(tempDir.resolve("workspace"))
+        val group = Files.createDirectories(workspace.resolve("browser4-plugins"))
+        link(group.resolve("browser4-testprobe"), real)
+
+        val roots = MirrorRoots.derive(workspace)
+
+        val realNormalized = real.toRealPath().normalize()
+        assertTrue(roots.any { it == realNormalized }, "expected the grouped module in $roots")
+    }
+
+    @Test
+    @DisplayName("MirrorRoots.derive does not walk deeper than a mirror can live")
+    fun deriveStopsAtTheMirrorDepth() {
+        // Unbounded walking is what made the first tool call of a big workspace take minutes; a
+        // link below the mirror depth is outside the contract (`WorkspaceMirror` links modules).
+        val real = Files.createDirectories(tempDir.resolve("real-module"))
+        val workspace = Files.createDirectories(tempDir.resolve("workspace"))
+        val deep = Files.createDirectories(workspace.resolve("a/b/c/d/e"))
+        link(deep.resolve("mod"), real)
+
+        val roots = MirrorRoots.derive(workspace)
+
+        val realNormalized = real.toRealPath().normalize()
+        assertFalse(roots.any { it == realNormalized }, "a link past the depth limit is ignored: $roots")
+    }
+
+    @Test
     @DisplayName("a write through a mirrored module junction is allowed")
     fun writeThroughJunctionAllowed() = runBlocking {
         val real = Files.createDirectories(tempDir.resolve("real-module"))

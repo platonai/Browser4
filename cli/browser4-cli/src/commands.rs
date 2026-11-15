@@ -5867,8 +5867,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "path", description: "Directory to search in (default: workspace root)", optional: true },
             ],
             options: &[
-                OptionDef { name: "file-pattern", description: "File name glob filter (default: *)", is_bool: false, short: None },
+                OptionDef { name: "file-pattern", description: "File name glob (default: *), or a path glob below PATH when it contains a separator (src/**/*.kt)", is_bool: false, short: None },
                 OptionDef { name: "ignore-case", description: "Case-insensitive search", is_bool: true, short: None },
+                OptionDef { name: "limit", description: "Maximum matches to collect (default 100; the scan stops when it is reached)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_grep".to_string(),
@@ -5878,6 +5879,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(path) = get_opt_str(args, "path") { p["path"] = json!(path); }
                 if let Some(fp) = get_opt_str(args, "file-pattern") { p["filePattern"] = json!(fp); }
                 if get_bool(args, "ignore-case").unwrap_or(false) { p["ignoreCase"] = json!(true); }
+                if let Some(lim) = get_opt_str(args, "limit") {
+                    if let Ok(n) = lim.parse::<i32>() { p["limit"] = json!(n); }
+                }
                 p
             },
         },
@@ -11649,6 +11653,46 @@ mod tests {
             "fill tool_params must keep 'ref' key for batch normalisation"
         );
         assert_eq!(params["text"], "batch fill text");
+    }
+
+    // =========================================================================
+    // code-grep command — tool name and params
+    // =========================================================================
+
+    #[test]
+    fn test_code_grep_tool_params_include_limit_and_filters() {
+        let map = commands_map();
+        let cmd = map.get("code-grep").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&HashMap::new()), "coding_grep");
+
+        let mut args = HashMap::new();
+        args.insert("pattern".to_string(), json!("TODO"));
+        args.insert("path".to_string(), json!("src"));
+        args.insert("file-pattern".to_string(), json!("*.kt"));
+        args.insert("ignore-case".to_string(), json!(true));
+        args.insert("limit".to_string(), json!("25"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["pattern"], "TODO");
+        assert_eq!(params["path"], "src");
+        assert_eq!(params["filePattern"], "*.kt");
+        assert_eq!(params["ignoreCase"], json!(true));
+        assert_eq!(params["limit"], json!(25), "limit must reach the tool as a number");
+    }
+
+    #[test]
+    fn test_code_grep_omits_optional_args_when_absent() {
+        let map = commands_map();
+        let cmd = map.get("code-grep").unwrap();
+        let mut args = HashMap::new();
+        args.insert("pattern".to_string(), json!("needle"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["pattern"], "needle");
+        assert!(params.get("limit").is_none());
+        assert!(params.get("path").is_none());
+        assert!(params.get("filePattern").is_none());
+        assert!(params.get("ignoreCase").is_none());
     }
 
     // =========================================================================
