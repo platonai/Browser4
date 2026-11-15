@@ -4341,14 +4341,16 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         add_note_line(
             &mut lines,
-            "Browser order: the attached browser you are already using, then (only after you \
-             confirm) a local browser started with --remote-debugging-port, then your default \
-             browser. Only the first two can be verified, so the fallback says so.",
+            "Browser order (no signed-in `gh`, or --no-gh): the attached browser you are already \
+             using, then (only after you confirm) a local browser started with \
+             --remote-debugging-port, then your default browser. Only the first two can be \
+             verified, so the fallback says so.",
         );
         add_note_line(
             &mut lines,
-            "The CLI never stars the repository itself. It opens the page, reads whether you are \
-             signed in, and waits for YOUR click — no star is ever sent from your account.",
+            "A star is only ever written by a `star` you ran yourself: interactive runs ask once \
+             ([Y/n]), and a piped or agent-driven run only writes it with --gh. `gh` owns the \
+             credentials — the CLI never reads a token.",
         );
     }
 
@@ -5153,7 +5155,11 @@ const CLI_EXAMPLES: &[(&str, &[&str])] = &[
     ),
     (
         "star",
-        &["browser4-cli star", "browser4-cli star --check"],
+        &[
+            "browser4-cli star",
+            "browser4-cli star --gh",
+            "browser4-cli star --check",
+        ],
     ),
 ];
 

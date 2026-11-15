@@ -1,14 +1,20 @@
 # 引导用户用「自己已登录的 GitHub 账号」点 Star —— 方案
 
 > 状态：**已实现**（2026-11-11），见 §12 的实现记录
+> 更新：**2026-11-16** —— 新增 GitHub CLI（`gh`）REST 路径（§2 P0），让已 `gh auth login` 的用户
+> 一次确认即可加星，无需浏览器；`--gh` 显式跳过确认。设计与边界见
+> [star-gh-api-direct-star.md](star-gh-api-direct-star.md)。
 > 基线：2026-11-11，`platonai/Browser4` 1,180 ⭐ / 152 fork / 52 open issues
 > 目标仓库固定为 `platonai/Browser4`（单一目标，不做多仓库）。
 
 ## 0. 一句话方案
 
-新增 `browser4-cli star`：它只做三件事 —— **把用户带到仓库页（优先复用他已经登录的浏览器）、读出页面上的登录/Star 状态、然后停下来等人点**。
+新增 `browser4-cli star`：**优先用用户自己已登录的 GitHub CLI 走 REST API 加星（一次确认，
+`--gh` 跳过确认）；没有可用 `gh` 时把用户带到仓库页（优先复用他已经登录的浏览器），读出页面上的
+登录/Star 状态，然后停下来等人点**。
 
-CLI 永不代点。转化靠「价值刚交付的那一刻提一句 + 一条真能一键到达的命令」，不靠打扰。
+不代点、不批量、不在用户没同意的情况下写任何东西。转化靠「价值刚交付的那一刻提一句 + 一条真能一键
+到达的命令」，不靠打扰。
 
 ## 1. 为什么「代点」不能做（这是硬边界，不是可选优化）
 
@@ -16,11 +22,28 @@ CLI 永不代点。转化靠「价值刚交付的那一刻提一句 + 一条真�
 - **商业价值**：非真实用户产生的 star 不构成社交证明；被识破一次，信任成本远高于收益。
 - **产品叙事**：Browser4 卖的是「AI 原生浏览器引擎」。用户一旦看到 CLI 会代替自己点 Star，就会合理怀疑它在别的站点也会自作主张地写操作。**人点，是产品可信度的一部分。**
 
-落到代码约束：`star` 命令不发送 `POST /star`，不调用 `gh api -X PUT user/starred/*`，不做任何「批量/多账号」路径。
+落到代码约束：`star` 命令不发送 `POST /star`，不做任何「批量/多账号」路径；唯一会发生的写操作是
+`PUT /user/starred/platonai/Browser4`，且只能由**用户自己敲的 `star`**触发 —— 交互式运行时必须
+先回答一次 `[Y/n]`，非交互（管道 / agent）运行必须显式给出 `--gh`。CTA、`star --check`、
+`star --no-open` 永远不会写。
 
-## 2. 三条用户路径
+## 2. 用户路径
 
-### P1 已 attach —— 最理想（用户自己的 Chrome 就是登录态）
+### P0 已 `gh auth login` —— 最省事（2026-11-16 新增）
+
+`gh api user` 成功即认定可用（`GH_TOKEN` / `GITHUB_TOKEN` 环境变量也算，`gh` 自己处理凭据，
+CLI 不读 token）。
+
+| 场景 | CLI 行为 | 退出码 |
+|---|---|---|
+| 交互式 `star`，未 star | 问一次 `Star … as @login through the GitHub CLI? [Y/n]`，回车即 `PUT /user/starred/platonai/Browser4` | 0 |
+| `star --gh` | 不问，直接 `PUT`（脚本 / 用户明确要求的唯一入口） | 0 |
+| 账号上已经 star 过 | 先读 `GET /user/starred/…`（204），只报「已 star」不再写 | 0 |
+| 非交互（管道 / agent）且没有 `--gh` | **不写**，打印一行「`… star --gh` 可走 API」，继续走 P1-P3 | 0 |
+| `--gh` 但 `gh` 缺失 / 未登录 / 写失败 | 报错并给出下一步（`gh auth login`、安装地址） | 2 |
+| `star --check` | 只 `GET`，不写；读不到就回落到 P1 的页面读取 | 0 |
+
+### P1 已 attach —— 用户自己的 Chrome 就是登录态
 
 `SessionKind::ExtensionAttached` / `CdpAttached`。
 
@@ -43,8 +66,10 @@ CLI 永不代点。转化靠「价值刚交付的那一刻提一句 + 一条真�
 
 ### P3 无 GUI（SSH / 容器 / CI）
 
-- 只打印 URL；无浏览器可启动时，再打印一句可复制的 `gh repo star platonai/Browser4`。
-- **不实现 `--gh` 开关**（原提案里的可选路径，已否决）：一旦 CLI 真的执行写操作，就与「同意不做代点」自相矛盾，而这个用例只需要把命令递到用户手里 —— 他自己敲那一下，等价于手点，CLI 不承担任何写请求。可在 `star` 里加 `--gh` 的前提是重新讨论这条边界，不是顺手加个 flag。
+- 有 `gh`：P0 直接加星，**不需要 GUI**。
+- 只有 URL 可递：打印 URL 与 `browser4-cli star --gh`（已 `gh auth login` 时）或 `gh repo star platonai/Browser4`。
+- `--gh` 自 2026-11-16 起**已实现**：它把写操作交给用户自己启动的那条命令，交互式运行仍默认先问一次；
+  批量 / 多账号路径依旧不存在（见 §8 反模式）。
 
 ## 3. 触达点矩阵
 
@@ -153,10 +178,12 @@ attach 复用真实浏览器，登录态天然存在。漏斗顺序因此固定�
 | GitHub DOM 改版 | 多信号 + `Unknown` 降级，永不报错 |
 | attach 抢焦点 / 覆盖用户页面 | 只开新 tab，禁用 `goto`，提供 `--no-open` |
 | 用户反感 | 上限 3 次、7 天间隔、`BROWSER4_NO_PROMO=1` |
-| 被误指「AI 刷 star」 | 不发写请求、文档明说、SKILL.md 禁止 agent 代点 |
-| 隐私 | `user-login` 只在本地用，不回传、不落日志 |
+| 被误指「AI 刷 star」 | 只有用户自己敲的 `star` 能写：交互式先问 `[Y/n]`，非交互必须 `--gh`；无 CTA 写入、无批量、无多账号；文档与 SKILL.md 明说 agent 不得代跑 |
+| gh 写失败 / 凭据过期 | `GET` 只把 404 当「未 star」，其余一律 `Unknown`；`PUT` 失败按原样回报 `gh` 的 stderr，退出码 2，绝不假装成功 |
+| `gh` 卡住（网络黑洞） | 每次调用 20 s 硬超时并 kill，然后走浏览器路径 |
+| 隐私 | `user-login` 只在本地用，不回传、不落日志；`gh` 凭据由 `gh` 自己保管，CLI 不读 token |
 
-**反模式（明确不做）**：Star 换功能/换额度（易被判定 inauthentic）、在错误信息里推销、每条命令都提示、`--yes` 自动点、用 gh token 批量点、向 agent 的上下文里塞 CTA。
+**反模式（明确不做）**：Star 换功能/换额度（易被判定 inauthentic）、在错误信息里推销、每条命令都提示、`--yes` 自动点、用 gh token 批量点/多账号点、在 CTA 或非交互路径里偷偷写、向 agent 的上下文里塞 CTA。
 
 ## 9. 分阶段落地
 
@@ -166,15 +193,17 @@ attach 复用真实浏览器，登录态天然存在。漏斗顺序因此固定�
 | P2 | attach 感知 + 页面态检测 + state 文件 + fixture | ✅ |
 | P3 | CTA（TTY 门禁 + 频控 + 退出开关） | ✅ |
 | P4 | README / README.zh / CLI README / SKILL.md | ✅ |
-| P5 | 真实 e2e 场景（`--scenario=test_e2e_star_*`） | ⬜ 待做，fixture 与 `BROWSER4_STAR_URL` 钩子已就位 |
+| P5 | e2e：`test_e2e_mock_star_gh_api`（stub `gh`，覆盖 `--gh`、幂等、`--check`、缺 `gh` 报错） | ✅ |
 | P6 | 发布 4 周后对比 star 增速 | ⬜ 需要时间 |
+| P7 | GitHub CLI REST 路径（`--gh` / `--no-gh`，`[Y/n]` 确认，20 s 超时） | ✅ 2026-11-16 |
 
 ## 10. 验收标准
 
 - [x] `browser4-cli star` 在 attach / 有 GUI / 无 GUI 三种环境下行为符合 §2（attach 与有 GUI 已实测；无 GUI 走纯提示）
-- [x] 代码中不存在任何 star 写请求（`POST /star`、`gh api -X PUT user/starred`）—— 只调用 `browser_tabs` / `browser_evaluate` / `browser_navigate` 三个只读（相对 GitHub 而言）工具
+- [x] 写请求只有一个入口：`PUT /user/starred/platonai/Browser4`，且只由用户自己运行的 `star` 触发（交互式确认或 `--gh`）；`--check` / `--no-open` / CTA / 非交互无 `--gh` 全部零写入
 - [x] `should_show_cta()` 门禁矩阵单测全绿；`BROWSER4_NO_PROMO=1` 全局静默
-- [x] `cargo test --bin browser4-cli` 全绿（2,155 个），help 宽度/示例一致性 77 个测试全绿
+- [x] `cargo test --bin browser4-cli star_guide` 全绿（29 个），help 宽度/示例一致性 76 个测试全绿
+- [x] `cargo test --test e2e -- --scenario=test_e2e_mock_star_gh_api` 全绿（stub `gh`，不碰真实账号）
 - [x] `help.rs` / `tips.rs` / `SKILL.md` / `README(.zh)` / `cli/browser4-cli/README.md` 已更新
 - [ ] 发布 4 周后 star 增速可与前 4 周对比
 
@@ -182,23 +211,26 @@ attach 复用真实浏览器，登录态天然存在。漏斗顺序因此固定�
 
 1. 「点赞」= **Star**，目标仓库只有 `platonai/Browser4`。
 2. 「询问后一次性 attach 用户真实浏览器」：接受。实现上**只在没有会话时**才问 —— 已有会话时接管会顶掉用户正在用的浏览器，那比「无法校验点击」更糟。
-3. `--gh`：**不做**。SSH 场景只把 `gh repo star platonai/Browser4` 递给用户自己敲（见 §2 P3）。
-4. 同意不做「代点」：CLI 不发写请求，文档与 `SKILL.md` 都写明。
+3. `--gh`：**做**（2026-11-16 改判，项目 owner 明确要求「已登录 gh 的用户直接用 API 加星」）。边界照旧：交互式运行默认先问一次，`--gh` 是用户自己敲的显式授权，非交互运行没有它就不写；批量 / 多账号仍然不做。
+4. 「代点」仍是禁区，但「用户授权后由 CLI 发送一次写请求」不再是禁区：`gh` 自己的凭据、用户自己的命令、单仓库单次写入。
 
 ## 12. 实现记录
 
 | 文件 | 内容 |
 |---|---|
-| `cli/browser4-cli/src/star_guide.rs`（新） | 三条路径、状态检测、`--wait` 轮询、CTA 门禁、`star-guide.json` 读写、21 个单测 |
-| `cli/browser4-cli/src/main.rs` | `mod star_guide;`；`star` 在 server gate **之前**分发（打不开浏览器不该付一次冷启动）；成功命令尾部调用 `maybe_show_cta()` |
-| `cli/browser4-cli/src/commands.rs` | `star` 的 `CommandDef`（`Category::Browsers`、`batch_supported: false`、`E2eCoverage::Excluded` 及原因） |
-| `cli/browser4-cli/src/help.rs` | `star` 的三条 Notes + `CLI_EXAMPLES` 两条示例 |
+| `cli/browser4-cli/src/star_guide.rs` | 四条路径（gh REST → attach → 询问后 attach → 系统浏览器）、状态检测、`--wait` 轮询、CTA 门禁、`star-guide.json` 读写、`gh` 探针/读/写与时 20 s 超时、29 个单测 |
+| `cli/browser4-cli/src/main.rs` | `mod star_guide;`；`star` 在 server gate **之前**分发（打不开浏览器 / 只走 API 都不该付一次冷启动）；成功命令尾部调用 `maybe_show_cta()` |
+| `cli/browser4-cli/src/commands.rs` | `star` 的 `CommandDef`（`Category::Browsers`、`batch_supported: false`、`E2eCoverage::Tested`、`--gh` / `--no-gh` 选项） |
+| `cli/browser4-cli/src/help.rs` | `star` 的三条 Notes + `CLI_EXAMPLES` 三条示例 |
 | `cli/browser4-cli/src/tips.rs` | GENERAL 轮换里一条 `star` tip |
-| `browser4-tests/.../static/b4/star-fixture.html`（新） | 页面 fixture，localStorage 模拟账号级 star 状态 |
-| `skills/browser4-cli/SKILL.md` | 命令表新增 `star` 行，并写明「agent 不得代用户执行」 |
+| `browser4-tests/.../static/b4/star-fixture.html` | 页面 fixture，localStorage 模拟账号级 star 状态 |
+| `cli/browser4-cli/tests/e2e/scenarios/mock_server.rs` | `test_star_gh_api` + `gh` stub（Windows `.cmd` / Unix `sh`） |
+| `skills/browser4-cli/SKILL.md` | 命令表 `star` 行：gh 路径 + 「agent 不得代跑、不得代传 `--gh`」 |
 | `README.md` / `README.zh.md` / `cli/browser4-cli/README.md` | 一行 CTA / 命令说明 |
+| `docs-dev/copilot/star-gh-api-direct-star.md` | gh REST 路径的设计、边界与验证记录 |
 
 两处与提案不同的实现细节，都是端到端跑出来的：
 
 1. **`--check` 会 reload 一个已经显示仓库的 tab**。只读 DOM 会读到「打开早于点击」的旧 tab，把已 star 误判成未 star；reload 之后页面才是账号的真实状态。它仍然不会新开 tab。
 2. **`--check` 优先当前活动 tab**。`star` 每跑一次开一个 tab，两个仓库 tab 同时存在是正常的，挑第一个匹配会读到另一个 tab 的旧状态。
+3. **gh 路径优先于页面路径**（2026-11-16）。`gh` 看到的是账号级真实状态，页面可能只是旧 DOM；`--check` 因此先问 API，只有 API 不可用时才回落到页面。

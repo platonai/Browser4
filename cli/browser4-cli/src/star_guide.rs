@@ -1,22 +1,26 @@
-//! ⭐ Star guidance — take the user to the repository in the browser they are
-//! **already logged into** and wait for *their* click.
+//! ⭐ Star guidance — collect a star from the person who is actually using the
+//! tool, with as few steps as their setup allows.
 //!
-//! The CLI never stars the repository itself: no `POST /star`, no
-//! `gh api -X PUT user/starred/…`, nothing that would produce an inauthentic
-//! interaction (GitHub's acceptable-use policy forbids star manipulation, and a
-//! star from an account that never used the tool is worth nothing anyway).  This
-//! module only *navigates*, *reads the page state*, and *waits*.
+//! Four paths, in order of preference:
 //!
-//! Three paths, in order of preference:
-//!
-//! 1. **Attached session** (`attach --extension` / `attach --cdp`) — the user's
+//! 1. **GitHub CLI (`gh`) signed in** — the star is written through the REST API
+//!    (`PUT /user/starred/platonai/Browser4`) as the user, after *one*
+//!    confirmation; `--gh` sends it without asking (for scripts the user drives
+//!    himself).  No browser, no click.  A star is never written from the CTA,
+//!    from a piped/non-interactive run, or by an agent on its own initiative —
+//!    only an explicit `star` that a human confirms, or an explicit `--gh`, can
+//!    reach GitHub.  The CLI reads no token itself; `gh` owns the credentials.
+//! 2. **Attached session** (`attach --extension` / `attach --cdp`) — the user's
 //!    own browser, with their logins.  A new tab is opened (never the active
 //!    tab), the page is inspected, and the CLI polls until the user clicks.
-//! 2. **Ask, then attach once** — when no session exists but a local browser is
+//! 3. **Ask, then attach once** — when no session exists but a local browser is
 //!    running with `--remote-debugging-port`, the user is asked before the
 //!    browser is taken over.
-//! 3. **System browser** — otherwise the URL is handed to the default browser
+//! 4. **System browser** — otherwise the URL is handed to the default browser
 //!    (`open_url_in_browser`) and the CLI cannot verify the click, so it says so.
+//!
+//! `star --check` never opens a tab: it asks the API when `gh` is signed in and
+//! otherwise re-reads the page an attached browser already shows.
 //!
 //! The rotating CTA that points here is frequency-capped and opt-out
 //! (`BROWSER4_NO_PROMO=1`), and never printed into machine-readable output or a
@@ -70,6 +74,17 @@ const LOAD_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// Fixture/testing hook: point the command at a local page instead of github.com.
 /// Undocumented on purpose — the product targets exactly one repository.
 const TARGET_URL_ENV: &str = "BROWSER4_STAR_URL";
+
+/// `owner/repo` of [REPO_URL] — the pair the REST endpoints take.
+const REPO_SLUG: &str = "platonai/Browser4";
+
+/// Test/dev hook: point the API path at a stub executable instead of `gh`.
+/// Undocumented on purpose — the real command always talks to the GitHub CLI.
+const GH_BIN_ENV: &str = "BROWSER4_STAR_GH";
+
+/// How long one `gh` invocation may run before it is killed.  `gh` talks to
+/// github.com, and a blackholed network must not hang the CLI forever.
+const GH_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Set to `1`/`true` to suppress the CTA permanently.
 const NO_PROMO_ENV: &str = "BROWSER4_NO_PROMO";
@@ -245,8 +260,8 @@ pub fn maybe_show_cta(command: &str) {
     let bin = crate::cli_binary_name();
     eprintln!();
     eprintln!("⭐ Finding Browser4 useful? Run `{bin} star`.");
-    eprintln!("   It opens {REPO_URL} in the browser you are already logged into and waits for");
-    eprintln!("   your click — the CLI never clicks Star for you. Turn this off: {NO_PROMO_ENV}=1");
+    eprintln!("   It stars {REPO_URL} with your signed-in GitHub CLI (one confirmation), or");
+    eprintln!("   opens the page in the browser you are already logged into. Turn this off: {NO_PROMO_ENV}=1");
     state.shows += 1;
     state.last_shown_at = Some(now);
     save_state(&state);
@@ -297,6 +312,251 @@ pub fn login_url_for(repo_url: &str) -> String {
         )
     } else {
         repo_url.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GitHub CLI (gh) — star through the REST API
+// ---------------------------------------------------------------------------
+
+/// What the GitHub CLI can do for us right now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GhStatus {
+    /// No `gh` executable could be started (not installed, or not on `PATH`).
+    Missing,
+    /// `gh` ran but the API is not usable: signed out, an expired token, a
+    /// proxy/network failure, or a timeout.
+    Unavailable { detail: String },
+    /// `gh` authenticates as this account, so the REST API is usable.
+    LoggedIn { login: String },
+}
+
+/// The repository's starred state, as reported by the REST API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GhStarState {
+    Starred,
+    NotStarred,
+    /// The API did not answer.  Never reported as "not starred": a transient
+    /// failure must not claim the user has not starred the repository.
+    Unknown,
+}
+
+/// What the API path should do about sending a star.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GhAction {
+    /// `--gh`: the user asked for the API path on the command line.
+    Star,
+    /// A human is at the terminal — one confirmation, then the star.
+    Ask,
+    /// No usable `gh`, `--no-gh`, or nobody to confirm with.
+    Skip,
+}
+
+/// Only the real repository is reachable through the REST endpoints; a fixture
+/// override (`BROWSER4_STAR_URL`) must never touch the user's GitHub account.
+pub fn gh_covers_url(url: &str) -> bool {
+    fn normalize(value: &str) -> String {
+        value.trim().trim_end_matches('/').to_ascii_lowercase()
+    }
+    !url.trim().is_empty() && normalize(url) == normalize(REPO_URL)
+}
+
+/// `gh api user` prints the account JSON; only its `login` matters.
+pub fn parse_gh_login(stdout: &str) -> Option<String> {
+    let value = serde_json::from_str::<Value>(stdout.trim()).ok()?;
+    let login = value.get("login")?.as_str()?.trim();
+    if login.is_empty() {
+        None
+    } else {
+        Some(login.to_string())
+    }
+}
+
+/// Map one `GET /user/starred/{slug}` result to a verdict.
+///
+/// `gh api` exits 1 with `gh: Not Found (HTTP 404)` when the repository is not
+/// starred; every other failure (credentials, proxy, network) stays
+/// [GhStarState::Unknown], so a transient error is never reported as a verdict.
+pub fn classify_starred(success: bool, stderr: &str) -> GhStarState {
+    if success {
+        return GhStarState::Starred;
+    }
+    let lower = stderr.to_ascii_lowercase();
+    if lower.contains("404") || lower.contains("not found") {
+        GhStarState::NotStarred
+    } else {
+        GhStarState::Unknown
+    }
+}
+
+/// Whether a star may be sent, and whether a human should confirm it first.
+pub fn decide_gh_action(status: &GhStatus, options: &StarOptions, stdin_tty: bool) -> GhAction {
+    if options.no_gh {
+        return GhAction::Skip;
+    }
+    match status {
+        GhStatus::LoggedIn { .. } if options.gh => GhAction::Star,
+        GhStatus::LoggedIn { .. } if stdin_tty => GhAction::Ask,
+        // Nobody to confirm with.  A star written from a pipe, a cron job or an
+        // agent run is not the user's own action, so `--gh` has to ask for it.
+        _ => GhAction::Skip,
+    }
+}
+
+/// One finished `gh` invocation.
+struct GhRun {
+    ok: bool,
+    stdout: String,
+    stderr: String,
+}
+
+/// How one `gh` invocation ended before producing a result.
+enum GhInvoke {
+    /// The executable could not be started at all.
+    Missing,
+    /// It did not exit within [GH_TIMEOUT] and was killed.
+    TimedOut,
+    Ran(GhRun),
+}
+
+fn gh_binary() -> String {
+    match std::env::var(GH_BIN_ENV) {
+        Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
+        _ => "gh".to_string(),
+    }
+}
+
+/// Run one `gh` command with a hard timeout, capturing its output.
+fn run_gh(args: &[&str]) -> GhInvoke {
+    let mut command = std::process::Command::new(gh_binary());
+    command
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // A console child would flash a window when the CLI runs from a GUI
+        // (editor task, desktop shortcut); the captured answer needs no console.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let Ok(mut child) = command.spawn() else {
+        return GhInvoke::Missing;
+    };
+    let deadline = Instant::now() + GH_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return GhInvoke::TimedOut;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return GhInvoke::Missing;
+            }
+        }
+    }
+    // The process has exited.  Every call this module makes prints well under
+    // the pipe buffer (one small JSON object, or one error line), so reading the
+    // pipes after the exit status cannot deadlock.
+    match child.wait_with_output() {
+        Ok(output) => GhInvoke::Ran(GhRun {
+            ok: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }),
+        Err(_) => GhInvoke::Missing,
+    }
+}
+
+/// First non-empty line of a tool's stderr, bounded to one readable line.
+fn first_line(text: &str) -> String {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    let mut bounded: String = line.chars().take(200).collect();
+    if line.chars().count() > 200 {
+        bounded.push('…');
+    }
+    bounded
+}
+
+/// Probe the GitHub CLI: `gh api user` both proves the login and names the
+/// account, so one request answers everything the API path needs.
+fn gh_status() -> GhStatus {
+    match run_gh(&["api", "user"]) {
+        GhInvoke::Missing => GhStatus::Missing,
+        GhInvoke::TimedOut => GhStatus::Unavailable {
+            detail: format!(
+                "`gh api user` did not answer within {}s",
+                GH_TIMEOUT.as_secs()
+            ),
+        },
+        GhInvoke::Ran(run) => match parse_gh_login(&run.stdout) {
+            Some(login) => GhStatus::LoggedIn { login },
+            None => {
+                let detail = first_line(&run.stderr);
+                GhStatus::Unavailable {
+                    detail: if detail.is_empty() {
+                        "`gh api user` returned no account".to_string()
+                    } else {
+                        detail
+                    },
+                }
+            }
+        },
+    }
+}
+
+/// `GET /user/starred/{slug}`: 204 when starred, 404 when not.
+fn gh_star_state() -> GhStarState {
+    let endpoint = format!("/user/starred/{REPO_SLUG}");
+    match run_gh(&["api", &endpoint]) {
+        GhInvoke::Ran(run) => classify_starred(run.ok, &run.stderr),
+        GhInvoke::Missing | GhInvoke::TimedOut => GhStarState::Unknown,
+    }
+}
+
+/// Send the star.  `PUT /user/starred/{slug}` is idempotent — an existing star
+/// also answers 204 — so this needs no read-modify-write.
+fn gh_star() -> Result<(), String> {
+    let endpoint = format!("/user/starred/{REPO_SLUG}");
+    match run_gh(&["api", "--method", "PUT", &endpoint]) {
+        GhInvoke::Ran(run) if run.ok => Ok(()),
+        GhInvoke::Ran(run) => {
+            let detail = first_line(&run.stderr);
+            Err(if detail.is_empty() {
+                "`gh api --method PUT` failed without a message".to_string()
+            } else {
+                detail
+            })
+        }
+        GhInvoke::Missing => Err("`gh` could not be started".to_string()),
+        GhInvoke::TimedOut => Err(format!(
+            "`gh` did not answer within {}s",
+            GH_TIMEOUT.as_secs()
+        )),
+    }
+}
+
+/// Why the API path is unusable, phrased for a user who asked for it.
+fn gh_unusable_message(status: &GhStatus) -> String {
+    match status {
+        GhStatus::Missing => {
+            "the GitHub CLI (`gh`) is not installed — see https://cli.github.com".to_string()
+        }
+        GhStatus::Unavailable { detail } => {
+            format!("`gh` cannot use the GitHub API ({detail}) — run `gh auth login` and retry")
+        }
+        GhStatus::LoggedIn { login } => format!("`gh` is signed in as @{login}"),
     }
 }
 
@@ -403,7 +663,7 @@ pub fn parse_detection(raw: &str, expected_host: &str) -> PageState {
 /// Parsed `star` options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StarOptions {
-    /// Read the current page instead of opening a new one.
+    /// Read the current state instead of opening a new page.
     pub check: bool,
     /// Never touch a browser; print the URL and the commands that would open it.
     pub no_open: bool,
@@ -411,6 +671,10 @@ pub struct StarOptions {
     pub wait_secs: u64,
     /// Turn the CTA off permanently.
     pub dismiss: bool,
+    /// Star through the GitHub CLI API without asking first.
+    pub gh: bool,
+    /// Never use the GitHub CLI — stay in the browser.
+    pub no_gh: bool,
 }
 
 impl Default for StarOptions {
@@ -420,6 +684,8 @@ impl Default for StarOptions {
             no_open: false,
             wait_secs: DEFAULT_WAIT_SECS,
             dismiss: false,
+            gh: false,
+            no_gh: false,
         }
     }
 }
@@ -430,6 +696,8 @@ impl StarOptions {
         options.check = flag(parsed, "check");
         options.no_open = flag(parsed, "no-open");
         options.dismiss = flag(parsed, "dismiss");
+        options.gh = flag(parsed, "gh");
+        options.no_gh = flag(parsed, "no-gh");
         if let Some(raw) = parsed.get("wait") {
             let parsed_wait = raw
                 .as_u64()
@@ -439,6 +707,26 @@ impl StarOptions {
             }
         }
         options
+    }
+
+    /// Flag combinations that contradict each other, reported before anything
+    /// is read, opened, or written.
+    pub fn conflicts(&self) -> Option<String> {
+        if self.gh && self.no_gh {
+            return Some(
+                "--gh and --no-gh cannot be combined: --gh stars through the GitHub CLI API, \
+                 --no-gh keeps the browser path."
+                    .to_string(),
+            );
+        }
+        if self.gh && self.no_open {
+            return Some(
+                "--gh and --no-open cannot be combined: --gh writes the star, --no-open only \
+                 prints the URL."
+                    .to_string(),
+            );
+        }
+        None
     }
 }
 
@@ -464,6 +752,9 @@ pub async fn run(
     parsed: &HashMap<String, Value>,
 ) -> Result<(), CliError> {
     let options = StarOptions::from_parsed(parsed);
+    if let Some(message) = options.conflicts() {
+        return Err(CliError(ExitCode::Usage, message));
+    }
     let url = target_url();
     crate::json_field("url", json!(url));
 
@@ -479,20 +770,32 @@ pub async fn run(
     let mut guide = load_state();
     if guide.starred_at.is_some() && !options.check {
         say(&format!(
-            "⭐ You already starred {url} — thank you! (`star --check` re-reads the live page.)"
+            "⭐ You already starred {url} — thank you! (`star --check` re-reads the live state.)"
         ));
         crate::json_field("page", json!("starred"));
         return Ok(());
     }
 
     if options.check {
+        // The API answers "is it starred" with no browser at all; prefer it when
+        // `gh` is signed in and fall back to the page otherwise (or fail if the
+        // user asked for `--gh` explicitly).
+        match gh_page_state(&options, &url) {
+            Ok(Some(page)) => {
+                record_and_report(page, &mut guide, &url, true);
+                return Ok(());
+            }
+            Ok(None) => {}
+            Err(err) => return Err(err),
+        }
         let Some(session_id) = attached_session(session_name) else {
             let bin = crate::cli_binary_name();
             return Err(CliError(
                 ExitCode::Session,
                 format!(
-                    "`star --check` reads the page an attached browser is showing, and no attached \
-                     browser is known.\nAttach the browser you are logged into, then check again:\n  \
+                    "`star --check` asks the GitHub CLI or reads the page an attached browser is \
+                     showing, and neither answered.\nSign in with `gh auth login` (then \
+                     `{bin} star --check`), or attach the browser you are logged into:\n  \
                      {bin} attach --extension chrome\n  {bin} star --check"
                 ),
             ));
@@ -523,7 +826,7 @@ pub async fn run(
                 return Ok(());
             }
         };
-        record_and_report(page, &mut guide, &url);
+        record_and_report(page, &mut guide, &url, false);
         return Ok(());
     }
 
@@ -532,7 +835,15 @@ pub async fn run(
         return Ok(());
     }
 
-    // Path 1/2: drive a browser, if one can be reached without taking anything
+    // Path 1: the GitHub CLI is signed in — the star needs no browser and no
+    // click, only one confirmation (or `--gh`).  A declined prompt falls through
+    // to the browser paths below, unchanged.
+    if let Some(page) = star_via_gh(&options, &url)? {
+        record_and_report(page, &mut guide, &url, true);
+        return Ok(());
+    }
+
+    // Path 2/3: drive a browser, if one can be reached without taking anything
     // over silently.
     if attached_session(session_name).is_none() {
         ask_then_attach(base_url, session_name).await?;
@@ -568,7 +879,7 @@ pub async fn run(
                 }),
             other => other,
         };
-        record_and_report(page, &mut guide, &url);
+        record_and_report(page, &mut guide, &url, false);
         return Ok(());
     }
 
@@ -577,8 +888,153 @@ pub async fn run(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// GitHub CLI paths
+// ---------------------------------------------------------------------------
+
+/// Read the starred state through the API (`--check`), without a browser.
+///
+/// `Ok(None)` means "no usable `gh` — fall back to the page"; `Err` is reserved
+/// for `--gh`, where a silent fallback would hide why the API path did not run.
+fn gh_page_state(options: &StarOptions, url: &str) -> Result<Option<PageState>, CliError> {
+    if options.no_gh || !gh_covers_url(url) {
+        return Ok(None);
+    }
+    let status = gh_status();
+    let login = match &status {
+        GhStatus::LoggedIn { login } => login.clone(),
+        _ => {
+            if options.gh {
+                return Err(CliError(
+                    ExitCode::Usage,
+                    format!("--gh was given, but {}.", gh_unusable_message(&status)),
+                ));
+            }
+            return Ok(None);
+        }
+    };
+    match gh_star_state() {
+        GhStarState::Starred => Ok(Some(PageState::LoggedIn {
+            login,
+            starred: true,
+        })),
+        GhStarState::NotStarred => Ok(Some(PageState::LoggedIn {
+            login,
+            starred: false,
+        })),
+        GhStarState::Unknown => {
+            if options.gh {
+                return Err(CliError(
+                    ExitCode::Usage,
+                    format!(
+                        "Could not read the starred state of {url} through the GitHub CLI — retry, \
+                         or use `{} star --check` with an attached browser.",
+                        crate::cli_binary_name()
+                    ),
+                ));
+            }
+            Ok(None)
+        }
+    }
+}
+
+/// Star through the GitHub CLI when it is signed in and the user allows it.
+///
+/// Returns `Some(page)` once the star is confirmed (or already on the account),
+/// `None` when the caller should fall back to the browser paths, and `Err` only
+/// when `--gh` asked for the API path explicitly.
+fn star_via_gh(options: &StarOptions, url: &str) -> Result<Option<PageState>, CliError> {
+    if options.no_gh || !gh_covers_url(url) {
+        return Ok(None);
+    }
+    let status = gh_status();
+    let action = decide_gh_action(&status, options, std::io::stdin().is_terminal());
+    if action == GhAction::Skip {
+        if options.gh {
+            return Err(CliError(
+                ExitCode::Usage,
+                format!("--gh was given, but {}.", gh_unusable_message(&status)),
+            ));
+        }
+        if let GhStatus::LoggedIn { login } = &status {
+            // Signed in, but this run has no terminal to confirm in: say that
+            // nothing was sent, and leave `--gh` for a human who is driving the
+            // command himself (never phrase it as "do this" to an agent).
+            say(&format!(
+                "GitHub CLI is signed in as @{login}, but this run has no terminal to confirm in \
+                 — nothing was sent. Run `{} star` in a terminal, or pass --gh when you are \
+                 driving the command yourself.",
+                crate::cli_binary_name()
+            ));
+        }
+        return Ok(None);
+    }
+    let GhStatus::LoggedIn { login } = &status else {
+        // `decide_gh_action` only leaves Skip for a signed-in `gh`.
+        return Ok(None);
+    };
+    let login = login.clone();
+    if action == GhAction::Ask
+        && !confirm_yes(&format!("Star {url} as @{login} through the GitHub CLI?"))
+    {
+        say("Not starred — continuing without the GitHub CLI.");
+        return Ok(None);
+    }
+    // Already starred? Say so instead of writing.  A read that fails (Unknown)
+    // still lets the PUT decide: it is idempotent and authoritative.
+    if gh_star_state() == GhStarState::Starred {
+        return Ok(Some(PageState::LoggedIn {
+            login,
+            starred: true,
+        }));
+    }
+    gh_star().map_err(|detail| {
+        CliError(
+            ExitCode::Usage,
+            format!("Could not star {url} through the GitHub CLI: {detail}"),
+        )
+    })?;
+    Ok(Some(PageState::LoggedIn {
+        login,
+        starred: true,
+    }))
+}
+
+/// Ask a yes/no question whose default answer is **yes**.
+///
+/// A piped stdin never accepts the default: an agent-driven or scripted run must
+/// not star on the user's behalf just because nobody was there to type `n`.
+fn confirm_yes(question: &str) -> bool {
+    if !std::io::stdin().is_terminal() {
+        return false;
+    }
+    eprint!("{question} [Y/n] ");
+    let _ = std::io::stderr().flush();
+    let mut answer = String::new();
+    if std::io::stdin().read_line(&mut answer).is_err() {
+        return false;
+    }
+    accept_default_yes(&answer)
+}
+
+/// `Enter`, `y` and `yes` accept the `[Y/n]` default; anything else declines.
+///
+/// An unrecognized answer declines on purpose: the default is a real write to
+/// the user's GitHub account, so only a spelled-out yes may take it.
+fn accept_default_yes(answer: &str) -> bool {
+    matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "" | "y" | "yes"
+    )
+}
+
 /// Print the outcome of an inspection and remember a confirmed star.
-fn record_and_report(page: PageState, guide: &mut StarGuideState, url: &str) {
+///
+/// `via_gh` says the verdict came from the REST API rather than from a page, so
+/// the message never claims a browser was involved (and `--json` says where it
+/// came from).
+fn record_and_report(page: PageState, guide: &mut StarGuideState, url: &str, via_gh: bool) {
+    crate::json_field("method", json!(if via_gh { "gh-api" } else { "browser" }));
     match page {
         PageState::LoggedIn { login, starred } => {
             if starred {
@@ -591,8 +1047,13 @@ fn record_and_report(page: PageState, guide: &mut StarGuideState, url: &str) {
                 } else {
                     format!(" as @{login}")
                 };
+                let how = if via_gh {
+                    " (through the GitHub CLI, no browser was opened)"
+                } else {
+                    ""
+                };
                 say(&format!(
-                    "⭐ Thanks{who} — {url} is starred. That genuinely helps the project."
+                    "⭐ Thanks{who} — {url} is starred{how}. That genuinely helps the project."
                 ));
                 crate::json_field("page", json!("starred"));
                 crate::json_field("login", json!(login));
@@ -607,10 +1068,18 @@ fn record_and_report(page: PageState, guide: &mut StarGuideState, url: &str) {
                 } else {
                     format!(" (@{login})")
                 };
-                say(&format!(
-                    "Signed in{who} and the repo is not starred yet. Click ⭐ Star in that tab — \
-                     Browser4 never clicks it for you."
-                ));
+                if via_gh {
+                    say(&format!(
+                        "Signed in{who} through the GitHub CLI and {url} is not starred yet. Run \
+                         `{} star --gh` to star it through the API.",
+                        crate::cli_binary_name()
+                    ));
+                } else {
+                    say(&format!(
+                        "Signed in{who} and the repo is not starred yet. Click ⭐ Star in that tab \
+                         — Browser4 never clicks it for you."
+                    ));
+                }
                 crate::json_field("page", json!("not-starred"));
                 crate::json_field("login", json!(login));
             }
@@ -909,12 +1378,13 @@ async fn activate_tab(
 fn print_dry_run(url: &str) {
     let bin = crate::cli_binary_name();
     say(&format!(
-        "Open {url} and click ⭐ Star — that is the whole ask."
+        "Open {url} and click ⭐ Star, or let the CLI star it with your signed-in GitHub CLI: \
+         `{bin} star --gh`."
     ));
     say(&format!(
-        "Nothing was opened and nothing was clicked. To have the CLI navigate for you: `{bin} \
-         star`; to have it read the result afterwards: `{bin} star --check` (needs `{bin} attach \
-         --extension chrome`)."
+        "Nothing was opened, clicked, or starred. To have the CLI navigate for you: `{bin} star`; \
+         to read the result afterwards: `{bin} star --check` (needs a signed-in `gh` or an \
+         attached browser)."
     ));
     crate::json_field("opened", json!("none"));
     crate::json_field("page", json!("unverified"));
@@ -930,8 +1400,9 @@ fn open_in_system_browser(url: &str) {
              for you."
         ));
         say(&format!(
-            "To let the CLI confirm it next time, attach the browser you are logged into: \
-             `{bin} attach --extension chrome`, then `{bin} star --check`."
+            "Prefer no click at all? `{bin} star --gh` stars it through your GitHub CLI login \
+             after `gh auth login`. To verify a click instead, attach the browser you are logged \
+             into: `{bin} attach --extension chrome`, then `{bin} star --check`."
         ));
         crate::json_field("opened", json!("system-browser"));
     } else {
@@ -939,8 +1410,8 @@ fn open_in_system_browser(url: &str) {
             "Open {url} and click ⭐ Star — no browser could be launched from here."
         ));
         say(&format!(
-            "On a headless host, run this where you are signed in: `gh repo star \
-             platonai/Browser4`."
+            "On a headless host, run `{bin} star --gh` with `gh auth login` done, or where you are \
+             signed in: `gh repo star platonai/Browser4`."
         ));
         crate::json_field("opened", json!("none"));
     }
@@ -1253,5 +1724,181 @@ mod tests {
         let mut parsed = HashMap::new();
         parsed.insert("check".to_string(), json!(false));
         assert!(!StarOptions::from_parsed(&parsed).check);
+    }
+
+    // -----------------------------------------------------------------------
+    // GitHub CLI (gh) REST path
+    // -----------------------------------------------------------------------
+
+    fn logged_in() -> GhStatus {
+        GhStatus::LoggedIn {
+            login: "octocat".to_string(),
+        }
+    }
+
+    fn with_gh_flags(gh: bool, no_gh: bool) -> StarOptions {
+        StarOptions {
+            gh,
+            no_gh,
+            ..StarOptions::default()
+        }
+    }
+
+    #[test]
+    fn gh_only_covers_the_real_repository() {
+        assert!(gh_covers_url(REPO_URL));
+        assert!(gh_covers_url("https://github.com/platonai/Browser4/"));
+        assert!(gh_covers_url("  HTTPS://GitHub.com/platonai/Browser4  "));
+        // A fixture page must never reach the user's GitHub account.
+        assert!(!gh_covers_url("http://127.0.0.1:9/b4/star-fixture.html"));
+        // A sub-page of the repository is not the repository.
+        assert!(!gh_covers_url(
+            "https://github.com/platonai/Browser4/issues"
+        ));
+        assert!(!gh_covers_url(""));
+    }
+
+    #[test]
+    fn gh_login_comes_from_the_account_json() {
+        assert_eq!(
+            parse_gh_login(r#"{"login":"octocat","id":1}"#),
+            Some("octocat".to_string())
+        );
+        assert_eq!(
+            parse_gh_login("\n{\"login\":\"  octocat \"}\n"),
+            Some("octocat".to_string())
+        );
+        // Anything that is not the account object is not a login.
+        assert_eq!(parse_gh_login(""), None);
+        assert_eq!(parse_gh_login("\"octocat\""), None);
+        assert_eq!(parse_gh_login(r#"{"login":"   "}"#), None);
+        assert_eq!(parse_gh_login(r#"{"login":null}"#), None);
+        assert_eq!(
+            parse_gh_login("You are not logged into any GitHub hosts."),
+            None
+        );
+    }
+
+    #[test]
+    fn starred_read_is_only_404_not_starred() {
+        assert_eq!(classify_starred(true, ""), GhStarState::Starred);
+        assert_eq!(
+            classify_starred(false, "gh: Not Found (HTTP 404)"),
+            GhStarState::NotStarred
+        );
+        // Credential, proxy and network failures must never read as a verdict:
+        // claiming "not starred" there would invite a duplicate write and a
+        // wrong message.
+        for stderr in [
+            "gh: Bad credentials (HTTP 401)",
+            "dial tcp 140.82.112.3:443: i/o timeout",
+            "gh: rate limit exceeded",
+            "",
+        ] {
+            assert_eq!(
+                classify_starred(false, stderr),
+                GhStarState::Unknown,
+                "stderr {stderr:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn gh_action_needs_a_login_and_somebody_to_confirm() {
+        let no_flags = with_gh_flags(false, false);
+        assert_eq!(
+            decide_gh_action(&logged_in(), &no_flags, true),
+            GhAction::Ask,
+            "an interactive run offers the API path"
+        );
+        assert_eq!(
+            decide_gh_action(&logged_in(), &no_flags, false),
+            GhAction::Skip,
+            "a piped/agent run must not write with nobody to confirm"
+        );
+        assert_eq!(
+            decide_gh_action(&logged_in(), &with_gh_flags(true, false), false),
+            GhAction::Star,
+            "--gh is the explicit opt-in for scripts"
+        );
+        assert_eq!(
+            decide_gh_action(&logged_in(), &with_gh_flags(false, true), true),
+            GhAction::Skip,
+            "--no-gh keeps everything in the browser"
+        );
+        for status in [
+            GhStatus::Missing,
+            GhStatus::Unavailable {
+                detail: "gh: Bad credentials (HTTP 401)".to_string(),
+            },
+        ] {
+            assert_eq!(decide_gh_action(&status, &no_flags, true), GhAction::Skip);
+            assert_eq!(
+                decide_gh_action(&status, &with_gh_flags(true, false), true),
+                GhAction::Skip,
+                "--gh cannot force a missing/unauthenticated gh to star"
+            );
+        }
+    }
+
+    #[test]
+    fn unusable_gh_messages_name_the_next_step() {
+        assert!(gh_unusable_message(&GhStatus::Missing).contains("not installed"));
+        let unavailable = gh_unusable_message(&GhStatus::Unavailable {
+            detail: "gh: Bad credentials (HTTP 401)".to_string(),
+        });
+        assert!(unavailable.contains("gh auth login"), "{unavailable}");
+        assert!(unavailable.contains("Bad credentials"), "{unavailable}");
+        assert_eq!(
+            gh_unusable_message(&logged_in()),
+            "`gh` is signed in as @octocat"
+        );
+    }
+
+    #[test]
+    fn gh_flags_parse_and_conflicts_are_rejected() {
+        let mut parsed = HashMap::new();
+        parsed.insert("gh".to_string(), json!(true));
+        let options = StarOptions::from_parsed(&parsed);
+        assert!(options.gh && !options.no_gh);
+        assert_eq!(options.conflicts(), None);
+
+        let mut parsed = HashMap::new();
+        parsed.insert("no-gh".to_string(), json!("yes"));
+        let options = StarOptions::from_parsed(&parsed);
+        assert!(options.no_gh && !options.gh);
+        assert_eq!(options.conflicts(), None);
+
+        let both = with_gh_flags(true, true);
+        assert!(both.conflicts().expect("gh+no-gh").contains("--no-gh"));
+
+        let dry_run = StarOptions {
+            no_open: true,
+            ..with_gh_flags(true, false)
+        };
+        assert!(dry_run
+            .conflicts()
+            .expect("gh+no-open")
+            .contains("--no-open"));
+    }
+
+    #[test]
+    fn first_line_is_bounded_and_skips_blank_leading_lines() {
+        assert_eq!(first_line("\n\n  gh: boom  \nmore"), "gh: boom");
+        assert_eq!(first_line(""), "");
+        let long = "x".repeat(400);
+        let bounded = first_line(&long);
+        assert_eq!(bounded.chars().count(), 201, "200 chars plus the ellipsis");
+        assert!(bounded.ends_with('…'));
+    }
+
+    #[test]
+    fn enter_accepts_the_star_only_an_explicit_yes_declines_otherwise() {
+        for accepted in ["", "\n", "  ", "y", "Y", "yes", " YES "] {
+            assert!(accept_default_yes(accepted), "answer {accepted:?}");
+        }
+        for declined in ["n", "N", "no", " NO ", "nope", "sure"] {
+            assert!(!accept_default_yes(declined), "answer {declined:?}");
+        }
     }
 }

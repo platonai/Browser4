@@ -5685,6 +5685,8 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "scrape-formats",
         // test_e2e_mock_profile_import_command
         "profile-import",
+        // test_e2e_mock_star_gh_api
+        "star",
         // test_mock_agent_browser_command_gaps
         "dialog-status",
         "errors",

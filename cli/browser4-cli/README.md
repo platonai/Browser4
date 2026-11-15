@@ -222,7 +222,7 @@ Full guide: [`skills/browser4-cli/references/network.md`](../../skills/browser4-
 | Command | Description |
 |---|---|
 | `profiles list` | List browser profile (context) directories under `~/.browser4/browser/chrome` |
-| `star` | Open the Browser4 repository in the browser you are already logged into and wait for **your** Star click — the CLI never stars it for you. Uses the attached browser, otherwise offers (once, after asking) to connect a local browser started with `--remote-debugging-port`, otherwise hands the URL to your default browser. `--check` only reads the page, `--wait <seconds>` bounds the wait, `--no-open` prints the URL without touching a browser, `--dismiss` turns the periodic reminder off |
+| `star` | Star the Browser4 repository as yourself. With the GitHub CLI (`gh`) signed in, the star is written through the GitHub REST API after one confirmation — `--gh` skips the confirmation for scripts you drive, `--no-gh` never uses the CLI. Without a signed-in `gh` it opens the repository in the browser you are already logged into: the attached browser, otherwise (once, after asking) a local browser started with `--remote-debugging-port`, otherwise your default browser, where you click Star yourself. `--check` reads the state from the API (or a repo tab in an attached browser) without opening anything, `--wait <seconds>` bounds the click wait, `--no-open` prints the URL without touching a browser or the API, `--dismiss` turns the periodic reminder off |
 
 ### Storage
 

@@ -3931,23 +3931,20 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "star",
-            description: "Open the Browser4 repository in the browser you are already logged into and wait while you click Star. The CLI never stars the repository for you: it navigates, reads whether you are signed in, and polls until your click shows up. Uses the attached browser when there is one, otherwise offers to connect a local browser started with --remote-debugging-port, and otherwise hands the URL to your default browser. `star --check` re-reads a tab that already shows the repository (after a reload) and never opens one.",
+            description: "Star the Browser4 repository as yourself. With the GitHub CLI (`gh`) signed in, the star is written through the GitHub REST API after one confirmation — `--gh` skips the confirmation (for scripts you drive), `--no-gh` never uses the CLI. Without a signed-in `gh` it opens the repository in the browser you are already logged into: the attached browser when there is one, otherwise (after asking) a local browser started with --remote-debugging-port, otherwise your default browser, where you click Star yourself. `star --check` asks the API, or re-reads a tab that already shows the repository, and never opens one.",
             category: Category::Browsers,
             hidden: false,
             batch_supported: false,
             args: &[],
             options: &[
-                OptionDef { name: "check", description: "Report the current state instead of opening anything: whether the attached browser is signed in and whether the repository is already starred. Reloads a tab that already shows the repository; never opens one.", is_bool: true, short: None },
-                OptionDef { name: "no-open", description: "Do not touch any browser: print the URL and the commands that would open it", is_bool: true, short: None },
+                OptionDef { name: "check", description: "Report the current state instead of opening anything: whether you are signed in and whether the repository is already starred. Uses the GitHub CLI API when it is signed in; otherwise reloads a tab that already shows the repository. Never opens one.", is_bool: true, short: None },
+                OptionDef { name: "gh", description: "Star through the GitHub CLI REST API without asking first (requires `gh auth login`). Interactive runs confirm once instead; this flag is the explicit opt-in for scripts.", is_bool: true, short: None },
+                OptionDef { name: "no-gh", description: "Never use the GitHub CLI: open the repository in the browser and leave the Star click to you", is_bool: true, short: None },
+                OptionDef { name: "no-open", description: "Do not touch any browser or the GitHub API: print the URL and the commands that would star it", is_bool: true, short: None },
                 OptionDef { name: "wait <seconds>", description: "How long to wait for your click in the attached browser (default: 60, 0 = return immediately, max: 600)", is_bool: false, short: None },
                 OptionDef { name: "dismiss", description: "Turn the periodic star reminder off permanently (same as BROWSER4_NO_PROMO=1)", is_bool: true, short: None },
             ],
-            // Deliberately outside the e2e suite: `star` opens a real, already
-            // logged-in browser and waits for a human click.  The detection half
-            // is covered by unit tests plus the `b4/star-fixture.html` fixture
-            // (point the CLI at it with BROWSER4_STAR_URL), which is where a
-            // future scenario should start.
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },

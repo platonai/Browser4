@@ -15,7 +15,7 @@
 
 English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platonai_galaxyeye/Browser4)
 
-> ⭐ **Finding Browser4 useful?** Run `browser4-cli star` — it opens this repository in the browser you are already logged into and waits for your click. The CLI never stars it for you.
+> ⭐ **Finding Browser4 useful?** Run `browser4-cli star` — with the GitHub CLI signed in it stars this repository as you after a single confirmation (`--gh` skips the prompt); otherwise it opens the repository in the browser you are already logged into and leaves the click to you.
 
 <!-- TOC -->
 **Table of Contents**

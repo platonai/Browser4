@@ -33623,9 +33623,11 @@ async fn run(
         }
     }
 
-    // `star` drives the browser the user is already logged into, so it decides
-    // for itself whether a backend is needed: opening the repository must not
-    // cost a cold server start (which can rebuild the runtime bundle first).
+    // `star` needs neither the backend nor a session: with the GitHub CLI signed
+    // in the star goes straight through the REST API, and otherwise it only
+    // drives a browser the user is already logged into.  Dispatching before the
+    // server gate keeps it free of a cold server start (which can rebuild the
+    // runtime bundle first).
     if command == "star" {
         star_guide::run(&base_url, global.session_name.as_deref(), &parsed).await?;
         emit_json_envelope_for_early_return(&command);

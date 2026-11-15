@@ -505,7 +505,7 @@ const TIPS_GENERAL: &[Tip] = &[
         text: "Use `doctor` to diagnose Chrome, Java, and network issues when things aren't working",
     },
     Tip {
-        text: "Use `star` to open the Browser4 repository in the browser you are already logged into — it waits for YOUR click and never stars it for you",
+        text: "Use `star` to star the Browser4 repository as yourself — it goes through your signed-in GitHub CLI (`gh`) after one confirmation (`--gh` skips the prompt), or opens the page in the browser you are already logged into",
     },
     Tip {
         text: "Set BROWSER4_CLI_STATE_DIR to a writable path in sandboxed environments — the CLI falls back to ./.browser4-cli-state when ~/.browser4 is not writable",
