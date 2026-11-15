@@ -39,10 +39,11 @@ also declares an `outputSchema` that those tests validate its payload against.
 | `captcha.auto.solve.enabled` | `true` | Enable the auto-solve browse handler |
 | `captcha.detection.enabled` | `true` | Enable detection |
 | `captcha.detect.poll.interval.ms` | `250` | Delay between the attempts of a waited `detect` call |
-| `captcha.service.provider` | `CAPSOLVER` | Primary solving provider (`CAPSOLVER`, `TWO_CAPTCHA`, `ANTI_CAPTCHA`) |
+| `captcha.service.provider` | `CAPSOLVER` | Primary solving provider (`CAPSOLVER`, `TWO_CAPTCHA`, `ANTI_CAPTCHA`, `SOLVECHA`) |
 | `captcha.capsolver.api.key` | — | CapSolver API key |
 | `captcha.twocaptcha.api.key` | — | 2Captcha API key |
 | `captcha.anticaptcha.api.key` | — | Anti-Captcha API key |
+| `captcha.solvecha.api.key` | — | Solvecha API key (image and text CAPTCHAs only) |
 | `captcha.solve.timeout.seconds` | `120` | Maximum time to wait for a solution |
 | `captcha.solve.max.retries` | `3` | Retry attempts per browse event |
 | `captcha.auto.solve.types` | `RECAPTCHA_V2,HCAPTCHA,TURNSTILE` | Types to solve automatically |

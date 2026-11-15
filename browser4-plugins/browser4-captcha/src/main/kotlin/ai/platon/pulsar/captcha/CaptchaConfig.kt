@@ -41,6 +41,9 @@ data class CaptchaConfig(
     /** API key for Anti-Captcha */
     val antiCaptchaApiKey: String? = null,
 
+    /** API key for Solvecha (image and text CAPTCHAs only) */
+    val solvechaApiKey: String? = null,
+
     /** Maximum time to wait for a solution */
     val solveTimeout: Duration = 120.seconds,
 
@@ -78,6 +81,7 @@ data class CaptchaConfig(
                 capsolverApiKey = conf.get("captcha.capsolver.api.key",),
                 twoCaptchaApiKey = conf.get("captcha.twocaptcha.api.key"),
                 antiCaptchaApiKey = conf.get("captcha.anticaptcha.api.key"),
+                solvechaApiKey = conf.get("captcha.solvecha.api.key"),
                 solveTimeout = conf.getLong("captcha.solve.timeout.seconds", 120L).seconds,
                 pollInterval = conf.getLong("captcha.poll.interval.ms", 1000L).milliseconds,
                 solveProxy = conf.get("captcha.solve.proxy")?.ifBlank { null },
