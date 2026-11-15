@@ -78,8 +78,7 @@ class SpeculativeBuildTest {
 
     @Test
     @DisplayName("different inputs wait for the running build instead of racing its target/")
-    fun differentInputsSerialize() = runBlocking {
-        val registry = registry()
+    fun differentInputsSerialize() = runBlocking {        val registry = registry()
         val active = AtomicInteger()
         val peak = AtomicInteger()
         val firstGate = CompletableDeferred<Unit>()
@@ -109,6 +108,36 @@ class SpeculativeBuildTest {
         assertEquals(0, first.await().exitCode)
         assertEquals(7, second.await().exitCode, "it still runs its own build afterwards")
         assertEquals(1, peak.get(), "two Maven builds must never overlap in one workspace")
+        assertEquals(2, registry.stats().builds)
+    }
+
+    @Test
+    @DisplayName("two workspaces build at the same time: the shared decide lock is not held across a build")
+    fun distinctWorkspacesRunConcurrently() = runBlocking {
+        // Regression guard for `decideLock`: one global mutex is only safe because it guards the
+        // check-and-insert (a map lookup, microseconds) and never the build itself. It replaces a
+        // ConcurrentHashMap<String, Mutex> that leaked one mutex per workspace ever seen.
+        val registry = registry()
+        val firstGate = CompletableDeferred<Unit>()
+        val secondEntered = AtomicInteger()
+
+        val first = async(Dispatchers.Default) {
+            registry.run("ws-a", "fpA") { firstGate.await(); result(exitCode = 0) }
+        }
+        awaitInFlight(registry, "ws-a")
+
+        val second = async(Dispatchers.Default) {
+            registry.run("ws-b", "fpB") { secondEntered.incrementAndGet(); result(exitCode = 1) }
+        }
+        withTimeout(2_000) { while (secondEntered.get() == 0) delay(1) }
+
+        assertEquals(1, second.await().exitCode)
+        assertTrue(
+            registry.inFlight("ws-a"),
+            "the other workspace must still be building — a shared lock held across block() would serialize them",
+        )
+        firstGate.complete(Unit)
+        assertEquals(0, first.await().exitCode)
         assertEquals(2, registry.stats().builds)
     }
 

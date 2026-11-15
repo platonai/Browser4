@@ -112,14 +112,6 @@ class MavenBuildSupport(
          */
         const val SPECULATIVE_TIMEOUT_SECONDS = 180L
 
-        /** The shape of the last build of one workspace (plan C1). */
-        private data class BuildRequest(
-            val module: String,
-            val goals: String,
-            val skipTests: Boolean,
-            val launcher: String,
-        )
-
         /**
          * What each workspace last built, process-wide.
          *
@@ -129,8 +121,17 @@ class MavenBuildSupport(
          * caller that *triggers* a speculative build need not be the executor instance
          * that ran the earlier one. Keyed by [BuildCache.rootKey] so two workspaces never
          * share it.
+         *
+         * Bounded (see [BoundedBuildShapes]): a long-lived backend is pointed at many
+         * workspaces (CI, a bench harness, an operator switching
+         * `-Dbrowser4.agent.workspace`), and an unbounded map kept one entry per workspace
+         * for the life of the JVM. Evicting the oldest shape only costs a guess — the next
+         * speculative build waits until a real build names its shape again.
          */
-        private val lastBuildRequest = java.util.concurrent.ConcurrentHashMap<String, BuildRequest>()
+        private val lastBuildRequest = BoundedBuildShapes(MAX_TRACKED_WORKSPACES)
+
+        /** Workspaces whose last build shape is remembered; see [lastBuildRequest]. */
+        const val MAX_TRACKED_WORKSPACES = 64
 
         /**
          * Locate the Maven launcher and return an **absolute** path when the
@@ -426,7 +427,7 @@ class MavenBuildSupport(
         val workspaceKey = BuildCache.rootKey(root)
 
         // C1: remember the shape of this build so a speculative compile can replay it.
-        lastBuildRequest[workspaceKey] = BuildRequest(selector, goalList, skipTests, launcher)
+        lastBuildRequest.put(workspaceKey, BuildShape(selector, goalList, skipTests, launcher))
 
         // P0-1 short-circuit: a second build of unchanged inputs must not start Maven.
         // Only successful `compile` builds are cacheable; `test`/`verify` goals always run.
@@ -502,7 +503,7 @@ class MavenBuildSupport(
         if (!speculative.enabled || !cache.enabled) return false
         val root = workspaceRoot(shell) ?: return false
         val workspaceKey = BuildCache.rootKey(root)
-        val request = lastBuildRequest[workspaceKey] ?: return false
+        val request = lastBuildRequest.get(workspaceKey) ?: return false
         if (!isCacheableBuild(request.goals, request.skipTests)) return false
         if (speculative.inFlight(workspaceKey)) return false
         val buildFingerprint = fingerprint(root, request.module, request.goals, request.skipTests, request.launcher)
@@ -778,4 +779,54 @@ internal fun mavenBuildCommand(
     val skipFlag = if (skipTests) " -DskipTests" else ""
     val threadsFlag = threads?.takeIf { it.isNotBlank() }?.let { " -T $it" } ?: ""
     return "$launcher$threadsFlag -pl $selector -am $goals$skipFlag -q"
+}
+
+/**
+ * The shape of one workspace's last build (plan C1): exactly what a speculative build
+ * replays so that it lands on the same `BuildCache` key the agent will ask for.
+ */
+internal data class BuildShape(
+    val module: String,
+    val goals: String,
+    val skipTests: Boolean,
+    val launcher: String,
+)
+
+/**
+ * The last build shape per workspace, least-recently-used first out.
+ *
+ * Bounded because the keys are workspace roots and nothing else limits them: a backend
+ * that serves many workspaces (CI, a bench harness, an operator switching
+ * `-Dbrowser4.agent.workspace`) used to keep one entry per workspace for the life of the
+ * JVM. Eviction is cheap to get wrong in only one direction — losing a shape means the
+ * next speculative build does not fire until a real build names its shape again, which is
+ * exactly the pre-C1 behaviour.
+ *
+ * Access-ordered on purpose: a workspace that keeps being built (the intended case) stays.
+ */
+internal class BoundedBuildShapes(private val capacity: Int = 64) {
+
+    init {
+        require(capacity > 0) { "capacity must be positive" }
+    }
+
+    private val entries = java.util.LinkedHashMap<String, BuildShape>(16, 0.75f, true)
+
+    @Synchronized
+    fun put(workspaceKey: String, shape: BuildShape) {
+        entries[workspaceKey] = shape
+        while (entries.size > capacity) {
+            val oldest = entries.keys.iterator()
+            if (!oldest.hasNext()) break
+            oldest.next()
+            oldest.remove()
+        }
+    }
+
+    @Synchronized
+    fun get(workspaceKey: String): BuildShape? = entries[workspaceKey]
+
+    /** How many workspaces are remembered — test seam for the bound. */
+    @Synchronized
+    fun size(): Int = entries.size
 }

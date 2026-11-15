@@ -127,7 +127,18 @@ class SpeculativeBuild(
     }
 
     private val flights = ConcurrentHashMap<String, Flight>()
-    private val locks = ConcurrentHashMap<String, Mutex>()
+
+    /**
+     * Serializes the check-and-insert in [decide].
+     *
+     * ONE mutex, not one per workspace: a previous `ConcurrentHashMap<String, Mutex>` grew an
+     * entry per workspace ever seen (a long-lived backend pointed at many workspaces — CI, a
+     * bench harness, an operator switching `-Dbrowser4.agent.workspace` — accumulated them for
+     * the life of the JVM). `decide` is a map lookup plus an insert, so a shared mutex costs
+     * microseconds; what must NOT happen is holding it across `block()`, which is why only
+     * [decide] takes it and [own] never does.
+     */
+    private val decideLock = Mutex()
     private val buildsCount = AtomicInteger()
     private val speculativeBuildsCount = AtomicInteger()
     private val reusedCount = AtomicInteger()
@@ -245,7 +256,7 @@ class SpeculativeBuild(
     }
 
     private suspend fun decide(workspaceKey: String, fingerprintId: String, speculative: Boolean): Decision =
-        lockFor(workspaceKey).withLock {
+        decideLock.withLock {
             val existing = flights[workspaceKey]
             when {
                 existing == null -> {
@@ -293,9 +304,6 @@ class SpeculativeBuild(
             flights.remove(workspaceKey, flight)
         }
     }
-
-    private fun lockFor(workspaceKey: String): Mutex =
-        locks.computeIfAbsent(workspaceKey) { Mutex() }
 
     companion object {
         /**
