@@ -272,6 +272,38 @@ backend provenance can be checked after the fact.
 
 ---
 
+## AOT cache (first-run training)
+
+On JDK 24+ the CLI trains a **JVM AOT cache** for each runtime bundle and reuses
+it on later starts. Training is a stripped Spring Boot boot that records loaded
+and linked classes (JEP 483) plus hot method profiles (JEP 515) and writes
+`app.aot`; it starts in the background right after `install` / `upgrade` commits
+the bundle, and on the first launch of a bundle that has no cache yet.
+
+- **Nothing blocks on it.** The backend the command needs starts immediately
+  (without acceleration); training runs detached, at below-normal priority. The
+  cache is attached by the **next** backend start — an already running backend
+  does not become faster retroactively.
+- **Cost (measured):** ~197 s and ~90 MB for the reference bundle. The file lives
+  under the CLI state dir as `aot-cache/<key>/app.aot`, with `training.log` next
+  to it (`~/.browser4/…` for installed builds, the per-checkout state dir in
+  development mode).
+- **Benefit (measured, warm disk):** Spring `Started … in N seconds` 2.00 s → 1.12 s;
+  CLI readiness (`/actuator/health` UP **and** `/mcp/tools` ready) 3.59 s → 2.25 s
+  (median). See [AOT cache startup benchmark](../docs-dev/copilot/aot-cache-startup-benchmark-2026-11-15.md).
+- **Invalidation:** the key is runtime tag + jar list + JVM flags. An upgrade —
+  or a development-mode rebuild that changes the jar list/sizes — trains again;
+  only the 3 newest key directories are kept.
+- **Opt out / override:** `BROWSER4_CLI_DISABLE_AOT_CACHE=1` disables both
+  training and loading (CI does this). An explicit `-XX:AOTCache=…` in
+  `BROWSER4_SERVER_OPTS` is respected: no training, no injected cache. Below
+  JDK 24 the cache is skipped and the backend starts normally.
+- **Failure is harmless:** training errors only land in `training.log`; a killed
+  run is detected and retrained on the next start. `browser4-cli status` prints
+  an `AOT cache: …` line.
+
+---
+
 ## Plugin warm restart
 
 Runtime plugins live in the server's `plugins/` directory and are wired into

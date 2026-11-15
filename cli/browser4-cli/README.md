@@ -32,6 +32,10 @@ and one state directory:
 | AOT cache | shared | per checkout (no cross-checkout invalidation) |
 | `browser4-cli stop` | stops every managed backend | stops **only this checkout's** backends (`kill-all` stays global) |
 
+The per-checkout AOT cache is keyed by bundle tag + jar list + JVM flags, so a
+dev rebuild that changes the jar list/sizes retrains once in the background
+(~1–3 min, non-blocking); the first backend start after that uses it.
+
 So with 4.13 already serving on 8282, a command in 4.14 picks 8283
 automatically; each checkout remembers its own port, and both can run and be
 tested side by side — including **two headed browsers at once**, because each

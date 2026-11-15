@@ -27,6 +27,10 @@ they keep port `18182` and the flat `~/.browser4` layout.
 | AOT cache | shared | per checkout — no cross-checkout invalidation |
 | `stop` | every managed backend + its browsers | **only this checkout's** backends, plus the browsers **they** launched |
 
+The AOT cache lives in the checkout's state dir, so a development rebuild whose
+jar list/sizes change yields a new cache key: the next backend start retrains in
+the background (~1–3 min, non-blocking) and the start after that is the fast one.
+
 ## Quick Index
 
 | Topic | Where |

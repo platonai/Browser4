@@ -51,6 +51,8 @@ first-run latency.
 ## 1. Core Loop
 
 > **First-run latency:** From a source tree, the first launch builds the runtime bundle via Maven (~1–3 min, before the spinner appears) and then starts the Browser4 backend (Spring Boot + JVM, ~10s). Subsequent commands are instant — the server stays alive between invocations.
+>
+> On JDK 24+ the first backend start of a **bundle** also trains a JVM AOT cache in the background (detached, below-normal priority, ~1–3 min, ~90 MB under the CLI state dir `aot-cache/<key>/`; it never blocks the command). The cache is keyed by runtime tag + jar list + JVM flags, so a new version or a rebuilt dev bundle trains once again, and it is picked up by the **next** backend start. Measured on the reference machine: Spring `Started in` 2.0 s → 1.1 s, CLI readiness (`/actuator/health` UP and `/mcp/tools` ready) 3.6 s → 2.3 s. `BROWSER4_CLI_DISABLE_AOT_CACHE=1` disables it; `browser4-cli status` prints an `AOT cache: …` line.
 
 > **When the backend does not stay alive:** a restricted session (sandbox, CI runner, or a terminal that is torn down after each command) can reap the backend even though an earlier run printed `Server ready in …s`. The symptom is misleading: the next command reports `Browser4 did not become MCP-ready` while its startup log ends with `Process exited early with status exit code: 0xffffffff`. Check `browser4-cli status` (health must be `UP`), then just re-run the command — every command, `open` included, brings the backend up on demand. There is no separate "start the server" step to run: no launcher script, no source checkout.
 >

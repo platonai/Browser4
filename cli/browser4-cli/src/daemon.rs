@@ -7401,18 +7401,18 @@ pub fn aot_cache_status_line() -> String {
     if let Some(dir) = training {
         return format!(
             "training in progress (log: {})",
-            dir.join(AOT_TRAINING_LOG_FILE_NAME).display()
+            plain_windows_path_text(&dir.join(AOT_TRAINING_LOG_FILE_NAME).display().to_string())
         );
     }
     if trained > 0 {
         format!(
             "{trained} trained cache(s) under {} — attached when the server starts",
-            root.display()
+            plain_windows_path_text(&root.display().to_string())
         )
     } else {
         format!(
             "none yet under {} — the next server start trains it in the background",
-            root.display()
+            plain_windows_path_text(&root.display().to_string())
         )
     }
 }
@@ -7437,8 +7437,8 @@ fn aot_training_script_contents(java: &Path, cache_dir: &Path) -> String {
              if %AOT_OUTPUT_BYTES% LSS {} exit /b 1\r\n\
              move /y \"{}\" \"{}\" >nul 2>&1\r\n\
              exit /b %errorlevel%\r\n",
-            cache_dir.display(),
-            java.display(),
+            plain_windows_path_text(&cache_dir.display().to_string()),
+            plain_windows_path_text(&java.display().to_string()),
             AOT_TRAINING_ARGFILE_FILE_NAME,
             AOT_TRAINING_OUTPUT_FILE_NAME,
             AOT_TRAINING_OUTPUT_FILE_NAME,
@@ -7559,7 +7559,7 @@ fn spawn_aot_training(
     if let Err(e) = fs::write(&script_file, script) {
         eprintln!(
             "AOT cache: cannot write training wrapper {}: {e}; skipping training",
-            script_file.display()
+            plain_windows_path_text(&script_file.display().to_string())
         );
         release_aot_training_marker(key);
         return;
@@ -7567,7 +7567,12 @@ fn spawn_aot_training(
 
     let mut cmd = if cfg!(windows) {
         let mut c = Command::new("cmd.exe");
-        c.arg("/d").arg("/c").arg(&script_file);
+        // `cmd.exe` cannot open a verbatim `\\?\` script path ("The system
+        // cannot find the path specified"), so the canonicalized state dir must
+        // be stripped here as well as inside the script (`cd /d`).
+        c.arg("/d")
+            .arg("/c")
+            .arg(plain_windows_path_text(&script_file.display().to_string()));
         c
     } else {
         let mut c = Command::new("sh");
@@ -7595,7 +7600,7 @@ fn spawn_aot_training(
         Err(e) => {
             eprintln!(
                 "AOT cache: cannot open training log {}: {e}",
-                log_file.display()
+                plain_windows_path_text(&log_file.display().to_string())
             );
             cmd.stdout(Stdio::null());
             cmd.stderr(Stdio::null());
@@ -7625,7 +7630,7 @@ fn spawn_aot_training(
             eprintln!(
                 "AOT cache training started in the background (log: {}) — \
                 the server starts without AOT acceleration until training completes",
-                log_file.display()
+                plain_windows_path_text(&log_file.display().to_string())
             );
         }
         Err(e) => {
@@ -7671,7 +7676,13 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
         if let Ok(key) = aot_cache_invalidation_key(runtime, &jvm_opts) {
             let cache_file = aot_cache_file(&key);
             if cache_file.is_file() {
-                jvm_opts.push(format!("-XX:AOTCache={}", cache_file.display()));
+                // The path is a JVM argument, so it takes the same verbatim-
+                // prefix strip and separator normalization as the classpath:
+                // a `\\?\` state dir must not reach the JVM command line.
+                jvm_opts.push(format!(
+                    "-XX:AOTCache={}",
+                    normalize_jvm_windows_path_text(&cache_file.display().to_string())
+                ));
             }
         }
     }
@@ -7733,6 +7744,22 @@ fn normalize_jvm_windows_path_text(text: &str) -> String {
     text.replace(r"\\?\UNC\", "//")
         .replace(r"\\?\", "")
         .replace('\\', "/")
+}
+
+/// Strip a Windows verbatim (`\\?\`) prefix while keeping native separators.
+///
+/// `cmd.exe` rejects a verbatim path as its current directory ("CMD does not
+/// support UNC paths as current directories"), so every path interpolated into
+/// the training wrapper must be plain.  A state dir taken from
+/// `BROWSER4_CLI_STATE_DIR` is canonicalized (see `user_state_dir_override`),
+/// which is exactly how a `\\?\` path reaches the wrapper — and silently killed
+/// every training run before its JVM started.
+fn plain_windows_path_text(text: &str) -> String {
+    if cfg!(windows) {
+        text.replace(r"\\?\UNC\", r"\\").replace(r"\\?\", "")
+    } else {
+        text.to_string()
+    }
 }
 
 /// Normalize one JVM argument for embedding in a Java `@argfile`.
@@ -10990,6 +11017,51 @@ mod tests {
         );
         assert!(script.contains("move /y \"app.aot.tmp\" \"app.aot\""));
         assert!(script.contains("@training-args.txt"));
+    }
+
+    /// A state dir taken from `BROWSER4_CLI_STATE_DIR` is canonicalized to a
+    /// verbatim `\\?\` path, and `cmd.exe` refuses that as its current
+    /// directory ("CMD does not support UNC paths as current directories"): the
+    /// wrapper then exits at the `cd` line and the JVM never starts, so the
+    /// cache is silently never trained.  The wrapper must embed plain paths.
+    #[cfg(windows)]
+    #[test]
+    fn aot_training_wrapper_strips_the_verbatim_state_dir_prefix() {
+        let script = aot_training_script_contents(
+            std::path::Path::new(r"\\?\C:\Program Files\Java\jdk\bin\java.exe"),
+            std::path::Path::new(r"\\?\C:\Users\me\.browser4\aot-cache"),
+        );
+        assert!(
+            !script.contains(r"\\?\"),
+            "cmd.exe cannot cd into a verbatim path, got: {script}"
+        );
+        assert!(
+            script.contains("cd /d \"C:\\Users\\me\\.browser4\\aot-cache\""),
+            "the cache dir must stay a plain, quoted Windows path, got: {script}"
+        );
+        assert!(
+            script.contains("\"C:\\Program Files\\Java\\jdk\\bin\\java.exe\" @training-args.txt"),
+            "the java path must stay quoted and plain, got: {script}"
+        );
+    }
+
+    /// The prefix strip has to keep native separators (the wrapper is a batch
+    /// file) and restore a UNC path instead of leaving a half-stripped `//`.
+    #[cfg(windows)]
+    #[test]
+    fn plain_windows_path_text_strips_verbatim_prefixes() {
+        assert_eq!(
+            plain_windows_path_text(r"\\?\C:\Users\me\.browser4"),
+            r"C:\Users\me\.browser4"
+        );
+        assert_eq!(
+            plain_windows_path_text(r"\\?\UNC\server\share\dir"),
+            r"\\server\share\dir"
+        );
+        assert_eq!(
+            plain_windows_path_text(r"C:\Users\me\.browser4"),
+            r"C:\Users\me\.browser4"
+        );
     }
 
     /// The WMI path must not leave a terminal window on the user's desktop.
