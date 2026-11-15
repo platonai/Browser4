@@ -505,7 +505,8 @@ T2 有 5 次带耗时的 `b4_run` 合计 34.7 s（占该任务 tool 桶 52 s 的
 ### 12.3 收益去了哪里（三条新方向，按性价比排序）
 
 1. **每动作固定开销**（最直接、无需新并发）：45/51 次调用是 `b4_run`，每次都要起进程 + 建连 + 一次 MCP 往返。
-   §12.4 把这个"固定开销"量出来了：**≈0.5 s/动作，每任务 5.5–10 s，占墙钟 12–23%**，且生产环境同样付。
+   §12.4 把这个"固定开销"量出来了：**dev ≈0.48 s/动作、生产等价 ≈0.22 s/动作**；
+   按 B1 的 11–20 次调用，就是每任务 5–10 s（dev）/ 2.4–4.4 s（生产），占墙钟 12–23% / 5–10%。
    做法与风险见 §12.6。
 2. **跨标签页流水线**（§2 E）：因为 W-tool 从 1.2% 变成 51.7%，多标签并行的天花板比 coding 口径下的估计高得多
    ——这也解释了既有的"4 个 1.5 s 慢页 28 s → 4.6 s"（6×）为什么成立。它是**吞吐**轴，不是单任务延迟轴。
@@ -520,39 +521,51 @@ T2 有 5 次带耗时的 `b4_run` 合计 34.7 s（占该任务 tool 桶 52 s 的
 |---|---|---|---|
 | PowerShell 外壳 | `pwsh -NoLogo -NoProfile -NonInteractive -Command $true` | **199 ms** | 187–227 |
 | PowerShell 5.1（备用外壳） | `powershell -NoLogo -NoProfile -NonInteractive -Command $true` | 178 ms | 163–199 |
-| CLI 进程启动（dev 构建） | `target/debug/browser4-cli.exe --version` | **282 ms** | 268–294 |
-| CLI 进程启动（**发布** bundle 里的 exe） | `…/runtime-bundle/…/bin/browser4-cli.exe --version` | **293 ms** | 284–320 |
-| CLI 经 PowerShell 启动 | `pwsh -c "& browser4-cli.exe --version"` | 511 ms | 490–546 |
+| CLI 启动，**在仓库 checkout 里** | `target/debug/browser4-cli.exe --version` | **282 ms** | 268–294 |
+| CLI 启动，checkout 外（`D:\tmp`、`C:\Windows`） | 同一个 exe `--version` | **15–22 ms** | 13–33 |
+| CLI 启动，显式 `--server` 或 `BROWSER4_CLI_SERVER` | `… --version` | 18–26 ms | 14–64 |
+| CLI 启动，`BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1`（关掉 dev 模式） | `… --version` | **24 ms** | 17–46 |
+| CLI 经 PowerShell 启动（checkout 里） | `pwsh -c "& browser4-cli.exe --version"` | 511 ms | 490–546 |
 
 两个要点：
 
-1. **固定开销 ≈ 0.5 s/动作**（199 + ≈290）。B1 的任务里 11–20 次 `b4_run`，
-   即**每任务 5.5–10 s** 花在"起 PowerShell + 起 CLI"上——占 43–104 s 墙钟的 **12–23%**。
-2. **这不是 dev 模式的假象**：发布 bundle 里的 release 版 `--version` 是 293 ms，与 debug 版
-   （282 ms）几乎一样。也就是说**生产环境同样付这笔钱**——B1 的 51.7% 不是被 dev 构建抬高的。
-   （`--help` 更贵：700 ms，它大概在做命令/技能发现或联网。）
+1. **固定开销分两段，生产/开发不一样**：
+   - **PowerShell 199 ms / 动作**：发生在**后端**的 `CliProcessManager` 里，生产同样付。
+   - **CLI 那 282 ms 是 dev 模式独有的**：同一个 exe 在 checkout 外只要 15–22 ms。
+     进 dev 模式的判定一触发（在 checkout 里、且没显式 `--server`），每次调用多付 ≈256 ms；
+     `BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1` 把它压回 24 ms。
+     另一个 checkout（`Browser4-4.16-feat`，23 个 worktree）实测 **1,007 ms**，说明这笔开销随 checkout 状态变化。
+   - 所以**生产等价**的每动作固定开销是 ≈0.22 s（199 + ≈20），dev 下才是 ≈0.48 s。
+2. **B1 的 51.7% 因此被 dev 开销抬高了，但结论不变**：按 15/20/11 次调用折算，
+   dev 每任务多付 3.6/5.2/2.9 s。扣掉后 tool 桶 22.7→19.1、52.0→46.8、20.9→18.0，
+   **生产等价 W-tool ≈ 48%（49.2 / 48.4 / 47.0）**，仍是"工具与模型各占一半"。
 
-一个反直觉的补充：`b4w.ps1` 把 backend 指到 `target/debug/browser4-cli.exe`，但换成 bundle 的
-release 版并没有变快，所以"用 release 二进制"不是收益点；**收益点在"别为每个动作起两个进程"**。
+**这条被证伪了两次，记下来**：我先假设"dev 用的是 debug 二进制所以慢"——换成 bundle 的 release 版
+（293 ms vs 282 ms）几乎没变；再假设"生产同样付"——checkout 外一测只有 15–22 ms。
+两次都是"在同一位置量另一个变量"才纠正的，不是靠推理。
 
 ### 12.5 还没测的
 
 - 3 个任务都在同一台机器、同一天、`headless`；GUI 模式与人化输入的比例会不同（`type` 的字符延迟在大段输入里占比更高）。
 - **调用内部**的三段（CLI 启动 / HTTP 往返 / 页面动作）还没有埋点：12.4 量的是"地板"，
   不是每条真实调用的拆分。要把 `eval` 那 2–4 s 进一步拆开，需要让 CLI 回报自身的 HTTP 段耗时。
-- CLI 启动那 ~290 ms 花在哪（配置/技能扫描/联网/更新检查）没有定位——这是**所有** CLI 用户共付的成本，
-  不只是 agent，所以值得单独查一次。
+- **dev 模式那 256 ms 到底花在哪没定位**。已排除：state dir（换新的仍慢）、`.browser4` 下的 6 个 worktree
+  （挪走仍慢）、AOT 缓存开关、promo/自动升级、`BROWSER4_CLI_ALLOW_STALE_BUNDLE`、`BROWSER4_RUNTIME_DIR`、
+  root-search 起始目录。已确认：只在 checkout 里发生、`--server`/`FORCE_REMOTE_BUNDLE` 能绕过。
+  这是一笔**开发者每次敲命令都要付**的钱（不只 agent），值得单独查一次。
 
 ### 12.6 由此产生的三个候选（按"收益 / 风险"排序）
 
-1. **去掉 Windows 上的 PowerShell 中间层**（每动作 −199 ms，占固定开销 40%）。命令本身是
-   `browser4-cli.exe <argv>`，只有当参数里含 shell 元字符时才需要外壳。风险点很具体：
+1. **去掉 Windows 上的 PowerShell 中间层**（每动作 −199 ms，且这是**生产**也付的一段）。
+   命令本身是 `browser4-cli.exe <argv>`，只有当参数里含 shell 元字符时才需要外壳。风险点很具体：
    `CliProcessManager` 的历史注释记录了 2026-10-29 因为 argv 引号被 PowerShell 二次解析而改用
    `-EncodedCommand` 的一次修复，动它必须有等价的转义测试。
 2. **一个 `b4_run` 跑多条命令**（CLI 已有 `batch`）：直接把 11–20 次调用压成 3–5 次，
    固定开销按调用数线性下降。不需要动 shell 层。
-3. **查 CLI 启动的 290 ms**：它影响每一个 CLI 调用（含人手动敲），潜在收益面最大，
-   但要先定位（`--version` 不该花 290 ms）。
+3. **定位 dev 模式那 256 ms**（`--version` 在 checkout 里 282 ms、在外面 22 ms）：它不影响终端用户，
+   但**开发者敲的每一条命令**都要付，且另一个 checkout 是 1 s。12.5 列了已排除的假设。
+4. **查 CLI 启动本身**（checkout 外 15–22 ms，已经不是问题）——这条从候选里划掉：
+   它只在 dev 模式下才贵，发布版没有 290 ms 的问题。
 
 ## 附录：本文引用的数据
 
