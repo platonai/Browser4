@@ -16,6 +16,9 @@ ab-c1/    the C1 speculative-build A/B: 5 baseline + 5 speculative, result JSON 
 b1/       the B1 browser bucket split: 3 browser tasks, result JSON + run log + the task prompt each,
           plus task4-after-shell-bypass-* (the same task re-run to check a later change; see the
           evaluation §12.7 for why its wall clock is NOT a before/after comparison)
+e3-dev-startup/  the E-3/E-1/E-4 measurements: startup traces before and after the port-probe fix,
+          the closed-loopback-port probe cost, the PowerShell floor, and the script that re-runs
+          all of it (evaluation §14)
 ab-fixture/  the throwaway two-module Maven project the A/B ran against (seed state)
 ab-run.ps1   runner for ab-c1 (arm switch, workspace reset, result extraction)
 b1-run.ps1   runner for b1
@@ -57,6 +60,12 @@ transcript of the same task (tool calls, per-call durations, the final answer).
 form fill+submit), one run each, against `example.com`, `browser4.io` and the Selenium form
 fixture. No arm switch; the browser buckets had simply never been measured.
 
+**E-3/E-1/E-4 (`e3-dev-startup/`)** — no backend and no model: the fixed cost of one CLI
+invocation, measured on the CLI binary itself. `before.txt` / `after.txt` are the raw outputs
+of `e3-measure.ps1` (startup phase traces, `--version` wall clock inside vs outside the
+checkout, direct-exec vs shell, the PowerShell floor, and one real MCP round trip). No
+`result.json` here because no agent task ran; the numbers are process-level.
+
 ## Reproducing
 
 ```powershell
@@ -69,6 +78,9 @@ pwsh -File docs-dev/copilot/20261115-wait-split-experiments/ab-run.ps1 -Arm base
 # B1
 pwsh -File docs-dev/copilot/20261115-wait-split-experiments/b1-run.ps1 -Index 1 `
     -TaskFile docs-dev/copilot/20261115-wait-split-experiments/b1/b1-task1.txt
+
+# E-3/E-1/E-4 — the fixed cost of one CLI invocation (no backend, no model, no Maven)
+pwsh -File docs-dev/copilot/20261115-wait-split-experiments/e3-dev-startup/e3-measure.ps1
 ```
 
 The scripts are the ones that produced the archived files, edited only to point at the
@@ -87,6 +99,9 @@ relative task files (they originally read them from `D:\tmp`).
 4. **The first real run found a unit bug in the code under test** — `timings.phases` reported
    nanoseconds while every field is named `*Ms` (389 days for a 33 s task). Fixed in
    `38987ce990`; §11.4 of the evaluation records what the tests had missed.
+5. **A "cheap" check on a hot path can be a subprocess.** The E-3 investigation ordered the
+   managed-process registry before the TCP probe to save a probe, and startup went 256 → 1,186 ms:
+   `is_process_running` spawned `tasklist` (evaluation §14.1). Measure the check, not its name.
 
 ## Environment
 

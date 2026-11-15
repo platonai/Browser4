@@ -32,6 +32,14 @@
 > 按语义必须串行、延迟是反爬要求（§2 D1/D2）。收益因此转移到两条新方向上：每个动作的 `b4_run` 固定开销
 > 与跨标签页流水线（§12.3）。
 >
+> **修订 v4（2026-11-15，E-1~E-5 已做完）**：§13.2 的 5 条工程待办全部落地，见 §14。
+> 三条要记住的：**① 那 256 ms 的 dev 模式开销就是一段 `connect_timeout(250 ms)` 打在一个关闭的
+> loopback 端口上**（这台机器上关闭端口的 `ECONNREFUSED` 要 ~2 s 才回来），修完 `--version` 从
+> 278–358 ms 降到 50–78 ms；**② payload 走 stdin 之后带 payload 的命令重新落进直连子集**，dev 下
+> 一个动作的固定开销从 ≈500 ms 变成 ≈50 ms（生产 ≈220 → ≈20 ms）；**③ `b4.run` 现在报告
+> `launch/startup/http/server/net` 五段**，`eval` 那 2–4 s 不再是一个黑箱。E-5 顺带把
+> `ModuleGraph` 分支覆盖从 52% 拉到 87.5%。
+>
 > **索引**：本文的待办散在各节，**§13「剩余待办索引」是唯一汇总**（需决策 / 工程待办 / 流程卫生 / 已关闭），
 > 每条都指向解释它的那一节。看到待办先看 §13。
 
@@ -539,6 +547,8 @@ T2 有 5 次带耗时的 `b4_run` 合计 34.7 s（占该任务 tool 桶 52 s 的
      `BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1` 把它压回 24 ms。
      另一个 checkout（`Browser4-4.16-feat`，23 个 worktree）实测 **1,007 ms**，说明这笔开销随 checkout 状态变化。
    - 所以**生产等价**的每动作固定开销是 ≈0.22 s（199 + ≈20），dev 下才是 ≈0.48 s。
+   - **这两段后来都降了**（§14.1 / §14.3）：dev 的 CLI 启动 278–358 → 50–78 ms，带 payload 的命令
+     也不再起外壳。dev 下每个动作的固定开销从 ≈0.48 s 变成 ≈0.05 s，生产等价 ≈0.02 s。
 2. **B1 的 51.7% 因此被 dev 开销抬高了，但结论不变**：按 15/20/11 次调用折算，
    dev 每任务多付 3.6/5.2/2.9 s。扣掉后 tool 桶 22.7→19.1、52.0→46.8、20.9→18.0，
    **生产等价 W-tool ≈ 48%（49.2 / 48.4 / 47.0）**，仍是"工具与模型各占一半"。
@@ -550,12 +560,17 @@ T2 有 5 次带耗时的 `b4_run` 合计 34.7 s（占该任务 tool 桶 52 s 的
 ### 12.5 还没测的
 
 - 3 个任务都在同一台机器、同一天、`headless`；GUI 模式与人化输入的比例会不同（`type` 的字符延迟在大段输入里占比更高）。
-- **调用内部**的三段（CLI 启动 / HTTP 往返 / 页面动作）还没有埋点：12.4 量的是"地板"，
-  不是每条真实调用的拆分。要把 `eval` 那 2–4 s 进一步拆开，需要让 CLI 回报自身的 HTTP 段耗时。
-- **dev 模式那 256 ms 到底花在哪没定位**。已排除：state dir（换新的仍慢）、`.browser4` 下的 6 个 worktree
+- ~~**调用内部**的三段（CLI 启动 / HTTP 往返 / 页面动作）还没有埋点~~ → ✅ 已埋（§14.2）：
+  `[timing] launch/startup/http/server/net`，一次 `status` 的实测是
+  `startup=56ms http=5ms`（热）/ `startup=545ms http=34ms`（冷）。
+- ~~**dev 模式那 256 ms 到底花在哪没定位**~~ → ✅ 已定位并修复（§14.1）：一段
+  `connect_timeout(250 ms)` 打在一个关闭的 loopback 端口上；`--version` 从 278–358 ms 降到 50–78 ms。
+  下面这段是**当时的排查记录**，留着当"排除项清单"：
+  已排除：state dir（换新的仍慢）、`.browser4` 下的 6 个 worktree
   （挪走仍慢）、AOT 缓存开关、promo/自动升级、`BROWSER4_CLI_ALLOW_STALE_BUNDLE`、`BROWSER4_RUNTIME_DIR`、
   root-search 起始目录。已确认：只在 checkout 里发生、`--server`/`FORCE_REMOTE_BUNDLE` 能绕过。
-  这是一笔**开发者每次敲命令都要付**的钱（不只 agent），值得单独查一次。
+  事后看，`--server`/`FORCE_REMOTE_BUNDLE` 之所以能绕过，是因为它们**跳过了 dev-mode 的端口决策**
+  ——排除项一路正确，只是没有一项指向"那一步里有个 TCP 探测"。
 
 ### 12.6 由此产生的三个候选（按"收益 / 风险"排序）
 
@@ -564,9 +579,11 @@ T2 有 5 次带耗时的 `b4_run` 合计 34.7 s（占该任务 tool 桶 52 s 的
    `CliProcessManager` 的历史注释记录了 2026-10-29 因为 argv 引号被 PowerShell 二次解析而改用
    `-EncodedCommand` 的一次修复，动它必须有等价的转义测试。
 2. **一个 `b4_run` 跑多条命令**（CLI 已有 `batch`）：直接把 11–20 次调用压成 3–5 次，
-   固定开销按调用数线性下降。不需要动 shell 层。
+   固定开销按调用数线性下降。不需要动 shell 层。**✅ 已落地为 `b4.batch`（§14.4）**。
 3. **定位 dev 模式那 256 ms**（`--version` 在 checkout 里 282 ms、在外面 22 ms）：它不影响终端用户，
    但**开发者敲的每一条命令**都要付，且另一个 checkout 是 1 s。12.5 列了已排除的假设。
+   **✅ 已定位并修复（§14.1）**：是一段 `connect_timeout(250 ms)` 打在一个关闭的 loopback 端口上，
+   不是 state/更新/缓存。
 4. **查 CLI 启动本身**（checkout 外 15–22 ms，已经不是问题）——这条从候选里划掉：
    它只在 dev 模式下才贵，发布版没有 290 ms 的问题。
 
@@ -605,6 +622,8 @@ bundle 确实按新源码重建了（日志里有 `Rebuilding from source`），
 跑 `browser4-coding,browser4-agentic,browser4-agent-tools` 三模块：**BUILD SUCCESS**，
 本次新增的测试类都在里面执行了。
 **没有**做的：跨标签页/批量（候选 2）、dev 模式 256 ms 的定位（候选 3）、带 payload 命令的 stdin 化。
+——三条后来都做了：批量与 stdin 见 §14.3/§14.4，那 256 ms 见 §14.1（一段 `connect_timeout` 打在一个
+关闭的 loopback 端口上）。
 
 ## 13. 剩余待办索引（2026-11-15 收尾时）
 
@@ -617,15 +636,15 @@ bundle 确实按新源码重建了（日志里有 `Rebuilding from source`），
 | D-1 | **C1 投机编译的默认开关策略**：永久默认关，还是按核数/在线 `reuseRatio` 自动开 | 待决策 | §11.3（判定：留代码默认关）、§3 的"开关"段、§12.5 的读数口径 |
 | D-2 | **跨任务并行（吞吐轴）是否作为产品目标** | 待决策 | §2 E、§12.3 第 2 条（B1 把它从 1.2% 的天花板抬到 ~48%） |
 
-### 13.2 工程待办（有数据支持，未开工）
+### 13.2 工程待办（E-1~E-5，全部已实施，见 §14）
 
 | # | 事项 | 状态 | 依据在哪 |
 |---|---|---|---|
-| E-1 | **带 payload 的命令不经过命令行**（`--stdin` / `--file`），吃掉直连子集剩下的 60–70% | 未开工；`b4_run` 当前故意关 stdin | §12.7 末段、§12.6 候选 2 |
-| E-2 | **一个 `b4_run` 跑多条命令**（CLI 已有 `batch`）：压调用数，但牺牲中间观测 | 未开工，需先定"可观测性换时间"是否可接受 | §12.6 候选 2 |
-| E-3 | **dev 模式 256 ms 定位**（`--version` 在 checkout 里 282 ms、外面 22 ms；另一个 checkout 1 s） | 未定位；已排除项见左 | §12.4、§12.5 |
-| E-4 | **`b4_run` 内部三段埋点**（CLI 启动 / HTTP / 页面），解释 `eval` 那 2–4 s | 未开工 | §12.5 |
-| E-5 | **`ModuleGraph` 分支覆盖 52%**（模块整体指令 78.5% / 行 82.1%，门禁已过） | 未开工，小活 | 本条为收尾时实测，未写进正文 |
+| E-1 | **带 payload 的命令不经过命令行**（`--stdin` / `--file`），吃掉直连子集剩下的 60–70% | ✅ **已实施**（§14.3）：`b4.run(args=…, stdin=…)`，payload 走子进程 stdin | §12.7 末段、§12.6 候选 2 |
+| E-2 | **一个 `b4_run` 跑多条命令**（CLI 已有 `batch`）：压调用数，但牺牲中间观测 | ✅ **已实施**（§14.4）：`b4.batch(commands=…)` = 一个进程；每步输出保留，丢的是步间判断 | §12.6 候选 2 |
+| E-3 | **dev 模式 256 ms 定位**（`--version` 在 checkout 里 282 ms、外面 22 ms；另一个 checkout 1 s） | ✅ **已定位并修复**（§14.1）：一段 `connect_timeout(250 ms)` 打在一个关闭的 loopback 端口上；`--version` 50–78 ms | §12.4、§12.5 |
+| E-4 | **`b4_run` 内部三段埋点**（CLI 启动 / HTTP / 页面），解释 `eval` 那 2–4 s | ✅ **已实施**（§14.2）：`[timing] launch/startup/http/server/net` + 四个指标 | §12.5 |
+| E-5 | **`ModuleGraph` 分支覆盖 52%**（模块整体指令 78.5% / 行 82.1%，门禁已过） | ✅ **已补测**（§14.5）：分支 87.5% / 指令 95.8% / 行 100% | 本条为收尾时实测，未写进正文 |
 
 ### 13.3 流程/卫生（有观察，未改）
 
@@ -642,6 +661,190 @@ P0-3 同轮只读并发（coding 口径，§5）、P1-2/P1-3 回调与检查并�
 D1–D5 结构性不可并行（§2 D）、P0-2 多模块融合（§10 实测否决）、
 "用 release 二进制换收益"（§12.4 实测证伪）、"CLI 启动本身要 290 ms"（§12.5，checkout 外 15–22 ms）。
 
+## 14. 实施记录：E-1~E-5（2026-11-15 收尾）
+
+> §13.2 的 5 条工程待办一次做完。它们其实是一条线上的东西：**E-3 是每个动作固定开销的底座，
+> E-1/E-2 是它的两个杠杆，E-4 是把这笔钱量出来的埋点，E-5 是顺手做的小活**。
+> 原始输出（改前/改后、端口探测、PowerShell 地板）见
+> [e3-dev-startup/](20261115-wait-split-experiments/e3-dev-startup/README.md)，脚本可重跑。
+>
+> 环境：本 checkout、`target/debug/browser4-cli.exe`、Windows 20 核、无后端在跑（除 §14.2 的样例）。
+
+### 14.1 E-3：那 256 ms 是"给一个没人监听的端口做 TCP 探测"
+
+**它到底是什么。** 加一层 `BROWSER4_CLI_TRACE_STARTUP=1` 的阶段打点后，答案一行就出来了：
+
+| 阶段（`--version`，checkout 里） | 改前 | 改后 |
+|---|---|---|
+| hooks / runtime / flags / invocation | 0 / 0 / 20 / 20 ms | 0 / 0 / 5 / 5 ms |
+| `state` / `persisted-state` | 21 / 21 ms | 6 / 6 ms |
+| `dev-mode`（`find_browser4_root`） | 21 ms | 6 ms |
+| **`port-8283-registry`**（本 workspace 的托管进程注册表） | 未做 | 1 ms（累计 7 ms） |
+| **`port-8283-connect`**（`TcpStream::connect_timeout`） | **277 ms** | **49 ms** |
+| 合计 | 278 ms | **50 ms** |
+
+改前的 256 ms 全部花在**一个** `connect_timeout(127.0.0.1:8283, 250 ms)` 上：8283 是本
+checkout 记录下的 dev 端口，当时没人监听。这台机器上**连一个关闭的 loopback 端口不会立刻
+RST**，SYN 被丢掉，`ECONNREFUSED` 要 ~2 s 才回来（实测 8283/8284/18182/9999 都是
+2,023–2,084 ms；而 8282 上有另一个 checkout 的后端在监听，2 ms 就连上了）。所以那个 250 ms
+的预算**每次都被整份花掉**——预算本身是上限，不是"多久算不健康"的阈值。
+
+**修正过程中被打脸一次，记下来。** 第一版"优化"是把托管进程注册表放在探测前面（"自己的后端
+还活着就不用探"），结果 `dev-port` 变成 **1,185 ms**：`managed_port_has_live_server` 里的
+`is_process_running` 在 Windows 上是**起一个 `tasklist`**，每调一次 ~1 s。所谓"便宜的注册表检查"
+本身就是那笔钱。改成 `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` + `CloseHandle`
+（微秒级，`ERROR_ACCESS_DENIED` 也算活着）之后降到 1 ms。
+
+**改了 3 处**（`cli/browser4-cli/src/daemon.rs`、`managed_processes.rs`）：
+
+| 改动 | 理由 |
+|---|---|
+| `dev_port_is_usable`：注册表**优先**，命中即"这个端口是我的" | 自己的后端在跑时（agent 任务的常态）完全不探测，只剩一次小 JSON 读 |
+| `DEV_PORT_PROBE_TIMEOUT` 250 → **30 ms** | 真正的监听者在内核里完成握手（亚毫秒），"预算内没答案"本来就已经等于"不是我的"；预算只决定**空闲端口**的探测花多久 |
+| `is_process_running`：`tasklist` → `OpenProcess` | 见上，1 s → 1 ms |
+
+**结果**：checkout 里的 `--version` 从 278–358 ms 降到 **50–78 ms**（trace 的 `total` 是 50 ms；
+checkout 外 14–25 ms，差的那 30 ms 就是"这台机器上探一个空闲端口"的地板）。另一个 checkout 的
+1 s 是同一段代码在更多端口被占时的表现，这次没有单独复测。
+
+**没测的**：本 checkout 自己的后端活着时，端口决策只剩注册表读（预期 ≈1 ms）——这次测量环境
+没有后端，所以显示的是"探测 30 ms"那一侧。
+
+### 14.2 E-4：`b4.run` 内部三段的埋点
+
+**想量什么。** `eval` 那 2–4 s 到底是 CLI 启动、网络、还是页面。现在一次调用被切成 5 段：
+
+| 段 | 含义 | 谁测 |
+|---|---|---|
+| `launch` | 进程创建之前的花费：外壳解释器 + spawn | `CliProcessManager`（= 子进程耗时 − CLI 自报 `total`） |
+| `startup` | 进程启动 → 第一个**工具**请求：参数解析、config/state、dev 端口决策、就绪探测 | CLI 自己 |
+| `http` | 工具调用 HTTP 往返总计（send → body 读完） | CLI 自己 |
+| `server` | `http` 里后端自报的处理时间（页面动作） | 后端 → `X-Browser4-Duration-Ms` 响应头 |
+| `net` | `http − server`：派发、socket、序列化 | 两者之差 |
+
+**实现**
+
+| 文件 | 内容 |
+|---|---|
+| `cli/browser4-cli/src/timing.rs`（新） | `Timing` 收集器（`startup/http/server/calls/launch` + 一次性 footer）+ `[startup]` 阶段 trace；**默认关闭**，`BROWSER4_CLI_TIMING=1` 打开 footer，`BROWSER4_CLI_TRACE_STARTUP=1` 打开逐阶段行。收集器是值对象，测试自建实例，不碰全局 |
+| `cli/browser4-cli/src/main.rs` | `timing::init()` 作为进程第一句；退出前 `emit_footer()`；阶段标记 `hooks/runtime/flags/invocation` |
+| `cli/browser4-cli/src/daemon.rs` | 端口决策的阶段标记（`state/persisted-state/dev-mode/dev-port/port-<p>-registry/port-<p>-connect`） |
+| `cli/browser4-cli/src/http.rs` | `call_tool_with_timeout` 里记 `note_tool_request()`（钉住 startup）+ `record_http(往返, 响应头)` |
+| `MCPToolController.kt` | 每次 `call-tool` 回 `X-Browser4-Duration-Ms`（响应头，不改 JSON 契约） |
+| `CliProcessManager.kt` | 子进程环境固定带 `BROWSER4_CLI_TIMING=1`（每次一行、~90 字节）；从 stderr 里**摘掉** footer 与 trace 行，解析成 `CliResult.timing`，并补上 `launchMs`；指标 `browser4.cli.{launch,startup,http,server}` |
+| `B4CliToolExecutor.classifyCliResult` | `-Dbrowser4.agent.b4.timing=true` 时把 `[timing] …` 追加到结果末尾，默认不显示 |
+
+**读到的数**（对一个**真实**后端跑 `status`，即一次 `list_sessions` 往返）：
+
+```
+冷：[timing] startup=545ms http=34ms server=0ms net=34ms calls=1 total=581ms
+热：[timing] startup=56ms  http=5ms  server=0ms net=5ms  calls=1 total=62ms
+```
+
+`server=0ms` 是因为那台后端还是旧代码（没有 `X-Browser4-Duration-Ms`）——没有头时整个往返
+都记进 `net`，这正是设计里的降级：老后端/非 Browser4 服务不会让这条线变成假的。
+
+**为什么要 `launch` 这一段。** CLI 的时钟在进程内部开始，**它看不见谁把它拉起来的**：同一条
+`status` 直接跑 `total=62ms`，套一层 `pwsh -EncodedCommand` 也是 `total=62ms`，而墙钟多了
+~220 ms。父子之差只有调用方能算，所以由 `CliProcessManager` 记。
+
+**测试**：`CliTimingTest` 11 例（footer 解析、未知字段、`server` 钳到 `http`、stderr 剥离、
+trace 行剥离、未知 footer 形状、`launch` 渲染与回读）；`CliProcessManagerTest` 新增
+"footer 被解析且不进 stderr""stdin payload 原样送达"；`MCPToolControllerTest` 新增
+"`call-tool` 一定带 `X-Browser4-Duration-Ms`"；Rust 侧 `timing::tests` 8 例。
+
+### 14.3 E-1：payload 走 stdin，不再经过命令行
+
+**接口**：`b4.run(args="eval --stdin --json", stdin="document.title")`。payload 落在
+`CliRunRequest.stdin` → 子进程 stdin（写完后关闭，命令看到 EOF），`args` 里只留命令本身。
+`batch --json`、`htmlsnapshot inspect --stdin`、`fs write --stdin` 同理。
+
+**为什么这是"吃掉 60–70%"的那一半**：§12.7 的直连子集只接受"无引号、无元字符"的命令行，
+而 `eval --json "…"` 因为带引号必须走外壳。payload 挪到 stdin 之后，命令行长这样：
+
+| 命令 | 改前 | 改后 |
+|---|---|---|
+| 取标题 | `eval --json "document.title"`（外壳） | `eval --stdin --json` + stdin（**直连**） |
+| 多条命令 | 每条一个进程 | `batch --json` + stdin（**直连**） |
+| 写文件 | `fs write --content "…"`（外壳） | `fs write --stdin` + stdin（**直连**） |
+
+每动作省下的是外壳那一段（本机 `pwsh -EncodedCommand $true` 实测 210–228 ms，与 §12.4 的
+187–227 ms 一致），叠加 E-3 的 256 ms 之后，dev 下的固定开销：
+
+```
+改前  220（外壳）+ 278（dev 启动）≈ 500 ms/动作
+改后    0（直连）  +  50（启动）  ≈  50 ms/动作
+生产等价：199 + 20 ≈ 220 ms/动作  →  0 + 20 ≈ 20 ms/动作
+```
+
+**守卫没有被 payload 绕开。** 这是这次最容易做错的地方：`b4.run` 的三道守卫
+（生命周期命令、外部路径、收窄的 access preset）都只看 `args`，而 payload 是**看不见**的。
+`b4.run(args="batch --json", stdin='["goto x","stop"]')` 因此必须与 `b4.batch` 一样逐条检查
+——现在如此（`stdinBatchRefusal` + `batchStepRefusal`），拒绝文案点名第几步。非 batch 的
+payload（JS、CSS、文件内容）**不做文本扫描**：它可能是任何东西，而按关键字拒一次正常的
+`eval` 比漏掉一次更糟；那类 payload 能做的事在 E-1 之前就能做。
+
+**测试**：`B4CliBatchTest` 12 例（见 §14.4）、`CliProcessManagerTest`
+"stdin payload 原样送达（引号/反斜杠不丢）"。
+
+### 14.4 E-2：一个 `b4.run` 跑多条命令 → `b4.batch`
+
+**接口**：`b4.batch(commands="goto https://x\nsnapshot -v 0\nclick e12", bail=false)`。
+换行分隔就够了——模型写的是短序列，不是序列化格式；行首的 `- ` / `* ` / `1. ` 会被剥掉
+（模型爱把"每行一条"写成项目符号）。
+
+**落法**：`args` 恒为 `batch --json`（直连子集），命令列表作为 JSON 数组走 stdin。所以
+**N 条命令 = 1 个进程 + 1 次 MCP 往返**，且每一步都不需要引号。按改后的固定开销估算
+（只数省掉的**固定**部分，页面动作两种方式都要付）：4 条一批省 3 ×（进程 ~50 ms + 往返 ~10 ms）
+≈ 0.18 s/批（dev），生产等价 ≈ 0.09 s。
+
+**代价（就是 §13.2 说的那个决定）**：**每一步的输出都在**（CLI 逐条打印，失败行是
+`Batch command N failed (<command>): <reason>`，退出码 5 表示至少一步失败），**丢的是
+"步与步之间的判断"**——后一条命令的参数如果要依赖前一条的返回值，就不能批。所以规则很简单：
+**参数已定的序列用 `b4.batch`，需要看结果再决定的用 `b4.run`**。
+
+**守卫**：逐条跑与 `b4.run` 相同的三道检查，任何一条被拒则**一条都不执行**，文案点名第几步
+（`PERMISSION_DENIED | code=COMMAND_NOT_ALLOWED | tool=b4.batch | detail=command 2 (stop) was
+refused: …`）。用 `PermissionAudit` 的信封而不是自造前缀，是因为 `ToolOutcome` 只把**行首**的
+`PERMISSION_DENIED | code=` 当拒绝——被拒的批必须显示成 `[fail]`，否则它看起来就像跑过了。
+批里的步骤不能用 `--stdin`（stdin 被命令列表占了），payload 要落成文件（`eval --file x.js`）或内联。
+
+**测试**：`B4CliBatchTest` 12 例——换行/项目符号切分、JSON 列表编码、两种 entry 形状、
+一条命令列表 = 一个进程（断言 `args == "batch --json"` 且 stdin 是那三条）、`bail` 转发、
+空列表拒绝、生命周期步骤被拒（点名步号）、`b4.run` 的 stdin 版本同样被拒、非 batch payload
+不被当命令扫、payload 原样进 `CliRunRequest`、无 payload 时保持 null、`[timing]` 仅按开关显示。
+
+### 14.5 E-5：`ModuleGraph` 分支覆盖 52% → 87.5%
+
+`browser4-coding` 单跑 `ModuleGraphTest` + JaCoCo（`-Pquality-gate -Djacoco.check.skip=true`）：
+
+| 计数器 | 改前 | 改后 |
+|---|---|---|
+| BRANCH | 52% | **42/48 = 87.5%** |
+| INSTRUCTION | 78.5% | **713/744 = 95.8%** |
+| LINE | 82.1% | **100%（77/77）** |
+
+新增 8 例，补的都是**不该走**的分支：父 pom 里没有自己的 artifactId（不是模块，不能顶着父名
+注册）、`<parent>` 里没有 artifactId（不产生父边）、`dependencyManagement`/`build` 里的
+`<dependency>` 不是编译边（版本钉版、插件 classpath）、同名 artifactId 取先写的那个、
+依赖环终止、`cachedGraph` 命中 / pom 变化后重建 / `clearCache`、`scanPoms` 只认模块 pom、
+`format` 的两个判词（`(none)` 与 ⚠ 漂移）。剩下的 6 个分支是 I/O 故障路径
+（`visitFileFailed`、pom 读失败），要 OS 级故障注入才碰得到，没有为它造 ACL。
+
+### 14.6 验证
+
+| 范围 | 命令 | 结果 |
+|---|---|---|
+| Rust CLI 全量单测 | `cargo test --manifest-path cli/browser4-cli/Cargo.toml --bin browser4-cli` | **2229 passed** / 0 failed / 4 ignored |
+| `browser4-agentic` 快测试（PR 门禁口径） | `mvn -o -pl browser4-agentic test -Dsurefire.excludedGroups=ManualOnly,RequiresAI,E2E,…,TestInfraCheck` | **1798 passed** / 0 failed，BUILD SUCCESS |
+| CLI 侧新增（agentic） | `mvn -o -pl browser4-agentic test -Dtest=CliTimingTest,B4CliBatchTest,B4CliToolExecutorTest,CliProcessManagerTest` | **50 例全绿**（11 + 12 + 13 + 14） |
+| 后端埋点（rest） | `mvn -o -pl browser4-rest test -Dtest=MCPToolControllerTest#callToolStampsTheHandlerDuration` | **1/1 绿** |
+| 模块图（coding） | `mvn -o -pl browser4-coding test -Pquality-gate -Dtest=ModuleGraphTest -Djacoco.check.skip=true` | **17/17 绿**，覆盖见 §14.5 |
+
+**没有做的**：真页面上复测 `eval` 的 `http/server` 拆分（需要一次真实后端 + 页面；埋点已经在
+`agent result` 的指标和 `[timing]` 里，下一轮 B1 式采集可以直接读）；另一个 checkout 那 1 s 的
+单独复测；`--file` 作为 payload 通道的工具封装（`stdin` 已覆盖，`--file` 一直可用）。
+
 ## 附录：本文引用的数据
 
 | 指标 | 数值 | 出处 |
@@ -654,3 +857,9 @@ D1–D5 结构性不可并行（§2 D）、P0-2 多模块融合（§10 实测否
 | 历史基线（P0-1 之前）构建占比 / 零编辑重建 | 1332 s (46%) / 756 s (26.4%) | 计划 §1 |
 | 同轮 17 调用 | 17.2 s 中工具时间 0.45 s（97% 不在工具里） | 计划 §0/§1 |
 | 多标签并行采集 | 28 s → 4.6 s（4 慢页） | crawl-multitab-parallel |
+| dev 模式 CLI 启动（`--version`） | 278–358 ms → **50–78 ms** | §14.1、[e3-dev-startup/](20261115-wait-split-experiments/e3-dev-startup/after.txt) |
+| 关闭的 loopback 端口探测 | ~2 s 才 `ECONNREFUSED`（探针预算 250 → 30 ms） | §14.1 |
+| 每动作固定开销（dev / 生产等价） | ≈500 / ≈220 ms → **≈50 / ≈20 ms** | §14.3 |
+| PowerShell 外壳（`-EncodedCommand $true`） | 210–228 ms | §14.3、§12.4 |
+| `b4.batch` 一批 4 条的固定开销节省 | ≈0.18 s（dev）/ ≈0.09 s（生产） | §14.4 |
+| `ModuleGraph` 分支 / 指令 / 行覆盖 | 52% / 78.5% / 82.1% → **87.5% / 95.8% / 100%** | §14.5 |

@@ -176,14 +176,22 @@ missing columns).
 
 ### Quote `@file` correctly when an agent drives the CLI
 
-`b4.run(args=…)` is executed as `pwsh -Command "& browser4-cli …"`, so PowerShell parses
-the line: quote `@file` or it is treated as splatting. `coding.shell` is `cmd.exe`
-instead, and inline interpreters (`powershell -Command …`, `bash -c …`) are refused by the
-command guard.
+`b4.run(args=…)` is executed as `pwsh -Command "& browser4-cli …"` whenever the line needs
+shell syntax, so PowerShell parses the line: quote `@file` or it is treated as splatting.
+`coding.shell` is `cmd.exe` instead, and inline interpreters (`powershell -Command …`,
+`bash -c …`) are refused by the command guard.
 
 ```text
 ✗ b4.run(args="crawl --sql @.b4scratch/q.sql …")     → PowerShell ParserError
 ✓ b4.run(args="crawl --sql '@.b4scratch/q.sql' …")   → the file is read
+```
+
+Better where it applies: put the payload on `stdin` and the command line has no quoting at
+all, so it skips the shell entirely (~200 ms per call on Windows):
+
+```text
+✓ b4.run(args="eval --stdin --json", stdin="[document.title, ...document.querySelectorAll('h2')]")
+✓ b4.batch(commands="goto <url>\nsnapshot -v 0\nclick e12")   # one process for the sequence
 ```
 
 ## Flags
