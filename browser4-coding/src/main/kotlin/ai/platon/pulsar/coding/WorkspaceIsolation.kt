@@ -3,6 +3,7 @@ package ai.platon.pulsar.coding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.Callable
@@ -10,7 +11,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /** Result of one `git` invocation (argument array, no shell). */
-private data class GitOutcome(val exitCode: Int, val stdout: String, val stderr: String) {
+internal data class GitOutcome(val exitCode: Int, val stdout: String, val stderr: String) {
     val output: String get() = listOf(stdout, stderr).filter { it.isNotBlank() }.joinToString("\n")
 }
 
@@ -25,14 +26,16 @@ private data class GitOutcome(val exitCode: Int, val stdout: String, val stderr:
  * >4 KiB `diff --cached --binary` look like a timeout — i.e. real changes silently failed
  * to merge.
  */
-private fun runGit(dir: Path, args: List<String>): GitOutcome = runCatching {
+internal fun runGit(dir: Path, args: List<String>): GitOutcome = runCatching {
     val process = ProcessBuilder(listOf("git") + args)
         .directory(dir.toFile())
         .redirectErrorStream(false)
         .start()
     val readers = Executors.newVirtualThreadPerTaskExecutor()
-    val stdout = readers.submit(Callable { process.inputStream.bufferedReader().use { it.readText() } })
-    val stderr = readers.submit(Callable { process.errorStream.bufferedReader().use { it.readText() } })
+    // Git emits paths as UTF-8 (and `-z` raw); decode explicitly instead of leaning on the
+    // platform default, which decides whether "naïve 中文.md" survives as a file name.
+    val stdout = readers.submit(Callable { process.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() } })
+    val stderr = readers.submit(Callable { process.errorStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() } })
     try {
         // git is fast; a hung git is a broken environment, not a slow task.
         if (!process.waitFor(120, TimeUnit.SECONDS)) {
@@ -247,20 +250,11 @@ class WorkspaceIsolation private constructor(
          * it verified: the merge gate compares that recording with the tree it is about
          * to apply, because "verify passed, then the agent kept editing" must not merge.
          *
-         * Rename entries (`R  old -> new`) are reported by their destination path — the
-         * old path no longer exists, so it must never reach a digest, a module lookup or
-         * a `git apply` pathspec.
+         * The paths are real file names (see [GitStatus]): `-z` is what keeps a non-ASCII
+         * name from coming back as a quoted, octal-escaped string that matches no file.
          */
-        fun changedFilesOf(worktree: Path): List<String> {
-            val status = runGit(worktree, listOf("status", "--porcelain", "--", ".") + EXCLUDES)
-            if (status.exitCode != 0) return emptyList()
-            return status.stdout.lineSequence().mapNotNull { line ->
-                if (line.length < 4) return@mapNotNull null
-                val raw = line.substring(3).trim().trim('"')
-                val path = if (raw.contains(" -> ")) raw.substringAfter(" -> ").trim().trim('"') else raw
-                path.replace('\\', '/').takeIf { it.isNotEmpty() }
-            }.toList()
-        }
+        fun changedFilesOf(worktree: Path): List<String> =
+            GitStatus.changedFiles(worktree, excludes = EXCLUDES).orEmpty()
 
         /**
          * Re-attach to a worktree created by an earlier (possibly crashed) run,
@@ -540,7 +534,9 @@ class WorkspaceIsolation private constructor(
             // `--3way` stages what it merges; restore the pre-merge index entries for
             // exactly the patched paths so the result is indistinguishable from a plain
             // apply (worktree change, index untouched).
-            runGit(repoRoot, listOf("reset", "-q", "--") + changed)
+            // `:(literal)` keeps a path that begins with `:` or contains `*`/`[` from being
+            // read as pathspec magic.
+            runGit(repoRoot, listOf("reset", "-q", "--") + changed.map { ":(literal)$it" })
         }
         if (!keepWorktree) cleanupWorktree()
         logger.info("Workspace isolation merged {} file(s) into {} via {}", changed.size, repoRoot, applyMode)

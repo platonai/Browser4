@@ -24,6 +24,7 @@ import ai.platon.pulsar.agentic.tools.langchain4j.ToolExecutionCoordinator
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.coding.CodingWorkspace
+import ai.platon.pulsar.coding.GitStatus
 import ai.platon.pulsar.coding.SafeText
 import ai.platon.pulsar.coding.VerificationReport
 import ai.platon.pulsar.common.AppPaths
@@ -2650,41 +2651,29 @@ open class RobustBrowserAgent(
         gitStatus(workspace)?.second
 
     /**
-     * `git status --porcelain` split into (changed, deleted).
+     * `git status` split into (changed, deleted), or null when git is unavailable.
+     *
+     * Goes through [GitStatus], the shared parser: the line-based form quotes non-ASCII
+     * paths (so the report's file list and this evidence could never match), and reading
+     * the process only after `waitFor` deadlocks on a wide change set.
+     *
+     * The agent's own bookkeeping is excluded — a scratch script is not a deliverable, and
+     * counting it as one made the "files the run modified" rule nag about files the report
+     * rightly leaves out.
      *
      * Deletions are tracked separately: a deleted file is absent from the
      * changed-file list, so a "deleted X" claim needs its own evidence.
      */
     private fun gitStatus(workspace: Path): Pair<Set<String>, Set<String>>? {
-        return try {
-            val process = ProcessBuilder("git", "-C", workspace.toString(), "status", "--porcelain")
-                .redirectErrorStream(true)
-                .start()
-            if (!process.waitFor(15, TimeUnit.SECONDS)) {
-                process.destroyForcibly()
-                return null
-            }
-            if (process.exitValue() != 0) return null
-            val text = process.inputStream.bufferedReader().use { it.readText() }
-            val changed = linkedSetOf<String>()
-            val deleted = linkedSetOf<String>()
-            text.lineSequence().forEach { line ->
-                if (line.length < 4) return@forEach
-                var path = line.substring(3).trim()
-                // Rename/copy form: "old -> new" — the new path is what exists.
-                if (" -> " in path) path = path.substringAfter(" -> ")
-                val normalized = normalizeRepoPath(path)
-                if (normalized.isEmpty()) return@forEach
-                if (line.startsWith(" D") || line.startsWith("D ") || line.startsWith("DD")) {
-                    deleted += normalized
-                } else {
-                    changed += normalized
-                }
-            }
-            changed to deleted
-        } catch (_: Exception) {
-            null
+        val entries = GitStatus.entries(workspace, excludes = AGENT_BOOKKEEPING_EXCLUDES) ?: return null
+        val changed = linkedSetOf<String>()
+        val deleted = linkedSetOf<String>()
+        entries.forEach { entry ->
+            val normalized = normalizeRepoPath(entry.path)
+            if (normalized.isEmpty()) return@forEach
+            if (entry.deleted) deleted += normalized else changed += normalized
         }
+        return changed to deleted
     }
 
     private fun normalizeRepoPath(raw: String): String =
@@ -2817,3 +2806,13 @@ open class RobustBrowserAgent(
     }
 }
 
+/**
+ * Pathspecs excluded from the finish-report evidence: the agent's own bookkeeping is not a
+ * deliverable, and counting it as one made the "files the run modified" rule nag about files a
+ * completion report rightly leaves out. Mirrors `WorkspaceIsolation`'s merge exclusions.
+ */
+private val AGENT_BOOKKEEPING_EXCLUDES = listOf(
+    ":(exclude).b4scratch/**", ":(exclude)**/.b4scratch/**",
+    ":(exclude).b4inputs/**", ":(exclude)**/.b4inputs/**",
+    ":(exclude).browser4/**", ":(exclude)**/.browser4/**",
+)

@@ -449,4 +449,27 @@ class WorkspaceIsolationTest {
             Files.deleteIfExists(plain)
         }
     }
+
+    // ==================== change-set reporting ====================
+
+    @Test
+    @DisplayName("a non-ASCII file name is reported verbatim, so it can be fingerprinted")
+    fun changedFilesReportsNonAsciiNames() = runBlocking {
+        // The line-based porcelain form quotes such a name (`"na\303\257ve.md"`), and the
+        // reported path then matches no file on disk: no digest, no module, no git pathspec.
+        val isolation = WorkspaceIsolation.begin(tempDir, "run-unicode")
+        try {
+            Files.writeString(isolation.isolatedRoot.resolve("naïve 中文.kt"), "class X\n")
+
+            val changed = WorkspaceIsolation.changedFilesOf(isolation.isolatedRoot)
+
+            assertEquals(listOf("naïve 中文.kt"), changed)
+            assertNotNull(
+                WorkspaceDigest.of(isolation.isolatedRoot, changed),
+                "the reported path must resolve on disk: $changed",
+            )
+        } finally {
+            isolation.rollback()
+        }
+    }
 }
