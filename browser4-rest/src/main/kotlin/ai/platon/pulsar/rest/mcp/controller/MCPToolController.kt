@@ -248,6 +248,16 @@ class MCPToolController(
         internal const val CHANNEL = "B"
 
         /**
+         * Response header carrying the backend's own handler time for one tool call.
+         *
+         * The CLI splits its round trip into "backend time" and "everything else"
+         * (`[timing] server=… net=…`, evaluation E-4): without a server-side number
+         * a 2–4 s `eval` cannot be attributed to the page or to the transport. It is
+         * a header, not a body field, so no client's JSON parsing changes.
+         */
+        internal const val TOOL_DURATION_HEADER = "X-Browser4-Duration-Ms"
+
+        /**
          * Arguments addressed to the transport rather than to the tool: they are
          * consumed here (`sessionId` routes the call, `cache` bypasses the result
          * cache) and must never reach an executor's argument validation.
@@ -578,6 +588,10 @@ class MCPToolController(
             requestId, CHANNEL, request.tool, durationMs, errorCode,
             body?.content?.sumOf { it.text.length } ?: 0,
         )
+        // E-4: let the caller split its own round trip into "backend time" and
+        // "everything else". The CLI reads this header and reports
+        // `server=<ms> net=<ms>`; a client that ignores it is unaffected.
+        response.addHeader(TOOL_DURATION_HEADER, durationMs.toString())
         return entity
     }
 
