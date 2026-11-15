@@ -427,4 +427,26 @@ class WorkspaceIsolationTest {
             isolation.rollback()
         }
     }
+
+    @Test
+    @DisplayName("the checkout to lock is the main repository, and a nested worktree locks nothing")
+    fun checkoutToLockIsTheMainRepository() = runBlocking {
+        assertEquals(tempDir.toAbsolutePath().normalize(), WorkspaceIsolation.checkoutToLock(tempDir))
+
+        // A task nested inside an isolated run is covered by its outer task's lock; asking for
+        // a second one would deadlock against it.
+        val isolation = WorkspaceIsolation.begin(tempDir, "run-lock")
+        try {
+            assertNull(WorkspaceIsolation.checkoutToLock(isolation.isolatedRoot))
+        } finally {
+            isolation.rollback()
+        }
+
+        val plain = Files.createTempDirectory("b4-no-repo-")
+        try {
+            assertNull(WorkspaceIsolation.checkoutToLock(plain), "a non-git workspace has no checkout to lock")
+        } finally {
+            Files.deleteIfExists(plain)
+        }
+    }
 }

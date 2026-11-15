@@ -196,6 +196,15 @@ class WorkspaceIsolation private constructor(
             resolveRepoRoot(candidateRoot) != null
 
         /**
+         * The checkout a task must lock before it may write or merge into it, or null when no
+         * lock applies: [workspaceRoot] is not inside a git work tree, or it is already a
+         * managed worktree (a task nested inside an isolated run is covered by its outer
+         * task's lock, and taking a second one would deadlock against it).
+         */
+        fun checkoutToLock(workspaceRoot: Path): Path? =
+            resolveRepoRoot(workspaceRoot)?.takeUnless { isManagedWorktree(workspaceRoot) }
+
+        /**
          * Why a coding task cannot run isolated in [workspaceRoot], or null when it can.
          *
          * A coding task that cannot get a worktree must **fail**, not fall back to the
