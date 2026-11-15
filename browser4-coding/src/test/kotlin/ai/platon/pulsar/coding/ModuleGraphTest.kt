@@ -104,6 +104,65 @@ class ModuleGraphTest {
     }
 
     @Test
+    @DisplayName("a foreign reactor keeps its edges: the groupId is not a filter")
+    fun foreignReactorKeepsEdges() {
+        // Somebody else's two-module project: no ai.platon groupId anywhere. Filtering the
+        // declared dependencies by groupId made every node edgeless here, which is what made
+        // the isolation gate refuse the A/B smoke run (evaluation §11).
+        val demo = linkedMapOf(
+            "lib" to """
+                <project>
+                    <groupId>demo</groupId>
+                    <artifactId>lib</artifactId>
+                    <version>1.0.0</version>
+                </project>
+            """.trimIndent(),
+            "app" to """
+                <project>
+                    <groupId>demo</groupId>
+                    <artifactId>app</artifactId>
+                    <version>1.0.0</version>
+                    <dependencies>
+                        <dependency>
+                            <groupId>demo</groupId>
+                            <artifactId>lib</artifactId>
+                            <version>1.0.0</version>
+                        </dependency>
+                    </dependencies>
+                </project>
+            """.trimIndent(),
+        )
+
+        val graph = ModuleGraph.build(demo)
+
+        assertTrue(graph.nodes["app"]!!.dependencies.contains("lib"), "demo:lib is an edge: ${graph.nodes["app"]}")
+        assertEquals(listOf("lib", "app"), ModuleGraph.transitiveDependents(graph, "lib"))
+    }
+
+    @Test
+    @DisplayName("a foreign dependency outside the reactor is still not an edge")
+    fun foreignExternalStillDropped() {
+        val graph = ModuleGraph.build(
+            linkedMapOf(
+                "app" to """
+                    <project>
+                        <groupId>demo</groupId>
+                        <artifactId>app</artifactId>
+                        <dependencies>
+                            <dependency>
+                                <groupId>com.google.guava</groupId>
+                                <artifactId>guava</artifactId>
+                            </dependency>
+                        </dependencies>
+                    </project>
+                """.trimIndent(),
+            )
+        )
+
+        assertTrue(graph.nodes["app"]!!.dependencies.isEmpty(), "unresolved external must vanish")
+    }
+
+    @Test
     @DisplayName("transitiveDependents closes over reverse edges")
     fun transitiveDependents() {
         val graph = ModuleGraph.build(poms)

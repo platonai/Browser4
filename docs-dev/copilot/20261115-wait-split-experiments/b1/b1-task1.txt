@@ -1,0 +1,1 @@
+Open https://example.com and report the page heading and the first paragraph of the page. Then tell me the final URL the browser is on.

@@ -1031,10 +1031,10 @@ class CodingToolExecutorTest {
         }
 
         @Test
-        @DisplayName("getToolSpecs returns 57 registered specs")
+        @DisplayName("getToolSpecs returns 58 registered specs")
         fun testToolSpecsCount() {
             val specs = executor.getToolSpecs()
-            assertEquals(57, specs.size)
+            assertEquals(58, specs.size)
         }
 
         @Test
@@ -1044,7 +1044,10 @@ class CodingToolExecutorTest {
             val expectedMethods = setOf(
                 "shell", "shellOutput", "shellStatus", "shellList", "shellSetEnv",
                 "toolsDetect", "projectType", "permissions", "explain", "requestAccess",
-                "read", "readLines", "write", "append", "replace", "delete", "mkdir", "checksum",
+                // `readFiles` (bounded multi-file read) belongs in the middle of the read family:
+                // it was added by 9dd0cc0c5f and this golden list was not updated with it, which
+                // left the module suite red until the assertion was told the truth.
+                "read", "readLines", "readFiles", "write", "append", "replace", "delete", "mkdir", "checksum",
                 "copy", "move", "listDir", "glob", "grep", "stat", "diff",
                 "changeSummary", "languages", "workspaceRoot",
                 "scaffold", "scaffoldToDir", "validate",

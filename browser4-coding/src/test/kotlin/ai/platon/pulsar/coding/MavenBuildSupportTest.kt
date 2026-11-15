@@ -212,6 +212,61 @@ class MavenBuildSupportTest {
     }
 
     @Test
+    @DisplayName("the remembered build shapes are bounded, least recently used first out")
+    fun buildShapesAreBounded() {
+        // Regression: this map is keyed by workspace root and was a plain ConcurrentHashMap, so
+        // a backend pointed at many workspaces kept one entry per workspace for the JVM's life.
+        val shapes = BoundedBuildShapes(capacity = 2)
+        fun shape(module: String) = BuildShape(module, "compile", skipTests = true, launcher = "mvn")
+
+        shapes.put("ws-a", shape("a"))
+        shapes.put("ws-b", shape("b"))
+        assertEquals(2, shapes.size())
+
+        // Touch ws-a: it is no longer the oldest, so the next insert must not evict it.
+        assertEquals("a", shapes.get("ws-a")?.module)
+        shapes.put("ws-c", shape("c"))
+
+        assertEquals(2, shapes.size(), "a long-lived backend must not accumulate one entry per workspace")
+        assertEquals("a", shapes.get("ws-a")?.module, "the recently used workspace stays")
+        assertNull(shapes.get("ws-b"), "the least recently used one is evicted")
+        assertEquals("c", shapes.get("ws-c")?.module)
+    }
+
+    @Test
+    @DisplayName("-T is opt-in and reaches the command line before -pl")
+    fun buildThreadsAreOptIn() {
+        // `-T` must not appear by default: the repository's own maven.config keeps it
+        // commented out (kapt/remote-resources are not threaded).
+        assertEquals(
+            "mvnw -pl browser4-coding -am compile -DskipTests -q",
+            mavenBuildCommand("mvnw", "browser4-coding", "compile", skipTests = true, threads = null),
+        )
+        assertEquals(
+            "mvnw -T 1C -pl browser4-coding -am compile -DskipTests -q",
+            mavenBuildCommand("mvnw", "browser4-coding", "compile", skipTests = true, threads = "1C"),
+        )
+
+        val key = "browser4.agent.build.threads"
+        val previous = System.getProperty(key)
+        try {
+            System.clearProperty(key)
+            assertNull(MavenBuildSupport.buildThreads("compile", skipTests = true), "default is single-threaded")
+            System.setProperty(key, "1C")
+            assertEquals("1C", MavenBuildSupport.buildThreads("compile", skipTests = true))
+            System.setProperty(key, "1")
+            assertNull(MavenBuildSupport.buildThreads("compile", skipTests = true), "'1' means off")
+            System.setProperty(key, "1C")
+            // Parallelism is confined to the compile-only path: surefire and kapt are the
+            // reason the project keeps `-T` disabled in the first place.
+            assertNull(MavenBuildSupport.buildThreads("test", skipTests = false))
+            assertNull(MavenBuildSupport.buildThreads("compile", skipTests = false))
+        } finally {
+            if (previous == null) System.clearProperty(key) else System.setProperty(key, previous)
+        }
+    }
+
+    @Test
     @DisplayName("the module artifactId is read from its pom (parent excluded, ':' prefix tolerated)")
     fun artifactIdResolvedFromPom() {
         val root = java.nio.file.Files.createTempDirectory("b4-mvn-module")

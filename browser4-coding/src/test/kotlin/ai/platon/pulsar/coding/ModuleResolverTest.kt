@@ -79,4 +79,66 @@ class ModuleResolverTest {
         )
         assertEquals(setOf("browser4-coding", "browser4-rest"), modules)
     }
+
+    // -- a foreign workspace is judged by its own graph -------------------------
+
+    private fun pom(artifactId: String, vararg dependencies: String): String = buildString {
+        append("<project><artifactId>").append(artifactId).append("</artifactId>")
+        if (dependencies.isNotEmpty()) {
+            append("<dependencies>")
+            dependencies.forEach {
+                // groupId deliberately NOT ai.platon: this is somebody else's repo.
+                append("<dependency><groupId>demo</groupId><artifactId>").append(it).append("</artifactId></dependency>")
+            }
+            append("</dependencies>")
+        }
+        append("</project>")
+    }
+
+    private fun demoGraph(): ModuleGraph.Graph = ModuleGraph.build(
+        linkedMapOf("lib" to pom("lib"), "app" to pom("app", "lib"))
+    )
+
+    @Test
+    @DisplayName("a workspace graph lets a dependent verifier cover a foreign repo's library")
+    fun coversWithWorkspaceGraph() {
+        val graph = demoGraph()
+
+        // app depends on lib, so `mvn -pl app -am` compiles both.
+        assertTrue(ModuleResolver.covers("app", setOf("lib", "app"), graph))
+        assertFalse(
+            ModuleResolver.covers("lib", setOf("lib", "app"), graph),
+            "verifying the library does not compile its dependent",
+        )
+        assertFalse(
+            ModuleResolver.covers("app", setOf("lib", "app")),
+            "the static Browser4 snapshot cannot know a foreign repo's edges — that was the bug",
+        )
+    }
+
+    @Test
+    @DisplayName("a workspace graph resolves nested foreign modules that the heuristic truncates")
+    fun nestedForeignModules() {
+        val graph = ModuleGraph.build(
+            linkedMapOf("svc/core" to pom("core"), "svc/api" to pom("api", "core"))
+        )
+
+        // The old heuristic returned "core": a name `mvn -pl` cannot select as a module.
+        assertEquals("svc/core", ModuleResolver.moduleOf("svc/core/src/main/java/A.java", graph))
+        assertEquals("svc/core", ModuleResolver.moduleOf("D:/work/x/svc/core/src/main/java/A.java", graph))
+        assertTrue(ModuleResolver.covers("svc/api", setOf("svc/core", "svc/api"), graph))
+        assertEquals(setOf("svc/core", "svc/api"), ModuleResolver.modulesOf(
+            listOf("svc/core/src/main/java/A.java", "svc/api/src/main/java/B.java"), graph,
+        ))
+    }
+
+    @Test
+    @DisplayName("a graph that does not know the verifier keeps the static behaviour")
+    fun foreignVerifierFallsBackToStatic() {
+        val graph = demoGraph()
+        // Browser4 verdicts are not nodes of the demo graph, so the static snapshot answers.
+        assertTrue(ModuleResolver.covers("browser4-agentic", setOf("browser4-coding"), graph))
+        assertTrue(ModuleResolver.covers(ModuleMap.CLI_CRATE, setOf(ModuleMap.CLI_CRATE), graph))
+        assertTrue(ModuleResolver.covers("app", emptySet(), graph), "an empty change set needs no verifier")
+    }
 }

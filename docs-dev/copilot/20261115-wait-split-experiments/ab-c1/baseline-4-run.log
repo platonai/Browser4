@@ -1,0 +1,54 @@
+Starting Browser4 dev server for workspace 'Browser4-4.16' on port 8283 (first launch ~10s for JVM + Spring Boot; subsequent starts faster)...
+  workspace: D:\workspace\Browser4\Browser4-4.16
+  app data:  C:\Users\pereg\.browser4\workspaces\Browser4-4.16-02e52167\app-data (isolated browser profiles, data and memory)
+Using existing local Browser4 runtime bundle at D:\workspace\Browser4\Browser4-4.16\browser4-apps\browser4-bundle\target\runtime-bundle\_work\browser4-bundle-runtime-windows-x64\browser4-bundle-runtime-windows-x64.
+  Starting server... (JVM loading, waiting for the TCP port; progress is not animated on non-interactive output)
+Server ready in 10.5s
+Task submitted: d7527296-b5a6-42ed-8e8c-2029b29ef5cf (no session — a session-less task)
+[00:00] ▶ Run coding.mvnBuild with module "app" and goals "compile" and report its exit code. Then in app/src/main/java/demo/App.j…
+[00:00] budget 8,994 / 5.00M (0%) · cache 0 (0%) · 1 requests
+[00:00] #1 coding_listDir(path=".")
+[00:00] #2 coding_mvnBuild({"module":"app","goals":"compile"})
+[00:03]   ↳ #2 coding_mvnBuild ok in 2.8s
+[00:04] #3 coding_read(path="app/src/main/java/demo/App.java")
+[00:04] #4 coding_read(path="pom.xml")
+[00:05] #5 coding_read(path="lib/src/main/java/demo/Lib.java")
+[00:06] #6 coding_replace(path="app/src/main/java/demo/App.java", +2)
+[00:08] #7 coding_mvnBuild({"goals":"compile","module":"app"})
+[00:10]   ↳ #7 coding_mvnBuild ok in 2.7s
+[00:12] #8 coding_mvnBuild({"goals":"compile","module":"app","json":true})
+[00:13] #9 coding_read(path="app/src/main/java/demo/App.java")
+[00:13] #10 coding_verify({"checks":"compile","module":"app"})
+[00:16] budget 11.9k / 5.00M (0%) · cache 68.4k (86%) · 8 requests
+[00:16] #11 coding_changeSummary
+[00:20] #12 system_taskComplete({"summary":"Ran the baseline build of module `app` (exit code 0), added a second println printing `Lib.add(5, 7)` to `ap…)
+[00:20] budget 13.1k / 5.00M (0%) · cache 91.8k (89%) · 10 requests
+[00:20]   ⋯ DONE
+✔ Agent completed in 21.8s · d7527296-b5a6-42ed-8e8c-2029b29ef5cf · 1 round(s) · 12 tool(s) · 104.8k tokens · cache 89%
+
+Summary
+  Ran the baseline build of module `app` (exit code 0), added a second println printing `Lib.add(5,
+  7)` to `app/src/main/java/demo/App.java`, re-ran the build (exit code 0, no diagnostics) and ran
+  coding.verify with checks=compile, module=app which PASSED.
+
+  VERDICT_JSON:
+  {"passed":true,"module":"app","requested":["compile"],"durationMs":118,"verifiedAt":"2026-11-15T10
+  :26:11.208774600Z","contentDigest":"sha256:fd838eb03fa746bab1b2fc12e1abad510c4dc689341d28212466fbf
+  ea0c93558","failureReason":null,"checks":[{"name":"compile","target":"app","ran":true,"ok":true,"r
+  equired":true,"exitCode":0,"durationMs":13,"evidence":"cached@sha256:e8b504536
+  (no source change since
+  2026-11-15T10:26:08.017Z)","detail":null,"cached":true,"fingerprint":"sha256:e8b504536","diagnosti
+  cs":[]}]}
+
+Key findings (4)
+  • Baseline `mvn -pl app -am compile` exited 0 before the edit.
+  • App.java now prints both add(2, 3) and add(5, 7) using the existing Lib.add(int,int) helper.
+  • Post-edit `mvn -pl app -am compile` exited 0 with zero compiler diagnostics.
+  • coding.verify (compile, module app) returned passed=true, 1/1 checks ran.
+
+Files written (1) · workspace: D:\tmp\b4-ab
+  app/src/main/java/demo/App.java
+
+Timings
+  10 rounds · model 15.7s · tools 228ms · callbacks 109ms · build 5.7s · tokens 102.9k in / 91.8k ca…
+  setup 865ms (isolation 582ms) · merge 561ms · finalize 111ms

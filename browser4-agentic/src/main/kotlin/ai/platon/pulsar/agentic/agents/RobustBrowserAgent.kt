@@ -25,6 +25,7 @@ import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.coding.CodingWorkspace
 import ai.platon.pulsar.coding.GitStatus
+import ai.platon.pulsar.coding.MavenBuildSupport
 import ai.platon.pulsar.coding.SafeText
 import ai.platon.pulsar.coding.VerificationReport
 import ai.platon.pulsar.common.AppPaths
@@ -722,6 +723,35 @@ open class RobustBrowserAgent(
      * the task result instead of having to be re-derived from the memory event log.
      */
     private val runTimings = RunTimingsAccumulator()
+
+    /**
+     * Mutation count at the last speculative-build attempt (plan C1).
+     *
+     * The trigger runs before every model request; the fingerprint it needs hashes the whole
+     * source tree, so remembering the last epoch keeps "nothing was written" rounds free.
+     */
+    private var speculativeBuildEpoch = Int.MIN_VALUE
+
+    /**
+     * Start a compile while the model is thinking (plan C1).
+     *
+     * After an edit the agent waits seconds for the provider, and the build it usually asks
+     * for next can run inside that window: a correct guess turns the later
+     * `coding.mvnBuild` into a cache hit, a wrong one costs CPU only (the content-keyed
+     * cache and the write-time cancel make sure a stale answer is never served).
+     *
+     * Best-effort by construction: a miss here is an optimisation that did not happen, so
+     * every failure is swallowed at debug level and the task continues.
+     */
+    private fun maybeScheduleSpeculativeBuild() {
+        if (!codingMode) return
+        runCatching {
+            val epoch = agentToolManager.codingFs.mutationEpoch
+            if (epoch == speculativeBuildEpoch) return
+            speculativeBuildEpoch = epoch
+            MavenBuildSupport().scheduleSpeculativeBuild(agentToolManager.codingShell)
+        }.onFailure { logger.debug("speculative build trigger skipped: {}", it.message) }
+    }
 
     /** The current run's attribution, or `null` before the first round. */
     val lastRunTimings: RunTimings?
@@ -1527,7 +1557,13 @@ open class RobustBrowserAgent(
             // tool execution (see CliLoopTracer). The specs are the ones the
             // model request actually carries (exposed set + meta tools), NOT
             // the full registry — the dump must reconstruct the real prompt.
-            onBeforeGenerate = { msgs, specs -> cliLoopTracer.logPrompt(msgs, specs) },
+            onBeforeGenerate = { msgs, specs ->
+                cliLoopTracer.logPrompt(msgs, specs)
+                // Plan C1: the provider round-trip is the window a build can run in. The
+                // hook is called before EVERY request, so the trigger is guarded by a
+                // mutation counter — it must never hash the source tree for nothing.
+                maybeScheduleSpeculativeBuild()
+            },
             // The provider's usage for this request reaches the run's stats as a
             // `run.usage` step (token accounting for `/stats`): the tracer writes
             // the same numbers to `cli-usage.jsonl`, but only on disk — a client

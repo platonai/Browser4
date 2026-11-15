@@ -1,5 +1,6 @@
 package ai.platon.pulsar.coding
 
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
@@ -225,6 +226,69 @@ class IsolationGateTest {
 
         assertFalse(decision.allow)
         assertTrue(decision.reason.contains("was last written"), decision.reason)
+    }
+
+    @Test
+    @DisplayName("a foreign repo's dependent verdict covers a library change (the A/B smoke failure)")
+    fun foreignRepoDependentVerdictCoversLibrary(@TempDir tmp: Path) {
+        // Reproduced from evaluation §11: a two-module Maven project with its own groupId,
+        // `app` depending on `lib`. The run changed both modules and verified `app` only —
+        // which `mvn -pl app -am` does compile. The gate refused the merge, because the
+        // static ModuleMap snapshot has no idea that this workspace's `app` depends on `lib`.
+        fun writePom(module: String, dependency: String?) {
+            val dir = Files.createDirectories(tmp.resolve(module))
+            val deps = if (dependency == null) "" else
+                "<dependencies><dependency><groupId>demo</groupId><artifactId>$dependency</artifactId></dependency></dependencies>"
+            Files.writeString(
+                dir.resolve("pom.xml"),
+                "<project><modelVersion>4.0.0</modelVersion><groupId>demo</groupId>" +
+                    "<artifactId>$module</artifactId><version>1.0.0</version>$deps</project>",
+            )
+        }
+        writePom("lib", null)
+        writePom("app", "lib")
+
+        val changed = listOf("lib/src/main/java/demo/Lib.java", "app/src/main/java/demo/App.java")
+        changed.forEach { relative ->
+            val file = tmp.resolve(relative)
+            Files.createDirectories(file.parent)
+            Files.writeString(file, "class Demo {}\n")
+        }
+
+        val decision = IsolationGate.evaluate(changed, listOf(verdict("app", passed = true)), worktree = tmp)
+
+        assertTrue(decision.allow, decision.reason)
+        assertEquals(setOf("lib", "app"), decision.requiredModules)
+    }
+
+    @Test
+    @DisplayName("the same change is still refused for the upstream-only verdict")
+    fun foreignRepoUpstreamVerdictStillRefused(@TempDir tmp: Path) {
+        // The fix must not turn the coverage rule into a rubber stamp: a verdict for the
+        // library does not compile the module that depends on it.
+        fun writePom(module: String, dependency: String?) {
+            val dir = Files.createDirectories(tmp.resolve(module))
+            val deps = if (dependency == null) "" else
+                "<dependencies><dependency><groupId>demo</groupId><artifactId>$dependency</artifactId></dependency></dependencies>"
+            Files.writeString(
+                dir.resolve("pom.xml"),
+                "<project><modelVersion>4.0.0</modelVersion><groupId>demo</groupId>" +
+                    "<artifactId>$module</artifactId><version>1.0.0</version>$deps</project>",
+            )
+        }
+        writePom("lib", null)
+        writePom("app", "lib")
+        val changed = listOf("lib/src/main/java/demo/Lib.java", "app/src/main/java/demo/App.java")
+        changed.forEach { relative ->
+            val file = tmp.resolve(relative)
+            Files.createDirectories(file.parent)
+            Files.writeString(file, "class Demo {}\n")
+        }
+
+        val decision = IsolationGate.evaluate(changed, listOf(verdict("lib", passed = true)), worktree = tmp)
+
+        assertFalse(decision.allow)
+        assertTrue(decision.reason.contains("did not cover"), decision.reason)
     }
 
     @Test

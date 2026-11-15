@@ -87,8 +87,10 @@ object IsolationGate {
      *
      * @param verdicts `VERDICT_JSON`s recorded by this run (any order, duplicates fine)
      * @param worktree the isolated tree the change set belongs to; when null the
-     *   freshness check is skipped (callers that cannot name the tree keep the
-     *   coverage rule only)
+     *   freshness check is skipped and the coverage rule falls back to the static
+     *   [ModuleMap]. When present, its own pom graph also supplies the module
+     *   dependents, so a foreign Maven workspace is judged by its own topology
+     *   instead of Browser4's snapshot
      */
     fun evaluate(
         changedFiles: List<String>,
@@ -103,7 +105,8 @@ object IsolationGate {
         if (changed.isEmpty()) {
             return Decision(true, "no changes to merge", changed)
         }
-        val modules = ModuleResolver.modulesOf(changed)
+        val graph = worktree?.let { root -> runCatching { ModuleGraph.cachedGraph(root) }.getOrNull() }
+        val modules = ModuleResolver.modulesOf(changed, graph)
         if (!requireVerify || !ModuleResolver.requiresVerification(changed)) {
             return Decision(true, "no verification required (documentation-only or gate disabled)", changed, modules)
         }
@@ -133,10 +136,18 @@ object IsolationGate {
 
         // Coverage: one verdict may cover several modules (`-am`), and several
         // verdicts may cover one change set (a Rust crate + a Kotlin module).
+        //
+        // The dependents are read from the WORKTREE's own module graph (built above from its
+        // poms). The static ModuleMap only knows Browser4's modules, so it answered "no
+        // dependent" for every foreign Maven project and refused a legitimate merge — the
+        // two-module toy repo in evaluation §11, where `app` depends on `lib` and
+        // `coding.verify(module=app)` was rejected for `lib` even though `-pl app -am`
+        // compiles it. Without a worktree (or with a tree whose poms we cannot read) the
+        // historical static behaviour is kept.
         val covering = mutableMapOf<String, VerificationReport>()
         val uncovered = mutableListOf<String>()
         for (module in modules) {
-            val verdict = passing.firstOrNull { ModuleResolver.covers(it.module, setOf(module)) }
+            val verdict = passing.firstOrNull { ModuleResolver.covers(it.module, setOf(module), graph) }
             if (verdict == null) uncovered += module else covering[module] = verdict
         }
         if (uncovered.isNotEmpty()) {

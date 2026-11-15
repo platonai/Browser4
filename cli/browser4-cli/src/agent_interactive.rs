@@ -48,6 +48,83 @@ const EVENTS_PAGE_LIMIT: usize = 200;
 /// terminating a genuinely dead backend.
 const TRANSIENT_FAILURE_WINDOW: Duration = Duration::from_secs(300);
 
+/// Timeout of the one liveness probe taken when that window expires.
+const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// What a health probe says about a backend the follower can no longer poll.
+///
+/// The give-up message used to claim "the task itself may still be running" no matter
+/// why polling failed — which is exactly wrong when the backend process is gone (the
+/// task died with it) and only half right when the server is fine and the task is stuck.
+/// One cheap probe of `/actuator/health` at the moment of giving up separates the two.
+/// [Unknown] exists for the residual case — an error that is neither a refused connection
+/// nor a timeout proves nothing, and guessing there would be worse than the generic wording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackendLiveness {
+    /// The port answered HTTP: the server is up, so the task (or the endpoint) is the problem.
+    Up,
+    /// Nothing served the request: the process exited, is restarting, or is wedged.
+    Down,
+    /// The probe failed in a way that proves nothing about the server — do not claim a cause.
+    Unknown,
+}
+
+/// Ask `/actuator/health` whether anything is still serving.
+///
+/// Called only when the transient-failure window is about to expire, so it costs one
+/// request per give-up rather than one per failed poll. Any HTTP answer counts as [Up]:
+/// a 503 from a starting Spring context still proves a process owns the port, which is
+/// the distinction that matters here (a task cannot outlive its backend).
+///
+/// A timeout counts as [Down], not as "unknown": a healthy backend answers this endpoint
+/// in milliseconds, so a 2 s timeout after five minutes of failed polling means it is not
+/// serving — exited, restarting, or wedged. Windows reserves ranges of ephemeral ports and
+/// silently drops SYNs to them, so "connection refused" cannot be relied on to mean "dead".
+async fn probe_backend_liveness(client: &Client, base_url: &str) -> BackendLiveness {
+    let url = format!("{}/actuator/health", base_url.trim_end_matches('/'));
+    match client.get(&url).timeout(HEALTH_PROBE_TIMEOUT).send().await {
+        Ok(_) => BackendLiveness::Up,
+        // A connect failure or a timeout both mean nothing served the request. Only an
+        // error that is neither (a TLS/handshake/proxy failure) leaves the cause unknown.
+        Err(error) if error.is_connect() || error.is_timeout() => BackendLiveness::Down,
+        Err(_) => BackendLiveness::Unknown,
+    }
+}
+
+/// The message a follower reports when its failure window expires.
+///
+/// The reason is appended instead of replacing the original error: an operator needs
+/// both "what failed" and "whether the backend is gone".
+fn give_up_message(
+    task_id: &str,
+    failing_for: Duration,
+    error: &str,
+    liveness: BackendLiveness,
+) -> String {
+    let cause = match liveness {
+        BackendLiveness::Up => format!(
+            " (the backend still answers /actuator/health, so the server is up and the task or \
+             this endpoint is the problem — 'agent status {}' reports it)",
+            task_id
+        ),
+        BackendLiveness::Down => " (the backend is not serving any more: it exited, is restarting, \
+                                  or is wedged, and a task cannot outlive it — run \
+                                  'browser4-cli status' and read the backend log before retrying)"
+            .to_string(),
+        BackendLiveness::Unknown => format!(
+            " (the task itself may still be running — 'agent status {}' reports it)",
+            task_id
+        ),
+    };
+    format!(
+        "giving up on task {} after {}s without a usable response: {}{}",
+        task_id,
+        failing_for.as_secs(),
+        error,
+        cause
+    )
+}
+
 /// Upper bound on a rendered tool-call argument preview.
 const TOOL_ARGS_PREVIEW: usize = 120;
 
@@ -1971,7 +2048,7 @@ impl TaskFollower {
         .await
         {
             Ok(response) => response,
-            Err(error) => return self.tolerate_transient(error),
+            Err(error) => return self.tolerate_transient(client, base_url, error).await,
         };
 
         if response.is_missing_endpoint() {
@@ -1982,11 +2059,17 @@ impl TaskFollower {
             return self.poll_status(client, base_url).await;
         }
         if !response.is_success() {
-            return self.tolerate_transient(format!(
-                "the events endpoint answered HTTP {}: {}",
-                response.status,
-                truncate(response.body.trim(), 200)
-            ));
+            return self
+                .tolerate_transient(
+                    client,
+                    base_url,
+                    format!(
+                        "the events endpoint answered HTTP {}: {}",
+                        response.status,
+                        truncate(response.body.trim(), 200)
+                    ),
+                )
+                .await;
         }
 
         let page = match parse_events_page(&response.body) {
@@ -1994,7 +2077,7 @@ impl TaskFollower {
             // A 200 the parser rejects is not a transport problem: the page is
             // deterministic, so retrying it unchanged never helps. Recover from
             // it instead of blocking the live view for the whole retry window.
-            Err(error) => return self.recover_unparseable_page(&response.body, error),
+            Err(error) => return self.recover_unparseable_page(client, base_url, &response.body, error).await,
         };
         self.first_failure = None;
         // Back off the narrowing now that pages parse again: a long coding run
@@ -2028,8 +2111,10 @@ impl TaskFollower {
     /// step stands alone, then step over that single step using the `nextSeq`
     /// the body still carries — losing one preview line instead of the live view
     /// of a task that keeps running for another hour.
-    fn recover_unparseable_page(
+    async fn recover_unparseable_page(
         &mut self,
+        client: &Client,
+        base_url: &str,
         body: &str,
         error: String,
     ) -> Result<PollOutcome, String> {
@@ -2052,7 +2137,7 @@ impl TaskFollower {
         let Some(next) = parse_next_seq(body).filter(|next| *next > self.after) else {
             // No usable cursor either (a proxy error page, a truncated body):
             // that IS an outage, so fall back to the transient-failure window.
-            return self.tolerate_transient(error);
+            return self.tolerate_transient(client, base_url, error).await;
         };
         self.after = next;
         self.page_limit = EVENTS_PAGE_LIMIT;
@@ -2075,7 +2160,7 @@ impl TaskFollower {
     ) -> Result<PollOutcome, String> {
         let body = match get_command_status(client, base_url, &self.task_id).await {
             Ok(body) => body,
-            Err(error) => return self.tolerate_transient(error),
+            Err(error) => return self.tolerate_transient(client, base_url, error).await,
         };
         let progress = parse_status_progress(&body);
         self.first_failure = None;
@@ -2187,20 +2272,22 @@ impl TaskFollower {
         ));
     }
 
-    fn tolerate_transient(&mut self, error: String) -> Result<PollOutcome, String> {
+    async fn tolerate_transient(
+        &mut self,
+        client: &Client,
+        base_url: &str,
+        error: String,
+    ) -> Result<PollOutcome, String> {
         let now = Instant::now();
         let first_failure = self.first_failure.is_none();
         let since = *self.first_failure.get_or_insert(now);
         let failing_for = now.duration_since(since);
         if failing_for >= TRANSIENT_FAILURE_WINDOW {
-            return Err(format!(
-                "giving up on task {} after {}s without a usable response: {} \
-                 (the task itself may still be running — 'agent status {}' reports it)",
-                self.task_id,
-                failing_for.as_secs(),
-                error,
-                self.task_id
-            ));
+            // One probe, exactly when the cause is about to be reported: telling a user
+            // "the task may still be running" when the backend process is gone is the
+            // wrong instruction, and it is the case that wastes a whole sample.
+            let liveness = probe_backend_liveness(client, base_url).await;
+            return Err(give_up_message(&self.task_id, failing_for, &error, liveness));
         }
         // One notice per outage, and only on a human-facing stream: NDJSON must
         // stay parseable line by line.
@@ -6049,6 +6136,93 @@ mod tests {
         assert_eq!(parse_next_seq("<html>proxy error</html>"), None);
         assert_eq!(parse_next_seq(r#"{"events":[]}"#), None);
         assert_eq!(parse_next_seq(r#"{"nextSeq":"nope"}"#), None);
+    }
+
+    /// A port nobody is listening on: bind to reserve one, then release it.
+    fn dead_base_url() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind for a dead port");
+        let port = listener.local_addr().expect("addr").port();
+        drop(listener);
+        format!("http://127.0.0.1:{port}")
+    }
+
+    #[test]
+    fn the_give_up_message_names_the_cause_instead_of_guessing() {
+        let error = "error sending request";
+
+        let up = give_up_message("t1", Duration::from_secs(300), error, BackendLiveness::Up);
+        assert!(up.contains("still answers /actuator/health"), "{up}");
+        assert!(up.contains("'agent status t1'"), "{up}");
+
+        // The case that matters: a dead backend must never be described as "may still be
+        // running" — that is the instruction that wasted a whole sample.
+        let down = give_up_message("t1", Duration::from_secs(300), error, BackendLiveness::Down);
+        assert!(down.contains("not serving any more"), "{down}");
+        assert!(down.contains("cannot outlive it"), "{down}");
+        assert!(!down.contains("may still be running"), "{down}");
+
+        // A probe that proved nothing keeps the old, careful wording.
+        let unknown = give_up_message("t1", Duration::from_secs(300), error, BackendLiveness::Unknown);
+        assert!(unknown.contains("may still be running"), "{unknown}");
+        assert!(unknown.contains("300s"), "{unknown}");
+        assert!(unknown.contains(error), "the original error must survive: {unknown}");
+    }
+
+    #[tokio::test]
+    async fn the_liveness_probe_separates_a_live_server_from_a_dead_one() {
+        let client = Client::builder().build().expect("client");
+
+        let up = HttpStub::start(vec![("/actuator/health", 200, r#"{"status":"UP"}"#)]);
+        assert_eq!(
+            probe_backend_liveness(&client, &up.base_url).await,
+            BackendLiveness::Up
+        );
+
+        // A starting Spring context answers 503 — still proves a process owns the port.
+        let starting = HttpStub::start(vec![("/actuator/health", 503, r#"{"status":"DOWN"}"#)]);
+        assert_eq!(
+            probe_backend_liveness(&client, &starting.base_url).await,
+            BackendLiveness::Up,
+            "an HTTP answer of any status means something is listening"
+        );
+
+        assert_eq!(
+            probe_backend_liveness(&client, &dead_base_url()).await,
+            BackendLiveness::Down
+        );
+    }
+
+    #[tokio::test]
+    async fn an_expired_window_reports_a_live_backend_as_live() {
+        let stub = HttpStub::start(vec![("/api/commands/t1/events", 500, "boom")]);
+        let client = Client::builder().build().expect("client");
+        let mut follower = TaskFollower::new("t1", false, false, true);
+        follower.first_failure = Some(Instant::now() - TRANSIENT_FAILURE_WINDOW);
+
+        let error = match follower.poll(&client, &stub.base_url).await {
+            Err(error) => error,
+            Ok(_) => panic!("an expired window must surface the failure"),
+        };
+        // /actuator/health is unscripted, so it answers 404 — still a live port.
+        assert!(error.contains("still answers /actuator/health"), "{error}");
+        assert!(!error.contains("not serving any more"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn an_expired_window_reports_a_dead_backend_as_dead() {
+        let client = Client::builder().build().expect("client");
+        let mut follower = TaskFollower::new("t1", false, false, true);
+        follower.first_failure = Some(Instant::now() - TRANSIENT_FAILURE_WINDOW);
+
+        let error = match follower.poll(&client, &dead_base_url()).await {
+            Err(error) => error,
+            Ok(_) => panic!("an expired window must surface the failure"),
+        };
+        assert!(error.contains("not serving any more"), "{error}");
+        assert!(
+            !error.contains("may still be running"),
+            "a dead backend must not be reported as alive: {error}"
+        );
     }
 
     #[tokio::test]

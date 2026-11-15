@@ -1,0 +1,1 @@
+Open https://browser4.io and summarize the hero section in two sentences. Then locate the link to the documentation, open it, and list the titles of the first three sections you land on. Report what you found.

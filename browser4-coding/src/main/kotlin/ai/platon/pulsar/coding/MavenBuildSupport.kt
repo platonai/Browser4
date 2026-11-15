@@ -77,6 +77,15 @@ data class BuildResult(
 class MavenBuildSupport(
     private val cache: BuildCache = BuildCache.shared,
     /**
+     * Single-flight and speculative coordination (plan C1).
+     *
+     * Shared by every tool-side instance so two callers cannot compile the same workspace
+     * into the same `target/` directories at once. The speculative half (starting a build
+     * before the model asks for it) is opt-in; the single-flight half is always on, because
+     * it prevents corruption rather than saving time.
+     */
+    private val speculative: SpeculativeBuild = SpeculativeBuild.shared,
+    /**
      * Test seam: executes one formatted Maven command line.
      *
      * `null` (the production path) runs it through [CodingAgentShell.executeRaw]. The
@@ -93,6 +102,36 @@ class MavenBuildSupport(
             val isWindows = System.getProperty("os.name").lowercase().contains("win")
             return if (isWindows) listOf("mvnw.cmd", "mvnw.bat", "mvnw") else listOf("mvnw")
         }
+
+        /**
+         * Timeout for a speculative build (plan C1).
+         *
+         * Shorter than the on-demand default: nobody is waiting for it, and a build that
+         * has not finished in this long would have been asked for explicitly anyway. It
+         * also bounds how long a cancelled-but-wedged Maven can hold the workspace.
+         */
+        const val SPECULATIVE_TIMEOUT_SECONDS = 180L
+
+        /**
+         * What each workspace last built, process-wide.
+         *
+         * A speculative compile replays the module and goals the agent actually asked for;
+         * guessing the module from an edited path is a different (harder) problem, and a
+         * wrong guess is pure waste. Process-wide rather than per instance because the
+         * caller that *triggers* a speculative build need not be the executor instance
+         * that ran the earlier one. Keyed by [BuildCache.rootKey] so two workspaces never
+         * share it.
+         *
+         * Bounded (see [BoundedBuildShapes]): a long-lived backend is pointed at many
+         * workspaces (CI, a bench harness, an operator switching
+         * `-Dbrowser4.agent.workspace`), and an unbounded map kept one entry per workspace
+         * for the life of the JVM. Evicting the oldest shape only costs a guess — the next
+         * speculative build waits until a real build names its shape again.
+         */
+        private val lastBuildRequest = BoundedBuildShapes(MAX_TRACKED_WORKSPACES)
+
+        /** Workspaces whose last build shape is remembered; see [lastBuildRequest]. */
+        const val MAX_TRACKED_WORKSPACES = 64
 
         /**
          * Locate the Maven launcher and return an **absolute** path when the
@@ -312,6 +351,23 @@ class MavenBuildSupport(
         }
 
         /**
+         * The `-T` value for this build, or `null` to stay single-threaded.
+         *
+         * `-Dbrowser4.agent.build.threads=1C` opts in (measured: −24 % on a cold compile of
+         * the ten-module reactor; see [mavenBuildCommand]).
+         *
+         * Restricted to compile-only builds on purpose: `test`/`verify` fan out into forked
+         * surefire JVMs and the repository documents kapt/remote-resources as not threaded,
+         * so a parallel `test` run buys seconds and risks a flaky red. The default is `1`,
+         * because the project's own `maven.config` keeps `-T` commented out.
+         */
+        fun buildThreads(goals: String, skipTests: Boolean): String? {
+            if (!isCacheableBuild(goals, skipTests)) return null
+            val threads = System.getProperty("browser4.agent.build.threads", "1").trim()
+            return threads.takeIf { it.isNotEmpty() && it != "1" }
+        }
+
+        /**
          * The fingerprint of a build invocation, or `null` when the workspace cannot be
          * hashed (an unknown/foreign shell root, or a tree too large to hash per call).
          * A `null` fingerprint bypasses the cache instead of guessing.
@@ -342,6 +398,10 @@ class MavenBuildSupport(
     /**
      * Run a Maven build for a module and return structured results.
      *
+     * Builds of one workspace are **single-flighted** (plan C1): identical inputs join the
+     * build already running, different inputs wait for it. `target/` is single-tenant, so
+     * overlapping Maven runs corrupt each other rather than just wasting CPU.
+     *
      * @param shell     the coding shell (mvn must be allowed — it is a DEV command)
      * @param module    module path, e.g. "browser4-rest" or "browser4-plugins/browser4-seo"
      * @param goals     space-separated goals, default "compile"
@@ -364,6 +424,10 @@ class MavenBuildSupport(
         // reactor entry (`browser4-core/browser4-browser`); Maven would reject it.
         val selector = resolveModuleSelector(shell, module, workingDir) ?: module
         val root = workspaceRoot(shell)
+        val workspaceKey = BuildCache.rootKey(root)
+
+        // C1: remember the shape of this build so a speculative compile can replay it.
+        lastBuildRequest.put(workspaceKey, BuildShape(selector, goalList, skipTests, launcher))
 
         // P0-1 short-circuit: a second build of unchanged inputs must not start Maven.
         // Only successful `compile` builds are cacheable; `test`/`verify` goals always run.
@@ -374,10 +438,36 @@ class MavenBuildSupport(
         }
         if (buildFingerprint != null) {
             cache.lookup(root, buildFingerprint)?.let { return it }
+            // A build of exactly these sources may already be in flight (a speculative one,
+            // or a concurrent caller's). Joining it is the whole point of the registry.
+            val threads = buildThreads(goalList, skipTests)
+            return speculative.run(workspaceKey, buildFingerprint.id) {
+                executeBuild(shell, selector, goalList, skipTests, launcher, timeoutSeconds, workingDir, root, buildFingerprint, threads)
+            }
         }
+        // Uncacheable goals (`test`, `verify`) are not joinable — their evidence is that they
+        // RAN — but they still must not overlap another build of the same workspace.
+        return speculative.run(workspaceKey, "uncacheable-${java.util.UUID.randomUUID()}") {
+            // Null threads: `buildThreads` refuses parallel goals for exactly this path.
+            executeBuild(shell, selector, goalList, skipTests, launcher, timeoutSeconds, workingDir, root, null, null)
+        }
+    }
 
+    /** The Maven invocation itself — one call, whichever caller the coordinator picked. */
+    private suspend fun executeBuild(
+        shell: CodingAgentShell,
+        selector: String,
+        goalList: String,
+        skipTests: Boolean,
+        launcher: String,
+        timeoutSeconds: Long,
+        workingDir: String?,
+        root: Path?,
+        buildFingerprint: BuildFingerprint?,
+        threads: String?,
+    ): BuildResult {
         val result = runMavenWithSelectorFallback(shell, selector, timeoutSeconds, workingDir) { resolved ->
-            mavenBuildCommand(launcher, resolved, goalList, skipTests)
+            mavenBuildCommand(launcher, resolved, goalList, skipTests, threads)
         }
 
         val combined = listOf(result.stdout, result.stderr)
@@ -396,6 +486,52 @@ class MavenBuildSupport(
         if (buildFingerprint != null) cache.put(root, buildFingerprint, buildResult)
         return buildResult
     }
+
+    /**
+     * Compile the workspace's last-built module **before** the model asks for it (plan C1).
+     *
+     * The window this fills is the model round-trip: after an edit the agent spends seconds
+     * waiting for the provider, and the build it usually asks for next can run there. A
+     * correct guess turns the later `coding.mvnBuild` into `cached`; a wrong one costs CPU
+     * only, because [BuildCache] keys on content and a write invalidates it.
+     *
+     * Deliberately not `suspend`: call sites are write paths that must not block on a build.
+     *
+     * @return true when a build was actually started.
+     */
+    fun scheduleSpeculativeBuild(shell: CodingAgentShell, workingDir: String? = null): Boolean {
+        if (!speculative.enabled || !cache.enabled) return false
+        val root = workspaceRoot(shell) ?: return false
+        val workspaceKey = BuildCache.rootKey(root)
+        val request = lastBuildRequest.get(workspaceKey) ?: return false
+        if (!isCacheableBuild(request.goals, request.skipTests)) return false
+        if (speculative.inFlight(workspaceKey)) return false
+        val buildFingerprint = fingerprint(root, request.module, request.goals, request.skipTests, request.launcher)
+            ?: return false
+        // Nothing to win when the answer is already cached.
+        if (cache.lookup(root, buildFingerprint) != null) return false
+        return speculative.schedule(workspaceKey, buildFingerprint.id) {
+            executeBuild(
+                shell, request.module, request.goals, request.skipTests, request.launcher,
+                SPECULATIVE_TIMEOUT_SECONDS, workingDir, root, buildFingerprint,
+                buildThreads(request.goals, request.skipTests),
+            )
+        }
+    }
+
+    /**
+     * Drop the speculative build of this workspace: a write changed the sources it compiles.
+     *
+     * Pairs with `BuildCache.invalidate` at the same write point — the cache entry and the
+     * in-flight build describe the same tree, so they must be dropped together.
+     */
+    fun cancelSpeculativeBuild(root: Path?) {
+        if (root == null) return
+        speculative.cancel(BuildCache.rootKey(root))
+    }
+
+    /** Counters for reports and the A/B (plan C1): `reused / started` decides keep-or-drop. */
+    fun speculativeStats(): SpeculativeBuild.Stats = speculative.stats()
 
     /**
      * Run the module's tests (the AGENTS.md "smallest scope" step).
@@ -621,13 +757,76 @@ internal fun mavenTestCommand(
     return "$launcher test -pl $selector -am$testArg -DskipTests=false$noSpecifiedTests -q"
 }
 
-/** The `mvn -pl <selector> -am <goals>` build command. */
+/**
+ * The `mvn -pl <selector> -am <goals>` build command.
+ *
+ * @param threads `-T` value (`1C`, `4`, …), or `null` for Maven's single-threaded default.
+ *
+ *   Measured on this repository itself (20 cores, offline, `-DskipTests`): a **cold**
+ *   compile of the ten-module reactor behind `browser4-agentic` went 110.7 s → 83.9 s with
+ *   `-T 1C` (−24 %), while a warm no-op build moved 36.4 s → 32.4 s. The repository keeps
+ *   `-T 1C` commented out in `.mvn/maven.config` because kapt and remote-resources are not
+ *   threaded, so this stays **off by default** and is only applied to compile-only builds —
+ *   the ones whose output P0-1 already treats as a pure function of the sources.
+ */
 internal fun mavenBuildCommand(
     launcher: String,
     selector: String,
     goals: String,
     skipTests: Boolean,
+    threads: String? = null,
 ): String {
     val skipFlag = if (skipTests) " -DskipTests" else ""
-    return "$launcher -pl $selector -am $goals$skipFlag -q"
+    val threadsFlag = threads?.takeIf { it.isNotBlank() }?.let { " -T $it" } ?: ""
+    return "$launcher$threadsFlag -pl $selector -am $goals$skipFlag -q"
+}
+
+/**
+ * The shape of one workspace's last build (plan C1): exactly what a speculative build
+ * replays so that it lands on the same `BuildCache` key the agent will ask for.
+ */
+internal data class BuildShape(
+    val module: String,
+    val goals: String,
+    val skipTests: Boolean,
+    val launcher: String,
+)
+
+/**
+ * The last build shape per workspace, least-recently-used first out.
+ *
+ * Bounded because the keys are workspace roots and nothing else limits them: a backend
+ * that serves many workspaces (CI, a bench harness, an operator switching
+ * `-Dbrowser4.agent.workspace`) used to keep one entry per workspace for the life of the
+ * JVM. Eviction is cheap to get wrong in only one direction — losing a shape means the
+ * next speculative build does not fire until a real build names its shape again, which is
+ * exactly the pre-C1 behaviour.
+ *
+ * Access-ordered on purpose: a workspace that keeps being built (the intended case) stays.
+ */
+internal class BoundedBuildShapes(private val capacity: Int = 64) {
+
+    init {
+        require(capacity > 0) { "capacity must be positive" }
+    }
+
+    private val entries = java.util.LinkedHashMap<String, BuildShape>(16, 0.75f, true)
+
+    @Synchronized
+    fun put(workspaceKey: String, shape: BuildShape) {
+        entries[workspaceKey] = shape
+        while (entries.size > capacity) {
+            val oldest = entries.keys.iterator()
+            if (!oldest.hasNext()) break
+            oldest.next()
+            oldest.remove()
+        }
+    }
+
+    @Synchronized
+    fun get(workspaceKey: String): BuildShape? = entries[workspaceKey]
+
+    /** How many workspaces are remembered — test seam for the bound. */
+    @Synchronized
+    fun size(): Int = entries.size
 }

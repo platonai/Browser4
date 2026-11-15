@@ -301,6 +301,14 @@ class CodingAgentFileSystem(
     /** Snapshot of the mutation log, oldest first. */
     fun mutationsSnapshot(): List<FileMutation> = mutationLog.toList()
 
+    /**
+     * How many mutations this task has recorded — the cheap "did anything change" probe.
+     *
+     * Plan C1 uses it so a trigger that runs on every model round (a speculative build)
+     * does not re-hash the whole source tree when nothing was written since its last look.
+     */
+    val mutationEpoch: Int get() = mutationCount.get()
+
     /** Reset the log (a new task started). */
     fun clearMutations() {
         mutationLog.clear()
@@ -391,6 +399,13 @@ class CodingAgentFileSystem(
         // "the run modified 23 file(s) the report does not list: .b4scratch/outline.py, …"
         // right after coding.verify passed).
         if (isNonDeliverableMutationPath(normalized)) return
+        // C1: a write makes any build started ahead of the request compile the tree this
+        // write just changed. Cancel it at the same funnel that drops the build cache, so
+        // the speculative build and the cache entry can never disagree about the sources.
+        if (root != null && absolute.startsWith(root)) {
+            runCatching { SpeculativeBuild.shared.cancel(BuildCache.rootKey(workspaceRoot)) }
+                .onFailure { logger.debug("recordMutation: could not cancel the speculative build", it) }
+        }
         mutationLog.addLast(FileMutation(op, normalized, ok))
         if (mutationCount.incrementAndGet() > MAX_MUTATION_LOG) {
             mutationLog.pollFirst()

@@ -482,16 +482,15 @@ fn render_sections(
         section(&mut lines, &format!("Links ({})", links.len()), body, options);
     }
 
-    // Plan N3: the run's own attribution — where the wall clock went. One line, because
-    // it is a diagnosis and not a deliverable; `--json` carries the whole object.
+    // Plan N3 + B2: the run's own attribution — where the wall clock went. One line for the
+    // loop's buckets, one for the phases around it; `--json` carries the whole object.
     if let Some(Value::Object(timings)) = result.get("timings") {
-        if let Some(line) = timings_line(timings) {
-            section(
-                &mut lines,
-                "Timings",
-                vec![options.clip(&line, options.width)],
-                options,
-            );
+        if let Some(body) = timings_lines(timings) {
+            let body: Vec<String> = body
+                .iter()
+                .map(|line| options.clip(line, options.width))
+                .collect();
+            section(&mut lines, "Timings", body, options);
         }
     }
 
@@ -570,12 +569,15 @@ fn is_known_key(key: &str) -> bool {
     RESULT_KEYS.iter().any(|known| *known == key) || ENVELOPE_KEYS.iter().any(|known| *known == key)
 }
 
-/// One-line rendering of the backend's `timings` object (plan N3).
+/// Rendering of the backend's `timings` object (plans N3 + B2): one line for what the tool
+/// loop measured, an optional second line for the phases around it.
 ///
 /// Example: `3 rounds · model 4.8s · tools 170ms · callbacks 54ms · tokens 555 out /
-/// 12.8k cached in`. Zero buckets are omitted, so a read-only run does not claim a build
-/// time and a run that reported no usage does not claim tokens.
-fn timings_line(timings: &serde_json::Map<String, Value>) -> Option<String> {
+/// 12.8k cached in` followed by `setup 3.2s (isolation 2.8s) · merge 120ms · finalize
+/// 45ms`. Zero buckets and zero phases are omitted, so a read-only run does not claim a
+/// build time, a run that reported no usage does not claim tokens, and a run with no
+/// worktree does not claim an isolation time.
+fn timings_lines(timings: &serde_json::Map<String, Value>) -> Option<Vec<String>> {
     let number = |key: &str| timings.get(key).and_then(|value| value.as_u64());
     let mut parts: Vec<String> = Vec::new();
     if let Some(rounds) = number("rounds") {
@@ -599,6 +601,42 @@ fn timings_line(timings: &serde_json::Map<String, Value>) -> Option<String> {
             _ => {}
         }
     }
+    // Plan B2: the phases *around* the tool loop. The buckets above answer "where did the
+    // loop spend its time"; these answer "what happened outside it" — worktree creation,
+    // the isolation merge, the manifest/result writes. That residue was 9% of the wall
+    // clock on the measured tasks and had no name, which made "how much of a task is
+    // waiting?" unanswerable.
+    //
+    // They go on their OWN line: appended to the bucket line they pushed the token summary
+    // past the width and got it clipped away (the renderer test caught it).
+    // `isolation` is a share of `setup`, so it rides in parentheses; `runOverheadMs` stays
+    // JSON-only, being a planner's number rather than part of a one-line diagnosis.
+    let mut phase_parts: Vec<String> = Vec::new();
+    if let Some(Value::Object(phases)) = timings.get("phases") {
+        let phase = |key: &str| phases.get(key).and_then(|value| value.as_u64()).unwrap_or(0);
+        let duration = |ms: u64| crate::state::format_duration_ms(ms as i64);
+        for (label, key) in [
+            ("setup", "setupMs"),
+            ("merge", "mergeMs"),
+            ("finalize", "finalizeMs"),
+        ] {
+            let ms = phase(key);
+            if ms == 0 {
+                continue;
+            }
+            let isolation = phase("isolationMs");
+            if key == "setupMs" && isolation > 0 {
+                phase_parts.push(format!(
+                    "{label} {} (isolation {})",
+                    duration(ms),
+                    duration(isolation)
+                ));
+            } else {
+                phase_parts.push(format!("{label} {}", duration(ms)));
+            }
+        }
+    }
+
     if let Some(Value::Object(tokens)) = timings.get("tokens") {
         let count = |key: &str| tokens.get(key).and_then(|value| value.as_u64()).unwrap_or(0);
         let output = count("out");
@@ -618,10 +656,17 @@ fn timings_line(timings: &serde_json::Map<String, Value>) -> Option<String> {
             parts.push(format!("tokens {}", token_parts.join(" / ")));
         }
     }
-    if parts.is_empty() {
+    let mut rendered: Vec<String> = Vec::new();
+    if !parts.is_empty() {
+        rendered.push(format!("  {}", parts.join(" · ")));
+    }
+    if !phase_parts.is_empty() {
+        rendered.push(format!("  {}", phase_parts.join(" · ")));
+    }
+    if rendered.is_empty() {
         None
     } else {
-        Some(format!("  {}", parts.join(" · ")))
+        Some(rendered)
     }
 }
 
@@ -925,7 +970,16 @@ mod tests {
                     "toolMs": 171,
                     "callbackMs": 54,
                     "modelMs": 4814,
-                    "tokens": { "in": 12800, "cachedIn": 12000, "out": 555 }
+                    "tokens": { "in": 12800, "cachedIn": 12000, "out": 555 },
+                    "phases": {
+                        "wallMs": 9100,
+                        "setupMs": 3200,
+                        "isolationMs": 2800,
+                        "runMs": 5039,
+                        "mergeMs": 120,
+                        "finalizeMs": 45
+                    },
+                    "runOverheadMs": 730
                 }
             }
         })
@@ -938,6 +992,13 @@ mod tests {
         assert!(text.contains("model 4.8s"), "{text}");
         assert!(text.contains("tools 171ms"), "{text}");
         assert!(text.contains("callbacks 54ms"), "{text}");
+        // B2: the time around the loop, with the worktree work shown as a share of setup.
+        assert!(text.contains("setup 3.2s (isolation 2.8s)"), "{text}");
+        assert!(text.contains("merge 120ms"), "{text}");
+        assert!(text.contains("finalize 45ms"), "{text}");
+        // `runOverheadMs` is a planner's number, JSON-only: a one-line diagnosis that lists
+        // it invites reading it as a bucket that is not there.
+        assert!(!text.contains("overhead"), "{text}");
         // A read-only run must not claim a build time ...
         assert!(!text.contains("build "), "{text}");
         assert!(text.contains("12.8k in"), "{text}");
@@ -945,6 +1006,42 @@ mod tests {
         assert!(text.contains("555 out"), "{text}");
         // ... and the timings object must not be dumped as an unknown field.
         assert!(!text.contains("Other fields"), "{text}");
+    }
+
+    /// A run that failed during setup measured no round and no tool — the phases are then
+    /// the *only* attribution there is, so the section must still appear. Before B2 this
+    /// task printed nothing about time at all.
+    #[test]
+    fn a_run_with_only_phases_still_reports_timings() {
+        let body = json!({
+            "taskId": "task-3",
+            "status": "failed",
+            "statusCode": 500,
+            "result": {
+                "summary": "The worktree could not be created.",
+                "timings": {
+                    "phases": {
+                        "wallMs": 4200,
+                        "setupMs": 4200,
+                        "isolationMs": 3900,
+                        "runMs": 0,
+                        "mergeMs": 0,
+                        "finalizeMs": 0
+                    },
+                    "runOverheadMs": 0
+                }
+            }
+        })
+        .to_string();
+
+        let text = rendered(body, 120);
+
+        assert!(text.contains("Timings"), "{text}");
+        assert!(text.contains("setup 4.2s (isolation 3.9s)"), "{text}");
+        // Nothing ran, so no round and no zero bucket may be invented.
+        assert!(!text.contains("0 rounds"), "{text}");
+        assert!(!text.contains("merge "), "{text}");
+        assert!(!text.contains("finalize "), "{text}");
     }
 
     #[test]
