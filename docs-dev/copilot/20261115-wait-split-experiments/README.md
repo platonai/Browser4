@@ -14,8 +14,21 @@ No mocks.
 ```
 ab-c1/    the C1 speculative-build A/B: 5 baseline + 5 speculative, result JSON + run log each
 b1/       the B1 browser bucket split: 3 browser tasks, result JSON + run log + the task prompt each
+ab-fixture/  the throwaway two-module Maven project the A/B ran against (seed state)
 ab-run.ps1   runner for ab-c1 (arm switch, workspace reset, result extraction)
 b1-run.ps1   runner for b1
+```
+
+`ab-fixture/` is the seed the A/B workspace was created from, copied verbatim (it was a git
+repo with exactly one commit, `seed: two-module maven project`, which is the state every
+attempt was reset to). To rebuild the workspace:
+
+```powershell
+$ws = 'D:\tmp\b4-ab'
+Copy-Item -Recurse docs-dev\copilot\20261115-wait-split-experiments\ab-fixture\* $ws
+git -C $ws init; git -C $ws add -A
+git -C $ws -c user.name=ab -c user.email=ab@example.com commit -m "seed: two-module maven project"
+mvn -q -pl app -am compile   # warm the plugin downloads once, so both arms see the same cache
 ```
 
 `*-result.json` is `browser4-cli agent result <id> --json --allow-failed`, i.e. the CLI
