@@ -360,6 +360,13 @@ C1 仍值得留（它把重复构建和等待变成一次），但**验收线要
 `test`/`verify` 一律单线程：仓库自己把 `-T 1C` 注释在 `.mvn/maven.config` 里，原因就是 kapt 与
 remote-resources 不是线程安全的；并行 `mvn test` 省几秒却可能换来一个假红。
 
+**这条命令本身验证过**（2026-11-15，开关的真实风险是"kapt 被拖进并行"，不是参数拼错）：
+`MavenBuildSupport.buildThreads("compile", skipTests=true)` 生成的就是
+`mvnw -T 1C -pl <module> -am compile -DskipTests -q`，直接跑——
+单模块 reactor（`-pl browser4-coding -am`）10.7 s、**12 模块 reactor**（`-pl browser4-agent-tools -am`，
+含 kapt）**48.5 s**，两次都 exit 0。这证明参数位置与 compile-only 的并行路径可用；
+但它只是"跑通一次"，不构成 kapt 线程安全的证明，所以默认值仍然是关。
+
 ## 11. C1 的 A/B 实测（2026-11-15）
 
 **口径**：真实后端（`b4w.ps1` 从源码构建的 bundle）+ 真实模型（DeepSeek）+ 真实 Maven。
@@ -450,6 +457,11 @@ pwsh ./b4w.ps1 agent result <taskId> --json | jq '.output.raw | fromjson | .resu
 
 **一个坑**：后端 java 进程会继承调用者的 stdout 句柄，脚本连续跑多次会在第一次的管道上死等；
 跑批脚本每次结束时停掉后端（下一次重新起 JVM，顺带完成臂切换）。
+
+**原始样本与跑批脚本已入库**：
+[20261115-wait-split-experiments/](20261115-wait-split-experiments/README.md) —— §11 与 §12 的
+10 + 3 组 `result.json` / `run.log`、三个任务 prompt、两个 runner 脚本，以及复现命令和那四个坑。
+表里的数字都能从这些文件重算。
 
 ## 12. B1 实测：浏览器任务的四桶（2026-11-15）
 

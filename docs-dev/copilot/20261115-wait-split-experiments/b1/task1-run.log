@@ -1,0 +1,85 @@
+Backend sources are newer than the runtime bundle; the next backend command rebuilds it automatically (a few minutes).
+Starting Browser4 dev server for workspace 'Browser4-4.16' on port 8283 (first launch ~10s for JVM + Spring Boot; subsequent starts faster)...
+  workspace: D:\workspace\Browser4\Browser4-4.16
+  app data:  C:\Users\pereg\.browser4\workspaces\Browser4-4.16-02e52167\app-data (isolated browser profiles, data and memory)
+
+⚠  the checked-out sources are newer than the existing local Browser4 runtime bundle.
+⚠  Rebuilding from source before starting, so dev mode cannot serve a backend older than the checked-out code.
+⚠  Bundled backend version: 4.16.8-SNAPSHOT (jars built 2026-11-15 17:44:54 +08:00); checked-out version: 4.16.8-SNAPSHOT.
+Building local Browser4 runtime bundle from D:\workspace\Browser4\Browser4-4.16\browser4-apps\browser4-bundle ...
+Building the Browser4 runtime bundle with JDK D:\Program Files\Java\graalvm-jdk-25.0.3+9.1.
+Assembling Browser4 runtime bundle from D:\workspace\Browser4\Browser4-4.16\browser4-apps\browser4-bundle ...
+Local Browser4 runtime bundle built successfully at D:\workspace\Browser4\Browser4-4.16\browser4-apps\browser4-bundle\target\runtime-bundle.
+Training JVM AOT cache in the background (one-time, only on first launch) ...
+AOT cache training started in the background (log: C:\Users\pereg\.browser4\workspaces\Browser4-4.16-02e52167\aot-cache\fc04752959f49fe6e9b3023d6c3928e42748d61c435ba6d90f7cd26f8eee9f97\training.log) — the server starts without AOT acceleration until training completes
+  Starting server... (JVM loading, waiting for the TCP port; progress is not animated on non-interactive output)
+Server ready in 11.0s
+Task submitted: f4a68a7e-b6f6-4101-8da5-3c1bd05af02a (no session — a session-less task)
+[00:00] ▶ Open https://example.com and report the page heading and the first paragraph of the page. Then tell me the final URL the…
+[00:00] budget 7,168 / 5.00M (0%) · cache 4,224 (37%) · 1 requests
+[00:00] #1 b4_run(args="open --headless https://example.com")
+[00:07]   ↳ #1 b4_run ok in 8.4s
+[00:08] #2 b4_run(args="htmlsnapshot get text 'h1' --stdout")
+[00:08]   ↳ #2 b4_run failed after 500ms: b4.run [fail] failed: CLI exited with code 2 b4.run [fail] CLI exited with code 2 stderr: error: unknown option --stdout for 'htmlsnapshot get'. Supported options: --page, --page-size, --all, --expires (-expires), --absolute Run `browser4-c…
+[00:08] #3 b4_run(args="htmlsnapshot get text 'p' --stdout")
+[00:09]   ↳ #3 b4_run failed after 494ms: b4.run [fail] failed: CLI exited with code 2 b4.run [fail] CLI exited with code 2 stderr: error: unknown option --stdout for 'htmlsnapshot get'. Supported options: --page, --page-size, --all, --expires (-expires), --absolute Run `browser4-c…
+[00:10] #4 b4_run(args="htmlsnapshot get text 'h1'")
+[00:17]   ↳ #4 b4_run ok in 7.4s
+[00:17] #5 b4_run(args="htmlsnapshot get text 'p'")
+[00:20] budget 8,327 / 5.00M (0%) · cache 39.3k (83%) · 4 requests
+[00:20] #6 b4_run(args="htmlsnapshot get all text 'h1, h2, p, div'")
+[00:21] #7 b4_run(args="eval --json 'document.title + ' | ' + location.href + ' | ' …")
+[00:22] #8 b4_run(args="eval --json 'Array.from(document.body.children).map(e=>e.tag…")
+[00:24] #9 b4_run(args="eval 'JSON.stringify(Array.from(document.body.querySelectorA…")
+[00:27] #10 b4_run({"args":"eval \"JSON.stringify({title:document.title,url:location.href,headings:Array.from(document.querySelectorAll('h1…)
+[00:28] #11 b4_run(args="screenshot --path .b4scratch/example.png")
+[00:28]   ↳ #11 b4_run failed after 512ms: b4.run [fail] failed: CLI exited with code 2 b4.run [fail] CLI exited with code 2 stderr: error: unknown option --path for 'screenshot'. Supported options: --filename (-o), --full-page, --viewport (-v) Run `browser4-cli --help screenshot` f…
+[00:29] #12 b4_run(args="screenshot --filename .b4scratch/example.png")
+[00:31] #13 b4_run(args="snapshot -v 0 --stdout")
+[00:34] budget 11.7k / 5.00M (0%) · cache 120.7k (92%) · 10 requests
+[00:34] #14 b4_run(args="eval 'JSON.stringify(Array.from(document.querySelectorAll('p…")
+[00:38] #15 system_taskComplete({"summary":"Opened https://example.com headlessly and read the live DOM (eval + accessibility snapshot + htmlsnapshot).\…)
+[00:40]   ⋯ Done — here's what the live page shows: **Heading:** The page has **no heading element
+            at all** (`h1/h2/h3/header` count = 0, verified via DOM query, AX snapshot and
+            `htmlsnapshot`). The heading-equiv…
+✔ Agent completed in 41.0s · f4a68a7e-b6f6-4101-8da5-3c1bd05af02a · 1 round(s) · 15 tool(s) · 165.4k tokens · cache 93%
+
+Summary
+  Opened https://example.com headlessly and read the live DOM (eval + accessibility snapshot +
+  htmlsnapshot).
+
+  Heading: the page has NO heading element at all
+  (document.querySelectorAll('h1,h2,h3,header').length === 0). The heading-equivalent is the
+  document title: **"Example Domain"**.
+
+  First paragraph (first <p> in DOM order, exactly as served):
+  "该域名仅用于文档示例，无需获得许可。这并非一项服务，请勿将其用于测试和监控目的。" (Chinese — the page is a multilingual variant of
+  example.com that lists the same notice in 6 languages; the English one, "This domain is for use in
+  documentation examples without needing permission. This is not a service; avoid relying on it for
+  testing and monitoring purposes.", is the 2nd paragraph.)
+
+  Final URL: **https://example.com/** (page added the trailing slash to the requested address;
+  document.title = "Example Domain").
+
+Key findings (6)
+  • Final URL after load: https://example.com/ (trailing slash appended by the server/page)
+  • Page title: Example Domain
+  • No <h1>/<h2>/<h3>/<header> exists on the page — the current example.com variant uses the
+    document title as its heading and renders only paragraphs + an SVG logo + a 'Learn more' link
+  • First <p>: 该域名仅用于文档示例，无需获得许可。这并非一项服务，请勿将其用于测试和监控目的。
+  • The page carries the same notice in 6 languages (zh, en, ar, fr, ru, es); lang attribute is 'en'
+    though the first paragraph is Chinese — that is the page's own content order, not a localization
+    interstitial
+  • htmlsnapshot get does not accept --stdout (only --page/--page-size/--all/--expires/--absolute);
+    screenshot uses --filename/-o, not --path
+
+Workspace
+  C:\Users\pereg\.browser4\workspaces\Browser4-4.16-02e52167\app-data\agent\2026\11\15\58565996-333c…
+
+Problems (1)
+  ⚠ The page has no heading element, so 'the page heading' was reported as the document title
+    ('Example Domain') — headingsCount = 0 verified three ways
+
+Timings
+  12 rounds · model 19.7s · tools 22.7s · callbacks 91ms · tokens 163.0k in / 152.3k cached in / 2.4…
+  setup 106ms · finalize 40ms
