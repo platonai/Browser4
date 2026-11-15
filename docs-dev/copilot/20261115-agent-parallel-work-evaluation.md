@@ -584,9 +584,24 @@ T2 有 5 次带耗时的 `b4_run` 合计 34.7 s（占该任务 tool 桶 52 s 的
 B1 的 45 次 `b4_run` 里有多少落在子集会随任务而变（`open`/`goto`/`click`/`tab list`/`snapshot -v 0`
 都是），`eval --json "…"` 那种不会。
 
+**落地后真跑了一次**（同一句 prompt、同一个页面，样本见
+[20261115-wait-split-experiments/b1/task4-after-shell-bypass-*](20261115-wait-split-experiments/b1/)）：
+bundle 确实按新源码重建了（日志里有 `Rebuilding from source`），结果 `tool=16.2 s / 40.8%`、
+墙钟 40.9 s。但**这个对比不能用来证明省了多少**：模型这次只用了 8 次 `b4_run`（上次 14 次），
+计划不同；按调用平均反而更高（1.62 → 2.02 s），因为剩下的调用更重。
+
+把两次真实调用的**命令行分类**才是有用的数：落在"直连子集"里的只有 T1 4/14、T4 3/8
+（约 30–40%）——其余绝大多数是 `eval --json "…"`，带引号，必须走外壳。
+所以这条改动的实际收益是**每任务 ~0.6–0.8 s**（3–4 次 × 199 ms），不是"每个动作 −200 ms"。
+要吃到剩下那 60–70%，得让带 payload 的命令不必经过命令行（`--stdin` / `--file`），
+而 `b4_run` 目前把 stdin 关掉了（历史上为了不让读 stdin 的命令挂死）——那是另一件事，没有做。
+
 验证：`CliProcessManagerTest` 14/14（新增 3 例：简单命令行解析到二进制本身、10 种 shell 语法仍走外壳、
-子集拒绝项逐条）、`B4CliToolExecutorTest` 13/13、`browser4-agentic` **1775 例全绿**。
-**没有**做的：跨标签页/批量（候选 2）、dev 模式 256 ms 的定位（候选 3）。
+子集拒绝项逐条）、`B4CliToolExecutorTest` 13/13、`browser4-agentic` **1775 例全绿**；
+按 PR 门禁的排除项（`-Dsurefire.excludedGroups=ManualOnly,RequiresAI,E2E,…,Slow,Heavy,…`）
+跑 `browser4-coding,browser4-agentic,browser4-agent-tools` 三模块：**BUILD SUCCESS**，
+本次新增的测试类都在里面执行了。
+**没有**做的：跨标签页/批量（候选 2）、dev 模式 256 ms 的定位（候选 3）、带 payload 命令的 stdin 化。
 
 ## 附录：本文引用的数据
 

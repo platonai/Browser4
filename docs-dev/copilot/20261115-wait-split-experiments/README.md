@@ -13,7 +13,9 @@ No mocks.
 
 ```
 ab-c1/    the C1 speculative-build A/B: 5 baseline + 5 speculative, result JSON + run log each
-b1/       the B1 browser bucket split: 3 browser tasks, result JSON + run log + the task prompt each
+b1/       the B1 browser bucket split: 3 browser tasks, result JSON + run log + the task prompt each,
+          plus task4-after-shell-bypass-* (the same task re-run to check a later change; see the
+          evaluation §12.7 for why its wall clock is NOT a before/after comparison)
 ab-fixture/  the throwaway two-module Maven project the A/B ran against (seed state)
 ab-run.ps1   runner for ab-c1 (arm switch, workspace reset, result extraction)
 b1-run.ps1   runner for b1
