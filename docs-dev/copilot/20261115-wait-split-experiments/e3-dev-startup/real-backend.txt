@@ -1,0 +1,82 @@
+# Real-backend samples (2026-11-15, bundle rebuilt from this checkout)
+
+Everything above (`before.txt`, `after.txt`) is the CLI measured on its own. These
+samples are the other half: a **real backend built from the same sources**
+(`b4w.ps1 -Rebuild`, `Browser4 4.16.8-SNAPSHOT`), a real page
+(`https://example.com`), and the CLI talking to it, so the `[timing]` line can be
+checked against what actually happened.
+
+Environment: `BROWSER4_CLI_TIMING=1`, CLI invoked directly
+(`cli/browser4-cli/target/debug/browser4-cli.exe`) so the wrapper is not part of
+the measurement; development port 8283.
+
+## The wrapper's build and server start land in `startup`
+
+The first command of the session ran inside `b4w.ps1 -Rebuild goto https://example.com`.
+Its `[timing]` line is:
+
+```
+[timing] startup=719354ms http=7465ms server=7176ms net=289ms calls=8 total=726809ms
+```
+
+That is 12 minutes of Maven rebuild plus the ~12 s JVM start, counted before the
+first tool request — which is exactly what `startup` means ("everything from
+process start to the first backend request"). Not an artifact to filter out:
+a caller that starts the backend pays it, and the metric says so. The same line
+also proves the `X-Browser4-Duration-Ms` header on 8 real calls
+(`server=7176ms` of `http=7465ms`).
+
+## The `eval` split, once the backend and page are warm
+
+```
+eval --json "1+1"                                  : startup=24ms http=15ms server=7ms  net=8ms  calls=1 total=41ms
+eval --stdin --json <<< document.title             : startup=27ms http=12ms server=5ms  net=7ms  calls=1 total=42ms
+page-side 1.0 s wait + document.title (--await)    : startup=22ms http=1016ms server=1009ms net=7ms calls=1 total=1039ms
+page-side 1.5 s wait + document.title (--await)    : startup=23ms http=1523ms server=1514ms net=9ms  calls=1 total=1548ms
+```
+
+The page-side wait is ~98% `server`: a slow `eval` is the page, not CLI startup
+and not the network. That is the number §12.5 could not produce.
+
+## One batch process vs three invocations
+
+```
+batch --json <<< ["eval document.title","eval document.URL","eval 1+1"]
+    : startup=31ms http=42ms server=20ms net=22ms calls=3 total=79ms   (one process, three backend calls)
+same three commands as three CLI invocations
+    : 166 ms wall clock                                                (~55 ms each)
+```
+
+≈87 ms saved for three commands in a development checkout — the per-action fixed
+cost the batch removes (the page work is paid either way).
+
+## With this checkout's own backend running, the port decision costs nothing
+
+`BROWSER4_CLI_TRACE_STARTUP=1` on a warm backend shows only the registry mark,
+no TCP probe at all:
+
+```
+[startup] state=5ms
+[startup] persisted-state=6ms
+[startup] dev-mode=6ms
+[startup] port-8283-registry=6ms
+[startup] dev-port=6ms
+```
+
+`port-8283-connect` never appears: `dev_port_is_usable` found a live managed
+backend for 8283 in the registry and answered without probing. This is the
+"own backend alive" case §14.1 could not measure earlier (the 30 ms in
+`after.txt` is the no-backend case).
+
+## Reproducing
+
+```powershell
+$env:BROWSER4_CLI_TIMING = "1"
+$exe = "cli/browser4-cli/target/debug/browser4-cli.exe"
+pwsh ./b4w.ps1 -Rebuild goto https://example.com       # rebuild + start + one page
+& $exe eval --json "1+1"
+'document.title' | & $exe eval --stdin --json
+'new Promise(r => setTimeout(() => r(document.title), 1500))' | & $exe eval --stdin --await --json
+'["eval document.title","eval document.URL","eval 1+1"]' | & $exe batch --json
+pwsh ./b4w.ps1 stop
+```

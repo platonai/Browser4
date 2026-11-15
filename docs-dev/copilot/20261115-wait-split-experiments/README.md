@@ -63,7 +63,10 @@ fixture. No arm switch; the browser buckets had simply never been measured.
 **E-3/E-1/E-4 (`e3-dev-startup/`)** — no backend and no model: the fixed cost of one CLI
 invocation, measured on the CLI binary itself. `before.txt` / `after.txt` are the raw outputs
 of `e3-measure.ps1` (startup phase traces, `--version` wall clock inside vs outside the
-checkout, direct-exec vs shell, the PowerShell floor, and one real MCP round trip). No
+checkout, direct-exec vs shell, the PowerShell floor, and one real MCP round trip).
+`real-backend.txt` is the same `[timing]` line against a backend rebuilt from these sources
+and a real page: the `eval` split (`server` = the page), a batch process vs three
+invocations, and the registry-only port decision when this checkout's own backend is up. No
 `result.json` here because no agent task ran; the numbers are process-level.
 
 ## Reproducing
