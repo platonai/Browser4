@@ -85,6 +85,11 @@ class B4CliToolExecutor(
             domain = domain, method = "run",
             arguments = listOf(
                 ToolSpec.Arg("args", "String"),
+                ToolSpec.Arg(
+                    "stdin", "String", "null",
+                    "Payload for a command that reads stdin (`eval --stdin`, " +
+                        "`htmlsnapshot inspect --stdin`, `fs write --stdin`, `batch --json`).",
+                ),
                 ToolSpec.Arg("timeoutSeconds", "Long", "300"),
                 ToolSpec.Arg("workingDir", "String", "null"),
             ),
@@ -97,15 +102,22 @@ class B4CliToolExecutor(
                 "A failed command is reported as `b4.run [fail] …`: a non-zero CLI exit " +
                 "code, a JSON `\"status\":\"error\"` answer, a timeout or a cancelled job " +
                 "all count as failures, and the output plus the reason stay in the result. " +
+                "PAYLOADS GO IN `stdin`, NOT IN `args`: `b4.run(args=\"eval --stdin --json\", " +
+                "stdin=\"document.title\")`. A payload carried that way never touches the " +
+                "command line — no quoting or escaping, no PowerShell/cmd quoting bugs, and " +
+                "the command stays in the direct-execution path (an inline quoted payload " +
+                "costs a shell start, ~200 ms on Windows, and a browser task makes dozens of " +
+                "calls). Without `stdin`, a command that reads stdin sees EOF immediately, " +
+                "so `eval --stdin`/`--js` would run an empty script — pass the expression " +
+                "through `stdin`, `eval --file <path>`, or as a quoted positional argument. " +
                 "On Windows the arguments are interpreted by PowerShell " +
                 "(pwsh -EncodedCommand \"& browser4-cli ...\"), not as plain argv: they reach " +
                 "the CLI with their quoting intact, so `eval --json \"1+1\"` works, but the " +
                 "text is still PowerShell syntax — quote @file references ('@query.sql' — an " +
                 "unquoted @file is PowerShell splatting) and do not use cmd.exe syntax " +
                 "(dir /b, %VAR%). " +
-                "There is no stdin: a command that reads it (e.g. `eval --js`, the bool " +
-                "shorthand for `eval --stdin`) sees EOF, so pass the JavaScript with " +
-                "`eval --file <path>` or as a quoted positional expression instead. " +
+                "Several commands in one call: see `b4.batch`, which saves one process and one " +
+                "MCP round trip per command. " +
                 "The binary is resolved automatically (bundled / PATH / auto-install). " +
                 "Default timeout 300s (max 600s); above 30s the CLI is also given a matching " +
                 "global --timeout, so the CLI's own HTTP deadline is longer than the MCP call " +
@@ -116,6 +128,35 @@ class B4CliToolExecutor(
                 "wait with b4.wait(id=..., timeoutSeconds=...), or cancel with b4.kill(id=...). " +
                 "NOTE: 'agent run', 'agent-run', and 'act' subcommands are blocked " +
                 "to prevent nested agent spawning."
+        )
+        toolSpec["batch"] = ToolSpec(
+            domain = domain, method = "batch",
+            arguments = listOf(
+                ToolSpec.Arg(
+                    name = "commands", type = "String",
+                    description = "Commands separated by newlines, one CLI command per line " +
+                        "(same syntax as b4.run's args).",
+                ),
+                ToolSpec.Arg("bail", "Boolean", "false", "Stop at the first failing command."),
+                ToolSpec.Arg("timeoutSeconds", "Long", "300"),
+                ToolSpec.Arg("workingDir", "String", "null"),
+            ),
+            returnType = "String",
+            description = "Run SEVERAL browser4-cli commands in ONE call — the cheap way to do " +
+                "a short scripted sequence (`click`, `type`, `snapshot`, …). Each command costs a " +
+                "process start plus an MCP round trip (~0.2-0.5 s); a batch pays that once. " +
+                "Example: b4.batch(commands=\"goto https://example.com\\nsnapshot -v 0\\n" +
+                "click e12\"). Commands run in order on the client, one backend call per step; " +
+                "every step's output is returned, a failing step is reported as " +
+                "`Batch command N failed (<command>): <reason>`, the batch then continues unless " +
+                "bail=true, and the exit code is 5 when at least one step failed. " +
+                "TRADE-OFF: you get every step's output, but you cannot adapt between steps — " +
+                "a command whose arguments depend on what an earlier command returned must stay " +
+                "a separate b4.run call. A step cannot use `--stdin` (stdin carries the command " +
+                "list): put step payloads in a file (`eval --file x.js`) or quote them inline. " +
+                "The same refusals as b4.run apply, per step: lifecycle/installation commands, " +
+                "`code`/`tool call`/`plugin` under a narrowed preset, and paths outside the " +
+                "workspace are rejected before any step runs, and the message names the step."
         )
         toolSpec["status"] = ToolSpec(
             domain = domain, method = "status",
@@ -168,8 +209,14 @@ class B4CliToolExecutor(
 
         return when (functionName) {
             "run" -> {
-                validateArgs(args, allowed = setOf("args", "timeoutSeconds", "workingDir"), required = setOf("args"), functionName)
+                validateArgs(
+                    args,
+                    allowed = setOf("args", "stdin", "timeoutSeconds", "workingDir"),
+                    required = setOf("args"),
+                    functionName,
+                )
                 val cliArgs = paramString(args, "args", functionName)!!
+                val payload = paramString(args, "stdin", functionName, required = false, default = null)
                 requireAgentNotSpawned(cliArgs)
                 val shell = receiver as CodingAgentShell
                 // D4: the browser (file://) and upload are filesystem readers the coding
@@ -184,41 +231,39 @@ class B4CliToolExecutor(
                 // subprocess, which carries no preset — the backend answers with its own
                 // server-wide policy. Under a narrowed preset those routes escape the task.
                 policyRefusal(cliArgs)?.let { return it }
+                // The payload is invisible to the guards above: when the command is a
+                // batch, its steps are commands too and must pass the same checks.
+                stdinBatchRefusal(cliArgs, payload, shell)?.let { return it }
                 val timeout = paramLong(args, "timeoutSeconds", functionName, required = false, default = 300L) ?: 300L
-                // The cwd must be the workspace the coding tools are writing into, not a
-                // directory captured when this executor was built: the task runner rebinds
-                // the workspace per task, and a stale default made a relative
-                // `eval --file .b4scratch/x.js` resolve into the PREVIOUS task's workspace
-                // (2026-10-28: the model saw "not found" four times and rewrote the path
-                // instead of the binding being wrong). The receiver is the live shell.
                 val explicitWorkingDir = paramString(args, "workingDir", functionName, required = false, default = null)
-                val workingDir = explicitWorkingDir?.let { Path.of(it) } ?: shell.workspaceRoot
-                if (explicitWorkingDir != null && workingDir != shell.workspaceRoot) {
-                    logger.warn(
-                        "b4.run explicit workingDir {} differs from the task workspace {}",
-                        workingDir, shell.workspaceRoot
-                    )
-                }
-                logger.debug("b4.run cwd={} workspaceRoot={} args={}", workingDir, shell.workspaceRoot, cliArgs)
-                // Long-command job escalation (design §4.1.1): start the command
-                // as a background job; if it finishes within the yield window
-                // return the result directly, otherwise hand the model a job
-                // handle to poll/wait/kill.
-                val request = CliRunRequest(
-                    args = cliArgs,
-                    timeoutSeconds = timeout,
-                    workingDir = workingDir,
+                launch(shell, cliArgs, payload, timeout, explicitWorkingDir, "run")
+            }
+            "batch" -> {
+                validateArgs(
+                    args,
+                    allowed = setOf("commands", "bail", "timeoutSeconds", "workingDir"),
+                    required = setOf("commands"),
+                    functionName,
                 )
-                val jobId = jobRegistry.start(request, backendBaseUrl)
-                val result = jobRegistry.await(jobId, jobYieldMs)
-                if (result != null) {
-                    classifyCliResult(result, "run", workingDir)
-                } else {
-                    CliMetrics.recordJobEscalation()
-                    "[job: $jobId] Command still running after ${jobYieldMs / 1000}s. " +
-                        "Poll with b4.status(id=\"$jobId\"), wait with b4.wait(id=\"$jobId\", " +
-                        "timeoutSeconds=...), or cancel with b4.kill(id=\"$jobId\")."
+                val commands = batchCommandLines(paramString(args, "commands", functionName)!!)
+                require(commands.isNotEmpty()) {
+                    "Parameter 'commands' for batch must contain at least one command line"
                 }
+                val bail = paramBool(args, "bail", functionName, required = false, default = false) ?: false
+                val shell = receiver as CodingAgentShell
+                // Same guards as b4.run, one step at a time: a batch must not become a way
+                // to reach a command the single-command path refuses. The refusal names the
+                // step, and nothing runs when one is refused.
+                commands.forEachIndexed { index, commandLine ->
+                    batchStepRefusal(index, commandLine, shell)?.let { return it }
+                }
+                val timeout = paramLong(args, "timeoutSeconds", functionName, required = false, default = 300L) ?: 300L
+                val explicitWorkingDir = paramString(args, "workingDir", functionName, required = false, default = null)
+                val cliArgs = if (bail) "batch --json --bail" else "batch --json"
+                // E-2: the command list travels on stdin, so the command line stays the
+                // constant `batch --json` — no per-step quoting, no shell, and one process
+                // for the whole sequence.
+                launch(shell, cliArgs, commandsAsBatchJson(commands), timeout, explicitWorkingDir, "batch")
             }
             "status" -> {
                 validateArgs(args, allowed = setOf("id"), required = setOf("id"), functionName)
@@ -285,6 +330,117 @@ class B4CliToolExecutor(
     fun closeJobs() {
         jobRegistry.close()
         jobScope.cancel()
+    }
+
+    /**
+     * Resolve the working directory and run one CLI invocation with job escalation.
+     *
+     * Shared by `run` and `batch` so both get the same cwd binding, the same
+     * long-command behaviour and the same failure classification — a second copy
+     * of this logic is how the cwd note below stops being true for one of them.
+     *
+     * @param stdin payload for the child's stdin, or null to close it (EOF)
+     * @param method `run` / `batch`, used for the `b4.<method> [fail]` first line
+     */
+    private suspend fun launch(
+        shell: CodingAgentShell,
+        cliArgs: String,
+        stdin: String?,
+        timeout: Long,
+        explicitWorkingDir: String?,
+        method: String,
+    ): String {
+        // The cwd must be the workspace the coding tools are writing into, not a
+        // directory captured when this executor was built: the task runner rebinds
+        // the workspace per task, and a stale default made a relative
+        // `eval --file .b4scratch/x.js` resolve into the PREVIOUS task's workspace
+        // (2026-10-28: the model saw "not found" four times and rewrote the path
+        // instead of the binding being wrong). The receiver is the live shell.
+        val workingDir = explicitWorkingDir?.let { Path.of(it) } ?: shell.workspaceRoot
+        if (explicitWorkingDir != null && workingDir != shell.workspaceRoot) {
+            logger.warn(
+                "b4.{} explicit workingDir {} differs from the task workspace {}",
+                method, workingDir, shell.workspaceRoot
+            )
+        }
+        logger.debug(
+            "b4.{} cwd={} workspaceRoot={} args={} stdin={}",
+            method, workingDir, shell.workspaceRoot, cliArgs,
+            if (stdin == null) "none" else "${stdin.length} chars",
+        )
+        // Long-command job escalation (design §4.1.1): start the command
+        // as a background job; if it finishes within the yield window
+        // return the result directly, otherwise hand the model a job
+        // handle to poll/wait/kill.
+        val request = CliRunRequest(
+            args = cliArgs,
+            timeoutSeconds = timeout,
+            workingDir = workingDir,
+            stdin = stdin,
+        )
+        val jobId = jobRegistry.start(request, backendBaseUrl)
+        val result = jobRegistry.await(jobId, jobYieldMs)
+        return if (result != null) {
+            classifyCliResult(result, method, workingDir, timingVisible())
+        } else {
+            CliMetrics.recordJobEscalation()
+            "[job: $jobId] Command still running after ${jobYieldMs / 1000}s. " +
+                "Poll with b4.status(id=\"$jobId\"), wait with b4.wait(id=\"$jobId\", " +
+                "timeoutSeconds=...), or cancel with b4.kill(id=\"$jobId\")."
+        }
+    }
+
+    /**
+     * Show the CLI's `[timing]` line in `b4.run`/`b4.batch` output.
+     *
+     * Off by default: it is three numbers about the harness, not about the page,
+     * and it would ride along in every result. `-Dbrowser4.agent.b4.timing=true`
+     * turns it on for the run that is trying to explain a slow `eval`.
+     */
+    private fun timingVisible(): Boolean =
+        System.getProperty(B4_TIMING_PROPERTY)?.trim().equals("true", ignoreCase = true)
+
+    /**
+     * Refusal for a step of a batch — same guards as `b4.run`, naming the step.
+     *
+     * The result carries [PermissionAudit]'s own envelope, because that is what makes
+     * a refusal render as `[fail]` (`ToolOutcome.isRefusal` matches the *leading*
+     * `PERMISSION_DENIED | code=`): a batch that was refused must not look like a
+     * batch that ran. The step's own refusal text goes into `detail`, so nothing the
+     * single-command path says is lost.
+     */
+    private fun batchStepRefusal(index: Int, commandLine: String, shell: CodingAgentShell): String? {
+        val stepRefusal = runCatching { requireAgentNotSpawned(commandLine) }.exceptionOrNull()?.message
+            ?: externalPathRefusal(commandLine, shell.workspaceRoot)
+            ?: b4CliLifecycleRefusal(commandLine)
+            ?: policyRefusal(commandLine)
+            ?: return null
+        val reason = stepRefusal.lineSequence().firstOrNull { it.isNotBlank() } ?: stepRefusal
+        return PermissionAudit.format(
+            tool = "b4.batch",
+            code = PermissionAudit.CODE_COMMAND_NOT_ALLOWED,
+            detail = "command ${index + 1} ($commandLine) was refused: $reason",
+            hint = "nothing ran: fix or drop that command and re-send the batch",
+        )
+    }
+
+    /**
+     * Guard a `b4.run` whose payload is on stdin.
+     *
+     * `b4.run(args="batch --json", stdin="…")` is the same capability as
+     * `b4.batch`, so the steps it carries must pass the same checks: without this,
+     * moving a command list from `args` to `stdin` would hide `stop` or `install`
+     * from [b4CliLifecycleRefusal]. A payload that is not a command list cannot run
+     * anything (the CLI rejects it), so it is left to the CLI's own error.
+     */
+    private fun stdinBatchRefusal(cliArgs: String, payload: String?, shell: CodingAgentShell): String? {
+        if (payload == null) return null
+        if (parseB4Invocation(cliArgs)?.command != "batch") return null
+        val commands = batchPayloadCommands(payload) ?: return null
+        commands.forEachIndexed { index, commandLine ->
+            batchStepRefusal(index, commandLine, shell)?.let { return it }
+        }
+        return null
     }
 
     /**
@@ -367,6 +523,58 @@ internal fun b4FailureText(method: String, reason: String, detail: String = ""):
     if (detail.isNotBlank()) append('\n').append(detail.trim())
 }
 
+/** System property that puts the CLI's `[timing]` line into `b4.run`/`b4.batch` output. */
+internal const val B4_TIMING_PROPERTY = "browser4.agent.b4.timing"
+
+/**
+ * Split `b4.batch`'s `commands` argument into one command line per step.
+ *
+ * Newline-separated is the whole format — the model writes a short sequence, not
+ * a serialization. Empty lines are dropped, and a leading list marker (`- `, `* `,
+ * `1. `) is stripped because models routinely bullet a list they were asked to
+ * write as lines; without this, `- goto https://x` would reach the CLI and fail on
+ * an unknown command name.
+ */
+internal fun batchCommandLines(raw: String): List<String> =
+    raw.lines()
+        .map { it.trim() }
+        .map { it.replace(LEADING_LIST_MARKER, "") }
+        .filter { it.isNotEmpty() }
+
+/** `- `, `* `, `• ` or `1. ` in front of a bulleted command line. */
+private val LEADING_LIST_MARKER = Regex("""^(?:[-*•]|\d+[.)])\s+""")
+
+/** Encode [commands] as the JSON array `batch --json` reads from stdin. */
+internal fun commandsAsBatchJson(commands: List<String>): String =
+    pulsarObjectMapper().writeValueAsString(commands)
+
+/**
+ * The command lines of a `batch --json` payload, or null when [payload] is not one.
+ *
+ * Mirrors the CLI's parser (`parse_batch_json_commands`): an array whose entries are
+ * either a command string or an array of its tokens. Used to run the per-step guards
+ * on a `b4.run(args="batch --json", stdin=…)` invocation; a payload that does not
+ * parse here executes nothing in the CLI either, so it is not a guard bypass.
+ */
+internal fun batchPayloadCommands(payload: String): List<String>? {
+    val root = runCatching { pulsarObjectMapper().readTree(payload) }.getOrNull() ?: return null
+    if (!root.isArray) return null
+    val commands = mutableListOf<String>()
+    for (entry in root) {
+        when {
+            entry.isTextual -> commands += entry.asText()
+            entry.isArray -> {
+                val tokens = entry.map { it.asText() }.filter { it.isNotEmpty() }
+                if (tokens.isEmpty()) return null
+                commands += tokens.joinToString(" ")
+            }
+            else -> return null
+        }
+    }
+    return commands.ifEmpty { null }
+}
+
+
 /**
  * The failure reason of one finished CLI invocation, or null when it succeeded.
  *
@@ -416,10 +624,18 @@ internal fun cliStatusErrorMessage(stdout: String): String? {
  * @param workingDir the directory relative paths resolved against — included in the
  *   path hint, because "not found" without the lookup root is what made a live run
  *   rewrite a correct relative path four times.
+ * @param timingVisible append the CLI's `[timing]` segment line (E-4); off by default
+ *   so the harness's own numbers do not ride along in every result.
  */
-internal fun classifyCliResult(result: CliResult, method: String, workingDir: Path? = null): String {
+internal fun classifyCliResult(
+    result: CliResult,
+    method: String,
+    workingDir: Path? = null,
+    timingVisible: Boolean = false,
+): String {
+    val timing = result.timing?.takeIf { timingVisible }?.format()
     val text = result.toModelText()
-    val reason = cliFailureReason(result) ?: return text
+    val reason = cliFailureReason(result) ?: return if (timing == null) text else "$text\n$timing"
     val hints = buildList {
         if (result.timedOut) {
             add(
@@ -442,7 +658,8 @@ internal fun classifyCliResult(result: CliResult, method: String, workingDir: Pa
         if (result.aborted) add("the job was cancelled; re-running it will do the same unless the cause is fixed")
     }
     val hintLine = hints.joinToString("\n").takeIf { it.isNotBlank() }?.let { "\n[hint] $it" } ?: ""
-    return b4FailureText(method, reason, text + hintLine)
+    val timingLine = timing?.let { "\n$it" } ?: ""
+    return b4FailureText(method, reason, text + hintLine + timingLine)
 }
 
 /** True when the output reads like a path-resolution failure. */

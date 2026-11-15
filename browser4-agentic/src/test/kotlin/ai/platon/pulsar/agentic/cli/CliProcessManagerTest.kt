@@ -49,6 +49,9 @@ class CliProcessManagerTest {
         assertTrue(spec.outputBufferBytes == 1 shl 20, "default output buffer")
         assertTrue(spec.env.containsKey("BROWSER4_CLI_DISABLE_PLUGIN_WARM_RESTART"))
         assertFalse(spec.env.containsKey("DEEPSEEK_API_KEY"))
+        // E-4: every invocation asks the CLI for its `[timing]` footer. The manager
+        // strips it from stderr, so this costs the model nothing.
+        assertEquals("1", spec.env["BROWSER4_CLI_TIMING"])
 
         val capped = mgr.resolve(CliRunRequest(args = "x", timeoutSeconds = 9999))
         assertTrue(capped.timeoutMs == 600_000L, "timeout capped at max")
@@ -401,5 +404,58 @@ class CliProcessManagerTest {
         assertTrue(result.isSuccess, "result: $result")
         assertTrue(result.stdout.contains("EOF-reached"), "stdout: ${result.stdout}")
         assertTrue(elapsed < 15_000, "must not block on stdin, took ${elapsed}ms")
+    }
+
+    @Test
+    @Tag("Slow")
+    @DisplayName("a stdin payload reaches the command (E-1)")
+    fun stdinPayloadReachesTheCommand() = runBlocking {
+        // E-1: the payload rides on stdin instead of the command line, so a command
+        // whose argument is a whole script needs no quoting and no shell. The child
+        // must see the exact text, and then EOF (or it would hang to its deadline).
+        val mgr = manager()
+        val result = mgr.run(
+            CliRunRequest(
+                args = "-NoProfile -Command \"[Console]::In.ReadToEnd()\"",
+                timeoutSeconds = 30,
+                stdin = "console.log('quoted \"words\" and \\backslashes\\ survive')",
+            ),
+            backendBaseUrl = null,
+        )
+
+        assertTrue(result.isSuccess, "result: $result")
+        assertTrue(
+            result.stdout.contains("""console.log('quoted "words" and \backslashes\ survive')"""),
+            "the payload must arrive verbatim: ${result.stdout}",
+        )
+        assertTrue(result.durationMs < 15_000, "the stream must be closed, took ${result.durationMs}ms")
+    }
+
+    @Test
+    @Tag("Slow")
+    @DisplayName("the CLI's timing footer is parsed and kept out of stderr (E-4)")
+    fun timingFooterIsParsedAndStripped() = runBlocking {
+        val mgr = manager()
+        val footer = "[timing] startup=5ms http=2310ms server=2240ms net=70ms calls=2 total=2600ms"
+        val result = mgr.run(
+            CliRunRequest(
+                args = "-NoProfile -Command \"[Console]::Error.WriteLine('$footer'); Write-Output 'done'\"",
+                timeoutSeconds = 30,
+            ),
+            backendBaseUrl = null,
+        )
+
+        assertTrue(result.isSuccess, "result: $result")
+        val timing = result.timing ?: error("the footer must parse: ${result.stderr}")
+        assertEquals(5, timing.startupMs)
+        assertEquals(2310, timing.httpMs)
+        assertEquals(2240, timing.serverMs)
+        assertEquals(2, timing.calls)
+        // The launcher's share is what the CLI's own clock cannot see: the subprocess
+        // took longer than the 2.6 s the footer reports.
+        val launch = timing.launchMs ?: error("launch must be attributed when the footer reports totalMs")
+        assertTrue(launch >= 0, "launch=$launch")
+        // Instrumentation never reaches the model.
+        assertFalse(result.stderr.contains("[timing]"), "stderr must be clean: ${result.stderr}")
     }
 }

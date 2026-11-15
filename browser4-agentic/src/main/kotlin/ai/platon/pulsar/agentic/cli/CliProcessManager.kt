@@ -122,6 +122,7 @@ class CliProcessManager(
             sessionId = request.sessionId,
             taskId = request.taskId,
             env = buildWhitelistedEnv(backendBaseUrl),
+            stdin = request.stdin,
         )
     }
 
@@ -179,7 +180,13 @@ class CliProcessManager(
         // `--stdin`) hung for the full 300s on the 2026-10-29 smoke run. Node's
         // `spawn(..., { stdio: ["ignore", …] })` — what pi's shell transport uses for
         // argv commands — reads from NUL instead, so such commands see EOF at once.
-        pb.redirectInput(nullDevice())
+        //
+        // A caller that supplies a payload ([CliRunSpec.stdin]) is the exception: it
+        // wants the command to read stdin, so the pipe must stay open until the
+        // payload is written and closed (see `startStdinWriter`).
+        if (spec.stdin == null) {
+            pb.redirectInput(nullDevice())
+        }
 
         val proc = try {
             withContext(Dispatchers.IO) {
@@ -196,6 +203,7 @@ class CliProcessManager(
         val stderr = HeadTailBuffer(spec.outputBufferBytes)
         val outThread = startReader(proc.inputStream, stdout)
         val errThread = startReader(proc.errorStream, stderr)
+        spec.stdin?.let { startStdinWriter(proc, it) }
 
         val outcome: Outcome = try {
             withTimeoutOrNull(spec.timeoutMs.milliseconds) {
@@ -231,22 +239,34 @@ class CliProcessManager(
         }
         val durationMs = System.currentTimeMillis() - startMs
         val outText = stdout.text()
-        val errText = stderr.text()
+        // The CLI's per-segment `[timing]` footer is instrumentation, not output:
+        // pull it out of stderr so it never reaches the model, and keep the parsed
+        // segments on the result (E-4). The CLI's clock starts inside itself, so
+        // whatever the *launcher* spent (a shell interpreter, the process spawn) is
+        // not in its `total`; the subprocess duration makes it visible.
+        val (errText, parsedTiming) = extractCliTiming(stderr.text())
+        val timing = parsedTiming?.copy(
+            launchMs = (durationMs - parsedTiming.totalMs).coerceAtLeast(0),
+        )
+        if (timing != null) {
+            logger.debug("cli timing {} | {}", spec.commandLine, timing.format())
+        }
         CliMetrics.recordCall(
             durationMs = durationMs,
             timedOut = outcome == Outcome.TimedOut,
             truncated = outText.contains("dropped") || errText.contains("dropped"),
         )
+        timing?.let { CliMetrics.recordTiming(it) }
 
         return when (outcome) {
             is Outcome.Exited -> CliResult(
-                outcome.code, outText, errText, durationMs = durationMs
+                outcome.code, outText, errText, durationMs = durationMs, timing = timing
             )
             Outcome.TimedOut -> CliResult(
-                null, outText, errText, timedOut = true, durationMs = durationMs
+                null, outText, errText, timedOut = true, durationMs = durationMs, timing = timing
             )
             Outcome.Aborted -> CliResult(
-                null, outText, errText, aborted = true, durationMs = durationMs
+                null, outText, errText, aborted = true, durationMs = durationMs, timing = timing
             )
         }
     }
@@ -331,6 +351,29 @@ class CliProcessManager(
             if (!p.waitFor(5, TimeUnit.SECONDS)) p.destroyForcibly()
         }
     }
+
+    /**
+     * Feed [payload] to the child's stdin, then close it so the command sees EOF.
+     *
+     * Runs on its own daemon thread: the payload can be larger than the OS pipe
+     * buffer, and the child may not read stdin until after it has talked to the
+     * backend — writing inline would block the deadline loop (and the two readers
+     * are already draining the child's output, so there is no lockstep risk).
+     * A failed write is expected when the child exits first, and is not an error
+     * of the invocation itself: the exit code still decides.
+     */
+    private fun startStdinWriter(proc: Process, payload: String): Thread =
+        Thread({
+            runCatching {
+                java.io.OutputStreamWriter(proc.outputStream, StandardCharsets.UTF_8).use { writer ->
+                    writer.write(payload)
+                    writer.flush()
+                }
+            }
+        }, "cli-process-stdin").apply {
+            isDaemon = true
+            start()
+        }
 
     private fun startReader(stream: InputStream, buffer: HeadTailBuffer): Thread =
         Thread({
@@ -557,6 +600,11 @@ class CliProcessManager(
         env["GIT_PAGER"] = "cat"
         // M0: force the CLI onto the same backend and disable plugin warm restart.
         env["BROWSER4_CLI_DISABLE_PLUGIN_WARM_RESTART"] = "1"
+        // E-4: ask the CLI for its `[timing]` footer (startup / http / server / net).
+        // One stderr line per invocation: the manager strips it from the child's
+        // stderr before anything model-visible is assembled and records the
+        // segments as metrics, so a `b4.run` can be attributed without a probe run.
+        env["BROWSER4_CLI_TIMING"] = "1"
         backendBaseUrl?.let { env["BROWSER4_CLI_SERVER"] = it }
         // Extension-attach passthrough: the agent may drive `attach --extension`
         // through the b4 domain.  The local dev extension (loaded unpacked)
