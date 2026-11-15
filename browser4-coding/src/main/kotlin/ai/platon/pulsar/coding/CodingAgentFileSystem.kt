@@ -317,11 +317,13 @@ class CodingAgentFileSystem(
          *   the docs point at. Build-output `bin/` (.NET/IDE layouts) is still skipped — see
          *   [isExcludedSearchDir].
          *
-         * The agent's own bookkeeping (`.b4scratch`, `.browser4`) is excluded from *recursive*
-         * scans: `.browser4/coding-snapshots/` holds copies of edited sources (duplicate matches
-         * under a different path) and `.b4scratch/` holds generated scripts and captured dumps.
-         * Naming either as the search root still searches it, because the visitor never skips
-         * the root itself.
+         * The agent's own bookkeeping is excluded from *recursive* scans:
+         * `.browser4/coding-snapshots/` holds copies of edited sources (duplicate matches under a
+         * different path), `.b4scratch/` holds generated scripts and captured dumps, `.b4inputs/`
+         * holds the task's copied input files, `.b4build/` the previous runtime bundle kept for
+         * `b4w recover`, and `.test-sessions/`/`.build-state/` hold run artifacts. Naming any of
+         * them as the search root still searches it, because the visitor never skips the root
+         * itself.
          */
         val DEFAULT_SEARCH_EXCLUDED_DIRS: Set<String> = setOf(
             ".git", ".svn", ".hg",
@@ -331,7 +333,7 @@ class CodingAgentFileSystem(
             "__pycache__", ".venv", "venv", ".tox",
             ".next", ".nuxt", ".cache", ".parcel-cache", ".turbo", ".yarn", ".pnpm-store",
             ".pytest_cache", ".mypy_cache", ".ruff_cache",
-            ".b4scratch", ".browser4",
+            ".b4scratch", ".b4build", ".b4inputs", ".browser4", ".test-sessions", ".build-state",
         )
 
         /**

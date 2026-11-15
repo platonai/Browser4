@@ -303,12 +303,16 @@ class CodingAgentFileSystemEditsTest {
     }
 
     @Test
-    @DisplayName("grep skips dependency and agent-scratch directories by default")
+    @DisplayName("grep skips dependency and agent-bookkeeping directories by default")
     fun grepSkipsDependencyAndScratchDirs() = runBlocking {
         write("src/a.js", "needle own code\n")
         write("vendor/lib/index.js", "needle vendor\n")
         write("site-packages/pkg/mod.py", "needle dependency\n")
         write(".b4scratch/probe.js", "needle scratch\n")
+        write(".b4inputs/spec.csv", "needle copied input\n")
+        write(".b4build/bundle/manifest.txt", "needle old bundle\n")
+        write(".test-sessions/run/index.html", "needle run artifact\n")
+        write(".build-state/state.json", "needle build state\n")
 
         val result = fs().grep("needle")
 
@@ -316,6 +320,10 @@ class CodingAgentFileSystemEditsTest {
         assertFalse(result.contains("vendor"), "result: $result")
         assertFalse(result.contains("site-packages"), "result: $result")
         assertFalse(result.contains(".b4scratch"), "result: $result")
+        assertFalse(result.contains(".b4inputs"), "result: $result")
+        assertFalse(result.contains(".b4build"), "result: $result")
+        assertFalse(result.contains(".test-sessions"), "result: $result")
+        assertFalse(result.contains(".build-state"), "result: $result")
     }
 
     @Test
