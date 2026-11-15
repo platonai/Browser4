@@ -310,6 +310,60 @@ class CliProcessManagerTest {
     }
 
     @Test
+    @DisplayName("a plain command line skips the shell entirely")
+    fun plainCommandLineSkipsTheShell() {
+        // Each b4.run call paid ~200 ms for a shell on Windows (evaluation §12.4), and a
+        // browser task makes 11-20 of them. A command line with no quoting and no
+        // metacharacters has exactly one reading, so it can go straight to the binary.
+        val mgr = manager()
+        val spec = mgr.resolve(CliRunRequest(args = "open --headless https://example.com"))
+        assertEquals(spec.binaryPath.toString(), spec.shellArgv.first(), "direct exec: ${spec.shellArgv}")
+        assertEquals(
+            listOf("open", "--headless", "https://example.com"),
+            spec.shellArgv.drop(1),
+            "the argv must be the command line's own tokens: ${spec.shellArgv}",
+        )
+    }
+
+    @Test
+    @DisplayName("anything that needs shell syntax keeps the shell")
+    fun shellSyntaxKeepsTheShell() {
+        val mgr = manager()
+        listOf(
+            "eval --json \"JSON.stringify({a: 1})\"",
+            "eval --json '[...document.querySelectorAll(\"a\")]'",
+            "goto https://x && snapshot",
+            "snapshot > out.txt",
+            "snapshot | head -5",
+            "status; close",
+            "eval --js \$env:PATH",
+            "grep --pattern `code`",
+            "code write --path C:\\work\\a.kt",
+            "explain --query 中文页面",
+            "  ",
+        ).forEach { args ->
+            val spec = mgr.resolve(CliRunRequest(args = args))
+            assertTrue(
+                spec.shellArgv.first() != spec.binaryPath.toString(),
+                "args must go through a shell: '$args' -> ${spec.shellArgv}",
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("the direct-argv subset is conservative about what a shell expands")
+    fun directArgvRejectsShellSyntax() {
+        assertEquals(listOf("tab", "list"), directArgvOrNull("tab list"))
+        assertEquals(listOf("click", "e33"), directArgvOrNull("  click   e33  "), "space runs collapse")
+        assertEquals(null, directArgvOrNull("--url https://example.com/a?b=c"), "? would be a glob in sh")
+        assertEquals(null, directArgvOrNull(""), "no command line, no direct exec")
+        assertEquals(null, directArgvOrNull("\t"))
+        listOf("a|b", "a>b", "a<b", "a&&b", "a;b", "a\$b", "a`b", "a\\b", "a'b", "a\"b", "a*b", "a?b", "a~b", "a#b").forEach {
+            assertEquals(null, directArgvOrNull(it), "must keep the shell: $it")
+        }
+    }
+
+    @Test
     @Tag("Slow")
     @DisplayName("a quoted argument reaches the target program intact")
     fun quotedArgumentSurvivesTheShell() = runBlocking {

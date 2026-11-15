@@ -435,6 +435,15 @@ class CliProcessManager(
     private fun buildShellInvocation(binary: Path, args: String): Triple<String, List<String>, String> {
         val quotedBinary = quoteForShell(binary.toString())
         val commandLine = "$quotedBinary $args".trimEnd()
+        // No shell needed: the command line has no quoting, no metacharacters and no
+        // non-ASCII, so splitting it on whitespace IS what the shell would do, and nothing
+        // else about a shell is used. Starting one costs ~200 ms per call on Windows
+        // (measured, evaluation §12.4) — and a browser task makes 11-20 `b4.run` calls, so
+        // the plain subset is where that money is. Direct execution also reports the child's
+        // own exit code instead of `exit $LASTEXITCODE` through a script.
+        directArgvOrNull(args)?.let { argv ->
+            return Triple(binary.toString(), listOf(binary.toString()) + argv, commandLine)
+        }
         return if (isWindows) {
             val shell = if (pwshAvailable.get()) "pwsh" else "powershell"
             val preamble = windowsPowerShellPreamble()
@@ -719,3 +728,39 @@ internal fun encodePowerShellCommand(commandLine: String, preamble: String): Str
         .encodeToString(script.toByteArray(StandardCharsets.UTF_16LE))
     return if (encoded.length <= PWSH_ENCODED_COMMAND_LIMIT) encoded else null
 }
+
+/**
+ * The argv for a command line that needs no shell interpreter, or `null` when a shell must
+ * run it.
+ *
+ * The accepted subset is deliberately tiny — the point is to be obviously safe, not clever:
+ *
+ * - **printable ASCII only.** The PowerShell preamble exists to pin UTF-8 console I/O
+ *   (2026-10-28: a cp936 host mangled a child's UTF-8 output); taking the shell away must
+ *   not change how either side encodes anything, so anything that could need that stays put.
+ * - **no quoting.** The shell resolves quotes, and `ProcessBuilder` would re-quote for the
+ *   CRT; guessing between the two is what produced the 2026-10-29 `ParserError`.
+ * - **no character a supported shell treats specially**: double quote, single quote,
+ *   backtick, backslash, `$`, `|`, `&`, `;`, `<`, `>`, `(`, `)`, `{`, `}`, `[`, `]`, `*`,
+ *   `?`, `!`, `^`, `#`, `~`. (Backslash and `$` are escapes in sh, `#` starts a comment,
+ *   `~` expands a home directory.)
+ * - at least one token.
+ *
+ * A command line inside this subset has exactly one reasonable reading — split on whitespace
+ * — which is what a shell does with it too. Everything else (an `eval --json '{…}'`, a pipe,
+ * a redirect, a Chinese search term) keeps the shell path unchanged.
+ */
+internal fun directArgvOrNull(args: String): List<String>? {
+    val trimmed = args.trim()
+    if (trimmed.isEmpty()) return null
+    // Whitespace runs are the separator; the loop below rejects tabs/newlines outright.
+    for (ch in trimmed) {
+        if (ch.code < 0x20 || ch.code > 0x7E) return null
+        if (ch in SHELL_SPECIAL_CHARS) return null
+    }
+    return trimmed.split(' ').filter { it.isNotEmpty() }
+}
+
+/** Characters that mean "a shell has to run this" — see [directArgvOrNull]. */
+private val SHELL_SPECIAL_CHARS: Set<Char> =
+    "\"'`\\$|&;<>(){}[]*?!^#~".toSet()
