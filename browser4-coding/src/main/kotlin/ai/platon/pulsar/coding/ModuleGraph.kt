@@ -1,13 +1,16 @@
 package ai.platon.pulsar.coding
 
 /**
- * Runtime module graph for the Browser4 multi-module repository — the
- * anti-staleness answer to the static [ModuleMap] snapshot.
+ * Runtime module graph for a Maven multi-module workspace — the anti-staleness
+ * answer to the static [ModuleMap] snapshot.
  *
  * Instead of a hand-maintained module → dependents map (which drifts when the
- * module topology changes), this scans the repository's REAL pom.xml files and
- * rebuilds the graph: module path, artifactId, parent artifact, and internal
- * `<dependency>` edges (`groupId` = ai.platon.pulsar / ai.platon).
+ * module topology changes), this scans the workspace's REAL pom.xml files and
+ * rebuilds the graph: module path, artifactId, parent artifact, and the
+ * `<dependency>` edges that resolve inside the same reactor. Browser4 is the main
+ * caller, but nothing here is specific to it — the same scan answers for any
+ * workspace the coding tools are pointed at (a foreign repo has no `ai.platon`
+ * modules at all, which is exactly why the groupId is not used as a filter).
  *
  * Pure string/regex analysis of pom content — zero dependencies. Callers walk
  * the repo for pom.xml files and pass them in as (module dir → content).
@@ -31,11 +34,21 @@ object ModuleGraph {
         val dependencies: List<String>,
     )
 
-    /** A parsed pom: the module's own artifactId, its parent artifactId, internal dep artifactIds. */
+    /** A parsed pom: the module's own artifactId, its parent artifactId, and every declared dependency artifactId. */
     data class PomInfo(
         val artifactId: String,
         val parentArtifactId: String?,
-        val internalDependencies: List<String>,
+        /**
+         * Every `<dependency>` artifactId this pom declares, whatever its groupId.
+         *
+         * Deliberately unfiltered: a workspace is not always this repository. An edge only
+         * becomes real in [build] when the artifactId resolves inside the same reactor, so
+         * `org.slf4j:slf4j-api` is still dropped while a foreign repo's `demo:lib` →
+         * `demo:app` edge survives. Filtering by `ai.platon` here turned every foreign
+         * reactor into an edgeless set of nodes, and the isolation gate then refused a
+         * legitimate two-module change (evaluation §11).
+         */
+        val declaredDependencies: List<String>,
     )
 
     /** The full graph: module-path index + artifactId → module-path index. */
@@ -64,14 +77,13 @@ object ModuleGraph {
         val own = PARENT_BLOCK.replaceFirst(content, "").let { ARTIFACT_TAG.find(it)?.groupValues?.get(1) }
             ?: return null
 
-        // Internal dependencies: <dependency> blocks whose groupId is ai.platon(.pulsar),
-        // excluding dependencyManagement / build / plugin blocks (not compile edges).
+        // Declared dependencies: every <dependency> block outside dependencyManagement /
+        // build, with NO groupId filter. [build] keeps only the artifactIds that resolve
+        // inside this reactor, which is both narrower (externals still vanish) and
+        // workspace-agnostic (a foreign repo's `demo:*` edges survive).
         val depsSource = NON_EDGE_BLOCKS.fold(content) { acc, regex -> regex.replace(acc, "") }
         val deps = Regex("""<dependency>.*?</dependency>""", RegexOption.DOT_MATCHES_ALL)
             .findAll(depsSource).mapNotNull { block ->
-                val group = Regex("""<groupId>([^<]+)</groupId>""").find(block.value)?.groupValues?.get(1)
-                    ?: return@mapNotNull null
-                if (!group.startsWith("ai.platon")) return@mapNotNull null
                 Regex("""<artifactId>([^<]+)</artifactId>""").find(block.value)?.groupValues?.get(1)
             }.distinct().toList()
 
@@ -90,7 +102,7 @@ object ModuleGraph {
         val nodes = linkedMapOf<String, ModuleNode>()
         val artifactIndex = mutableMapOf<String, String>()
         infos.forEach { (path, info) ->
-            nodes[path] = ModuleNode(path, info.artifactId, listOfNotNull(info.parentArtifactId) + info.internalDependencies)
+            nodes[path] = ModuleNode(path, info.artifactId, listOfNotNull(info.parentArtifactId) + info.declaredDependencies)
             artifactIndex.putIfAbsent(info.artifactId, path)
         }
 
