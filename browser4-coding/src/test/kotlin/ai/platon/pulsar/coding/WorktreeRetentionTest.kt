@@ -19,6 +19,11 @@ import java.util.concurrent.TimeUnit
  * Worktree retention (isolation plan S4): old isolated trees are reclaimed, the
  * newest N and anything recent survive, and removal goes through `git worktree
  * remove` so git's own metadata stays consistent.
+ *
+ * The rule that protects the work: a tree is only reclaimable when its manifest
+ * proves the previous task merged. A refused/failed/crashed task leaves its files
+ * **only** there (a run that never reached a merge attempt has no patch either), so
+ * reclaiming it would delete the user's work to win some disk back.
  */
 class WorktreeRetentionTest {
 
@@ -54,14 +59,66 @@ class WorktreeRetentionTest {
         git("commit", "-m", "initial")
     }
 
-    /** Create a managed worktree whose directory mtime is [ageDays] days old. */
-    private fun addWorktree(id: String, ageDays: Long): Path {
+    /** Create a managed worktree and register it with git. */
+    private fun createWorktree(id: String): Path {
         val path = repo.resolve(WorkspaceIsolation.WORKTREE_DIR).resolve(id)
         Files.createDirectories(path.parent)
         val (exit, output) = git("worktree", "add", "--detach", "--force", path.toString(), "HEAD")
         assertEquals(0, exit, "git worktree add failed: $output")
-        Files.setLastModifiedTime(path, FileTime.from(Instant.now().minus(ageDays, ChronoUnit.DAYS)))
         return path
+    }
+
+    /** Write the task ledger a real isolated run leaves behind (`.browser4/workspace.json`). */
+    private fun writeManifest(
+        worktree: Path,
+        merge: String?,
+        ageDays: Long = 0,
+        state: WorkspaceState = WorkspaceState.COMPLETE,
+        status: TaskStatus = TaskStatus.COMPLETE,
+        runningTask: Boolean = false,
+    ) {
+        val endedAt = Instant.now().minus(ageDays, ChronoUnit.DAYS)
+        val snapshot = TaskSnapshot(
+            taskId = worktree.fileName.toString(),
+            instruction = "do the task",
+            coding = true,
+            startedAt = endedAt.minusSeconds(600),
+            status = if (runningTask) null else status,
+            endedAt = if (runningTask) null else endedAt,
+            isolation = "worktree",
+            worktree = worktree.toString(),
+            merge = merge,
+        )
+        WorkspaceManifestStore().write(
+            worktree,
+            WorkspaceManifest(
+                workspaceId = worktree.fileName.toString(),
+                agentUuid = "agent",
+                engine = "cli",
+                state = state,
+                currentTask = if (runningTask) snapshot else null,
+                lastTask = if (runningTask) null else snapshot,
+            ),
+        )
+    }
+
+    /** Create a managed worktree whose directory mtime is [ageDays] days old. */
+    private fun addWorktree(id: String, ageDays: Long, merge: String? = "applied"): Path {
+        val path = createWorktree(id)
+        writeManifest(path, merge, ageDays = ageDays)
+        ageByDays(path, ageDays)
+        return path
+    }
+
+    /** Create a worktree with no manifest at all (a legacy or pre-ledger tree). */
+    private fun addWorktreeWithoutManifest(id: String, ageDays: Long): Path {
+        val path = createWorktree(id)
+        ageByDays(path, ageDays)
+        return path
+    }
+
+    private fun ageByDays(path: Path, ageDays: Long) {
+        Files.setLastModifiedTime(path, FileTime.from(Instant.now().minus(ageDays, ChronoUnit.DAYS)))
     }
 
     private fun managedWorktrees(): List<String> = git("worktree", "list", "--porcelain").second
@@ -156,5 +213,86 @@ class WorktreeRetentionTest {
         val report = WorktreeRetention.sweep(repo, keep = 0, maxAgeDays = 0, dryRun = false)
 
         assertEquals("worktree gc: kept=0 removed=2 skipped=0", report.summary(), report.summary())
+    }
+
+    // -- the work-protection rule ---------------------------------------------
+
+    @Test
+    @DisplayName("a tree whose change never merged is never reclaimed")
+    fun unmergedWorktreeIsKept() {
+        val refused = addWorktree("t-refused", ageDays = 30, merge = "refused")
+        val failed = addWorktree("t-failed", ageDays = 20, merge = null)
+
+        val report = WorktreeRetention.sweep(repo, keep = 0, maxAgeDays = 0, dryRun = false)
+
+        assertTrue(report.removed.isEmpty(), "unmerged work must never be reclaimed: ${report.removed}")
+        assertEquals(setOf(refused, failed), report.unmerged.toSet())
+        assertFalse(report.changed)
+        assertTrue(Files.isDirectory(refused), "the refused task's only copy must survive")
+        assertTrue(Files.isDirectory(failed))
+        assertEquals(2, managedWorktrees().size)
+        assertTrue(report.summary().contains("unmerged=2"), report.summary())
+    }
+
+    @Test
+    @DisplayName("a tree with no manifest cannot be proven disposable and is kept")
+    fun unknownWorktreeIsKept() {
+        val legacy = addWorktreeWithoutManifest("t-legacy", ageDays = 30)
+
+        val report = WorktreeRetention.sweep(repo, keep = 0, maxAgeDays = 0, dryRun = false)
+
+        assertEquals(listOf(legacy), report.unknown)
+        assertTrue(report.removed.isEmpty(), "an unprovable tree must not be reclaimed: ${report.removed}")
+        assertTrue(Files.isDirectory(legacy))
+        assertTrue(report.summary().contains("unknown=1"), report.summary())
+    }
+
+    @Test
+    @DisplayName("the tree of a still-running task is kept even when it is old")
+    fun activeWorktreeIsKept() {
+        val active = createWorktree("t-active")
+        writeManifest(active, merge = null, ageDays = 30, state = WorkspaceState.ACTIVE, runningTask = true)
+        ageByDays(active, 30)
+
+        val report = WorktreeRetention.sweep(repo, keep = 0, maxAgeDays = 0, dryRun = false)
+
+        assertEquals(listOf(active), report.unmerged)
+        assertTrue(Files.isDirectory(active))
+    }
+
+    @Test
+    @DisplayName("retention order follows the task ledger, not the directory timestamp")
+    fun orderingFollowsTheLedger() {
+        // A checkout's directory mtime freezes at creation, so a long task that only edited
+        // existing files looks older than an idle tree it is in fact newer than.
+        val recentlyFinished = createWorktree("t-recent-task")
+        writeManifest(recentlyFinished, merge = "applied", ageDays = 1)
+        ageByDays(recentlyFinished, 30)          // the directory looks old…
+
+        val oldTask = createWorktree("t-old-task")
+        writeManifest(oldTask, merge = "applied", ageDays = 30)
+        ageByDays(oldTask, 0)                    // …and this one looks new
+
+        val report = WorktreeRetention.sweep(repo, keep = 1, maxAgeDays = 0, dryRun = false)
+
+        assertEquals(listOf(recentlyFinished), report.kept, "the newer task must be the tree kept")
+        assertTrue(Files.isDirectory(recentlyFinished))
+        assertFalse(Files.exists(oldTask), "the older task's tree must be reclaimed")
+    }
+
+    @Test
+    @DisplayName("includeUnmerged reclaims the trees the default rule protects")
+    fun includeUnmergedReclaims() {
+        val refused = addWorktree("t-refused-force", ageDays = 30, merge = "refused")
+        val legacy = addWorktreeWithoutManifest("t-legacy-force", ageDays = 30)
+
+        val report = WorktreeRetention.sweep(
+            repo, keep = 0, maxAgeDays = 0, dryRun = false, includeUnmerged = true,
+        )
+
+        assertEquals(setOf(refused, legacy), report.removed.toSet())
+        assertFalse(Files.exists(refused))
+        assertFalse(Files.exists(legacy))
+        assertEquals(0, managedWorktrees().size)
     }
 }

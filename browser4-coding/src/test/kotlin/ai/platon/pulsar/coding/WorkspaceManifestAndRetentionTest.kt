@@ -65,6 +65,51 @@ class WorkspaceManifestAndRetentionTest {
     }
 
     @Test
+    @DisplayName("the isolation bookkeeping survives a write/read round-trip")
+    fun isolationBookkeepingRoundTrips() {
+        // Regression: `parseTask` read only the pre-isolation fields, so `merge` came back
+        // as null. That disabled session reuse (`isReusable` requires "applied") and would
+        // have made every finished worktree look unmerged to the sweeper.
+        val ws = tempDir.resolve("ws")
+        val merged = task("t-iso").copy(
+            isolation = "worktree",
+            worktree = "D:/repo/.browser4/worktrees/t-iso",
+            baseline = "0123456789abcdef",
+            preRef = "refs/b4/pre/t-iso",
+            patch = "D:/repo/.browser4/patches/t-iso.patch",
+            merge = "applied",
+        )
+        store.write(ws, manifest(lastTask = merged))
+
+        val read = store.read(ws)!!.lastTask!!
+        assertEquals("worktree", read.isolation)
+        assertEquals("D:/repo/.browser4/worktrees/t-iso", read.worktree)
+        assertEquals("0123456789abcdef", read.baseline)
+        assertEquals("refs/b4/pre/t-iso", read.preRef)
+        assertEquals("D:/repo/.browser4/patches/t-iso.patch", read.patch)
+        assertEquals("applied", read.merge)
+        assertTrue(
+            SessionWorktree.isReusable(store.read(ws)),
+            "a stored, fully merged task must make the session tree reusable",
+        )
+    }
+
+    @Test
+    @DisplayName("a JSON null task field reads back as absent, not as an empty task")
+    fun nullTaskFieldsReadAsAbsent() {
+        // Serialization writes `"currentTask": null`. Parsing that node as a task made
+        // `currentTask != null` — the "a task is running" guard — true for every finished
+        // workspace, so nothing was reclaimable and no tree was reusable.
+        val ws = tempDir.resolve("ws")
+        store.write(ws, manifest(lastTask = task("t-done")))
+
+        val read = store.read(ws)!!
+        assertNull(read.currentTask)
+        assertNotNull(read.lastTask)
+        assertNull(read.sourceRepo, "a JSON null sourceRepo must not read back as the string \"null\"")
+    }
+
+    @Test
     @DisplayName("read returns null for a workspace with no manifest (legacy)")
     fun legacyNull() {
         assertNull(store.read(tempDir.resolve("never-created")))

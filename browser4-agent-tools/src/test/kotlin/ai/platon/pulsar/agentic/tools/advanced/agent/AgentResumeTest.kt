@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -224,5 +225,27 @@ class AgentResumeTest {
             resumeCheckpointOf(status()).unrestricted,
             "a row written before the flag existed must stay unknown, not become a grant",
         )
+    }
+
+    @Test
+    @DisplayName("a resume of a worktree task continues in that tree, and refuses to run it without isolation")
+    fun resumeOfWorktreeTaskTargetsThatTree(@TempDir tmp: Path) {
+        // The interrupted task's files exist ONLY in its worktree (the checkout was never
+        // written), so a resume has to reopen that exact tree.
+        val tree = tmp.resolve(".browser4/worktrees/task-a")
+        assertEquals(tree, resumeWorktreeOf("task-b", tree, isolationEnabled = true))
+
+        // An ordinary per-task workspace, or no workspace at all, is not a worktree resume.
+        assertNull(resumeWorktreeOf("task-b", tmp.resolve("workspace.task-a"), isolationEnabled = true))
+        assertNull(resumeWorktreeOf("task-b", null, isolationEnabled = true))
+
+        // With isolation off there is no merge step, so continuing in the tree would end with
+        // the change outside the checkout and no warning: refuse instead.
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            resumeWorktreeOf("task-b", tree, isolationEnabled = false)
+        }
+        assertTrue(error.message!!.contains("isolation is off"), error.message!!)
+        assertTrue(error.message!!.contains(tree.toString()), error.message!!)
+        assertTrue(error.message!!.contains("--resume"), error.message!!)
     }
 }

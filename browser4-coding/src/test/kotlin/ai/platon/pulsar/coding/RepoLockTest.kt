@@ -13,6 +13,10 @@ import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 class RepoLockTest {
 
@@ -29,10 +33,17 @@ class RepoLockTest {
 
     private fun lockFile(): Path = repo.resolve(RepoLock.LOCK_FILE)
 
-    private fun writeLock(pid: Long, taskId: String, startedAt: Instant = Instant.now()) {
+    private fun writeLock(
+        pid: Long,
+        taskId: String,
+        startedAt: Instant = Instant.now(),
+        host: String = RepoLock.hostName(),
+        token: String = "",
+    ) {
+        val tokenField = if (token.isEmpty()) "" else ""","token":"$token""""
         Files.writeString(
             lockFile(),
-            """{"pid":$pid,"host":"test","taskId":"$taskId","startedAt":"$startedAt"}""",
+            """{"pid":$pid,"host":"$host","taskId":"$taskId","startedAt":"$startedAt"$tokenField}""",
         )
     }
 
@@ -46,6 +57,7 @@ class RepoLockTest {
             assertNotNull(holder)
             assertEquals("task-a", holder!!.taskId)
             assertEquals(ProcessHandle.current().pid(), holder.pid)
+            assertTrue(holder.token.isNotBlank(), "the record must carry the acquisition nonce")
         } finally {
             lock.release()
         }
@@ -68,7 +80,7 @@ class RepoLockTest {
     }
 
     @Test
-    @DisplayName("a lock left by a dead process is taken over")
+    @DisplayName("a lock left by a dead process on this host is taken over")
     fun staleDeadPidTakenOver() {
         writeLock(pid = 999_999_999L, taskId = "task-dead")
 
@@ -85,7 +97,7 @@ class RepoLockTest {
     fun stalenessRules() {
         val mine = RepoLock.LockRecord(
             pid = ProcessHandle.current().pid(),
-            host = "test",
+            host = RepoLock.hostName(),
             taskId = "t",
             startedAt = Instant.now().toString(),
         )
@@ -93,6 +105,69 @@ class RepoLockTest {
         assertTrue(RepoLock.isStale(mine, staleHours = 1, now = Instant.now().plusSeconds(2 * 3600)))
         // A pid that does not exist can never hold a live lock.
         assertTrue(RepoLock.isStale(mine.copy(pid = 999_999_999L), staleHours = 12))
+    }
+
+    @Test
+    @DisplayName("a lock written by another host is judged by age only, never by its pid")
+    fun foreignHostIsNotJudgedByPid() {
+        // Pids are not globally unique: the same number here is either absent or belongs to
+        // an unrelated process. Taking the lock over on that evidence runs two live coding
+        // tasks against one checkout.
+        val foreign = RepoLock.LockRecord(
+            pid = 999_999_999L,
+            host = "some-other-host",
+            taskId = "t-remote",
+            startedAt = Instant.now().toString(),
+        )
+        assertFalse(RepoLock.isStale(foreign, staleHours = 12), "a foreign pid proves nothing here")
+        assertTrue(
+            RepoLock.isStale(foreign, staleHours = 1, now = Instant.now().plusSeconds(2 * 3600)),
+            "the age limit still applies to another host's lock",
+        )
+    }
+
+    @Test
+    @DisplayName("a lock from another host is not taken over")
+    fun foreignHostLockIsNotTakenOver() {
+        writeLock(pid = 999_999_999L, taskId = "task-remote", host = "some-other-host")
+
+        val error = assertThrows(IllegalStateException::class.java) {
+            RepoLock.acquire(repo, "task-local")
+        }
+        assertTrue(error.message!!.contains("task-remote"), error.message!!)
+        Files.deleteIfExists(lockFile())
+    }
+
+    @Test
+    @DisplayName("concurrent acquires from several threads have exactly one winner")
+    fun concurrentAcquireHasOneWinner() {
+        val threads = 8
+        val start = CountDownLatch(1)
+        val done = CountDownLatch(threads)
+        val winners = ConcurrentLinkedQueue<String>()
+        val winnerLock = AtomicReference<RepoLock?>(null)
+        val failures = ConcurrentLinkedQueue<String>()
+        repeat(threads) { i ->
+            Thread({
+                start.await()
+                runCatching { RepoLock.acquire(repo, "task-$i") }
+                    .onSuccess {
+                        winners.add(it.taskId)
+                        winnerLock.compareAndSet(null, it)
+                    }
+                    .onFailure { failures.add(it.javaClass.simpleName) }
+                done.countDown()
+            }, "repo-lock-$i").start()
+        }
+        start.countDown()
+        assertTrue(done.await(30, TimeUnit.SECONDS), "the acquire attempts must finish")
+        try {
+            assertEquals(1, winners.size, "exactly one task may hold the lock: $winners")
+            assertEquals(threads - 1, failures.size, "every loser must fail: $failures")
+        } finally {
+            winnerLock.get()?.release()
+        }
+        assertNull(RepoLock.holder(repo), "the winner must leave no record behind")
     }
 
     @Test
@@ -109,5 +184,32 @@ class RepoLockTest {
         assertNotNull(holder, "a non-owner release must keep the lock")
         assertEquals("task-taken-over", holder!!.taskId)
         Files.deleteIfExists(lockFile())
+    }
+
+    @Test
+    @DisplayName("release with another acquisition's nonce keeps the lock")
+    fun releaseWithAnotherTokenKeepsLock() {
+        val lock = RepoLock.acquire(repo, "task-a")
+        // Same pid and task id (a takeover by a fork of this very task), different nonce.
+        writeLock(pid = ProcessHandle.current().pid(), taskId = "task-a", token = "someone-else")
+
+        lock.release()
+
+        val holder = RepoLock.holder(repo)
+        assertNotNull(holder, "a record we did not write must survive our release")
+        assertEquals("someone-else", holder!!.token)
+        Files.deleteIfExists(lockFile())
+    }
+
+    @Test
+    @DisplayName("a legacy record without a nonce is still releasable")
+    fun legacyRecordWithoutTokenIsReleased() {
+        val lock = RepoLock.acquire(repo, "task-legacy")
+        // A record written before the nonce existed: pid + task id only.
+        writeLock(pid = ProcessHandle.current().pid(), taskId = "task-legacy")
+
+        lock.release()
+
+        assertNull(RepoLock.holder(repo), "a legacy record we own must be releasable")
     }
 }

@@ -87,13 +87,32 @@ abstract class BasicBrowserAgent constructor(
     var lastInnerVerdictJson: String? = null
         private set
 
+    /**
+     * Every `coding.verify` verdict recorded in this run, oldest first (bounded).
+     *
+     * The merge gate needs all of them, not just the newest: a change that spans
+     * ecosystems (the Rust CLI crate and a Kotlin module) is covered by two verdicts, and
+     * no single module covers both. Keeping the list also lets an earlier failing attempt
+     * be superseded by a later passing one without losing the record.
+     */
+    private val innerVerdicts = java.util.concurrent.CopyOnWriteArrayList<String>()
+
+    /** Upper bound on retained verdicts: a repair loop may verify many times. */
+    private val maxInnerVerdicts = 16
+
+    /** The verdicts recorded in this run, for [ai.platon.pulsar.coding.IsolationGate]. */
+    val innerVerdictJsonList: List<String> get() = innerVerdicts.toList()
+
     /** Record one inner-loop tool execution (called from [AgentToolManager.notifyToolExecuted]). */
     fun recordInnerToolExecution(domain: String, method: String, resultText: String? = null) {
         innerToolExecutions.add("$domain.$method")
         if (resultText == null) return
         if (method != "verify" && !resultText.contains("VERDICT_JSON:")) return
         ai.platon.pulsar.coding.VerificationReport.parseFromText(resultText)?.let {
-            lastInnerVerdictJson = it.toJson()
+            val json = it.toJson()
+            lastInnerVerdictJson = json
+            innerVerdicts += json
+            while (innerVerdicts.size > maxInnerVerdicts) innerVerdicts.removeAt(0)
         }
     }
 
@@ -101,6 +120,7 @@ abstract class BasicBrowserAgent constructor(
     fun resetInnerToolExecutions() {
         innerToolExecutions.clear()
         lastInnerVerdictJson = null
+        innerVerdicts.clear()
     }
 
     val activeDriver get() = session.getOrCreateBoundDriver()

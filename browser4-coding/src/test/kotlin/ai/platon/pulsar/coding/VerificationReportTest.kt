@@ -200,4 +200,29 @@ class VerificationReportTest {
         assertNull(VerificationReport.parseFromText("no verdict in this reply"))
         assertNull(VerificationReport.fromJson("{not json"))
     }
+
+    @Test
+    @DisplayName("the verdict carries the tree it describes (verifiedAt + contentDigest) through JSON")
+    fun verdictCarriesFreshness() {
+        // The merge gate compares this recording with the tree it is about to apply; a
+        // field the round-trip drops would silently disable the freshness check.
+        val at = java.time.Instant.parse("2026-11-15T04:00:00Z")
+        val report = VerificationReport(
+            checks = listOf(check()),
+            module = "browser4-coding",
+            requested = listOf("compile"),
+            durationMs = 7,
+            verifiedAt = at,
+            contentDigest = "sha256:abc",
+        )
+
+        val parsed = VerificationReport.fromJson(report.toJson())!!
+        assertEquals(at, parsed.verifiedAt)
+        assertEquals("sha256:abc", parsed.contentDigest)
+
+        // A recording made before the fields existed stays "unknown", not "just now".
+        val legacy = VerificationReport.fromJson("""{"passed":true,"module":"m","checks":[]}""")!!
+        assertNull(legacy.verifiedAt)
+        assertNull(legacy.contentDigest)
+    }
 }

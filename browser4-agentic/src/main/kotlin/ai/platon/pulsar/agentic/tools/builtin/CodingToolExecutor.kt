@@ -30,6 +30,7 @@ import ai.platon.pulsar.coding.ModuleMap
 import ai.platon.pulsar.coding.PermissionAudit
 import ai.platon.pulsar.coding.ReadablePaths
 import ai.platon.pulsar.coding.RepoConsistencyReporter
+import ai.platon.pulsar.coding.RepoLock
 import ai.platon.pulsar.coding.Request
 import ai.platon.pulsar.coding.SkeletonExtractor
 import ai.platon.pulsar.coding.TokenEstimator
@@ -1991,6 +1992,27 @@ class CodingToolExecutor : AbstractToolExecutor() {
         store: DevTaskCheckpointStore,
         resumed: Boolean,
     ): String {
+        // A dev-task may create a worktree and merge it into the checkout; the checkout
+        // lock is what serialises that against an `agent run --coding` merge (another
+        // process) or a second dev-task. Null when the workspace is already a managed
+        // worktree — a dev-task nested inside an isolated run is covered by its own
+        // task's lock, and taking a second one would deadlock against it.
+        val lock = acquireDevTaskLock(receiver.fs.workspaceRoot, checkpointIn.id)
+        return try {
+            runCheckpointedPlanBody(planText, plan, receiver, checkpointIn, store, resumed)
+        } finally {
+            lock?.release()
+        }
+    }
+
+    private suspend fun runCheckpointedPlanBody(
+        planText: String,
+        plan: DevTaskPlanner.DevPlan,
+        receiver: Target,
+        checkpointIn: DevTaskCheckpoint,
+        store: DevTaskCheckpointStore,
+        resumed: Boolean,
+    ): String {
         var checkpoint = checkpointIn
 
         // A failed isolated run keeps its worktree; a resume continues inside it.
@@ -2833,3 +2855,21 @@ private const val MinBatchReadChars = 600
 
 /** The smallest share one file may take while the budget lasts. */
 private const val MinPerFileChars = 160
+
+/**
+ * Lock the checkout a dev-task is about to write or merge into, or null when no lock applies.
+ *
+ * A dev-task may create a worktree and merge its change into the checkout. That is the same
+ * resource `RepoLock` protects for `agent run --coding`: a patch applied to the main work tree
+ * while another task merges into it (or while both run Maven against the same `~/.m2`) is the
+ * collision the lock exists to prevent.
+ *
+ * Null means "nothing to lock": the workspace root is not a git work tree, or it is already a
+ * managed worktree — a dev-task nested inside an isolated run is covered by its own task's lock,
+ * and asking for a second one would deadlock against it.
+ *
+ * @throws IllegalStateException when another coding task holds the checkout; the message names
+ *   the holder and the lock file
+ */
+internal fun acquireDevTaskLock(workspaceRoot: java.nio.file.Path, taskId: String): RepoLock? =
+    WorkspaceIsolation.checkoutToLock(workspaceRoot)?.let { RepoLock.acquire(it, taskId) }

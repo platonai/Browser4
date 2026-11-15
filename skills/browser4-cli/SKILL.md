@@ -36,13 +36,11 @@ binary — it builds the CLI from source and starts the backend from the checkou
 ./b4w.sh -Rebuild status     # force a backend bundle rebuild
 ```
 
-See [§8 Installation](#8-installation) for the Java 25+ prerequisite and the
-first-run latency.
+See [§8 Installation](#8-installation) for the Java 25+ prerequisite and the first-run latency.
 
 > **Windows / Git Bash (MSYS) users.** From Git Bash (or any MSYS2 shell), arguments starting with
 > `/` are rewritten into Windows paths **before** PowerShell starts, so `./b4w.ps1` refuses them (the
-> original value is unrecoverable). Invoke `./b4w.sh <command>`, or prefix
-> `MSYS2_ARG_CONV_EXCL='*' ./b4w.ps1 <command>`. Where the value is a substring/regex rather than an
+> original value is unrecoverable). Invoke `./b4w.sh <command>`, or prefix `MSYS2_ARG_CONV_EXCL='*' ./b4w.ps1 <command>`. Where the value is a substring/regex rather than an
 > exact path, drop the leading slash — `-olp "product/"` still matches `/product/…` hrefs — and
 > `cookie-set --path` already defaults to `/`, so the flag can be omitted entirely — for example
 > `./b4w.sh crawl "<url>" -d 2 -ol "a.product" -olp "product/"`. The same rewrite hits `--path /`,

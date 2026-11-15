@@ -125,6 +125,12 @@ object ModuleGraph {
         ".git", "target", "node_modules", "build", "dist", "out",
         ".gradle", ".idea", ".mvn", ".claude", ".worktrees",
         ".test-sessions", "docs", "docs-dev", "archetype-resources",
+        // Agent bookkeeping under the checkout. `.browser4/worktrees/<id>` is a FULL
+        // checkout of every kept coding task, so descending into it registered each of
+        // its modules as a live module of this repository — the graph (and with it
+        // `coding.moduleGraph`, `coding.impact` and the dev-task planner) grew a bogus
+        // `.browser4/worktrees/<id>/…` node per task on any machine that had run one.
+        ".browser4", ".b4build", ".b4scratch", ".b4inputs",
     )
 
     /**

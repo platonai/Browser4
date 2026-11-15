@@ -66,11 +66,33 @@ BeforeAll {
     }
 
     function New-ManagedWorktree {
-        param([string]$Repo, [string]$Id, [int]$AgeDays)
+        param([string]$Repo, [string]$Id, [int]$AgeDays, [string]$Manifest = 'merged')
         $path = Join-Path $Repo ".browser4/worktrees/$Id"
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
         & git -C $Repo worktree add --detach --force $path HEAD 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "could not create worktree $Id" }
+        # A real isolated run leaves its task ledger inside the tree; the sweeper reads
+        # it to decide whether the change reached the checkout (and when the tree was
+        # last worked in — the manifest is the clock, not the directory timestamp).
+        if ($Manifest -ne 'unknown') {
+            $merge = if ($Manifest -eq 'merged') { 'applied' } else { 'refused' }
+            $endedAt = (Get-Date).AddDays(-$AgeDays)
+            $doc = [ordered]@{
+                schema = 2; workspaceId = $Id; agentUuid = 'agent'; engine = 'cli'
+                state = 'COMPLETE'; currentTask = $null
+                lastTask = [ordered]@{
+                    taskId = $Id; instruction = 'task'; coding = $true
+                    startedAt = $endedAt.AddMinutes(-10).ToString('o')
+                    status = 'COMPLETE'
+                    endedAt = $endedAt.ToString('o')
+                    filesChanged = @(); mutations = 0
+                    isolation = 'worktree'; worktree = $path; merge = $merge
+                }
+            }
+            $dir = Join-Path $path '.browser4'
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            ($doc | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath (Join-Path $dir 'workspace.json') -Encoding utf8
+        }
         (Get-Item -LiteralPath $path).LastWriteTime = (Get-Date).AddDays(-$AgeDays)
         return $path
     }
@@ -231,5 +253,39 @@ Describe 'recover.ps1' {
         $result.ExitCode | Should -Be 1
         $result.Output | Should -Match 'refusing to prune'
         (Test-Path (Join-Path $repo '.browser4/worktrees/wt-locked')) | Should -BeTrue
+    }
+
+    It 'never prunes a worktree whose change did not merge' {
+        # The tree of a refused/failed/crashed task is the only copy of that work: a
+        # run that never reached a merge attempt has no patch to restore it from.
+        $repo = New-TestRepo
+        $unmerged = New-ManagedWorktree -Repo $repo -Id 'wt-unmerged' -AgeDays 30 -Manifest 'unmerged'
+
+        $result = Invoke-Recover -Repo $repo -RecoverArgs @('-Prune', '-Keep', '0', '-MaxAgeDays', '0')
+
+        $result.ExitCode | Should -Be 0
+        (Test-Path $unmerged) | Should -BeTrue
+        $result.Output | Should -Match 'unmerged=1'
+        $result.Output | Should -Match 'never merged into the checkout'
+        (Get-ManagedWorktreeCount -Repo $repo) | Should -Be 1
+    }
+
+    It 'keeps a worktree with no manifest, and --force reclaims it with the unmerged ones' {
+        $repo = New-TestRepo
+        $legacy = New-ManagedWorktree -Repo $repo -Id 'wt-legacy' -AgeDays 30 -Manifest 'unknown'
+        $unmerged = New-ManagedWorktree -Repo $repo -Id 'wt-unmerged-force' -AgeDays 30 -Manifest 'unmerged'
+
+        $kept = Invoke-Recover -Repo $repo -RecoverArgs @('-Prune', '-Keep', '0', '-MaxAgeDays', '0')
+        $kept.ExitCode | Should -Be 0
+        $kept.Output | Should -Match 'unknown=1'
+        (Test-Path $legacy) | Should -BeTrue
+        (Test-Path $unmerged) | Should -BeTrue
+
+        $forced = Invoke-Recover -Repo $repo -RecoverArgs @('-Prune', '-Keep', '0', '-MaxAgeDays', '0', '--force')
+        $forced.ExitCode | Should -Be 0
+        $forced.Output | Should -Match 'removed=2'
+        (Test-Path $legacy) | Should -BeFalse
+        (Test-Path $unmerged) | Should -BeFalse
+        (Get-ManagedWorktreeCount -Repo $repo) | Should -Be 0
     }
 }

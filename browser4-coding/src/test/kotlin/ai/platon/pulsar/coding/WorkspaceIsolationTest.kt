@@ -360,4 +360,116 @@ class WorkspaceIsolationTest {
         assertTrue(WorkspaceIsolation.isAvailable(tempDir))
         assertNotNull(WorkspaceIsolation.resolveRepoRoot(tempDir))
     }
+
+    @Test
+    @DisplayName("only paths under the managed worktree directory are recognized as isolated trees")
+    fun managedWorktreeDetection() {
+        // What a `--resume` must reopen: the interrupted task's files exist only there.
+        assertTrue(WorkspaceIsolation.isManagedWorktree(tempDir.resolve(".browser4/worktrees/task-1")))
+
+        // An ordinary per-task workspace and a plain checkout are not isolated trees.
+        assertFalse(WorkspaceIsolation.isManagedWorktree(tempDir.resolve("workspace.task-1")))
+        assertFalse(WorkspaceIsolation.isManagedWorktree(tempDir))
+    }
+
+    @Test
+    @DisplayName("a non-git workspace explains why it cannot be isolated, instead of mirroring silently")
+    fun isolationUnavailableReason() {
+        assertNull(WorkspaceIsolation.isolationUnavailableReason(tempDir), "the fixture repo can be isolated")
+
+        val plain = Files.createTempDirectory("b4-not-a-repo-")
+        try {
+            val reason = WorkspaceIsolation.isolationUnavailableReason(plain)
+            assertNotNull(reason)
+            assertTrue(reason!!.contains("not a git work tree"), reason)
+            assertTrue(reason.contains("isolation=off"), "the message must name the opt-out: $reason")
+        } finally {
+            Files.deleteIfExists(plain)
+        }
+    }
+
+    @Test
+    @DisplayName("a patch larger than the cap is refused and the main tree stays untouched")
+    fun oversizedPatchRefused() = runBlocking {
+        val isolation = WorkspaceIsolation.begin(tempDir, "run-big")
+        try {
+            Files.writeString(isolation.isolatedRoot.resolve("big.txt"), "x".repeat(5_000) + "\n")
+
+            val outcome = isolation.applyToMain("run-big", maxPatchChars = 64)
+
+            assertFalse(outcome.ok, "an oversized patch must not be applied: ${outcome.message}")
+            assertTrue(outcome.message.contains("too large"), outcome.message)
+            assertEquals("original\n", read(tempDir.resolve("a.txt")))
+            assertFalse(Files.exists(tempDir.resolve("big.txt")), "nothing may reach the main tree")
+            assertTrue(status().isEmpty(), "the main tree must stay clean: ${status()}")
+        } finally {
+            isolation.rollback()
+        }
+    }
+
+    @Test
+    @DisplayName("a change whose patch exceeds the OS pipe buffer still merges")
+    fun largePatchMerges() = runBlocking {
+        // Regression: `runGit` used to wait for git before reading its pipes, so any diff
+        // larger than the pipe buffer (4 KiB on Windows) deadlocked until the 120 s timeout
+        // and was reported as "Could not produce the isolated patch" — a real change could
+        // never merge. Draining the pipes first is what makes this pass.
+        val isolation = WorkspaceIsolation.begin(tempDir, "run-large")
+        try {
+            val body = (1..400).joinToString("\n") { "line $it of a change larger than a pipe buffer" }
+            Files.writeString(isolation.isolatedRoot.resolve("large.txt"), body + "\n")
+
+            val outcome = isolation.applyToMain("run-large")
+
+            assertTrue(outcome.ok, outcome.message)
+            assertEquals(body + "\n", read(tempDir.resolve("large.txt")))
+        } finally {
+            isolation.rollback()
+        }
+    }
+
+    @Test
+    @DisplayName("the checkout to lock is the main repository, and a nested worktree locks nothing")
+    fun checkoutToLockIsTheMainRepository() = runBlocking {
+        assertEquals(tempDir.toAbsolutePath().normalize(), WorkspaceIsolation.checkoutToLock(tempDir))
+
+        // A task nested inside an isolated run is covered by its outer task's lock; asking for
+        // a second one would deadlock against it.
+        val isolation = WorkspaceIsolation.begin(tempDir, "run-lock")
+        try {
+            assertNull(WorkspaceIsolation.checkoutToLock(isolation.isolatedRoot))
+        } finally {
+            isolation.rollback()
+        }
+
+        val plain = Files.createTempDirectory("b4-no-repo-")
+        try {
+            assertNull(WorkspaceIsolation.checkoutToLock(plain), "a non-git workspace has no checkout to lock")
+        } finally {
+            Files.deleteIfExists(plain)
+        }
+    }
+
+    // ==================== change-set reporting ====================
+
+    @Test
+    @DisplayName("a non-ASCII file name is reported verbatim, so it can be fingerprinted")
+    fun changedFilesReportsNonAsciiNames() = runBlocking {
+        // The line-based porcelain form quotes such a name (`"na\303\257ve.md"`), and the
+        // reported path then matches no file on disk: no digest, no module, no git pathspec.
+        val isolation = WorkspaceIsolation.begin(tempDir, "run-unicode")
+        try {
+            Files.writeString(isolation.isolatedRoot.resolve("naïve 中文.kt"), "class X\n")
+
+            val changed = WorkspaceIsolation.changedFilesOf(isolation.isolatedRoot)
+
+            assertEquals(listOf("naïve 中文.kt"), changed)
+            assertNotNull(
+                WorkspaceDigest.of(isolation.isolatedRoot, changed),
+                "the reported path must resolve on disk: $changed",
+            )
+        } finally {
+            isolation.rollback()
+        }
+    }
 }

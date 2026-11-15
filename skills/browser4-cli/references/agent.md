@@ -83,6 +83,12 @@ change into the main repository as a patch only when `coding.verify` passes. So
 `--shared-workspace` is refused for `--coding` (a shared directory is not a worktree), and
 `b4w recover` can revert one task's patch without touching anything else.
 
+A worktree that still holds unmerged work is kept: the sweep only reclaims trees whose
+manifest proves the task merged, so a refused/failed/cancelled run is never deleted by
+age (`b4w recover --status` lists them, `b4w recover --prune --force` removes them
+deliberately). `--resume` therefore continues in the interrupted task's own tree, and
+fails with a clear message if that tree is gone — it never silently starts a fresh one.
+
 ### Cost control (`--token-budget`, `--follow` usage lines)
 
 A run is capped at `agent.token.budget.total` (**5M cache-miss tokens** by default) and aborts with `TOKEN_BUDGET` before it can burn unbounded provider credits. The cap counts **cache-miss prompt tokens + output tokens**: prompt-cache reads cost ~10% of the input price and are *not* charged, so a long loop that re-sends a mostly cached prefix no longer aborts a run that actually costs little. Uncached prompt (Anthropic's cache *writes* included) and output stay charged; a provider that reports no cache details charges its whole prompt — an unknown cache is never treated as a hit. Two different knobs:

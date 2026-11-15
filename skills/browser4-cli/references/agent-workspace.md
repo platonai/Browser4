@@ -58,12 +58,29 @@ requirement is met with a git worktree instead of a copy: every write is disposa
 `git status`/`git diff` work, and a change that does not pass `coding.verify` is never
 merged into the checkout.
 
+**A workspace that is not a git work tree cannot run isolated at all.** The coding task
+fails and says so: install git, or set `-Dbrowser4.agent.workspace.isolation=off`. It
+does not fall back to the mirror, because mirroring links the checkout's modules into the
+scratch workspace — every write would land in your tree with no merge step and no
+`merge`/`isolatedWorkspace` in the result.
+
 **Where a coding task's change lands.** `agent result` reports `workspace` = the
 **main repository** (the checkout the patch was applied to), `isolatedWorkspace` = the
 worktree, and `merge` = `applied` | `refused` | `pending`. `refused` means nothing was
 applied — the run's files exist only in `isolatedWorkspace` — so a client must not read
 `workspace` as containing the work. A refused merge also fails the task, with the reason
-in `problems`/the failure message.
+in `problems`/the failure message. The verdict must still describe the tree: a file
+written **after** `coding.verify` refuses the merge ("re-run verify for the final change
+set"), and a change spanning two ecosystems needs one passing verdict per module.
+
+**Unmerged work is never swept away.** The backend keeps the newest
+`browser4.agent.isolation.keep` worktrees and anything younger than
+`browser4.agent.isolation.maxAgeDays`, and reclaims the rest — but only those whose
+manifest proves the task merged. A tree whose change never reached the checkout (refused,
+failed, cancelled, crashed, still running) is retained, and so is one with no manifest to
+prove otherwise: a refused run has no patch until a merge is attempted, so that tree is
+the only copy of the work. `b4w recover --status` lists what is retained;
+`b4w recover --prune --force` deletes it deliberately.
 
 `agent result <task-id>` names the directory (`workspace`) and lists the files **this
 run** reported (`filesChanged`); a run that aborted without reporting them still lists

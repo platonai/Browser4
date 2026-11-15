@@ -3,6 +3,8 @@ package ai.platon.pulsar.agentic.tools.builtin
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingAgentShell
+import ai.platon.pulsar.coding.RepoLock
+import ai.platon.pulsar.coding.WorkspaceIsolation
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.*
@@ -108,5 +110,56 @@ class CodingToolExecutorIsolationTest {
         val text = runDevTaskExecute()
         assertFalse(text.contains("--- Isolation ---"), "text: $text")
         assertTrue(text.contains("--- Execution ---"), "text: $text")
+    }
+
+    // -- the checkout lock ------------------------------------------------------
+
+    @Test
+    @DisplayName("a devTask refuses to run while another coding task holds the checkout")
+    fun devTaskRefusesWhenTheCheckoutIsLocked() {
+        // A dev-task may merge into this checkout; an `agent run --coding` merge (another
+        // process) does the same, so the two must serialise on the same lock.
+        System.setProperty(property, "worktree")
+        val holder = RepoLock.acquire(tempDir, "task-holder")
+        try {
+            val executor = CodingToolExecutor()
+            val tc = ToolCall(
+                domain = "coding",
+                method = "devTask",
+                arguments = mutableMapOf("task" to "improve the overall performance", "execute" to "true"),
+            )
+            val result = runBlocking { executor.callFunctionOn(tc, target()) }
+            val text = (result.exception?.message ?: result.value?.toString()).orEmpty()
+
+            assertTrue(text.contains("another coding task"), text)
+            assertTrue(text.contains("task-holder"), text)
+        } finally {
+            holder.release()
+        }
+    }
+
+    @Test
+    @DisplayName("a devTask releases the checkout lock when it ends")
+    fun devTaskReleasesTheCheckoutLock() {
+        System.setProperty(property, "worktree")
+
+        runDevTaskExecute()
+
+        assertNull(RepoLock.holder(tempDir), "the devTask must not leave the checkout locked")
+    }
+
+    @Test
+    @DisplayName("a devTask nested in a managed worktree takes no second lock")
+    fun nestedDevTaskTakesNoLock() = runBlocking {
+        val isolation = WorkspaceIsolation.begin(tempDir, "run-nested")
+        try {
+            assertNull(
+                acquireDevTaskLock(isolation.isolatedRoot, "dt-nested"),
+                "the outer task's lock already covers the nested run",
+            )
+            assertNull(RepoLock.holder(tempDir), "no lock may be written for the nested case")
+        } finally {
+            isolation.rollback()
+        }
     }
 }
