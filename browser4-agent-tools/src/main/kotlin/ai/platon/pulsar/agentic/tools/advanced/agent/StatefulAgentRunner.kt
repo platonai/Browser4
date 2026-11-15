@@ -6,6 +6,8 @@ import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.agents.AgentRunEvent
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.agents.RobustBrowserAgent
+import ai.platon.pulsar.agentic.agents.RunPhase
+import ai.platon.pulsar.agentic.agents.RunPhaseClock
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.detail.DefaultServerSideAgentEventHandlers
 import ai.platon.pulsar.agentic.model.AgentHistory
@@ -932,6 +934,12 @@ open class StatefulAgentRunner(
         // The checkout lock taken for this task, released in the finally.
         var repoLock: RepoLock? = null
 
+        // B2: names the phases around the tool loop. The four buckets only cover the loop,
+        // so without this the setup/isolation/merge/finalize time stays anonymous — on the
+        // four measured tasks that was 9% of the wall clock, and any "do more work while
+        // waiting" decision needs those seconds to have names.
+        val phaseClock = RunPhaseClock()
+
         try {
             status.refresh(ResourceStatus.SC_PROCESSING)
             // Record what this run is: the effective flags decide a later resume's
@@ -996,10 +1004,15 @@ open class StatefulAgentRunner(
                 // No tool can run between the two calls — the task thread starts after
                 // this block — so the components rebuilt here with the previous policy
                 // are never dispatched.
+                // The worktree creation is often seconds (git + checkout) and used to be
+                // part of the anonymous residue: mark it as its own share of setup.
+                phaseClock.mark(RunPhase.ISOLATION)
                 val started = if (codingMode) {
                     startIsolation(status.id, session.uuid.toString(), resume?.workspace, sharedWorkspace)
                 } else IsolationStart(null, null)
                 repoLock = started.lock
+                // Back to SETUP: the rebind/policy work below is setup, not isolation.
+                phaseClock.mark(RunPhase.SETUP)
                 val startedIsolation = started.isolation
                 isolation = startedIsolation
                 it.workspaceIsolation = startedIsolation
@@ -1108,6 +1121,7 @@ open class StatefulAgentRunner(
             // Start with an empty task-scoped snapshot (never the live cumulative list).
             status.agentHistory = taskScopedHistory(agent.stateHistory, startIndex)
 
+            phaseClock.mark(RunPhase.RUN)
             supervisorScope {
                 // Start a child coroutine to collect events and update status
                 val eventCollectorJob = launch {
@@ -1156,6 +1170,7 @@ open class StatefulAgentRunner(
             // finished without throwing — the only point at which a patch may reach
             // the main work tree. A refused merge fails the task here, before the
             // finally block publishes the terminal state.
+            phaseClock.mark(RunPhase.MERGE)
             isolation?.let { iso ->
                 runCatching { finishIsolation(agent, status, iso) }
                     .onFailure { e ->
@@ -1211,6 +1226,10 @@ open class StatefulAgentRunner(
             runCatching { onStatusChanged(status) }
                 .onFailure { logger.warn("persisting failed status for {} failed: {}", status.id, it.message) }
         } finally {
+            // Everything from here to the status persist is the run's tail: manifest
+            // endTask, history strip, result assembly. Measured, because it is the last
+            // anonymous block between the loop and the answer.
+            phaseClock.mark(RunPhase.FINALIZE)
             // Release the checkout lock first: a slow manifest/persistence write must
             // not keep the next coding task blocked on a finished one.
             runCatching { repoLock?.release() }
@@ -1279,9 +1298,20 @@ open class StatefulAgentRunner(
             // failed) before it installed its budget reports `null` - a supervisor
             // must see "unknown", never the previous task's limit.
             status.effectiveTokenBudget = (agent as? RobustBrowserAgent)?.lastRunTokenBudget
-            // N3: the run's own four-bucket attribution travels with the result, so
-            // "where did the six minutes go" is answerable from `agent result` alone.
-            status.timings = (agent as? RobustBrowserAgent)?.lastRunTimings?.toMap()
+            // N3 + B2: the run's attribution travels with the result, so "where did the
+            // six minutes go" is answerable from `agent result` alone. The four buckets
+            // say where the tool loop spent its time; `phases` says what surrounded the
+            // loop (setup / worktree / merge / finalize), which is where the remaining 9%
+            // of wall clock on the measured tasks lived.
+            // `runOverheadMs` is the part of agent.run() that happened OUTSIDE the tool
+            // loop (prompt build, memory recall, state writes) — the number a plan that
+            // wants to hide work inside the model window needs to size the window.
+            val loopTimings = (agent as? RobustBrowserAgent)?.lastRunTimings
+            val phases = phaseClock.snapshot()
+            status.timings = (loopTimings?.toMap() ?: emptyMap<String, Any?>()).toMutableMap().apply {
+                put("phases", phases.toMap())
+                put("runOverheadMs", (phases.runMs - (loopTimings?.totalMs ?: 0L)).coerceAtLeast(0L))
+            }
             status.errorCode = AgentTaskStatus.errorCodeOf(status.failureReason, status.cancelled)
             status.resumable = if (status.cancelled || status.failureReason != null) {
                 AgentTaskStatus.isResumable(status.errorCode)
