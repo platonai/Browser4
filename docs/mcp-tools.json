@@ -193,7 +193,7 @@
     "domain" : "command",
     "method" : "run",
     "mcpNames" : [ "command_run" ],
-    "signature" : "command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, sharedWorkspace: Boolean? = null, engine: String? = null, access: String? = null, unattended: Boolean? = true, resumeTaskId: String? = null, tokenBudget: Long? = null, addDirs: List<String>? = null)",
+    "signature" : "command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, sharedWorkspace: Boolean? = null, engine: String? = null, access: String? = null, unattended: Boolean? = true, unrestricted: Boolean? = null, resumeTaskId: String? = null, tokenBudget: Long? = null, addDirs: List<String>? = null)",
     "description" : "Execute a plain command (URL, instruction, or agent task). When async=true (default), returns a task ID immediately. When async=false, blocks until done and returns the CommandStatus as JSON. noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. engine is a deprecated compatibility argument: the CLI tool loop is the only engine, and the removed 'observe-act' engine is rejected. coding=true explicitly marks an agent task as a coding task (file/build work, no page); omitted or false means a browser task — the default, and never auto-detected.",
     "returnType" : "String",
     "arguments" : [ {
@@ -249,6 +249,12 @@
       "required" : false,
       "default" : "true",
       "description" : "Whether nobody is watching this task (the default). An unattended task that names no `access` preset derives the documented default (`full` with outbound network, audited as ACCESS_APPROVED source=default); pass false from an interactive TTY run so the server-wide policy applies instead. `browser4.agent.access.unattended` narrows the derived default."
+    }, {
+      "name" : "unrestricted",
+      "type" : "Boolean?",
+      "required" : false,
+      "default" : "null",
+      "description" : "Run this task with the current OS user's own permissions (`agent run --unrestricted`): full preset, external access, network, destructive commands, no protected/sensitive rails, the OS sandbox is not applied, and the coding shell's command allow-list is off too, so inline scripts and PowerShell cmdlets run as written (shapes it cannot decompose are handed to the platform shell in every mode). Opt-in per task and audited; inherited by `resumeTaskId`. Omit to keep the normal rails."
     }, {
       "name" : "resumeTaskId",
       "type" : "String?",

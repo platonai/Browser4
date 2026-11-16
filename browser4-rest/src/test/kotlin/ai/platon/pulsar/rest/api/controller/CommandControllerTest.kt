@@ -120,6 +120,10 @@ class CommandControllerTest {
                     // still occupies a matcher slot, so omitting it mixes raw
                     // values with matchers and fails the stubbing.
                     anyOrNull(),
+                    // unrestricted (12th parameter, defaulted) — same rule: every
+                    // declared parameter needs its own matcher, even when the
+                    // caller never passes it.
+                    anyOrNull(),
                 )
             ).thenReturn("agent-task-9")
 
@@ -148,6 +152,8 @@ class CommandControllerTest {
                     any(), any(), anyOrNull(), anyOrNull(), anyOrNull(),
                     anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(),
                     // addDirs (11th parameter, defaulted) — see the async test above.
+                    anyOrNull(),
+                    // unrestricted (12th parameter, defaulted) — see the async test above.
                     anyOrNull(),
                 )
             ).thenReturn(status)
