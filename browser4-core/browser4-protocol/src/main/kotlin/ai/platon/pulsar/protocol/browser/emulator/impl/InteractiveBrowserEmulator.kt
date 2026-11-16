@@ -850,6 +850,15 @@ open class InteractiveBrowserEmulator(
 //            }
 //        }
 
+        // `hasScript` is only a snapshot of the wait above.  The on-demand re-injection
+        // below can make the runtime available afterwards, and the feature computation
+        // has to follow the runtime's *current* availability instead: a cold-launched
+        // Chrome (the injection window is 10 s) or a tab whose document committed
+        // before the runtime was registered would otherwise record no DOM features at
+        // all — an empty `activeDOMStatTrace`, which the `-requireImages` /
+        // `-requireAnchors` checks and CaptureIgnoreDomFeaturesE2ETest read.
+        var runtimeAvailable = hasScript
+
         if (result.state.isContinue) {
             // Store capture meta links on the JS side so serializeAnnotatedHTML()
             // can inject them into <head> during pageSource() serialization later.
@@ -862,7 +871,8 @@ open class InteractiveBrowserEmulator(
             // re-injected (no frame-navigated event follows).  Re-inject on
             // demand (bounded) instead of throwing a ReferenceError that
             // breaks capture for the whole session.
-            if (ensurePulsarUtils(driver, page)) {
+            runtimeAvailable = ensurePulsarUtils(driver, page)
+            if (runtimeAvailable) {
                 updateCaptureMetaLinks(page, driver)
             }
 
@@ -876,7 +886,7 @@ open class InteractiveBrowserEmulator(
         if (result.state.isContinue) {
             emit1(EmulateEvents.willComputeFeature, page, driver)
 
-            if (hasScript && !driver.ignoreDOMFeatures) {
+            if (runtimeAvailable && !driver.ignoreDOMFeatures) {
                 computeDocumentFeatures(task, result)
             }
 
