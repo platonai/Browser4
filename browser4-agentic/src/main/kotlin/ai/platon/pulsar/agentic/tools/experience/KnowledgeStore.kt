@@ -11,8 +11,10 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Date
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.*
@@ -436,15 +438,20 @@ class KnowledgeStore(
                                 )
                             } ?: emptyList(),
                             pagePatterns = listOf(data["url_pattern"] as? String ?: ""),
-                            taskTypes = emptyList(),
+                            // Read the page type the facts actually stored. This used to be
+                            // hardcoded `emptyList()`, so a fact that *did* carry
+                            // `page_facts.page_type` showed no task type in `experience list`
+                            // — the only column that says what kind of page the knowledge
+                            // describes.
+                            taskTypes = listOfNotNull(
+                                (data["page_facts"] as? Map<String, Any>)?.get("page_type") as? String
+                            ),
                             confidence = stats?.confidence ?: 0.0,
                             retrievalTier = stats?.retrievalTier ?: "P5",
                             status = try {
                                 VerificationStatus.valueOf((data["status"] as? String)?.uppercase() ?: "HYPOTHESIS")
                             } catch (_: Exception) { null },
-                            lastVerified = (data["updated_at"] as? String)?.let {
-                                try { Instant.parse(it) } catch (_: Exception) { null }
-                            },
+                            lastVerified = parseInstant(data["updated_at"]),
                             successCount = stats?.successes ?: 0,
                             failureCount = stats?.failures ?: 0,
                         ))
@@ -613,6 +620,36 @@ class KnowledgeStore(
     // Serialization Helpers
     // =========================================================================
 
+    /**
+     * Parse a timestamp written by the `mapFrom*` helpers, or `null` when the
+     * field is absent/unreadable — the caller then keeps the data class default.
+     *
+     * Every mapper writes its instants as `Instant.toString()` (an ISO-8601
+     * string), but the value read back is **not** guaranteed to be a `String`:
+     * SnakeYAML resolves an *unquoted* timestamp scalar to a [Date] before this
+     * code ever sees it (hand-edited files, or files written by a dumper that
+     * did not quote the value).  Both shapes are therefore accepted, and an
+     * offset spelling (`+08:00`) is tolerated as well.
+     *
+     * This exists because the mappers used to ignore their own timestamp
+     * columns: `created_at`, `updated_at`, `promotion_history[].date`,
+     * `last_updated`, `last_success`/`last_failure` and the trace/action
+     * `timestamp` all fell back to `Instant.now()` on load, so every
+     * read-modify-write refreshed them (an entry's `created_at` moved forward
+     * on each `deep_learn`) and stats recency decay — `0.5 ^ (days / 60)` —
+     * never actually decayed.
+     */
+    private fun parseInstant(value: Any?): Instant? = when (value) {
+        null -> null
+        is Instant -> value
+        is Date -> value.toInstant()
+        is String -> value.trim().takeIf { it.isNotEmpty() }?.let { text ->
+            runCatching { Instant.parse(text) }.getOrNull()
+                ?: runCatching { OffsetDateTime.parse(text).toInstant() }.getOrNull()
+        }
+        else -> null
+    }
+
     @Suppress("UNCHECKED_CAST")
     private fun mapFromTrace(trace: TraceRecord): Map<String, Any> = buildMap {
         put("trace_id", trace.traceId)
@@ -643,8 +680,10 @@ class KnowledgeStore(
         failureCategory = data["failure_category"] as? String,
         actions = (data["actions"] as? List<Map<String, Any>>)?.map { mapToAction(it) } ?: emptyList(),
         finalState = (data["final_state"] as? Map<String, Any>)?.let { mapToPageState(it) },
+        timestamp = parseInstant(data["timestamp"]) ?: Instant.now(),
         durationMs = (data["duration_ms"] as? Number)?.toLong(),
         errorMessage = data["error_message"] as? String,
+        redacted = data["redacted"] as? Boolean ?: true,
     )
 
     private fun mapFromPageState(state: PageState): Map<String, Any> = buildMap {
@@ -678,6 +717,7 @@ class KnowledgeStore(
         value = data["value"] as? String,
         result = data["result"] as? String,
         durationMs = (data["duration_ms"] as? Number)?.toLong(),
+        timestamp = parseInstant(data["timestamp"]) ?: Instant.now(),
     )
 
     @Suppress("UNCHECKED_CAST")
@@ -714,6 +754,8 @@ class KnowledgeStore(
         failureStats = (data["failure_stats"] as? Map<String, Any>)?.mapValues { (_, v) ->
             (v as? Number)?.toInt() ?: 0
         } ?: emptyMap(),
+        lastUpdated = parseInstant(data["last_updated"]) ?: Instant.now(),
+        lastDeepLearn = parseInstant(data["last_deep_learn"]),
     )
 
     private fun mapFromSelectorStats(ss: SelectorStats): Map<String, Any> = buildMap {
@@ -730,6 +772,8 @@ class KnowledgeStore(
         successes = (data["successes"] as? Number)?.toInt() ?: 0,
         failures = (data["failures"] as? Number)?.toInt() ?: 0,
         avgResolutionMs = (data["avg_resolution_ms"] as? Number)?.toDouble(),
+        lastSuccess = parseInstant(data["last_success"]),
+        lastFailure = parseInstant(data["last_failure"]),
     )
 
     @Suppress("UNCHECKED_CAST")
@@ -768,6 +812,8 @@ class KnowledgeStore(
         knownBlockers = (data["known_blockers"] as? List<Map<String, Any>>)?.map { mapToBlocker(it) } ?: emptyList(),
         antiPatterns = (data["anti_patterns"] as? List<String>) ?: emptyList(),
         promotionHistory = (data["promotion_history"] as? List<Map<String, Any>>)?.map { mapToPromotion(it) } ?: emptyList(),
+        createdAt = parseInstant(data["created_at"]) ?: Instant.now(),
+        updatedAt = parseInstant(data["updated_at"]) ?: Instant.now(),
     )
 
     private fun mapFromSiteFacts(sf: SiteFacts): Map<String, Any> = buildMap {
@@ -847,6 +893,7 @@ class KnowledgeStore(
         from = data["from"] as? String,
         to = data["to"] as? String ?: "",
         reason = data["reason"] as? String,
+        date = parseInstant(data["date"]) ?: Instant.now(),
         verifiedVisits = (data["verified_visits"] as? Number)?.toInt(),
         dualSignalPassed = data["dual_signal_passed"] as? Boolean,
     )
