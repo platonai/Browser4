@@ -5508,7 +5508,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "experience-deep-learn",
-            description: "Run deep learning analysis on stored experience traces. Builds or updates verified knowledge facts (selectors, blockers, page structure). Promotes knowledge from hypothesis to verified when confidence thresholds are met.",
+            description: "Re-derive the (domain, intent) knowledge entry from the traces and stats already stored, and promote it when the confidence and visit thresholds are met. It opens no page and runs no analysis tools (no htmlsnapshot/inspect, no LLM): selectors enter the knowledge base through 'experience save --facts'. Use --force to bypass the confidence >= 0.90 sampling check.",
             category: Category::Agent,
             hidden: false,
             batch_supported: false,

@@ -118,7 +118,10 @@ Lists stored knowledge entries with pagination and filtering.
 
 ### experience_deep_learn — Deep Learning
 
-Runs analysis tools to build or update `KnowledgeFacts`. Explicit call — runs in ~seconds.
+Re-derives the `(domain, intent)` `KnowledgeFacts` from what is already on disk and runs the
+promotion check. Explicit call, milliseconds. It does **not** open the page, run
+`htmlsnapshot`/`inspect`, or call an LLM — selectors enter the knowledge base only through
+`experience_save --facts`.
 
 | Argument | Required | Type | Default | Description |
 |----------|----------|------|---------|-------------|
@@ -130,10 +133,20 @@ Runs analysis tools to build or update `KnowledgeFacts`. Explicit call — runs 
 
 1. Classifies intent, loads current stats and facts
 2. **Sampling check:** skips if confidence ≥ 0.90 and `force=false`
-3. Loads the most recent successful trace for the domain
-4. Creates `KnowledgeFacts` as `HYPOTHESIS` (first run) or updates existing
-5. Calls `promoteToVerified()` — promotes if thresholds are met
-6. Saves facts to `facts/<domain>/<intent>.yaml`
+3. Copies the most recent trace's `task_type` into `page_facts.page_type` when that trace is a
+   success for the same intent (the only field deep learning itself writes)
+4. Keeps everything else the entry already holds — `url_pattern`, `site_facts`, and the
+   selectors / interaction hints / blockers / anti-patterns merged by
+   `experience_save --facts`
+5. Calls `promoteToVerified()` — promotes to CANDIDATE / VERIFIED when the thresholds are met
+6. Saves facts to `facts/<domain>/<intent>.yaml` (`created_at` is preserved; `updated_at` moves)
+
+**Reading the result:** `selectors_found` counts the selectors the entry holds, so it is `0` for
+an entry that never received a `--facts` patch. `new_confidence` is the stats-derived value
+loaded at the start of the call, so an empty evidence base reports the initial placeholder
+`0.500`. `promoted` is true only when `status_after` differs from `status_before` — a brand-new
+entry that starts out as `HYPOTHESIS` reports `promoted: true` simply because it had no previous
+status.
 
 **Returns:** `DeepLearnResult` — `{completed, domain, intent, status_before, status_after, promoted, new_confidence, selectors_found, message}`
 
@@ -269,6 +282,20 @@ Patterns like `/dp/*` match concrete URLs like `/dp/B0CXJ1NT4B`. When multiple p
 
 The knowledge tiers are **file-level YAML keyed by `(domain, intent)`** (one file per intent under `facts/<domain>/`). The store root `{knowledge_dir}` is resolved by `KnowledgeStore` itself: the **`knowledge.dir` system property** when it is set, else `DEFAULT_BASE_DIR = Path.of("knowledge")` — a path **relative to the backend process's current working directory**. Every construction path (the `experience_*` executor, the `browser4-rest` bean, and the engine-side `AgentMemory` L1 layer) resolves the same property, so one `-Dknowledge.dir=<path>` relocates the whole knowledge base instead of forking it in two.
 
+**A CLI-launched backend pins it explicitly.** `browser4-cli` starts the server with
+`-Dknowledge.dir=<app data>/knowledge`, next to the `memory/`, `logs/` and browser-profile
+directories it already owns:
+
+- development mode → `~/.browser4/workspaces/<workspace>-<hash>/app-data/knowledge` (one store
+  per checkout)
+- production → `~/.browser4/knowledge`
+
+This matters because the backend's working directory is the runtime bundle: with the
+cwd-relative default, assembling a new bundle (a `-Rebuild`, or an upgrade) replaced the
+directory *containing* the store and silently deleted everything the agent had learned. A
+store left in an older `./knowledge` next to the bundle is not read any more — move it to the
+app data root, or point `-Dknowledge.dir` at it in `BROWSER4_SERVER_OPTS`.
+
 > The reserved `patterns/` family/category/universal directories are only *read* for cross-site fallback lookups; `initializeStore()` creates `traces/`, `experience/`, `facts/` (and `.archive/` for evicted artifacts) under the root on first start.
 
 ## Concurrency Model
@@ -282,7 +309,7 @@ The knowledge tiers are **file-level YAML keyed by `(domain, intent)`** (one fil
 | Property | Default | Description |
 |----------|---------|-------------|
 | `browser4.experience.enabled` | `true` | Enable/disable the entire PEM system |
-| `knowledge.dir` (JVM system property) | `knowledge` | Store root. Relative paths resolve against the backend working directory. `AgentMemory` reads the same property for its L1 layer, so both writers stay on one directory. Pass it to a CLI-launched backend with `BROWSER4_SERVER_OPTS="-Dknowledge.dir=<path>"`, or set it in the backend's own JVM options when you start the server yourself. |
+| `knowledge.dir` (JVM system property) | `knowledge` | Store root. Relative paths resolve against the backend working directory. `AgentMemory` reads the same property for its L1 layer, so both writers stay on one directory. **`browser4-cli`-launched backends always pass it** (`<app data>/knowledge`, see above); pass your own with `BROWSER4_SERVER_OPTS="-Dknowledge.dir=<path>"`, or set it in the backend's JVM options when you start the server yourself. |
 
 Set `knowledge.dir` whenever several backends (or a test harness) must not share one knowledge base; the CLI e2e harness uses exactly that to pin the store inside its per-run temp tree (see [TESTING.md](TESTING.md#cli-e2e-的-experience-覆盖本轮补齐)).
 

@@ -677,7 +677,7 @@ These commands operate on Browser4's learned experience store.
 | `experience save <url> <trace>` | Save a task execution trace. Supports `--outcome`, `--intent`, `--task-type` (canonical types including `publish_post`), and `--facts <inline JSON \| @file.json>` — merges retrospective knowledge (`selectors` / `interaction_hints` / `known_blockers` / `anti_patterns`, camelCase or snake_case keys) into the (domain, intent) facts entry; the merge is refused when that entry is VERIFIED (immutable). |
 | `experience query <url>` | Query known selectors, blockers, and hints for a URL/domain. Supports `--intent`. |
 | `experience list` | List stored experience entries. Supports `--filter`, `--intent-filter`, `--page`, `--page-size`. |
-| `experience deep-learn <url> <intent>` | Run deeper analysis on stored traces. Supports `--force`. |
+| `experience deep-learn <url> <intent>` | Re-derive the (domain, intent) knowledge entry from stored traces and promote it (no page access). Supports `--force`. |
 
 #### Plugins
 

@@ -19,15 +19,17 @@ import java.util.UUID
  * | `experience_save` | Fast Learning: save trace + update stats only | ~tens of ms |
  * | `experience_query` | Intent-based knowledge retrieval with 6-level fallback | ~single-digit ms |
  * | `experience_list` | List all stored knowledge (by domain, intent, status) | ~ms |
- * | `experience_deep_learn` | Deep Learning: run analysis tools, build facts, promote | ~seconds |
+ * | `experience_deep_learn` | Deep Learning: re-derive facts from stored traces, promote | ~ms |
  *
  * ## Fast vs Deep Learning
  *
  * - **Fast Learning** (experience_save): always runs. Records trace + updates stats.
  *   No analysis tools run. Returns immediately.
  *
- * - **Deep Learning** (experience_deep_learn): explicit or sampled. Runs htmlsnapshot,
- *   inspect, builds KnowledgeFacts as hypothesis, promotes to verified if threshold met.
+ * - **Deep Learning** (experience_deep_learn): explicit. Re-derives `KnowledgeFacts` from what is
+ *   already on disk — it opens no page, runs no `htmlsnapshot`/`inspect` and calls no LLM — then
+ *   promotes hypothesis → candidate → verified when the thresholds are met. Selectors enter the
+ *   knowledge base through `experience_save --facts`, never through this call.
  *
  * ## Intent-Based Query
  *
@@ -145,10 +147,12 @@ class ExperienceToolExecutor(
             ),
             returnType = "String",
             outputSchema = ToolResultSchemas.EXPERIENCE_DEEP_LEARN,
-            description = "Deep Learning: run analysis tools (htmlsnapshot summary, inspect) " +
-                "to build or update KnowledgeFacts. Creates hypothesis on first run, " +
-                "promotes to verified when confidence threshold met. " +
-                "Use force=true to bypass sampling checks.",
+            description = "Deep Learning: re-derive the (domain, intent) knowledge entry from the " +
+                "traces and stats already stored, then promote it. Opens no page and runs no " +
+                "htmlsnapshot/inspect: it copies the most recent successful trace's task type into " +
+                "page_facts and keeps the knowledge recorded by `facts`. Promotes HYPOTHESIS → " +
+                "CANDIDATE → VERIFIED when the confidence/visit thresholds are met. " +
+                "Use force=true to bypass the confidence ≥ 0.90 sampling check.",
             examples = listOf(
                 ToolExample(
                     title = "Analyse a page and promote what it teaches",
@@ -156,7 +160,8 @@ class ExperienceToolExecutor(
                         "url" to "https://example.com/product/1",
                         "intent" to "buy the product",
                     ),
-                    notes = "Runs analysis tools against the current page and takes seconds, not milliseconds.",
+                    notes = "Milliseconds, not seconds: it only reads the stored traces. Save the " +
+                        "task first (`experience save`, ideally with `facts`) or there is nothing to learn from.",
                 ),
             ),
         )

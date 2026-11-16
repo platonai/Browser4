@@ -680,7 +680,7 @@ Browser4 中有两套不同的 “skill” 表面：
 | `experience save <url> <trace>` | 保存任务执行轨迹。支持 `--outcome`、`--intent`、`--task-type`（规范任务类型，含 `publish_post`），以及 `--facts <inline JSON \| @file.json>`——把复盘式知识（`selectors` / `interaction_hints` / `known_blockers` / `anti_patterns`，camelCase 或 snake_case 键均可）合并进 (domain, intent) 的 facts 条目；当该条目为 VERIFIED（不可变）时合并会被拒绝。 |
 | `experience query <url>` | 查询某个 URL / 域名已知的选择器、阻塞因素和提示。支持 `--intent`。 |
 | `experience list` | 列出已存储的经验条目。支持 `--filter`、`--intent-filter`、`--page`、`--page-size`。 |
-| `experience deep-learn <url> <intent>` | 对已存储轨迹做更深入分析。支持 `--force`。 |
+| `experience deep-learn <url> <intent>` | 基于已存储轨迹重建 (domain, intent) 知识并尝试晋升（不访问页面）。支持 `--force`。 |
 
 #### 插件
 

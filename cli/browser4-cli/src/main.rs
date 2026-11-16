@@ -19773,7 +19773,10 @@ async fn handle_experience_deep_learn(
     base_url: &str,
     tool_params: &Value,
 ) -> Result<(), String> {
-    cli_println!("Running deep learning analysis (this may take a few seconds)...");
+    // No page is opened and no analysis tool runs: this only re-derives the entry
+    // from the traces/stats already on disk, so the notice must not promise a
+    // multi-second page analysis (or the empty result reads as a failure).
+    cli_println!("Deep learning over stored traces (no page access)...");
     let result = call_tool(
         client,
         base_url,
