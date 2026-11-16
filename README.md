@@ -240,7 +240,7 @@ These flags can appear before any command.
 
 | Flag | Meaning |
 |---|---|
-| `-h`, `--help [command\|category]` | Show top-level help, category help, or detailed command help |
+| `-h`, `--help [command\|category]` | Show top-level help, category help, or detailed command help. `--help category:<name>` always lists a section (use it when the name is also a command, e.g. `category:install`); `--help hidden:<prefix>` lists a hidden family (`hidden:code`, `hidden:config`). The reference follows `COLUMNS` (clamped to 80–160) |
 | `--help-json` | Emit the machine-readable command reference |
 | `-v`, `--version` | Print the CLI version |
 | `-s`, `--session <name>` | Use a named session instead of the default session. A **global** flag: place it **before** the command (`browser4-cli -s job-42 snapshot`) — after the command it is rejected as a positional argument |
@@ -250,7 +250,7 @@ These flags can appear before any command.
 | `--json` | Emit machine-readable JSON only |
 | `--pretty` | Pretty-print JSON output |
 | `-q`, `--quiet` | Suppress normal human-readable output |
-| `-tip`, `--show-tip` | Show a relevant tip on stderr after commands |
+| `--show-tip`, `-tip` | Show a relevant tip on stderr after commands |
 
 ### Key concepts before the command list
 

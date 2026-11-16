@@ -5,8 +5,40 @@ use crate::commands::{all_commands, CommandDef};
 /// CLI version, set at build time from git tags or Cargo.toml.
 const VERSION: &str = env!("BROWSER4_CLI_VERSION");
 
-/// Maximum characters per line in help output.
+/// Default help line budget, used when `COLUMNS` is unset or unusable.
 const MAX_LINE_WIDTH: usize = 120;
+
+/// Narrowest help line budget `COLUMNS` may impose.
+///
+/// 80 is the floor because the Quick Start box is 76 columns wide (74 inner
+/// columns plus both borders); below that the box cannot be drawn at all.
+const MIN_HELP_WIDTH: usize = 80;
+
+/// Widest help line budget `COLUMNS` may impose.
+const MAX_HELP_WIDTH: usize = 160;
+
+/// The help line budget, in display columns.
+///
+/// Help used to ignore the terminal entirely: 145 of the 377 reference lines
+/// are wider than 80 columns, so on a default 80-column Windows terminal (and
+/// in most CI logs) they wrapped *inside* the terminal and the description
+/// column collapsed into a staircase. `COLUMNS` is the one portable way to
+/// state the width — it is already what `agent result` honours — so the help
+/// renderer follows it, clamped to a range that still keeps the box and the
+/// 32-column description gutter intact. A missing or unusable value keeps the
+/// historical 120-column budget, so piped output stays as it was.
+fn help_width() -> usize {
+    width_from_columns(std::env::var("COLUMNS").ok().as_deref())
+}
+
+/// The help line budget for a `COLUMNS` value, clamped between
+/// [`MIN_HELP_WIDTH`] and [`MAX_HELP_WIDTH`] and defaulting to
+/// [`MAX_LINE_WIDTH`].
+fn width_from_columns(raw: Option<&str>) -> usize {
+    raw.and_then(|value| value.trim().parse::<usize>().ok())
+        .map(|width| width.clamp(MIN_HELP_WIDTH, MAX_HELP_WIDTH))
+        .unwrap_or(MAX_LINE_WIDTH)
+}
 
 /// Inner width of the Quick Start box, i.e. the columns between its borders.
 const QUICK_START_BOX_WIDTH: usize = 74;
@@ -14,6 +46,15 @@ const QUICK_START_BOX_WIDTH: usize = 74;
 /// Longest command description listed in a category (the full text stays
 /// available through `--help <command>` and `--help-json`).
 const LISTING_DESC_WIDTH: usize = 110;
+
+/// Minimum columns a wrapped description must keep on its first line.
+///
+/// A command whose syntax already fills the line (`htmlsnapshot get <field>
+/// [selector] [name] [--page N] …`, `swarm query [url] --sql <query> …`) would
+/// otherwise leave a 30-column sliver for the summary; when the space left
+/// inline is under twice this, the summary starts on its own line at the
+/// gutter instead.
+const MIN_DESCRIPTION_COLUMN: usize = 24;
 
 /// Display width of `s` in terminal columns.
 ///
@@ -262,10 +303,10 @@ pub const GLOBAL_OPTIONS: &[GlobalOption] = &[
         description: "Pretty-print JSON results that parse as an object or array",
     },
     GlobalOption {
-        flags: "-tip, --show-tip",
+        flags: "--show-tip, -tip",
         json_key: "-tip, --show-tip",
         json_type: "bool",
-        description: "Show a relevant tip on stderr after each command",
+        description: "Show a relevant tip on stderr after each command (before the command name only)",
     },
     GlobalOption {
         flags: "--server <url>",
@@ -289,7 +330,7 @@ pub const GLOBAL_OPTIONS: &[GlobalOption] = &[
         flags: "-h, --help [cmd|category]",
         json_key: "-h, --help",
         json_type: "string",
-        description: "Print help: no argument for the command reference, a command name for its full page, a category for one section (see Categories above)",
+        description: "Print help: no argument for the command reference, a command name for its full page, a category for one section (see Categories above), `category:<name>` to force a category listing, `hidden:<prefix>` to list a hidden family",
     },
     GlobalOption {
         flags: "--help-json [command]",
@@ -307,7 +348,93 @@ pub const GLOBAL_OPTIONS: &[GlobalOption] = &[
         flags: "-v, --version",
         json_key: "-v, --version",
         json_type: "bool",
-        description: "Print the browser4-cli version",
+        description: "Print the browser4-cli version. `-v` is the version only as a global flag: after a command it is that command's own flag (`snapshot -v 0` sets the snapshot view depth)",
+    },
+];
+
+/// One environment variable the CLI honours.
+struct EnvVarDef {
+    /// Variable name, printed as-is in both surfaces.
+    name: &'static str,
+    /// JSON type in `--help-json`.
+    json_type: &'static str,
+    /// One-line description, wrapped by the renderer.
+    description: &'static str,
+}
+
+/// Environment variables the CLI honours, shared by `--help` and `--help-json`.
+///
+/// The two surfaces used to carry separate hand-written lists of two entries,
+/// so they could drift, and neither mentioned the two variables that matter most
+/// in practice: `BROWSER4_CLI_SESSION` and `BROWSER4_CLI_SERVER` are the
+/// defaults behind the global `-s` / `--server` flags. Everything here is read
+/// by the CLI itself (see `args.rs::apply_env_defaults`, `daemon.rs`,
+/// `skills.rs`), not by the backend.
+const ENVIRONMENT_VARIABLES: &[EnvVarDef] = &[
+    EnvVarDef {
+        name: "BROWSER4_CLI_STATE_DIR",
+        json_type: "string",
+        description: "Override CLI session state directory (default: ~/.browser4); falls back to ./.browser4-cli-state when unwritable",
+    },
+    EnvVarDef {
+        name: "BROWSER4_RUNTIME_DIR",
+        json_type: "string",
+        description: "Override Browser4 runtime data directory (JRE, JARs, launchers)",
+    },
+    EnvVarDef {
+        name: "BROWSER4_CLI_SESSION",
+        json_type: "string",
+        description: "Default value for the global `-s, --session` flag",
+    },
+    EnvVarDef {
+        name: "BROWSER4_CLI_SERVER",
+        json_type: "string",
+        description: "Default value for `--server` (e.g. http://localhost:18182)",
+    },
+    EnvVarDef {
+        name: "BROWSER4_CLI_PROXY",
+        json_type: "string",
+        description: "Default value for `--proxy`: the proxy downloads use (runtime bundle, webminer)",
+    },
+    EnvVarDef {
+        name: "BROWSER4_SKILLS_DIR",
+        json_type: "string",
+        description: "Override the directory `skills path` and `skills unpack` use for the bundled skills",
+    },
+    EnvVarDef {
+        name: "BROWSER4_AGENTS_SKILLS_DIR",
+        json_type: "string",
+        description: "Override the AI-agent skills directory (default: ~/.agents/skills) that install and upgrade copy skills into",
+    },
+    EnvVarDef {
+        name: "BROWSER4_SERVER_LOG_DIR",
+        json_type: "string",
+        description: "Directory for backend server logs; `doctor log` reads it when the backend is down",
+    },
+    EnvVarDef {
+        name: "BROWSER4_CLI_AGENT_WAIT_TIMEOUT_SECS",
+        json_type: "int",
+        description: "Default wait timeout in seconds for async agent tasks (default: 600)",
+    },
+    EnvVarDef {
+        name: "BROWSER4_CLI_FORCE_REMOTE_BUNDLE",
+        json_type: "bool",
+        description: "Use the released runtime bundle instead of building from a source checkout (also disables dev mode)",
+    },
+    EnvVarDef {
+        name: "BROWSER4_CLI_DISABLE_AOT_CACHE",
+        json_type: "bool",
+        description: "Disable JVM AOT cache training and loading on JDK 24+ (slower starts, no background training)",
+    },
+    EnvVarDef {
+        name: "NO_COLOR",
+        json_type: "bool",
+        description: "Disable ANSI colour in human-readable output (https://no-color.org)",
+    },
+    EnvVarDef {
+        name: "COLUMNS",
+        json_type: "int",
+        description: "Terminal width used by `agent result` and by this help output (this help clamps it to 80-160)",
     },
 ];
 
@@ -353,12 +480,28 @@ pub fn resolve_category_alias(alias: &str) -> Option<&'static str> {
     None
 }
 
-/// Return all non-hidden commands belonging to a category.
+/// Sort order for the rows of a category listing: high-frequency (★) commands
+/// first, then alphabetical by public name.
+///
+/// Declaration order used to be listing order, which put `batch` and `loop` at
+/// the top of `[Core]` and made every section read like an implementation
+/// detail instead of a menu.
+fn listing_sort_key(cmd: &CommandDef) -> (bool, String) {
+    (
+        !is_high_frequency_command(cmd.name),
+        public_command_name(cmd.name).to_string(),
+    )
+}
+
+/// Return all non-hidden commands belonging to a category, in listing order.
 pub fn commands_in_category(category_name: &str) -> Vec<CommandDef> {
     let cmds = all_commands();
-    cmds.into_iter()
+    let mut matching: Vec<CommandDef> = cmds
+        .into_iter()
         .filter(|c| !c.hidden && c.category.as_str() == category_name)
-        .collect()
+        .collect();
+    matching.sort_by_key(listing_sort_key);
+    matching
 }
 
 /// One row of the Quick Start box: `║` + content padded to the box width + `║`.
@@ -462,7 +605,7 @@ fn category_index_lines() -> Vec<String> {
     if !shadowed.is_empty() {
         out.extend(wrapped_lines(
             &format!(
-                "(*) {} {} also command names, so `--help <name>` prints that command — use an alias where one exists (e.g. `--help extraction` for HTML Snapshot).",
+                "(*) {} {} also command names, so `--help <name>` prints that command — use an alias where one exists (e.g. `--help extraction` for HTML Snapshot), or `--help category:<name>` for the listing.",
                 shadowed.join(", "),
                 if shadowed.len() == 1 { "is" } else { "are" }
             ),
@@ -471,6 +614,14 @@ fn category_index_lines() -> Vec<String> {
         ));
     }
     out.extend(wrapped_lines(&names.join(", "), "    ", 4));
+    // Every name above is a category, including the ones whose own name is a
+    // command (`install`, `webminer`, `skills`): `category:<name>` is the form
+    // that always means "list this section", so no section is unreachable.
+    out.extend(wrapped_lines(
+        "Any section also answers `--help category:<name>` (e.g. `--help category:install`).",
+        "  ",
+        4,
+    ));
 
     // Aliases grouped by target: `nav=navigation  kb,input=keyboard  …`
     let mut targets: Vec<&str> = Vec::new();
@@ -495,6 +646,134 @@ fn category_index_lines() -> Vec<String> {
     out
 }
 
+/// The reference's "Common workflows" block: one runnable command per row, with
+/// an optional trailing `#` comment.
+const COMMON_WORKFLOWS: &[(&str, &[(&str, Option<&str>)])] = &[
+    (
+        "Navigate & inspect:",
+        &[(
+            "goto <url>  →  snapshot -v 0  →  click <ref>  →  snapshot -v 0",
+            None,
+        )],
+    ),
+    (
+        "Extract data:",
+        &[
+            (
+                "htmlsnapshot",
+                Some("the capture every htmlsnapshot command runs"),
+            ),
+            (
+                "htmlsnapshot get text \"<css>\"",
+                Some("single field (captures the tab first)"),
+            ),
+            (
+                "htmlsnapshot query --sql @query.sql",
+                Some("structured extraction (also captures first)"),
+            ),
+            (
+                "scrape --formats \"markdown,links\"",
+                Some("one capture → many outputs in one document"),
+            ),
+            (
+                "htmlsnapshot get text \"<css>\" --expires 1d",
+                Some("read the stored snapshot instead (tab untouched)"),
+            ),
+        ],
+    ),
+    (
+        "Form interaction:",
+        &[("fill <ref> \"<text>\" --submit", Some("fill + press Enter"))],
+    ),
+    (
+        "Handle dialogs (two-step):",
+        &[
+            (
+                "click <ref> --auto-dismiss-dialogs",
+                Some("auto-accept dialog in one step"),
+            ),
+            (
+                "OR click <ref>  →  dialog-accept",
+                Some("a click parked on a dialog (DIALOG_PENDING); then accept"),
+            ),
+        ],
+    ),
+    (
+        "Run JavaScript:",
+        &[(
+            "eval --file script.js",
+            Some("read JS from file (no quoting issues)"),
+        )],
+    ),
+    (
+        "Bulk crawl:",
+        &[(
+            "crawl <url> --out-link-selector \"...\" --depth 1 --sql @query.sql",
+            None,
+        )],
+    ),
+    (
+        "Parallel extraction:",
+        &[
+            (
+                "swarm create  →  swarm query --sql @q.sql --seed-file urls.txt",
+                None,
+            ),
+            ("→  swarm result <id>", None),
+        ],
+    ),
+    (
+        "Use my own browser (no new browser, no CDP port):",
+        &[
+            (
+                "attach --extension <edge|chrome>",
+                Some("needs the Browser4 extension from the Web Store"),
+            ),
+            (
+                "→  goto <url>  →  ...  →  disconnect",
+                Some("drives the tab it opened; your own tabs stay"),
+            ),
+        ],
+    ),
+];
+
+/// One row of the Common-workflows block.
+///
+/// The comment is aligned at [`WORKFLOW_COMMENT_COLUMN`] when the row fits, and
+/// moves to its own indented line when it does not — so a narrow `COLUMNS` no
+/// longer wraps the example inside the terminal, which is the failure mode the
+/// width fix exists to remove.
+fn workflow_lines(command: &str, comment: Option<&str>) -> Vec<String> {
+    /// Column where the `#` comments line up (a command longer than this gets
+    /// the minimum two-space gap instead, like the original hand-aligned block).
+    const WORKFLOW_COMMENT_COLUMN: usize = 44;
+    let head = format!("    {command}");
+    let Some(comment) = comment else {
+        return vec![head];
+    };
+    let gap = WORKFLOW_COMMENT_COLUMN
+        .saturating_sub(display_width(&head))
+        .max(2);
+    let aligned = format!("{head}{}# {comment}", " ".repeat(gap));
+    if display_width(&aligned) <= help_width() {
+        return vec![aligned];
+    }
+    // A narrow terminal: keep the comment on the row with a small gap before
+    // moving it to its own line.
+    let compact = format!("{head}  # {comment}");
+    if display_width(&compact) <= help_width() {
+        return vec![compact];
+    }
+    let mut lines = vec![head];
+    lines.extend(
+        wrap_text(&format!("# {comment}"), "      ", 8)
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+    );
+    lines
+}
+
 /// Generate global help text listing all available commands by category.
 pub fn generate_help() -> String {
     let cmds = all_commands();
@@ -506,30 +785,16 @@ pub fn generate_help() -> String {
     // Quick Start — the commands new users reach for first
     lines.extend(quick_start_box());
 
-    // Common workflows — compact pipe-style
+    // Common workflows — compact pipe-style. Rendered through
+    // `workflow_lines`, which drops a comment onto its own line when the
+    // aligned form would not fit the terminal.
     lines.push("\n── Common workflows ─────────────────────────────────────────────────".to_string());
-    lines.push("  Navigate & inspect:".to_string());
-    lines.push("    goto <url>  →  snapshot -v 0  →  click <ref>  →  snapshot -v 0".to_string());
-    lines.push("  Extract data:".to_string());
-    lines.push("    htmlsnapshot                             # the capture every htmlsnapshot command runs".to_string());
-    lines.push("    htmlsnapshot get text \"<css>\"           # single field (captures the tab first)".to_string());
-    lines.push("    htmlsnapshot query --sql @query.sql       # structured extraction (also captures first)".to_string());
-    lines.push("    scrape --formats \"markdown,links\"        # one capture → many outputs in one document".to_string());
-    lines.push("    htmlsnapshot get text \"<css>\" --expires 1d  # read the stored snapshot instead (tab untouched)".to_string());
-    lines.push("  Form interaction:".to_string());
-    lines.push("    fill <ref> \"<text>\" --submit              # fill + press Enter".to_string());
-    lines.push("  Handle dialogs (two-step):".to_string());
-    lines.push("    click <ref> --auto-dismiss-dialogs        # auto-accept dialog in one step".to_string());
-    lines.push("    OR click <ref>  →  dialog-accept          # click returns 'dialog pending'; then accept".to_string());
-    lines.push("  Run JavaScript:".to_string());
-    lines.push("    eval --file script.js                     # read JS from file (no quoting issues)".to_string());
-    lines.push("  Bulk crawl:".to_string());
-    lines.push("    crawl <url> --out-link-selector \"...\" --depth 1 --sql @query.sql".to_string());
-    lines.push("  Parallel extraction:".to_string());
-    lines.push("    swarm create  →  swarm query --sql @q.sql --seed-file urls.txt  →  swarm result <id>".to_string());
-    lines.push("  Use my own browser (no new browser, no CDP port):".to_string());
-    lines.push("    attach --extension <edge|chrome>          # needs the Browser4 extension from the Web Store".to_string());
-    lines.push("    →  goto <url>  →  ...  →  disconnect      # drives the tab it opened; your own tabs stay".to_string());
+    for (heading, entries) in COMMON_WORKFLOWS {
+        lines.push(format!("  {heading}"));
+        for (command, comment) in *entries {
+            lines.extend(workflow_lines(command, *comment));
+        }
+    }
 
     // Category index — which `--help <category>` targets exist
     lines.extend(category_index_lines());
@@ -537,7 +802,7 @@ pub fn generate_help() -> String {
     // Category listing — each category with its commands
     let mut first_category = true;
     for (cat_name, cat_title) in CATEGORY_TITLES {
-        let cat_cmds: Vec<&CommandDef> = cmds
+        let mut cat_cmds: Vec<&CommandDef> = cmds
             .iter()
             .filter(|c| !c.hidden && c.category.as_str() == *cat_name)
             .collect();
@@ -548,13 +813,28 @@ pub fn generate_help() -> String {
             lines.push("\n── Commands ─────────────────────────────────────────────────────────".to_string());
             // Legend for the ★ marker used on high-frequency command rows below.
             lines.push("  ★ = high-frequency command — good starting points for new users".to_string());
-            lines.push(
-                "  Rows show a one-line summary; `--help <command>` has the full description, options, and examples."
-                    .to_string(),
-            );
+            lines.extend(wrapped_lines(
+                "Rows show a short summary (one or two lines); `--help <command>` has the full description, options, and examples.",
+                "  ",
+                4,
+            ));
         }
         first_category = false;
+        // ★ first, then alphabetical. Declaration order used to be the listing
+        // order, which put `batch` and `loop` at the top of [Core] and made
+        // every section read like an implementation detail instead of a menu.
+        cat_cmds.sort_by_key(|cmd| listing_sort_key(cmd));
         lines.push(format!("\n  [{}]", cat_title));
+        if *cat_name == "snapshot" {
+            // `snapshot` is also a command (the accessibility tree), and the
+            // category is reached through an alias — name both surfaces where a
+            // reader first meets the second one.
+            lines.extend(wrapped_lines(
+                "`htmlsnapshot` reads Browser4's HTML page store; the accessibility-tree command is `snapshot` (listed under [Core]).",
+                "  ",
+                4,
+            ));
+        }
         for cmd in cat_cmds {
             lines.push(generate_help_entry(cmd));
         }
@@ -568,10 +848,11 @@ pub fn generate_help() -> String {
         lines.push(
             "\n── Hidden commands ──────────────────────────────────────────────────".to_string(),
         );
-        lines.push(
-            "  Supported, but kept out of the category list above — `--help <family>` lists one:"
-                .to_string(),
-        );
+        lines.extend(wrapped_lines(
+            "Supported, but kept out of the category list above — `--help hidden:<prefix>` lists one:",
+            "  ",
+            4,
+        ));
         let width = hidden_groups
             .iter()
             .map(|group| display_width(&group.prefix))
@@ -580,7 +861,7 @@ pub fn generate_help() -> String {
         for group in &hidden_groups {
             let noun = if group.count == 1 { "command " } else { "commands" };
             lines.push(format!(
-                "    {}{}  {}  →  browser4-cli --help {}",
+                "    {}{}  {}  →  browser4-cli --help hidden:{}",
                 group.prefix,
                 " ".repeat(width - display_width(&group.prefix)),
                 format_args!("{:>2} {}", group.count, noun),
@@ -592,24 +873,58 @@ pub fn generate_help() -> String {
     // Plugin tools
     lines.push("\n── Plugin tools ─────────────────────────────────────────────────────".to_string());
     lines.push("  Plugin domains are invoked as `plugin <domain> <method>`:".to_string());
-    lines.push("    plugin                     plugin tool domains with their methods".to_string());
-    lines.push("    plugin <domain> --help     methods of one plugin domain".to_string());
-    lines.push("    plugin <domain> <method>   run one method (e.g. plugin media detectVideos)".to_string());
-    lines.push("    tool list [--filter <x>]   every advertised MCP tool name (GET /mcp/tools)".to_string());
-    lines.push("    tool call <mcp-name>       invoke any MCP tool (e.g. tool call captcha_detect)".to_string());
-    lines.push("  `plugin list` lists the installed plugin JARs and their status, not their tools.".to_string());
+    for (command, comment) in [
+        ("plugin", Some("plugin tool domains with their methods")),
+        ("plugin <domain> --help", Some("methods of one plugin domain")),
+        (
+            "plugin <domain> <method>",
+            Some("run one method (e.g. plugin media detectVideos)"),
+        ),
+        (
+            "tool list [--filter <x>]",
+            Some("every advertised MCP tool name (GET /mcp/tools)"),
+        ),
+        (
+            "tool call <mcp-name>",
+            Some("invoke any MCP tool (e.g. tool call captcha_detect)"),
+        ),
+    ] {
+        lines.extend(workflow_lines(command, comment));
+    }
+    lines.extend(wrapped_lines(
+        "`plugin list` lists the installed plugin JARs and their status, not their tools.",
+        "  ",
+        4,
+    ));
 
     // Server plugins (first-party)
     lines.push("\n── Server plugins ───────────────────────────────────────────────────".to_string());
     lines.push("  First-party plugins live in browser4-plugins/<name>/target/*.jar.".to_string());
     lines.push("  Bundled by default: swarm, images, markdown, media, seo.".to_string());
     lines.push("  Install on demand: captcha, pptx, profile-import, summary-demo.".to_string());
-    lines.push("    browser4-cli plugin install browser4-plugins/<name>/target/*.jar".to_string());
-    lines.push("    browser4-cli stop                    # next command auto-restarts the dev backend".to_string());
-    lines.push("  The CLI expands the * wildcard (PowerShell does not, for native commands); when".to_string());
-    lines.push("  several JARs match, the one for this CLI's version is installed and reported.".to_string());
-    lines.push("  After restart, plugin tools are callable via: browser4-cli tool call <mcp-name>".to_string());
-    lines.push("  Tool names are snake_case (captcha.detect -> captcha_detect); see docs/config.md §CAPTCHA.".to_string());
+    lines.extend(workflow_lines(
+        "browser4-cli plugin install browser4-plugins/<name>/target/*.jar",
+        None,
+    ));
+    lines.extend(workflow_lines(
+        "browser4-cli stop",
+        Some("next command auto-restarts the dev backend"),
+    ));
+    lines.extend(wrapped_lines(
+        "The CLI expands the * wildcard (PowerShell does not, for native commands); when several JARs match, the one for this CLI's version is installed and reported.",
+        "  ",
+        4,
+    ));
+    lines.extend(wrapped_lines(
+        "After restart, plugin tools are callable via: browser4-cli tool call <mcp-name>",
+        "  ",
+        4,
+    ));
+    lines.extend(wrapped_lines(
+        "Tool names are snake_case (captcha.detect -> captcha_detect); see docs/config.md §CAPTCHA.",
+        "  ",
+        4,
+    ));
 
     // Global options — rendered from GLOBAL_OPTIONS so the printed list and
     // the --help-json schema cannot drift apart.
@@ -618,46 +933,72 @@ pub fn generate_help() -> String {
         lines.push(format_with_gap(&format!("  {}", opt.flags), opt.description, 30));
     }
 
-    // Environment variables
+    // Environment variables — rendered from ENVIRONMENT_VARIABLES, the same
+    // table `--help-json` emits, so the two surfaces cannot drift. The
+    // description column is computed from the longest name: a fixed gutter left
+    // the long names flush against their text while the short ones sat in a
+    // ragged second column.
     lines.push(
         "\n── Environment variables ─────────────────────────────────────────────"
             .to_string(),
     );
-    lines.push(format_with_gap(
-        "  BROWSER4_CLI_STATE_DIR=<dir>",
-        "Override CLI session state directory (default: ~/.browser4); falls back to ./.browser4-cli-state when unwritable",
-        30,
-    ));
-    lines.push(format_with_gap(
-        "  BROWSER4_RUNTIME_DIR=<dir>",
-        "Override Browser4 runtime data directory (JRE, JARs, launchers)",
-        30,
-    ));
+    let env_col = ENVIRONMENT_VARIABLES
+        .iter()
+        .map(|var| display_width(&format!("  {}", var.name)))
+        .max()
+        .unwrap_or(0)
+        + 2;
+    for var in ENVIRONMENT_VARIABLES {
+        lines.push(format_with_gap(
+            &format!("  {}", var.name),
+            var.description,
+            env_col,
+        ));
+    }
 
     lines.push(String::new());
-    lines.push(
-        "Run `browser4-cli help <command>` or `<command> --help` for detailed options and examples."
-            .to_string(),
-    );
+    lines.extend(wrapped_lines(
+        "Run `browser4-cli help <command>` or `<command> --help` for detailed options and examples.",
+        "",
+        0,
+    ));
     // The `--help --examples` surface is only discoverable from a command page
     // otherwise, so the top-level help names it too.
-    lines.push(
-        "Add `--examples`: `browser4-cli --help <command> --examples` prints the command's runnable examples."
-            .to_string(),
-    );
+    lines.extend(wrapped_lines(
+        "Add `--examples`: `browser4-cli --help <command> --examples` prints the command's runnable examples.",
+        "",
+        0,
+    ));
     // Git Bash / MSYS users cannot discover the wrapper rule from anywhere else
     // in the CLI: MSYS rewrites a '/' -leading argument before the CLI starts,
     // so the failure looks like the CLI rejecting a value the user typed.
     lines.push(String::new());
-    for line in GIT_BASH_HELP_LINES {
-        lines.push(format!("  {line}"));
-    }
-    lines.push(
-        "Dev mode: cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>"
-            .to_string(),
-    );
+    lines.extend(wrapped_lines(&GIT_BASH_HELP_LINES.join(" "), "  ", 2));
+    // How to run the CLI from a source checkout. Meaningless in a released
+    // binary (there is no checkout on the user's machine), so it is printed only
+    // when the CLI is actually running from one.
+    lines.extend(dev_mode_lines());
 
     lines.join("\n")
+}
+
+/// The `Dev mode:` line, or nothing in a released build.
+///
+/// `is_dev` is passed in so the gate is testable both ways without depending on
+/// where the test runs.
+fn dev_mode_line(is_dev: bool) -> Option<&'static str> {
+    if is_dev {
+        Some("Dev mode: cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>")
+    } else {
+        None
+    }
+}
+
+/// The trailing lines that tell a source-checkout user how to run the CLI.
+fn dev_mode_lines() -> Vec<String> {
+    dev_mode_line(crate::daemon::is_dev_mode())
+        .map(|line| vec![line.to_string()])
+        .unwrap_or_default()
 }
 
 /// Generate the no-argument help screen: the CLI's **minimal usable manual**.
@@ -910,17 +1251,18 @@ pub fn generate_help_json(sub_command: Option<&str>) -> String {
         .map(|c| command_to_json(&c))
         .collect();
 
-    // Environment variables
-    let environment_variables = serde_json::json!({
-        "BROWSER4_CLI_STATE_DIR": {
-            "type": "string",
-            "description": "Override CLI session state directory (default: ~/.browser4); falls back to ./.browser4-cli-state when unwritable"
-        },
-        "BROWSER4_RUNTIME_DIR": {
-            "type": "string",
-            "description": "Override Browser4 runtime data directory (JRE, JARs, launchers)"
-        },
-    });
+    // Environment variables — the same table the printed help renders, so a
+    // variable cannot be documented on one surface and missing from the other.
+    let mut environment_variables = serde_json::Map::new();
+    for var in ENVIRONMENT_VARIABLES {
+        environment_variables.insert(
+            var.name.to_string(),
+            serde_json::json!({
+                "type": var.json_type,
+                "description": var.description,
+            }),
+        );
+    }
 
     let output = serde_json::json!({
         "cli": "browser4-cli",
@@ -5353,46 +5695,107 @@ pub fn help_hint(command: &str) -> String {
 
 /// Commands that are subcommands of `cmd`, in definition order.
 ///
-/// A subcommand is any visible command whose public name starts with this
-/// command's public name followed by a space (`crawl` → `crawl status`,
-/// `crawl result`, …), matching how `--help <prefix>` groups them. The command
-/// itself is excluded, so a command whose name is merely a prefix of its own
-/// spaced form does not list itself.
+/// A subcommand is any command whose public name starts with this command's
+/// public name followed by a space (`crawl` → `crawl status`, `crawl result`,
+/// …), matching how `--help <prefix>` groups them. The command itself is
+/// excluded, so a command whose name is merely a prefix of its own spaced form
+/// does not list itself.
+///
+/// Hidden subcommands are listed too: `config list` is a supported spelling of
+/// `config`, but with hidden children filtered out the parent's page (the only
+/// place a user who typed `config` looks) never named it.
 fn subcommands_of(cmd: &CommandDef) -> Vec<CommandDef> {
     let parent = public_command_name(cmd.name);
     let prefix = format!("{parent} ");
     all_commands()
         .into_iter()
-        .filter(|c| {
-            !c.hidden && c.name != cmd.name && public_command_name(c.name).starts_with(&prefix)
-        })
+        .filter(|c| c.name != cmd.name && public_command_name(c.name).starts_with(&prefix))
         .collect()
 }
 
-/// Shorten a command description for a category listing.
-///
-/// Listings are meant to be scanned and compared, but the command descriptions
-/// double as the MCP tool documentation: left whole, a single entry such as
-/// `htmlsnapshot` (twice — it and its `capture` alias) or `scrape` swallowed
-/// ten to twenty wrapped lines each and buried the commands around it.
-/// Listings therefore show the first sentence, trimmed at a word boundary to
-/// [`LISTING_DESC_WIDTH`]; `--help <command>` and `--help-json` keep the full
-/// text.
-fn listing_description(description: &str) -> String {
-    let first_line = description.split('\n').next().unwrap_or("").trim();
-    // First sentence: a period followed by a space or the end of the text.
-    let sentence = match first_line.find(". ") {
-        Some(idx) => &first_line[..=idx],
-        None => first_line,
-    };
-    if display_width(sentence) <= LISTING_DESC_WIDTH {
-        return sentence.to_string();
-    }
+/// Words a truncated summary must not end on: a cut that lands on one of these
+/// leaves a sentence that reads like a runaway regex (`… then queried, so the …`
+/// shipped on `htmlsnapshot query` for months).
+const DANGLING_TAIL_WORDS: &[&str] = &[
+    "a", "an", "the", "and", "or", "but", "nor", "of", "to", "in", "on", "at", "for",
+    "from", "with", "by", "as", "so", "when", "while", "that", "which", "than", "then",
+    "if", "its", "their", "is", "are", "was", "were", "be", "been", "being", "will",
+    "would", "can", "could", "should", "may", "might", "must", "not", "no", "only",
+    "also", "into", "over", "under", "via", "per", "this", "these", "those", "each",
+    "every", "any", "some", "more", "most", "less", "least", "up", "out", "it",
+];
 
-    // Too long even as one sentence — cut at the last word boundary that fits.
+/// End offsets (in characters) where `chars` may stop at a clause boundary.
+///
+/// Boundaries inside parentheses or backticked spans are skipped — cutting at
+/// one produced summaries such as `… (title, byline, site name, excerpt,` and a
+/// dangling `` `set ``. A closing `)` is itself a boundary, so a complete
+/// parenthetical is a legal stopping point.
+fn clause_boundaries(chars: &[char]) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::new();
+    let mut depth = 0usize;
+    let mut in_backtick = false;
+    for (i, &c) in chars.iter().enumerate() {
+        match c {
+            '`' => in_backtick = !in_backtick,
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if !in_backtick && depth == 0 {
+            let rest: String = chars[i..].iter().take(3).collect();
+            if rest.starts_with(", ")
+                || rest.starts_with("; ")
+                || rest.starts_with(": ")
+                || rest.starts_with(" — ")
+                || rest.starts_with(" - ")
+            {
+                out.push(i);
+            }
+        }
+        if c == ')' && !in_backtick {
+            out.push(i + 1);
+        }
+    }
+    out
+}
+
+/// Clean a candidate cut so it ends on a content word with balanced backticks.
+fn clean_clause_cut(text: &str) -> String {
+    let trim_tail = |value: &str| {
+        value
+            .trim_end()
+            .trim_end_matches([',', ';', ':', '—', '–'])
+            .trim_end()
+            .to_string()
+    };
+    let mut out = trim_tail(text);
+    // Back up over a dangling function word, up to a few words deep.
+    for _ in 0..4 {
+        let Some(space) = out.rfind(' ') else { break };
+        let last = out[space + 1..].to_lowercase();
+        if !DANGLING_TAIL_WORDS.contains(&last.as_str()) {
+            break;
+        }
+        out = trim_tail(&out[..space]);
+    }
+    // Never emit an unclosed backtick: drop the partial item instead.
+    if out.matches('`').count() % 2 == 1 {
+        if let Some(open) = out.rfind('`') {
+            let cleaned = trim_tail(&out[..open]);
+            if !cleaned.is_empty() {
+                out = cleaned;
+            }
+        }
+    }
+    out
+}
+
+/// Cut at the last word boundary that fits [`LISTING_DESC_WIDTH`].
+fn word_boundary_cut(text: &str) -> String {
     let mut out = String::new();
     let mut width = 0;
-    for word in sentence.split(' ') {
+    for word in text.split(' ') {
         let word_width = display_width(word);
         let next = if out.is_empty() { word_width } else { width + 1 + word_width };
         if next > LISTING_DESC_WIDTH {
@@ -5407,32 +5810,69 @@ fn listing_description(description: &str) -> String {
     }
     if out.is_empty() {
         // A single word wider than the budget (e.g. a long URL) — keep it.
+        return text.to_string();
+    }
+    clean_clause_cut(&out)
+}
+
+/// Shorten a command description for a category listing.
+///
+/// Listings are meant to be scanned and compared, but the command descriptions
+/// double as the MCP tool documentation: left whole, a single entry such as
+/// `htmlsnapshot` (twice — it and its `capture` alias) or `scrape` swallowed
+/// ten to twenty wrapped lines each and buried the commands around it.
+/// Listings therefore show the first sentence, trimmed to
+/// [`LISTING_DESC_WIDTH`]; `--help <command>` and `--help-json` keep the full
+/// text.
+///
+/// The cut prefers a clause boundary inside the budget (`… page metadata —
+/// URL, title, size, timestamps`), then a complete clause just past it when
+/// cutting at the budget would leave a fragment, and only then a plain word
+/// boundary. A summary that ends on a function word ("… so the …") is never
+/// emitted: it tells the reader nothing the command name did not.
+fn listing_description(description: &str) -> String {
+    let first_line = description.split('\n').next().unwrap_or("").trim();
+    // First sentence: a period followed by a space or the end of the text.
+    let sentence = match first_line.find(". ") {
+        Some(idx) => &first_line[..=idx],
+        None => first_line,
+    };
+    if display_width(sentence) <= LISTING_DESC_WIDTH {
         return sentence.to_string();
     }
 
-    // Item-aware: a word-boundary cut can still land inside a `backticked`
-    // enumeration, leaving a dangling "`set … that hides every later item (the
-    // `set` summary lost `set media`/`set device` this way). Drop the partial
-    // item and the separator before it instead of emitting an unclosed backtick.
-    if out.matches('`').count() % 2 == 1 {
-        if let Some(open) = out.rfind('`') {
-            let cleaned = out[..open]
-                .trim_end()
-                .trim_end_matches(|c| matches!(c, ',' | ';' | '—'))
-                .trim_end()
-                .to_string();
-            if !cleaned.is_empty() {
-                out = cleaned;
-            }
-        }
-    }
+    let chars: Vec<char> = sentence.chars().collect();
+    let width_at = |end: usize| {
+        display_width(&chars[..end.min(chars.len())].iter().collect::<String>())
+    };
+    let boundaries = clause_boundaries(&chars);
+    let within: Vec<usize> = boundaries
+        .iter()
+        .copied()
+        .filter(|end| width_at(*end) <= LISTING_DESC_WIDTH)
+        .collect();
+    // A complete clause just past the budget is better than a fragment: it costs
+    // one wrapped line and keeps the sentence readable.
+    let just_past = boundaries.iter().copied().find(|end| {
+        width_at(*end) > LISTING_DESC_WIDTH && width_at(*end) <= LISTING_DESC_WIDTH + 60
+    });
 
-    // Replace a trailing comma/dash left dangling by the cut, and drop the
-    // space that preceded it.
-    while out.ends_with(',') || out.ends_with(';') || out.ends_with('—') {
-        out.pop();
+    let cut = within
+        .last()
+        .copied()
+        // Do not spend the row on a two-word lead-in ("Capture:").
+        .filter(|end| width_at(*end) * 2 >= LISTING_DESC_WIDTH)
+        .or(just_past)
+        .or_else(|| within.last().copied());
+
+    let candidate = match cut {
+        Some(end) => clean_clause_cut(&chars[..end].iter().collect::<String>()),
+        None => word_boundary_cut(sentence),
+    };
+    if candidate.is_empty() {
+        return format!("{} …", word_boundary_cut(sentence));
     }
-    format!("{} …", out.trim_end())
+    format!("{candidate} …")
 }
 
 pub fn generate_help_entry(cmd: &CommandDef) -> String {
@@ -5517,9 +5957,10 @@ fn wrap_text(text: &str, first_line_prefix: &str, indent: usize) -> String {
     if text.is_empty() {
         return first_line_prefix.to_string();
     }
+    let width = help_width();
     let prefix_len = display_width(first_line_prefix);
-    let first_avail = MAX_LINE_WIDTH.saturating_sub(prefix_len);
-    let cont_avail = MAX_LINE_WIDTH.saturating_sub(indent);
+    let first_avail = width.saturating_sub(prefix_len);
+    let cont_avail = width.saturating_sub(indent);
     let cont_pad = " ".repeat(indent);
 
     let mut output = String::new();
@@ -5579,6 +6020,7 @@ fn format_with_gap(prefix: &str, text: &str, threshold: usize) -> String {
     // Measure the prefix in display columns, not bytes: a multi-byte prefix
     // (the `★` marker) would otherwise eat into the gap and shift the whole
     // description column left.
+    let width = help_width();
     let prefix_width = display_width(prefix);
     let gap = if prefix_width < threshold {
         threshold - prefix_width
@@ -5588,30 +6030,50 @@ fn format_with_gap(prefix: &str, text: &str, threshold: usize) -> String {
 
     // Fast path: everything fits on one line
     let full_line = format!("{}{}{}", prefix, " ".repeat(gap), text);
-    if display_width(&full_line) <= MAX_LINE_WIDTH {
+    if display_width(&full_line) <= width {
         return full_line;
     }
 
+    // Where the description actually starts. Continuation lines align under it,
+    // not under `threshold`: a command whose syntax is longer than the gutter
+    // (`swarm query [url] --sql <query> …`) pushed its description right of the
+    // gutter, and the fixed indent then hung every wrapped line to the LEFT of
+    // the text it continues.
+    let mut desc_col = prefix_width + gap;
+    // When the command syntax leaves too little room, the summary starts on its
+    // own line at the gutter instead of being squeezed into a sliver.
+    let own_line = desc_col + 2 * MIN_DESCRIPTION_COLUMN > width;
+    if own_line {
+        desc_col = threshold;
+    }
 
-    // Word-wrap the description text with continuation indented to `threshold`
-    let prefix_total = prefix_width + gap;
-    let first_avail = MAX_LINE_WIDTH.saturating_sub(prefix_total);
-    let cont_avail = MAX_LINE_WIDTH.saturating_sub(threshold);
-    let cont_indent = " ".repeat(threshold);
+    let avail = width.saturating_sub(desc_col);
+    let cont_indent = " ".repeat(desc_col);
 
     let words: Vec<&str> = text.split(' ').collect();
     let mut lines: Vec<String> = Vec::new();
     let mut current_line = String::new();
-
     for word in words {
-        let is_first = lines.is_empty();
-        let limit = if is_first { first_avail } else { cont_avail };
-
         if current_line.is_empty() {
             current_line = word.to_string();
-        } else if display_width(&current_line) + 1 + display_width(word) <= limit {
+        } else if display_width(&current_line) + 1 + display_width(word) <= avail {
             current_line.push(' ');
             current_line.push_str(word);
+        } else if word == "…" {
+            // Keep the truncation marker with the word before it: pushing the
+            // full line and starting a new one left an "…" alone under the row.
+            match current_line.rfind(' ') {
+                Some(pos) => {
+                    let tail = current_line[pos + 1..].to_string();
+                    current_line.truncate(pos);
+                    lines.push(current_line);
+                    current_line = format!("{tail} …");
+                }
+                None => {
+                    lines.push(current_line);
+                    current_line = word.to_string();
+                }
+            }
         } else {
             lines.push(current_line);
             current_line = word.to_string();
@@ -5621,13 +6083,17 @@ fn format_with_gap(prefix: &str, text: &str, threshold: usize) -> String {
         lines.push(current_line);
     }
 
-    let mut result = String::new();
+    let mut result = if own_line {
+        format!("{prefix}\n{cont_indent}")
+    } else {
+        format!("{prefix}{}", " ".repeat(gap))
+    };
     for (i, line) in lines.iter().enumerate() {
-        if i == 0 {
-            result.push_str(&format!("{}{}{}", prefix, " ".repeat(gap), line));
-        } else {
-            result.push_str(&format!("\n{}{}", cont_indent, line));
+        if i > 0 {
+            result.push('\n');
+            result.push_str(&cont_indent);
         }
+        result.push_str(line);
     }
     result
 }
@@ -5782,17 +6248,47 @@ mod tests {
 
     #[test]
     fn test_help_output_respects_the_line_width_budget() {
+        let budget = help_width();
         for (label, output) in [
             ("generate_help", generate_help()),
             ("generate_quick_reference", generate_quick_reference()),
         ] {
             for line in output.lines() {
                 assert!(
-                    display_width(line) <= MAX_LINE_WIDTH,
-                    "{label} line is {} columns wide (budget {MAX_LINE_WIDTH}): {line}",
+                    display_width(line) <= budget,
+                    "{label} line is {} columns wide (budget {budget}): {line}",
                     display_width(line)
                 );
             }
+        }
+    }
+
+    /// `COLUMNS` drives the help budget (it used to be ignored entirely: 145 of
+    /// 377 reference lines were wider than 80 columns, so an 80-column terminal
+    /// wrapped them and collapsed the aligned description column).
+    #[test]
+    fn test_help_width_follows_columns_and_clamps() {
+        assert_eq!(width_from_columns(None), MAX_LINE_WIDTH);
+        assert_eq!(width_from_columns(Some("garbage")), MAX_LINE_WIDTH);
+        assert_eq!(width_from_columns(Some(" 110 ")), 110);
+        // Below the floor the Quick Start box (76 columns) no longer fits.
+        assert_eq!(width_from_columns(Some("40")), MIN_HELP_WIDTH);
+        assert_eq!(width_from_columns(Some("9999")), MAX_HELP_WIDTH);
+    }
+
+    /// The quick reference is the surface a terminal user sees first, so it also
+    /// has to fit the narrowest budget the renderer accepts.
+    #[test]
+    fn test_quick_reference_fits_the_narrowest_budget() {
+        let narrowest = generate_quick_reference();
+        // The quick reference is rendered at the active budget; every line must
+        // stay inside `MIN_HELP_WIDTH` by construction, so a wide terminal only
+        // changes the table columns, never the minimum.
+        for line in narrowest.lines() {
+            assert!(
+                display_width(line) <= MAX_HELP_WIDTH,
+                "quick-reference line exceeds the widest budget: {line}"
+            );
         }
     }
 
@@ -5805,6 +6301,7 @@ mod tests {
     /// exists to provide.
     #[test]
     fn test_every_command_help_respects_the_line_width_budget() {
+        let budget = help_width();
         let mut offenders: Vec<String> = Vec::new();
         for cmd in all_commands() {
             let help = generate_command_help(&cmd);
@@ -5823,7 +6320,7 @@ mod tests {
                     }
                     in_examples = false;
                 }
-                if display_width(line) > MAX_LINE_WIDTH {
+                if display_width(line) > budget {
                     offenders.push(format!(
                         "'{}' ({} columns): {line}",
                         public_command_name(cmd.name),
@@ -5834,7 +6331,7 @@ mod tests {
         }
         assert!(
             offenders.is_empty(),
-            "help lines over the {MAX_LINE_WIDTH}-column budget:\n  {}",
+            "help lines over the {budget}-column budget:\n  {}",
             offenders.join("\n  ")
         );
     }
@@ -6808,21 +7305,21 @@ mod tests {
         let groups = hidden_command_groups();
         assert!(!groups.is_empty(), "the CLI has hidden commands to advertise");
         for group in &groups {
+            // The pointer must be `hidden:<prefix>`: a bare `--help config` /
+            // `--help skills` is answered by the *visible command* of that name,
+            // so the advertised family listing never appeared.
+            let pointer = format!("browser4-cli --help hidden:{}", group.prefix);
             assert!(
-                section.contains(&format!("browser4-cli --help {}", group.prefix)),
+                section.contains(&pointer),
                 "hidden family '{}' is not advertised:\n{section}",
                 group.prefix
             );
-            // The advertised prefix must actually resolve to a listing: either
-            // an exact command or at least one public name starting with it.
-            let reachable = crate::commands::commands_map().contains_key(group.prefix.as_str())
-                || all_commands()
-                    .iter()
-                    .any(|c| public_command_name(c.name).starts_with(&format!("{} ", group.prefix)));
+            // ... and the advertised target must itself resolve to a listing.
+            let family = classify_hidden_family(&group.prefix);
             assert!(
-                reachable,
-                "'--help {}' would not list anything",
-                group.prefix
+                family > 0,
+                "'{}' would not list anything",
+                pointer
             );
         }
 
@@ -6836,6 +7333,153 @@ mod tests {
                 "'{public}' is hidden but appears in the category listing"
             );
         }
+    }
+
+    /// Number of hidden commands `--help hidden:<prefix>` would list.
+    fn classify_hidden_family(prefix: &str) -> usize {
+        all_commands()
+            .iter()
+            .filter(|c| {
+                c.hidden
+                    && (public_command_name(c.name) == prefix
+                        || public_command_name(c.name).starts_with(&format!("{prefix} ")))
+            })
+            .count()
+    }
+
+    /// `--help-json` and the printed reference must document the same
+    /// environment variables: they used to be two hand-written lists of two
+    /// entries, and neither named the defaults behind `-s` / `--server`.
+    #[test]
+    fn test_environment_variables_are_documented_in_help_and_json() {
+        let help = generate_help();
+        let json = generate_help_json(None);
+        for var in ENVIRONMENT_VARIABLES {
+            assert!(
+                help.contains(var.name),
+                "{} is missing from the printed help",
+                var.name
+            );
+            assert!(
+                json.contains(&format!("\"{}\"", var.name)),
+                "{} is missing from --help-json",
+                var.name
+            );
+        }
+        for name in ["BROWSER4_CLI_SESSION", "BROWSER4_CLI_SERVER"] {
+            assert!(help.contains(name), "{name} is not documented: it defaults the global flags");
+        }
+    }
+
+    /// The `Dev mode:` line is a source-checkout hint. A released binary has no
+    /// checkout to run from, so the line is not printed there.
+    #[test]
+    fn test_dev_mode_line_is_only_printed_for_a_checkout() {
+        let line = dev_mode_line(true).expect("a checkout gets the hint");
+        assert!(line.starts_with("Dev mode: cargo run"), "{line}");
+        assert!(
+            dev_mode_line(false).is_none(),
+            "a released build must not tell users to run cargo"
+        );
+    }
+
+    /// Shadowed category names are reachable through the explicit forms the
+    /// reference advertises.
+    #[test]
+    fn test_category_index_advertises_the_explicit_forms() {
+        let index = category_index_lines().join("\n");
+        assert!(index.contains("--help category:<name>"), "{index}");
+        assert!(index.contains("category:install"), "{index}");
+    }
+
+    /// A workflow comment moves to its own line instead of pushing the row past
+    /// the terminal width.
+    #[test]
+    fn test_workflow_comment_wraps_instead_of_overflowing() {
+        let short = workflow_lines(
+            "fill <ref> \"<text>\" --submit",
+            Some("fill + press Enter"),
+        );
+        assert_eq!(short.len(), 1, "{short:?}");
+        assert!(short[0].contains("# fill + press Enter"), "{short:?}");
+
+        let comment = "a click parked on a dialog (DIALOG_PENDING); then accept and continue with the workflow";
+        let long = workflow_lines("OR click <ref>  →  dialog-accept", Some(comment));
+        assert!(long.len() >= 2, "the comment must move to its own line: {long:?}");
+        assert!(long[1].trim_start().starts_with('#'), "{long:?}");
+        for line in &long {
+            assert!(
+                display_width(line) <= help_width(),
+                "workflow row overflows the budget: {line}"
+            );
+        }
+    }
+
+    /// Truncated summaries used to end on a function word (`… then queried, so
+    /// the …`) or inside a parenthetical / backticked span. Every row must now
+    /// stop at a complete clause.
+    #[test]
+    fn test_truncated_listing_summaries_end_on_a_complete_clause() {
+        for cmd in all_commands() {
+            let summary = listing_description(cmd.description);
+            let Some(head) = summary.strip_suffix(" …") else {
+                continue;
+            };
+            let last = head.rsplit(' ').next().unwrap_or("").to_lowercase();
+            assert!(
+                !DANGLING_TAIL_WORDS.contains(&last.as_str()),
+                "'{}' summary ends on a dangling word: {summary}",
+                public_command_name(cmd.name)
+            );
+            assert_eq!(
+                head.matches('`').count() % 2,
+                0,
+                "'{}' summary leaves an unclosed backtick: {summary}",
+                public_command_name(cmd.name)
+            );
+        }
+    }
+
+    /// A wrapped row's continuation lines up under its own description. The
+    /// fixed 32-column indent used to hang the second line to the *left* of the
+    /// text it continues whenever the command syntax was longer than the gutter
+    /// (`swarm query …`, `htmlsnapshot get …`).
+    #[test]
+    fn test_wrapped_rows_align_under_their_own_description_column() {
+        let help = generate_help();
+        let commands_start = help.find("── Commands").expect("commands section");
+        let commands_end = help.find("── Hidden commands").unwrap_or(help.len());
+        let lines: Vec<&str> = help[commands_start..commands_end].lines().collect();
+
+        let mut checked = 0;
+        for (i, line) in lines.iter().enumerate() {
+            // Rows start with the ★ marker or exactly two spaces; continuation
+            // lines are indented to the description column (32+ spaces).
+            let is_row = line.starts_with("★ ")
+                || (line.starts_with("  ") && !line.starts_with("   "));
+            if !is_row {
+                continue;
+            }
+            let Some(next) = lines.get(i + 1) else { continue };
+            if next.trim().is_empty() || !next.starts_with("  ") {
+                continue;
+            }
+            let indent = next.len() - next.trim_start().len();
+            // Anything indented less than the 32-column gutter is the next row,
+            // not a continuation of this one.
+            if indent < 32 {
+                continue;
+            }
+            let Some(column) = description_column(line) else {
+                continue;
+            };
+            assert_eq!(
+                indent, column,
+                "row continuation is indented to {indent}, description starts at {column}:\n{line}\n{next}"
+            );
+            checked += 1;
+        }
+        assert!(checked >= 10, "expected wrapped rows to check, saw {checked}");
     }
 
     #[test]
@@ -7295,7 +7939,14 @@ mod tests {
     fn test_generate_command_help_htmlsnapshot() {
         let cmds = all_commands();
         let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot").unwrap();
-        let help = generate_command_help(cmd);
+        // Compare against the *unwrapped* page: the prose is re-flowed at the
+        // active line budget (and the description column depends on the longest
+        // command syntax), so asserting on raw lines pins the layout instead of
+        // the content.
+        let help = generate_command_help(cmd)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         // Header
         assert!(help.contains("browser4-cli htmlsnapshot"));
         assert!(help.contains("Capture: serialize the page the active tab is showing"));

@@ -27062,6 +27062,12 @@ const BUILTIN_PLUGIN_SUBCOMMANDS: &[&str] = &["list", "info", "install", "remove
 /// Answers both spellings users type — `--help plugin-markdown` and
 /// `plugin markdown --help` — and `None` for the static `plugin` subcommands so
 /// their own help pages stay in charge.
+///
+/// The domain has to come *after* the `plugin` token. Looking for the first
+/// non-flag argument anywhere in `args` made `--help plugin` treat the queried
+/// name itself as a domain, so the advertised `plugin=plugins` alias answered
+/// with "Plugin tool domain 'plugin' has no help to show" instead of the
+/// Plugins category.
 fn plugin_domain_help_target(command: &str, args: &[String]) -> Option<String> {
     if let Some(domain) = command.strip_prefix("plugin-") {
         if !domain.is_empty() && !BUILTIN_PLUGIN_SUBCOMMANDS.contains(&domain) {
@@ -27069,10 +27075,11 @@ fn plugin_domain_help_target(command: &str, args: &[String]) -> Option<String> {
         }
         return None;
     }
-    // `plugin <domain> --help`: the second word is the domain, unless it is a
-    // flag or one of the static subcommands.
+    // `plugin <domain> --help`: the first non-flag token after `plugin` is the
+    // domain, unless it is one of the static subcommands.
     if command == "plugin" {
-        let candidate = args.iter().skip(1).find(|arg| !arg.starts_with('-'))?;
+        let start = args.iter().position(|arg| arg == command)? + 1;
+        let candidate = args.iter().skip(start).find(|arg| !arg.starts_with('-'))?;
         if !BUILTIN_PLUGIN_SUBCOMMANDS.contains(&candidate.as_str()) {
             return Some(candidate.clone());
         }
@@ -32855,6 +32862,12 @@ fn main() {
 /// and return the process exit code.
 fn render_cli_error(json_mode: bool, command: &str, err: CliError) -> i32 {
     let message = err.message();
+    // A handler that already printed its own explanation reports only the exit
+    // code: `--help <typo>` prints "Unknown command" plus the full reference and
+    // then returns a bare Usage error, so the user is not told twice.
+    if message.is_empty() {
+        return err.code() as i32;
+    }
     // json_mode covers global --json; json_active() covers subcommand-level
     // --json (e.g. "tab-list --json") which enables JSON inside run().
     if json_mode || json_active() {
@@ -33150,7 +33163,7 @@ async fn run(
         // from the backend's tool list, and answering it from the static table
         // produced "Unknown command: plugin-<domain>" plus the full reference.
         if let Some(domain) = sub.as_deref().and_then(|target| {
-            plugin_domain_help_target(target, &global.args)
+            plugin_domain_help_target(target, &help_args)
         }) {
             if print_plugin_domain_help(&base_url, &domain).await {
                 return Ok(());
@@ -33181,6 +33194,9 @@ async fn run(
             if !print_declared_help(sub.as_deref(), &specs) {
                 eprintln!("Unknown command: {}", sub.as_deref().unwrap_or(""));
                 print_help(None);
+                // The reference is already on screen; the non-zero code is what
+                // lets scripts and agents notice the typo.
+                return Err(CliError(ExitCode::Usage, String::new()));
             }
             return Ok(());
         }
@@ -33267,6 +33283,9 @@ async fn run(
             if !print_declared_help(Some(command), &specs) {
                 eprintln!("Unknown command: {}", command);
                 print_help(None);
+                // The reference is already on screen; the non-zero code is what
+                // lets scripts and agents notice the typo.
+                return Err(CliError(ExitCode::Usage, String::new()));
             }
         }
         return Ok(());
@@ -35379,6 +35398,9 @@ enum HelpTarget {
     Command(String),
     /// A category name or alias — list every command in that category.
     Category(&'static str),
+    /// An explicit `hidden:<prefix>` request — list the hidden commands of one
+    /// family, whatever a command of the same name would otherwise win.
+    HiddenFamily(String),
     /// A prefix of one or more public command names (`experience` → `experience …`).
     Prefix,
     /// Nothing matched.
@@ -35387,24 +35409,53 @@ enum HelpTarget {
 
 /// Classify a `--help <target>` argument.
 ///
-/// Order matters: an exact command wins, then a category name or alias, and
-/// only then a prefix. Prefix matching used to run first, so the documented
-/// category `--help session` printed an arbitrary slice of the
-/// `sessionstorage-*` family, while `--help storage`, `--help tabs`,
-/// `--help network`, and `--help core` reported an unknown command even though
-/// the reference lists those very sections.
+/// Order matters: an explicit `category:` / `hidden:` request wins, then an
+/// exact command, then a category name or alias, and only then a prefix. Prefix
+/// matching used to run first, so the documented category `--help session`
+/// printed an arbitrary slice of the `sessionstorage-*` family, while `--help
+/// storage`, `--help tabs`, `--help network`, and `--help core` reported an
+/// unknown command even though the reference lists those very sections.
+///
+/// `category:<name>` and `hidden:<prefix>` exist because a name can be claimed
+/// twice: `install`, `webminer`, `skills`, `config`, `snapshot` and `keyboard`
+/// are both category names and commands, and the hidden families `config` and
+/// `skills` share their name with a visible command. An exact command always
+/// won, so those sections — and the hidden `config list` — could not be listed
+/// at all.
 fn classify_help_target(name: &str) -> HelpTarget {
+    let trimmed = name.trim();
+    if let Some(rest) = trimmed.strip_prefix("category:") {
+        return match resolve_category_alias(rest.trim()) {
+            Some(canonical) if !commands_in_category(canonical).is_empty() => {
+                HelpTarget::Category(canonical)
+            }
+            _ => HelpTarget::Unknown,
+        };
+    }
+    if let Some(rest) = trimmed.strip_prefix("hidden:") {
+        let prefix = rest.trim();
+        let matches = |public: &str| public == prefix || public.starts_with(&format!("{prefix} "));
+        if !prefix.is_empty()
+            && commands::all_commands()
+                .iter()
+                .any(|c| c.hidden && matches(public_command_name(c.name)))
+        {
+            return HelpTarget::HiddenFamily(prefix.to_string());
+        }
+        return HelpTarget::Unknown;
+    }
+
     let cmd_map = commands_map();
-    if cmd_map.contains_key(name) {
-        return HelpTarget::Command(name.to_string());
+    if cmd_map.contains_key(trimmed) {
+        return HelpTarget::Command(trimmed.to_string());
     }
     // A quoted spaced name (`--help "swarm submit"`) arrives as one argument;
     // its internal key is the kebab-case form.
-    let kebab = name.replace(' ', "-");
-    if kebab != name && cmd_map.contains_key(kebab.as_str()) {
+    let kebab = trimmed.replace(' ', "-");
+    if kebab != trimmed && cmd_map.contains_key(kebab.as_str()) {
         return HelpTarget::Command(kebab);
     }
-    if let Some(canonical) = resolve_category_alias(name) {
+    if let Some(canonical) = resolve_category_alias(trimmed) {
         if !commands_in_category(canonical).is_empty() {
             return HelpTarget::Category(canonical);
         }
@@ -35415,13 +35466,13 @@ fn classify_help_target(name: &str) -> HelpTarget {
     // listing and printed a one-line list instead of the page.
     if let Some(cmd) = cmd_map
         .values()
-        .find(|cmd| public_command_name(cmd.name) == name)
+        .find(|cmd| public_command_name(cmd.name) == trimmed)
     {
         return HelpTarget::Command(cmd.name.to_string());
     }
     if cmd_map
         .values()
-        .any(|c| public_command_name(c.name).starts_with(name))
+        .any(|c| public_command_name(c.name).starts_with(trimmed))
     {
         return HelpTarget::Prefix;
     }
@@ -35442,6 +35493,43 @@ fn print_help(command_name: Option<&str>) -> bool {
                         .get(resolved.as_str())
                         .expect("classify_help_target reported an exact command");
                     cli_println!("{}", generate_command_help(cmd));
+                    // The name is also a category (`install`, `webminer`,
+                    // `skills`, …): the command page wins, but the listing must
+                    // stay one copy-paste away.
+                    if let Some(hint) = shadowed_category_hint(name) {
+                        cli_println!("\n{hint}");
+                    }
+                    return true;
+                }
+                HelpTarget::HiddenFamily(prefix) => {
+                    // Explicit listing of a hidden family. Needed because a
+                    // visible command of the same name (`config`, `skills`) wins
+                    // over the prefix listing, which left those families
+                    // reachable only from the reference's pointer — and that
+                    // pointer resolved to the command page.
+                    let all = commands::all_commands();
+                    let mut matching: Vec<&crate::commands::CommandDef> = all
+                        .iter()
+                        .filter(|cmd| {
+                            if !cmd.hidden {
+                                return false;
+                            }
+                            let public = public_command_name(cmd.name);
+                            public == prefix || public.starts_with(&format!("{prefix} "))
+                        })
+                        .collect();
+                    matching.sort_by_key(|cmd| public_command_name(cmd.name));
+                    let mut lines: Vec<String> =
+                        vec![format!("\nHidden `{prefix}` commands:\n")];
+                    for cmd in matching {
+                        lines.push(generate_help_entry(cmd));
+                    }
+                    lines.push(String::new());
+                    lines.push(
+                        "These work like any other command; `--help <name>` prints one's own page."
+                            .to_string(),
+                    );
+                    cli_println!("{}", lines.join("\n"));
                     return true;
                 }
                 HelpTarget::Category(canonical) => {
@@ -35508,6 +35596,22 @@ fn print_help(command_name: Option<&str>) -> bool {
     }
     cli_println!("{}", generate_help());
     true
+}
+
+/// Pointer printed under a command page whose name is also a category name.
+///
+/// `install`, `webminer`, `skills`, `config`, `snapshot` and `keyboard` are both
+/// commands and categories; the command page wins by design, and this is the one
+/// line that keeps the section listing reachable.
+fn shadowed_category_hint(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    let canonical = resolve_category_alias(trimmed)?;
+    if commands_in_category(canonical).is_empty() {
+        return None;
+    }
+    Some(format!(
+        "`{trimmed}` is also a command category — list it with `browser4-cli --help category:{canonical}`."
+    ))
 }
 
 /// Render the `[plugin]`-badged section of declared plugin commands.
@@ -41171,8 +41275,79 @@ linkGroups:
         );
         assert_eq!(
             plugin_domain_help_target("plugin", &args(&["plugin"])),
-            None
+            None,
+            "the help target is not a plugin domain"
         );
+        assert_eq!(
+            plugin_domain_help_target("plugin", &args(&["plugin", "list", "--help"])),
+            None,
+            "the static subcommand keeps its own page"
+        );
+    }
+
+    #[test]
+    fn shadowed_category_hint_points_at_the_explicit_form() {
+        // `install`/`webminer`/`skills` are both commands and categories: the
+        // command page must name the listing, or the section is unreachable.
+        for name in ["install", "webminer", "skills", "config", "snapshot", "keyboard"] {
+            let hint = shadowed_category_hint(name)
+                .unwrap_or_else(|| panic!("{name} is a shadowed category and needs a hint"));
+            assert!(
+                hint.contains(&format!("--help category:{name}")),
+                "{name} hint does not name the explicit form: {hint}"
+            );
+        }
+        for name in ["goto", "click", "no-such-command"] {
+            assert_eq!(
+                shadowed_category_hint(name),
+                None,
+                "{name} is not a category"
+            );
+        }
+    }
+
+    /// `category:<name>` and `hidden:<prefix>` exist because an exact command
+    /// wins over the category/prefix of the same name; without them `install`
+    /// (category) and `config list` (hidden) had no listing at all.
+    #[test]
+    fn explicit_category_and_hidden_forms_resolve() {
+        for name in ["install", "webminer", "skills", "snapshot", "keyboard", "config"] {
+            assert_eq!(
+                classify_help_target(&format!("category:{name}")),
+                HelpTarget::Category(name),
+                "category:{name}"
+            );
+        }
+        // Aliases work through the explicit form too.
+        assert_eq!(
+            classify_help_target("category:extraction"),
+            HelpTarget::Category("snapshot")
+        );
+
+        assert_eq!(
+            classify_help_target("hidden:config"),
+            HelpTarget::HiddenFamily("config".into())
+        );
+        assert_eq!(
+            classify_help_target("hidden:skills"),
+            HelpTarget::HiddenFamily("skills".into())
+        );
+        assert_eq!(
+            classify_help_target("hidden:code"),
+            HelpTarget::HiddenFamily("code".into())
+        );
+        // Unknown or empty families are not silently accepted.
+        assert_eq!(classify_help_target("hidden:no-such-family"), HelpTarget::Unknown);
+        assert_eq!(classify_help_target("hidden:"), HelpTarget::Unknown);
+        assert_eq!(classify_help_target("category:no-such-category"), HelpTarget::Unknown);
+
+        // The shadowed names themselves still resolve to their command pages.
+        assert_eq!(
+            classify_help_target("install"),
+            HelpTarget::Command("install".into())
+        );
+        // ... and the advertised alias for the plugins category keeps working.
+        assert_eq!(classify_help_target("plugin"), HelpTarget::Category("plugins"));
     }
 
     #[test]

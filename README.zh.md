@@ -252,7 +252,7 @@ browser4-cli pdf --filename page.pdf
 
 | 标志 | 说明 |
 |---|---|
-| `-h`, `--help [command\|category]` | 显示顶层帮助、分类帮助或某个命令的详细帮助 |
+| `-h`, `--help [command\|category]` | 显示顶层帮助、分类帮助或某个命令的详细帮助。`--help category:<name>` 始终列出某个分类（分类名同时是命令时用这种写法，例如 `category:install`）；`--help hidden:<prefix>` 列出隐藏命令家族（`hidden:code`、`hidden:config`）。帮助宽度跟随 `COLUMNS`（限制在 80–160） |
 | `--help-json` | 输出机器可读的命令参考 JSON |
 | `-v`, `--version` | 打印 CLI 版本 |
 | `-s`, `--session <name>` | 使用命名会话，而不是默认会话。这是**全局**标志，必须写在命令**之前**（`browser4-cli -s job-42 snapshot`）——写在命令之后会被当作位置参数而报错 |
@@ -262,7 +262,7 @@ browser4-cli pdf --filename page.pdf
 | `--json` | 只输出机器可读 JSON |
 | `--pretty` | 美化 JSON 输出 |
 | `-q`, `--quiet` | 隐藏正常的人类可读输出 |
-| `-tip`, `--show-tip` | 每条命令后在 stderr 输出相关提示 |
+| `--show-tip`, `-tip` | 每条命令后在 stderr 输出相关提示 |
 
 ### 命令列表前需要理解的概念
 
