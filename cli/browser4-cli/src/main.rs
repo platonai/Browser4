@@ -27417,6 +27417,34 @@ fn format_uninstall_output(
     lines
 }
 
+/// Names the installers may create next to the CLI binary.
+///
+/// These are removed alongside the main binary so stale symlinks / hardlinks /
+/// `.cmd` wrappers don't linger after uninstall.
+///
+/// `browser4-cli-win32-x64.exe` is the release/npm sidecar and must be listed:
+/// the release installer hard-links `b4.exe` to it and both `.cmd` wrappers
+/// invoke it, so leaving it out kept a ~26 MB executable (and a resolvable
+/// `browser4-cli.cmd`) behind after the main binary was already gone.
+fn companion_binary_names() -> &'static [&'static str] {
+    #[cfg(windows)]
+    {
+        &[
+            "b4.exe",
+            "b4.cmd",
+            "browser4-cli.exe",
+            "browser4-cli.cmd",
+            "browser4-cli-win32-x64.exe",
+        ]
+    }
+    #[cfg(not(windows))]
+    {
+        // The `browser4-cli-linux-*` / `browser4-cli-darwin-*` sidecars live
+        // only inside an npm package directory, which npm removes wholesale.
+        &["b4", "browser4-cli"]
+    }
+}
+
 /// Attempt to remove the running browser4-cli binary from disk.
 ///
 /// On Unix, the file can be unlinked while the process is running — the
@@ -27424,14 +27452,6 @@ fn format_uninstall_output(
 /// process exits.  On Windows the running executable is locked, so we
 /// schedule a deferred deletion via a detached PowerShell script.
 fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
-    // Companion link names that the install scripts create alongside the binary.
-    // We clean these up too so stale symlinks / hardlinks / .cmd wrappers don't
-    // linger after uninstall.
-    #[cfg(windows)]
-    const COMPANION_NAMES: &[&str] = &["b4.exe", "b4.cmd", "browser4-cli.exe", "browser4-cli.cmd"];
-    #[cfg(not(windows))]
-    const COMPANION_NAMES: &[&str] = &["b4", "browser4-cli"];
-
     #[cfg(windows)]
     {
         let exe_str = exe_path.display().to_string();
@@ -27447,7 +27467,7 @@ fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
             .map(|p| p.display().to_string())
             .unwrap_or_default();
         let escaped_dir = exe_dir.replace('\'', "''");
-        for name in COMPANION_NAMES {
+        for name in companion_binary_names() {
             companion_lines.push_str(&format!(
                 "$c = Join-Path '{escaped_dir}' '{name}'\n\
                  if ((Test-Path -LiteralPath $c) -and ($c -ne $target)) {{\n\
@@ -27526,7 +27546,7 @@ fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
         // Clean up companion symlinks (b4, browser4-cli) from the same
         // directory.  These are best-effort — silently skip if missing.
         let dir = exe_path.parent().unwrap_or(std::path::Path::new("."));
-        for name in COMPANION_NAMES {
+        for name in companion_binary_names() {
             let companion = dir.join(name);
             if companion != exe_path {
                 match std::fs::remove_file(&companion) {
@@ -27627,20 +27647,14 @@ async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
     let npm = resolve_npm();
     let (npm_removed, npm_error) = if dry_run {
         // Check whether npm would find the package, but don't remove anything.
-        let installed = npm
-            .map(|npm| {
-                Command::new(npm)
-                    .args(["list", "-g", "browser4-cli", "--depth=0"])
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::null())
-                    .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false);
-        (installed, None)
+        (npm.map(npm_global_has_browser4_cli).unwrap_or(false), None)
     } else {
         match npm {
+            // Probe first: `npm uninstall -g browser4-cli` exits 0 even when the
+            // package was never installed, and a false `npm_removed` used to
+            // skip the binary self-removal below — the command then printed
+            // "uninstall complete" while the binary was still on disk.
+            Some(npm) if !npm_global_has_browser4_cli(npm) => (false, None),
             Some(npm) => {
                 let mut cmd = Command::new(npm);
                 cmd.args(["uninstall", "-g", "browser4-cli"])
@@ -27927,6 +27941,33 @@ fn resolve_npm() -> Option<&'static str> {
             .map(|s| s.success())
             .unwrap_or(false)
     })
+}
+
+/// Interpret the output of `npm list -g browser4-cli --depth=0`.
+///
+/// An installed package always prints as a `<name>@<version>` tree entry
+/// (`+-- browser4-cli@4.16.1`); a missing one prints `` `-- (empty) ``.
+///
+/// The exit code is deliberately *not* part of the signal: `npm ls -g` also
+/// exits non-zero when an unrelated global package is extraneous
+/// (ELSPROBLEMS), which would otherwise hide a real install.
+fn npm_list_reports_browser4_cli(stdout: &str) -> bool {
+    stdout.contains("browser4-cli@")
+}
+
+/// Whether `browser4-cli` is installed as an npm global package.
+///
+/// `npm uninstall -g <package that was never installed>` exits 0 (it only
+/// reports "up to date"), so the uninstall exit code alone cannot tell whether
+/// anything was removed.
+fn npm_global_has_browser4_cli(npm: &str) -> bool {
+    std::process::Command::new(npm)
+        .args(["list", "-g", "browser4-cli", "--depth=0"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map(|o| npm_list_reports_browser4_cli(&String::from_utf8_lossy(&o.stdout)))
+        .unwrap_or(false)
 }
 
 /// Whether the CLI self-upgrade step should be skipped entirely.
@@ -50614,6 +50655,62 @@ linkGroups:
             "https://example.com/home",
             "https://x.com/i/jf/onboarding/web?mode=login"
         ));
+    }
+
+    // ── uninstall: npm probe ──
+    //
+    // `npm uninstall -g browser4-cli` exits 0 even when the package was never
+    // installed.  Treating that as "removed" skipped the binary self-removal,
+    // so `browser4-cli uninstall -y` reported success while leaving the
+    // binary and every wrapper on PATH.  The probe below is what makes
+    // `npm_removed` truthful.
+
+    #[test]
+    fn npm_list_output_identifies_an_installed_browser4_cli() {
+        // `npm ls -g browser4-cli --depth=0`, package installed.
+        let installed = "C:\\Users\\x\\AppData\\Roaming\\npm -> .\\\n`-- browser4-cli@4.16.1\n\n";
+        assert!(npm_list_reports_browser4_cli(installed));
+        // Nested under another global package — still an install to remove.
+        assert!(npm_list_reports_browser4_cli("`-- other@1.0.0\n  `-- browser4-cli@4.16.1\n"));
+    }
+
+    #[test]
+    fn npm_list_output_identifies_a_missing_browser4_cli() {
+        // Package absent: npm exits 1 and prints an empty tree.  The exact
+        // output of npm 11 on Windows.
+        let missing = "C:\\Users\\x\\AppData\\Roaming\\npm -> .\\\n`-- (empty)\n\n";
+        assert!(!npm_list_reports_browser4_cli(missing));
+        // An error that merely names the package is not an install entry.
+        assert!(!npm_list_reports_browser4_cli("npm error 404 browser4-cli"));
+        // The version anchor keeps a bare mention from counting.
+        assert!(!npm_list_reports_browser4_cli("browser4-cli"));
+    }
+
+    // ── uninstall: companion links ──
+
+    #[test]
+    fn uninstall_companion_names_cover_the_primary_command_names() {
+        let names = companion_binary_names();
+        assert!(
+            names.contains(&"b4") || names.contains(&"b4.exe"),
+            "b4 wrapper must be swept: {names:?}"
+        );
+        assert!(
+            names.contains(&"browser4-cli") || names.contains(&"browser4-cli.exe"),
+            "browser4-cli binary must be swept: {names:?}"
+        );
+    }
+
+    /// The sidecar is what `.cmd` wrappers invoke and what `b4.exe` hard-links
+    /// to, so omitting it from the sweep left a ~26 MB executable behind (and
+    /// kept `browser4-cli.cmd` resolvable) after the main binary was removed.
+    #[cfg(windows)]
+    #[test]
+    fn uninstall_companion_names_include_the_windows_sidecar_and_wrappers() {
+        let names = companion_binary_names();
+        assert!(names.contains(&"browser4-cli-win32-x64.exe"), "{names:?}");
+        assert!(names.contains(&"b4.cmd"), "{names:?}");
+        assert!(names.contains(&"browser4-cli.cmd"), "{names:?}");
     }
 }
 
