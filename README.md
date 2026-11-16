@@ -15,6 +15,8 @@
 
 English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platonai_galaxyeye/Browser4)
 
+> ⭐ **Finding Browser4 useful?** Run `browser4-cli star` — with the GitHub CLI signed in it stars this repository as you after a single confirmation (`--gh` skips the prompt); otherwise it opens the repository in the browser you are already logged into and leaves the click to you.
+
 <!-- TOC -->
 **Table of Contents**
 - [🤖 Browser4](#-browser4)
@@ -520,7 +522,7 @@ These commands require an LLM key.
 | `summarize [instruction]` | Summarize the current page. Supports `--selector`, `--filename`, `--raw`, `--stdout`. |
 | `chat <message>` | Send a plain AI chat request without auto-appended browser context. |
 | `chat-result <id>` | Retrieve the result of an async chat task. |
-| `agent run <task>` | Submit an autonomous browser task and immediately receive a task ID. Supports `--wait` (block for the result) and `--wait-timeout <seconds>` (default 600). `--follow` streams every step (tool calls, model text, slow/failed tools) and ends with the result — Ctrl+C cancels the task; `--ndjson` emits that stream as one JSON object per line. `-i` opens an interactive session where a line typed while a task runs steers it (never queued as a second task), and `/stats` reports the run's LLM rounds/requests, token usage and tool calls (`/help` lists the session commands). A backend hiccup or an unreadable step never ends the live view: `-i` keeps following a task that still runs and skips the one unreadable step. Task type is browser by default; `--coding` explicitly marks a pure file/build task (never auto-detected). `--access <preset>` (`full`/`write`/`read-build`/`read`) narrows that task's coding tools and is reset when the task ends; a refused step is not a dead end — `coding.requestAccess` files a non-blocking pending request and an operator approves it through `POST /api/agent/<taskId>/access/<requestId>/approve`, while `denyTools`, protected paths and sensitive paths are never approved; a job with no TTY (scripts, CI, submitted tasks) derives `full` with outbound network instead of the server-wide preset (`browser4.agent.access.unattended` narrows it) |
+| `agent run <task>` | Submit an autonomous browser task and immediately receive a task ID. Supports `--wait` (block for the result) and `--wait-timeout <seconds>` (default 600). `--follow` streams every step (tool calls, model text, slow/failed tools) and ends with the result — Ctrl+C cancels the task; `--ndjson` emits that stream as one JSON object per line. `-i` opens an interactive session where a line typed while a task runs steers it (never queued as a second task), and `/stats` reports the run's LLM rounds/requests, token usage (prompt-cache reads/writes and hit rate included when the provider reports them) and tool calls; the per-task budget counts **cache-miss** tokens (5M by default — prompt-cache reads are free), a budget abort offers a one-key "continue" with the cap doubled, and after every task `-i` predicts 2–3 numbered next *tasks* — the model's own follow-up suggestions first, then what the payload left open (files to review/test/commit, findings to dig into, a failure to diagnose) — never a menu of CLI commands; every task of a session also inherits a compacted `## Session context` block of the earlier ones, plus any mid-session correction — a revised goal supersedes the original, and the current instruction wins over both (`/new` starts a fresh context), and `/result [--json] [--full]` re-prints the last payload (pretty-printed JSON, or nothing folded). A backend hiccup or an unreadable step never ends the live view: `-i` keeps following a task that still runs and skips the one unreadable step. Task type is browser by default; `--coding` explicitly marks a pure file/build task (never auto-detected). `--access <preset>` (`full`/`write`/`read-build`/`read`) narrows that task's coding tools and is reset when the task ends; `--unrestricted` runs it with YOUR own OS permissions instead (full preset, no workspace/protected rails, no OS sandbox — and the shell's command allow-list off as well, so programs outside it (a PowerShell cmdlet, for example) run verbatim; shapes the checker cannot decompose, such as `for` loops and inline scripts, are handed to the platform shell in every mode), audited per task and inherited by `--resume`, while the OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) and the commands that would kill or rebuild the backend stay refused; `--add-dir <folder>` grants this task an extra **existing** folder besides its workspace (repeatable; readable, writable and usable as a shell working directory — `--access` still bounds what may be written there, credential stores stay refused, and `--resume` inherits the grant; in `-i`, `/add-dir <folder>` grants one mid-session and `/dirs [clear]` lists or drops the grants); a refused step is not a dead end — `coding.requestAccess` files a non-blocking pending request and an operator approves it through `POST /api/agent/<taskId>/access/<requestId>/approve`, while `denyTools`, protected paths and sensitive paths are never approved; a job with no TTY (scripts, CI, submitted tasks) derives `full` with outbound network instead of the server-wide preset (`browser4.agent.access.unattended` narrows it) |
 | `agent status <id>` | Check a task — the shared status envelope (`status`: queued/running/done/failed/cancelled, plus `statusCode`, `message` and the agent's step count). |
 | `agent result <id>` | Fetch a completed task's result: its summary, `keyFindings`, `filesChanged` and the workspace its deliverables live in. Rendered as sections (`--json` prints the raw envelope). |
 | `agent list` | List tracked agent tasks with the same statuses (refreshed from the backend on every call); `--clear` untracks the finished ones. |
@@ -675,7 +677,7 @@ These commands operate on Browser4's learned experience store.
 | `experience save <url> <trace>` | Save a task execution trace. Supports `--outcome`, `--intent`, `--task-type` (canonical types including `publish_post`), and `--facts <inline JSON \| @file.json>` — merges retrospective knowledge (`selectors` / `interaction_hints` / `known_blockers` / `anti_patterns`, camelCase or snake_case keys) into the (domain, intent) facts entry; the merge is refused when that entry is VERIFIED (immutable). |
 | `experience query <url>` | Query known selectors, blockers, and hints for a URL/domain. Supports `--intent`. |
 | `experience list` | List stored experience entries. Supports `--filter`, `--intent-filter`, `--page`, `--page-size`. |
-| `experience deep-learn <url> <intent>` | Run deeper analysis on stored traces. Supports `--force`. |
+| `experience deep-learn <url> <intent>` | Re-derive the (domain, intent) knowledge entry from stored traces and promote it (no page access). Supports `--force`. |
 
 #### Plugins
 
@@ -703,13 +705,11 @@ JARs, not tools.
 | `plugin remove <name>` | Remove a plugin. Supports `-y`, `--yes`. |
 | `tool list [--filter <substr>]` | List every MCP tool name the backend advertises (plugin tools included); `tool call <name> --json '{…}'` invokes one. |
 
-#### Advanced and currently hidden commands
+#### Removed commands
 
-These commands exist in the CLI but are intentionally kept out of the default public help.
-
-| Command | Description |
+| Command | Replacement |
 |---|---|
-| `act <description>` | Experimental natural-language action translator that turns plain text into a browser command and runs it. |
+| `act <description>` | Removed in 4.16: the server-side `/api/act` one-shot text→tool-call translator (which reported a failed tool call as success) is gone. Use `agent run "<task>" --wait` — the CLI tool loop is the only agent engine. |
 
 ### Timeout environment variables
 
@@ -907,6 +907,10 @@ export PROXY_ROTATION_URL=https://your-proxy-provider.com/rotation-endpoint
 
 Each time you access this rotation URL, it should return a response containing one or more fresh proxy IPs.
 If you need this type of URL, please contact your proxy service provider.
+
+For a single fixed proxy (`--proxy-server`), proxy authentication, the format the rotation
+endpoint must return, and how to verify the egress IP, see **[docs/ip-proxy.md](docs/ip-proxy.md)**.
+Note that `browser4-cli --proxy` is a *download* proxy — it does not route page traffic.
 
 </details>
 

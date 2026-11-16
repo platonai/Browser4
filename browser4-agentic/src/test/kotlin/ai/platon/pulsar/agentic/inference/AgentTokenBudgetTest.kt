@@ -6,13 +6,13 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 
 /**
- * Unit tests for [AgentTokenBudget] — the per-agent-run token guard that
- * prevents runaway LLM consumption.
+ * Unit tests for [AgentTokenBudget] — the per-agent-run cache-miss token guard
+ * that prevents runaway LLM consumption.
  */
 class AgentTokenBudgetTest {
 
     @Test
-    @DisplayName("budget tracks input+output and reports consumed total")
+    @DisplayName("budget tracks the charged (cache-miss prompt + output) total")
     fun tracksUsage() {
         val budget = AgentTokenBudget(maxTotalTokens = 10_000)
         assertEquals(0, budget.consumedTotal)
@@ -20,6 +20,71 @@ class AgentTokenBudgetTest {
         assertEquals(4_000, budget.consumedTotal)
         budget.add(0, 500)
         assertEquals(4_500, budget.consumedTotal)
+    }
+
+    @Test
+    @DisplayName("prompt-cache reads are not charged to the budget")
+    fun cacheReadsAreFree() {
+        val budget = AgentTokenBudget(maxTotalTokens = 1_000)
+
+        budget.charge(inputTokens = 900, outputTokens = 50, cachedInputTokens = 800)
+
+        assertEquals(150, budget.consumedTotal, "charged = (900 - 800) + 50")
+        assertEquals(100, budget.consumedCacheMissInputTokens)
+        assertEquals(800, budget.consumedCacheReadTokens)
+        assertEquals(50, budget.consumedOutputTokens)
+        assertFalse(budget.isExceeded)
+    }
+
+    @Test
+    @DisplayName("a heavily cached loop no longer exhausts a budget its raw prompts would have blown")
+    fun heavyCacheHitLoopDoesNotExhaustTheBudget() {
+        val budget = AgentTokenBudget(maxTotalTokens = 1_000)
+
+        repeat(10) { budget.add(inputTokens = 10_000, outputTokens = 5, cachedInputTokens = 9_990) }
+
+        assertEquals(150, budget.consumedTotal, "10 misses of 10 tokens + 10 * 5 output")
+        assertEquals(99_900, budget.consumedCacheReadTokens)
+        assertFalse(
+            budget.isExceeded,
+            "the raw prompts were 100,000 tokens: charging them was the old behaviour",
+        )
+    }
+
+    @Test
+    @DisplayName("an unreported cache charges the whole prompt — unknown is not a hit")
+    fun unreportedCacheChargesTheWholePrompt() {
+        val budget = AgentTokenBudget(maxTotalTokens = 1_000)
+
+        val ex = assertThrows<TokenBudgetExceededException> {
+            budget.charge(inputTokens = 1_000, outputTokens = 10)
+        }
+
+        assertEquals(1_010L, ex.consumedTokens)
+        assertEquals(1_010, budget.consumedTotal)
+        assertEquals(0, budget.consumedCacheReadTokens)
+        assertEquals(0, ex.consumedCacheReadTokens)
+    }
+
+    @Test
+    @DisplayName("a cache count larger than the prompt is clamped, never negative")
+    fun cachedTokensAreClampedToThePrompt() {
+        val budget = AgentTokenBudget(maxTotalTokens = 10_000)
+
+        budget.add(inputTokens = 100, outputTokens = 0, cachedInputTokens = 10_000)
+
+        assertEquals(0, budget.consumedTotal, "a nonsensical cache count cannot mint budget")
+        assertEquals(100, budget.consumedCacheReadTokens, "the reads are still accounted")
+    }
+
+    @Test
+    @DisplayName("the 80% warning measures the cache-miss charge only")
+    fun warnMeasuresTheCacheMissCharge() {
+        val budget = AgentTokenBudget(maxTotalTokens = 1_000)
+        budget.add(inputTokens = 9_000, outputTokens = 100, cachedInputTokens = 8_600) // 500 = 50%
+        assertFalse(budget.shouldWarn())
+        budget.add(inputTokens = 9_000, outputTokens = 100, cachedInputTokens = 8_600) // 1,000 = 100%
+        assertTrue(budget.shouldWarn())
     }
 
     @Test
@@ -96,6 +161,22 @@ class AgentTokenBudgetTest {
         assertTrue(ex.message!!.contains("1,234,567"), "message should contain comma-formatted consumed tokens")
         assertTrue(ex.message!!.contains("1,000,000"), "message should contain comma-formatted budget tokens")
         assertTrue(ex.message!!.contains(AgentTokenBudget.CONFIG_KEY), "message should mention the config key")
+    }
+
+    @Test
+    @DisplayName("the exceeded exception names the cache reads and a doubled continue budget")
+    fun exceptionNamesCacheReadsAndContinueBudget() {
+        val ex = TokenBudgetExceededException(
+            consumedTokens = 5_100_000,
+            budgetTokens = 5_000_000,
+            consumedCacheReadTokens = 12_000_000,
+        )
+
+        // The message is what a CLI reader and the agent see: it must explain that
+        // cached tokens were not charged, and name the one-command way to continue.
+        assertTrue(ex.message!!.contains("12,000,000"), ex.message)
+        assertTrue(ex.message!!.contains("--token-budget 10000000"), ex.message)
+        assertTrue(ex.message!!.contains("resume"), ex.message)
     }
 
     @Test

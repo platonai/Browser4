@@ -49,6 +49,9 @@ class CliProcessManagerTest {
         assertTrue(spec.outputBufferBytes == 1 shl 20, "default output buffer")
         assertTrue(spec.env.containsKey("BROWSER4_CLI_DISABLE_PLUGIN_WARM_RESTART"))
         assertFalse(spec.env.containsKey("DEEPSEEK_API_KEY"))
+        // E-4: every invocation asks the CLI for its `[timing]` footer. The manager
+        // strips it from stderr, so this costs the model nothing.
+        assertEquals("1", spec.env["BROWSER4_CLI_TIMING"])
 
         val capped = mgr.resolve(CliRunRequest(args = "x", timeoutSeconds = 9999))
         assertTrue(capped.timeoutMs == 600_000L, "timeout capped at max")
@@ -310,6 +313,60 @@ class CliProcessManagerTest {
     }
 
     @Test
+    @DisplayName("a plain command line skips the shell entirely")
+    fun plainCommandLineSkipsTheShell() {
+        // Each b4.run call paid ~200 ms for a shell on Windows (evaluation §12.4), and a
+        // browser task makes 11-20 of them. A command line with no quoting and no
+        // metacharacters has exactly one reading, so it can go straight to the binary.
+        val mgr = manager()
+        val spec = mgr.resolve(CliRunRequest(args = "open --headless https://example.com"))
+        assertEquals(spec.binaryPath.toString(), spec.shellArgv.first(), "direct exec: ${spec.shellArgv}")
+        assertEquals(
+            listOf("open", "--headless", "https://example.com"),
+            spec.shellArgv.drop(1),
+            "the argv must be the command line's own tokens: ${spec.shellArgv}",
+        )
+    }
+
+    @Test
+    @DisplayName("anything that needs shell syntax keeps the shell")
+    fun shellSyntaxKeepsTheShell() {
+        val mgr = manager()
+        listOf(
+            "eval --json \"JSON.stringify({a: 1})\"",
+            "eval --json '[...document.querySelectorAll(\"a\")]'",
+            "goto https://x && snapshot",
+            "snapshot > out.txt",
+            "snapshot | head -5",
+            "status; close",
+            "eval --js \$env:PATH",
+            "grep --pattern `code`",
+            "code write --path C:\\work\\a.kt",
+            "explain --query 中文页面",
+            "  ",
+        ).forEach { args ->
+            val spec = mgr.resolve(CliRunRequest(args = args))
+            assertTrue(
+                spec.shellArgv.first() != spec.binaryPath.toString(),
+                "args must go through a shell: '$args' -> ${spec.shellArgv}",
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("the direct-argv subset is conservative about what a shell expands")
+    fun directArgvRejectsShellSyntax() {
+        assertEquals(listOf("tab", "list"), directArgvOrNull("tab list"))
+        assertEquals(listOf("click", "e33"), directArgvOrNull("  click   e33  "), "space runs collapse")
+        assertEquals(null, directArgvOrNull("--url https://example.com/a?b=c"), "? would be a glob in sh")
+        assertEquals(null, directArgvOrNull(""), "no command line, no direct exec")
+        assertEquals(null, directArgvOrNull("\t"))
+        listOf("a|b", "a>b", "a<b", "a&&b", "a;b", "a\$b", "a`b", "a\\b", "a'b", "a\"b", "a*b", "a?b", "a~b", "a#b").forEach {
+            assertEquals(null, directArgvOrNull(it), "must keep the shell: $it")
+        }
+    }
+
+    @Test
     @Tag("Slow")
     @DisplayName("a quoted argument reaches the target program intact")
     fun quotedArgumentSurvivesTheShell() = runBlocking {
@@ -347,5 +404,58 @@ class CliProcessManagerTest {
         assertTrue(result.isSuccess, "result: $result")
         assertTrue(result.stdout.contains("EOF-reached"), "stdout: ${result.stdout}")
         assertTrue(elapsed < 15_000, "must not block on stdin, took ${elapsed}ms")
+    }
+
+    @Test
+    @Tag("Slow")
+    @DisplayName("a stdin payload reaches the command (E-1)")
+    fun stdinPayloadReachesTheCommand() = runBlocking {
+        // E-1: the payload rides on stdin instead of the command line, so a command
+        // whose argument is a whole script needs no quoting and no shell. The child
+        // must see the exact text, and then EOF (or it would hang to its deadline).
+        val mgr = manager()
+        val result = mgr.run(
+            CliRunRequest(
+                args = "-NoProfile -Command \"[Console]::In.ReadToEnd()\"",
+                timeoutSeconds = 30,
+                stdin = "console.log('quoted \"words\" and \\backslashes\\ survive')",
+            ),
+            backendBaseUrl = null,
+        )
+
+        assertTrue(result.isSuccess, "result: $result")
+        assertTrue(
+            result.stdout.contains("""console.log('quoted "words" and \backslashes\ survive')"""),
+            "the payload must arrive verbatim: ${result.stdout}",
+        )
+        assertTrue(result.durationMs < 15_000, "the stream must be closed, took ${result.durationMs}ms")
+    }
+
+    @Test
+    @Tag("Slow")
+    @DisplayName("the CLI's timing footer is parsed and kept out of stderr (E-4)")
+    fun timingFooterIsParsedAndStripped() = runBlocking {
+        val mgr = manager()
+        val footer = "[timing] startup=5ms http=2310ms server=2240ms net=70ms calls=2 total=2600ms"
+        val result = mgr.run(
+            CliRunRequest(
+                args = "-NoProfile -Command \"[Console]::Error.WriteLine('$footer'); Write-Output 'done'\"",
+                timeoutSeconds = 30,
+            ),
+            backendBaseUrl = null,
+        )
+
+        assertTrue(result.isSuccess, "result: $result")
+        val timing = result.timing ?: error("the footer must parse: ${result.stderr}")
+        assertEquals(5, timing.startupMs)
+        assertEquals(2310, timing.httpMs)
+        assertEquals(2240, timing.serverMs)
+        assertEquals(2, timing.calls)
+        // The launcher's share is what the CLI's own clock cannot see: the subprocess
+        // took longer than the 2.6 s the footer reports.
+        val launch = timing.launchMs ?: error("launch must be attributed when the footer reports totalMs")
+        assertTrue(launch >= 0, "launch=$launch")
+        // Instrumentation never reaches the model.
+        assertFalse(result.stderr.contains("[timing]"), "stderr must be clean: ${result.stderr}")
     }
 }

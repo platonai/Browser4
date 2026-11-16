@@ -1,7 +1,6 @@
 package ai.platon.pulsar.agentic.inference
 
 import ai.platon.pulsar.agentic.model.AgentState
-import ai.platon.pulsar.agentic.model.ExecutionContext
 import ai.platon.pulsar.agentic.model.ExtractionSchema
 import com.fasterxml.jackson.databind.node.ObjectNode
 import java.util.UUID
@@ -12,25 +11,6 @@ data class ExtractParams(
     val schema: ExtractionSchema,
     val requestId: String = UUID.randomUUID().toString(),
     val userProvidedInstructions: String? = null,
-)
-
-data class ObserveParams(
-    val context: ExecutionContext,
-    /**
-     * User provided additional system instructions
-     * */
-    val userProvidedInstructions: String? = null,
-    val returnAction: Boolean = false,
-    val multistep: Boolean = false,
-    val logInferenceToFile: Boolean = false,
-    val fromAct: Boolean = false,
-    /**
-     * True when the task was explicitly marked as a coding task (command_run's
-     * coding argument / the CLI's agent run --coding) — never auto-detected.
-     * Drives tiered tool disclosure: coding tools in full, page tools collapsed to a
-     * one-line summary (and vice versa for browsing tasks).
-     */
-    val codingMode: Boolean = false,
 )
 
 /**
@@ -45,6 +25,15 @@ data class ObserveParams(
  * @property completed Whether the extraction task is complete — `true` whenever
  * usable content is present in [result], otherwise the evaluator's judgment.
  * @property progress Free-text progress description from the evaluator.
+ * @property inputTokenCount Summed prompt tokens of both calls, prompt-cache
+ *   reads and writes included (the provider protocols count them differently;
+ *   see `TokenUsage.normalized`).
+ * @property outputTokenCount Summed output tokens of both calls.
+ * @property totalTokenCount Summed accounted totals: [inputTokenCount] + output.
+ * @property cachedInputTokenCount Prompt tokens the providers served from their
+ *   prompt cache, or `null` when none of the calls reported cache details.
+ * @property cacheWriteInputTokenCount Prompt tokens the calls wrote into the
+ *   provider prompt cache, or `null` when unreported.
  */
 data class ExtractInferenceResult(
     val result: ObjectNode,
@@ -55,5 +44,7 @@ data class ExtractInferenceResult(
     val totalInferenceTimeMillis: Long,
     val inputTokenCount: Int,
     val outputTokenCount: Int,
-    val totalTokenCount: Int
+    val totalTokenCount: Int,
+    val cachedInputTokenCount: Int? = null,
+    val cacheWriteInputTokenCount: Int? = null,
 )

@@ -13,7 +13,7 @@
 
 | 场景 | 现在的行 | 代码锚点 |
 |---|---|---|
-| 横幅 | `Browser4 agent · session=… · engine=cli · type /help for commands` | `Repl::banner` 1662-1671 |
+| 横幅 | `Browser4 agent · session=… · engine=cli · type /help for commands` | `Repl::banner` 1662-1671（2026-11-14 起横幅已去掉 `engine=cli`，见文末「后续变更」） |
 | 提示符 | `agent> `（固定，不区分空闲/运行中） | `Repl::prompt` 1673-1682 |
 | 提交 | `▶ task <id>` | `Repl::start_task` 1895 |
 | 工具调用 | `[00:02] #1 b4.run({"args":"goto …"})` | `Renderer::format` 588-603 |
@@ -108,7 +108,7 @@ Browser4 agent · session=abc · engine=cli · type /help for commands
 after
 
 ```
-Browser4 agent · session=abc · engine=cli
+Browser4 agent · session=abc
   type a task · /help for commands · Ctrl+C cancels the running task
 
 ▶ task 5b0c3f2a — Summarize the pricing page
@@ -258,7 +258,7 @@ task 5b0c3f2a · running · 12 step(s) — collecting product details
 | P1-5 失败行 `errorCode`/`resume:` | ✅ | `failure_detail()` 把机器码放前面并小写（`page_blocked: the page was blocked`）；`resume_hint_line()` 仅在 `resumable=true` 时补 `    resume: agent run --resume <id> · /status for the envelope`；`-i` 与 `--follow` 都走，`--ndjson` 的 `message` 保持原句不变 |
 | P1-6 任务分隔 + 提交行带文本 | ✅ | `start_task` 先打空行再打 `▶ task <id> — <task 前 60 字>`（`task_label` 折叠换行并截断；`▶ task <id>` 子串保留） |
 | P1-7 退出时任务仍在跑 | ✅ | `Repl::run` 收尾：`⚠ task <id> keeps running — agent status <id> · agent cancel <id>`（提示用提示符消失后仍存在的命令） |
-| P1-8 横幅只列非默认开关 | ✅ | `banner_lines()`（纯函数，便于测试）：首行 session/engine + `coding=on` / `access=…` / `budget=5.00M` / `quiet` 中实际生效者；第二行固定 `  type a task · /help for commands · Ctrl+C cancels the running task` |
+| P1-8 横幅只列非默认开关 | ✅ | `banner_lines()`（纯函数，便于测试）：首行 session（无 `engine` 字段）+ `coding=on` / `access=…` / `budget=5.00M` / `quiet` 中实际生效者；第二行固定 `  type a task · /help for commands · Ctrl+C cancels the running task` |
 | P1-9 `/status` 行 | ✅ | `status_line()`：`task <id> · <status> · N step(s) — <message>`；无 message 不留尾随空格，空消息等同无消息 |
 | P1-10 `NO_COLOR` | ✅ | `color_enabled_for(is_tty, quiet, json, no_color)` 纯谓词 + `no_color_requested()`（任何非空值生效），四真值表单测；`color_enabled()` 只做 IO 取值 |
 | P2-1 `callId` 精确配对 | ⬜ | 需后端在 `tool.call`/`tool.result` 上补 `callId`（Kotlin + 线格式契约），单独一单 |
@@ -283,4 +283,49 @@ e2e `test_e2e_agent_run_follow_streams_steps` 增加 `#1 b4.run(args="goto …")
 门禁（最终）：`cargo test --bin browser4-cli` = **2114 passed / 1 failed / 4 ignored**
 （唯一失败仍是既有 WMI 环境用例，已在干净 HEAD worktree 复现）；
 `cargo test --test e2e -- --group agent --max-failures 0` = **36/36 通过，tolerated 0**。
+
+
+---
+
+## 十一、后续变更（2026-11-14）
+
+1. **横幅去掉 `engine=` 字段。** CLI 工具循环已是唯一 engine，每行都写 `engine=cli` 只是噪音。
+   `Repl::banner_lines()` 的首行现在是 `Browser4 agent · session=<id>`，只在生效时追加
+   `· coding=on` / `· access=…` / `· add-dir=<n>` / `· budget=…` / `· quiet`；第二行不变。
+   §一「现状」表里的 `engine=cli` 与 §三 3.1 的 `before` 属历史记录，`after` 示例已同步为现契约。
+2. **`Repl::engine` 字段保留，与横幅无关。** `payload()` 仍把 `engine` 发给 `agent.run`
+   （单测断言 `payload["engine"] == "cli"`），去掉的只是显示层。
+3. **验收补正（本机复核）。**
+   - `cargo test --bin browser4-cli banner` = **3 passed**：横幅用例断言首行不含 `engine=`，且默认会话不出现任何开关。
+   - `cargo test --lib` 原先编不过：`commands.rs` 的 `#[cfg(test)]` 用到 `crate::args`，而 `lib.rs` 只声明了 bin 之外的那批模块。
+     已在 `lib.rs` 用 `#[cfg(test)]` 补 `pub mod args;` / `pub mod help;`（`args → help → commands/skills` 闭环），
+     现在 `cargo test --lib` = **1009 passed / 3 ignored**。
+   - 全量 `cargo test --bin browser4-cli` = **2207 passed / 0 failed / 4 ignored**（共 2211 个用例）。
+       前提是**清掉继承来的 `BROWSER4_CLI_SERVER`**：本机 shell 里它被设成 `http://localhost:8283`，
+       此时有 20 个 `compile_batch_step*` / batch-plan 用例报 `Batch subcommands cannot override --server.`——
+       那是环境注入的 server override，不是代码回归（`set BROWSER4_CLI_SERVER=` 后同一条用例由 FAILED 变 ok）。
+       早前一次全量 `cargo test` 因 `target\debug\browser4-cli.exe` 被运行中的 `browser4-cli` 进程占用而无法重新链接
+       （`os error 5`）；`cargo test --bin` 只链接 `deps\browser4_cli-*.exe`，不受该占用影响。
+
+4. **CLI 测试对环境变量的敏感性已修（2026-11-14，第二轮）。** 上一条里让 20 个 batch 用例变红的
+   `BROWSER4_CLI_SERVER` 不是"用例太脆"，而是真缺陷：`compile_batch_step()` 用 `parse_global_flags()`
+   解析**每一步自己的 token**，而那个函数会把 `BROWSER4_CLI_SERVER` / `BROWSER4_CLI_SESSION` 折进来，
+   于是环境默认值被当成"这一步显式写了 `--server`"，batch 一律拒绝并报
+   `Batch subcommands cannot override --server.`。换言之，在导出了该变量的 shell 里跑 `batch` 也会全红，
+   不只是测试。
+   - 修法：`args::parse_global_flags()` 拆成 `parse_global_flags_from_argv()`（只看 argv）+
+     `apply_env_defaults()`（私有）；只有顶层的 `parse_global_flags()` 合并 env，
+     `compile_batch_step()` 改用 `parse_global_flags_from_argv()`。env 默认值因此只作用一次，
+     落在 CLI 自己的命令行上，永不冒充某一步的 override。
+   - 用例侧：`args.rs` 里断言 argv 语义的用例改走 `parse_global_flags_no_env()`，它用
+     `EnvDefaultsGuard` 临时摘掉两个 env 键（走 `crate::test_env::lock()` 的进程级 env 锁，
+     并发用例不会互相踩），析构时恢复原值。
+   - 新增回归用例：`test_parse_global_flags_from_argv_ignores_environment_defaults`（env 已设置时仍返回
+     `None`）与 `compile_batch_step_ignores_ambient_server_env`（`BROWSER4_CLI_SERVER=http://localhost:8283`
+     下 `tab-close` 仍编译成功）；`compile_batch_step_rejects_nested_batch_and_server_override` 保留，
+     证明显式 `--server` 仍被拒。
+   - 复核：`BROWSER4_CLI_SERVER=http://localhost:8283`、`BROWSER4_CLI_SESSION=default` 下
+     `cargo test --lib --bin browser4-cli` = **1013 + 2212 passed / 0 failed**；清空两变量后同样全绿；
+     再叠加 `TZ` / `COLUMNS` / `NO_COLOR` / `CLICOLOR_FORCE` / `TERM=dumb` / `BROWSER4_CLI_PROXY` 的
+     敌对环境组合仍全绿。
 

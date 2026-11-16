@@ -324,13 +324,25 @@ const TIPS_AGENT: &[Tip] = &[
         text: "A run without a TTY cannot be watched, so it starts from `full` (network on) instead of the server-wide preset — `browser4.agent.access.unattended` (`deny`/`read`/`read-build`/`write`/`full`) overrides that; a watched `-i` session on a TTY keeps `browser4.agent.access`",
     },
     Tip {
-        text: "`agent run -i` keeps a session open — type a line while a task runs to steer it, /status and /cancel to inspect or stop it, /stats for the run's LLM rounds, token usage and tool calls, /result [--json] to re-print the finished task's payload as sections (or the raw envelope)",
+        text: "`agent run -i` keeps a session open — type a line while a task runs to steer it, /status and /cancel to inspect or stop it, /stats for the run's LLM rounds, token usage and tool calls, /result [--json] [--full] to re-print the finished task's payload as sections (--json: pretty envelope, --full: nothing folded)",
+    },
+    Tip {
+        text: "After every task `-i` predicts 2-3 next steps as numbered TASKS — the model's own `nextSuggestions` first, then the files/problems it left behind — so type the number instead of reconstructing the next task",
+    },
+    Tip {
+        text: "Tasks of one `-i` session are not independent: each new task carries a compacted `## Session context` block (earlier tasks, their files, open problems, and any mid-session correction), auto-compressed under `browser4.agent.session.contextTokens`; `/new` starts a deliberately fresh context",
     },
     Tip {
         text: "Every task runs in its own workspace — artifacts of an earlier run never show up in this run's `filesChanged`. `--resume <id>` reuses the interrupted task's workspace; `--shared-workspace` opts into the old shared directory",
     },
     Tip {
         text: "`agent run <task> --token-budget <n>` caps THIS task only (0 = unlimited); `config set agent.token.budget.total` changes every later run on the backend",
+    },
+    Tip {
+        text: "`agent run <task> --add-dir <folder>` lets the task read, write and execute in a folder besides its workspace (repeat the flag for more); the folder must exist on the backend machine, credential stores stay refused, and `--access` still decides whether it is read-only. In `agent run -i`, `/add-dir <folder>` grants one mid-session and `/dirs [clear]` lists or drops the grants",
+    },
+    Tip {
+        text: "`agent run <task> --unrestricted` runs the task with YOUR OS permissions — full preset, no workspace/protected rails, no OS sandbox — and the shell's command allow-list is off too, so inline scripts and PowerShell cmdlets run as written (shapes the checker cannot decompose, such as `for` loops and blocks, are handed to the platform shell in every mode). It is audited and inherited by `--resume`; OS credential stores (`~/.ssh`, `~/.aws`, …) and commands that would kill or rebuild the backend stay refused",
     },
     Tip {
         text: "`agent result <id>` exits non-zero for a failed task — read `errorCode` and the `resume:` line, or pass `--allow-failed` to exit 0 while still seeing the failed payload",
@@ -491,6 +503,9 @@ const TIPS_GENERAL: &[Tip] = &[
     },
     Tip {
         text: "Use `doctor` to diagnose Chrome, Java, and network issues when things aren't working",
+    },
+    Tip {
+        text: "Use `star` to star the Browser4 repository as yourself — it goes through your signed-in GitHub CLI (`gh`) after one confirmation (`--gh` skips the prompt), or opens the page in the browser you are already logged into",
     },
     Tip {
         text: "Set BROWSER4_CLI_STATE_DIR to a writable path in sandboxed environments — the CLI falls back to ./.browser4-cli-state when ~/.browser4 is not writable",
@@ -741,9 +756,11 @@ fn failure_tip_for(
     if error_code == Some("TOKEN_BUDGET") || error_message.contains("Token budget exceeded") {
         let name = crate::help::public_command_name(command);
         return Some(format!(
-            "Tip: '{name}' stopped at the run's token budget — raise the cap for one task with \
-             `agent run <task> --token-budget <n>`, change the backend default with \
-             `config set agent.token.budget.total <n>`, or continue with `agent run --resume <task-id>`."
+            "Tip: '{name}' stopped at the run's cache-miss token budget (prompt-cache reads do not \
+             count) — continue it with a bigger cap using \
+             `agent run --resume <task-id> --token-budget <n>`, raise the cap for one task with \
+             `agent run <task> --token-budget <n>`, or change the backend default with \
+             `config set agent.token.budget.total <n>`."
         ));
     }
     // The page-evaluate deadline is worth naming before the code extraction: the

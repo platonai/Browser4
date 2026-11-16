@@ -63,12 +63,15 @@ class SystemToolExecutor(
                 ToolSpec.Arg("filesChanged", "List<String>", "[]"),
                 ToolSpec.Arg("deletedFiles", "List<String>", "[]"),
                 ToolSpec.Arg("problems", "List<String>", "[]"),
+                ToolSpec.Arg("nextSuggestions", "List<String>", "[]"),
             ),
             returnType = "String",
             description = "Mark the current task as complete. summary: concise final report " +
                 "(include the VERDICT_JSON line verbatim when coding.verify ran); " +
                 "keyFindings: list of key findings; filesChanged: list of files changed; " +
-                "deletedFiles: list of files deleted; problems: unresolved issues."
+                "deletedFiles: list of files deleted; problems: unresolved issues; " +
+                "nextSuggestions: up to 3 concrete follow-up tasks a user would plausibly " +
+                "want next (an imperative task description, not a status remark)."
         )
     }
 
@@ -292,6 +295,7 @@ class SystemToolExecutor(
         keyFindings: List<String>?,
         filesChanged: List<String>?,
         problems: List<String>?,
+        nextSuggestions: List<String>? = null,
     ): String {
         require(summary.isNotBlank()) { "taskComplete summary must not be blank" }
         return "Task marked complete. Summary: ${summary.take(200)}"
@@ -325,7 +329,11 @@ class SystemToolExecutor(
             }
             "taskComplete" -> {
                 validateArgs(
-                    args, allowed = setOf("summary", "keyFindings", "filesChanged", "deletedFiles", "problems"),
+                    args,
+                    allowed = setOf(
+                        "summary", "keyFindings", "filesChanged", "deletedFiles", "problems",
+                        "nextSuggestions",
+                    ),
                     required = setOf("summary"), functionName
                 )
                 taskComplete(
@@ -333,6 +341,7 @@ class SystemToolExecutor(
                     keyFindings = stringListArg(args["keyFindings"]),
                     filesChanged = stringListArg(args["filesChanged"]),
                     problems = stringListArg(args["problems"]),
+                    nextSuggestions = stringListArg(args["nextSuggestions"]),
                 )
             }
 
@@ -406,6 +415,14 @@ data class TaskCompletion(
     val keyFindings: List<String>? = null,
     val filesChanged: List<String>? = null,
     val problems: List<String>? = null,
+    /**
+     * Up to three follow-up tasks the model proposes for after this run.
+     *
+     * The interactive session turns these into its numbered "likely next steps"
+     * menu: the model just did the work, so its own view of what is left is a better
+     * predictor than anything the CLI could infer from the payload.
+     */
+    val nextSuggestions: List<String>? = null,
 ) {
     companion object {
         private val mapper = pulsarObjectMapper()

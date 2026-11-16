@@ -1,6 +1,7 @@
 package ai.platon.pulsar.coding
 
 import org.slf4j.LoggerFactory
+import ai.platon.pulsar.coding.sandbox.ExecutionSandbox
 import ai.platon.pulsar.coding.sandbox.ExecutionSandboxes
 import ai.platon.pulsar.coding.sandbox.ProcessLauncher
 import ai.platon.pulsar.coding.sandbox.ProcessSpec
@@ -17,17 +18,18 @@ import java.util.concurrent.TimeUnit
  * Sandboxed code execution for the coding domain — `coding.runCode(language, code)`.
  *
  * Runs user/agent-provided code in a throwaway subprocess with:
- * - a **private temp working directory** (nothing in the workspace can be touched
- *   unless the code explicitly reaches out via absolute paths),
+ * - a **private temp working directory** — always, whatever the access policy says: the script
+ *   starts outside the workspace, and only code that reaches for absolute paths can leave it,
  * - a **hard timeout** (default 30s) after which the process is killed,
  * - **stdout/stderr capture with truncation** (no unbounded output),
- * - a **deny-list of interpreters** that would be too dangerous to spawn as-is
- *   (interactive shells, database clients, etc.).
+ * - only the interpreters in [RUNNERS] — there is no shell-style allow-list to widen, and `bash`/`sh`
+ *   are fed through stdin (`-s`) so Windows path mapping cannot mangle the script.
  *
- * It provides no workspace access and no persistence; the network flag is the caller's
- * decision ([networkAllowed]), so a policy carrying an active `net.connect` grant can turn it
- * on. Scripts that need the workspace should use `coding.shell` with the normal command
- * whitelist instead.
+ * The OS sandbox is the caller's decision ([sandbox]): the executor passes this task's seam, so an
+ * `agent run --unrestricted` task is unsandboxed here exactly like `coding.shell`. The network flag
+ * is the caller's decision too ([networkAllowed]), so a policy carrying an active `net.connect`
+ * grant can turn it on. Scripts that need the workspace should use `coding.shell` with the normal
+ * command whitelist instead.
  */
 class CodeRunner(
     private val defaultTimeoutSeconds: Long = 30L,
@@ -87,6 +89,9 @@ class CodeRunner(
      * @param args     extra CLI args passed to the interpreter
      * @param networkAllowed whether the sandbox may let the process reach the network; supplied by
      *   the caller from the access policy, since this runner has no policy of its own
+     * @param sandbox the OS sandbox seam for this task, or `null` to keep the process-wide
+     *   `browser4.agent.sandbox` choice. `coding.runCode` and `coding.shell` must agree on it, or an
+     *   `--unrestricted` task would be unsandboxed in one and confined in the other
      */
     suspend fun run(
         language: String,
@@ -94,6 +99,7 @@ class CodeRunner(
         timeoutSeconds: Long = defaultTimeoutSeconds,
         args: List<String> = emptyList(),
         networkAllowed: Boolean = false,
+        sandbox: ExecutionSandbox? = null,
     ): RunResult {
         val runner = RUNNERS[language.lowercase()]
             ?: return RunResult(-1, "", "Unsupported language: $language. Supported: ${supportedLanguages().joinToString(", ")}")
@@ -122,7 +128,7 @@ class CodeRunner(
                     // C1/C2: same environment construction and sandbox seam as `coding.shell`.
                     // runCode declares no explicit variables, so it receives the whitelist only.
                     val environment = SandboxEnvironment.build(System.getenv())
-                    val spec = ExecutionSandboxes.current().prepare(
+                    val spec = (sandbox ?: ExecutionSandboxes.current()).prepare(
                         ProcessSpec(command, workDir, environment),
                         workDir,
                         allowNetwork = networkAllowed,

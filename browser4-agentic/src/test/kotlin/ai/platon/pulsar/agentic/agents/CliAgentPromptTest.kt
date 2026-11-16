@@ -146,6 +146,26 @@ class CliAgentPromptTest {
     }
 
     @Test
+    @DisplayName("the coding prompt prices output tokens and forbids per-round narration")
+    fun outputTokenBudgetIsStated() {
+        val coding = CliAgentPrompt.hygiene(true, workspace)
+        // Measured: model time is ~4 ms per output token; a coding run that narrates every
+        // round pays for it in wall clock (plan P1-4). The rule must stay in the prompt.
+        assertTrue(coding.contains("1,000 output tokens"), coding)
+        assertTrue(coding.contains("A tool round needs\n          NO prose") || coding.contains("NO prose"), coding)
+        // A "batch independent calls into one round" rule was A/B-tested and REVERTED: rounds did
+        // not drop (22 vs 17-21) and wall clock rose ~15% (plan §0.4, appendix B.8).
+        assertFalse(coding.contains("Batch independent calls"), coding)
+        // N1 note: a prompt line recommending coding.readFiles was A/B-tested and DROPPED —
+        // the tool's own spec description is what makes the model adopt it (both arms used it;
+        // the arm with the extra prompt line was not faster). The tool is advertised through
+        // `CodingReadFilesToolTest`, not through the prompt.
+        assertFalse(coding.contains("coding.readFiles"), coding)
+        assertFalse(CliAgentPrompt.hygiene(false, workspace).contains("NO prose"),
+            "browsing runs must not inherit the coding output-budget rule")
+    }
+
+    @Test
     @DisplayName("the prompt states the finish-report contract for both modes")
     fun finishContractPresent() {
         for (codingMode in listOf(true, false)) {
@@ -188,6 +208,22 @@ class CliAgentPromptTest {
     }
 
     @Test
+    @DisplayName("an unrestricted prompt names the lifted command list and the vetoes that still refuse")
+    fun unrestrictedPromptNamesTheLiftedTierAndTheSurvivingVetoes() {
+        // `--unrestricted` lifts the command allow-list, so the prompt must not promise a blank
+        // cheque either: the OS credential stores still refuse, and killing the backend or
+        // rebuilding the runtime still refuses (CodingAgentShell.handOffVetoViolation).
+        val prompt = CliAgentPrompt.hygiene(true, workspace, AgentAccessPolicy().withUnrestricted())
+
+        assertTrue(prompt.contains("unrestricted"), prompt)
+        assertTrue(prompt.contains("command allow-list"), prompt)
+        assertTrue(prompt.contains("b4w build"), "the surviving vetoes must be named: $prompt")
+        assertTrue(prompt.contains("taskkill"), prompt)
+        assertTrue(prompt.contains("~/.ssh"), "the credential rail must be named: $prompt")
+        assertFalse(prompt.contains("UNSUPPORTED_SYNTAX"), "a removed gate must not be advertised: $prompt")
+    }
+
+    @Test
     @DisplayName("the permissions block reports what the policy actually grants, including an operator grant")
     fun permissionsBlockReflectsOperatorGrant() {
         // `read` + an operator-approved `fs.write` grant unlocks file mutation and — because the
@@ -215,5 +251,43 @@ class CliAgentPromptTest {
         val policy = AgentAccessPolicy(preset = AccessPreset.FULL, denyTools = setOf("coding.shell"))
         val prompt = CliAgentPrompt.hygiene(true, workspace, policy)
         assertTrue(prompt.contains("### Permissions"), prompt)
+    }
+
+    @Test
+    @DisplayName("an isolated coding run is told it has git, and that unverified work is not merged")
+    fun isolatedCodingRoleDescribesWorktreeMerge() {
+        val prompt = CliAgentPrompt.role(
+            codingMode = true, repairMaxRounds = 3, workspaceDir = workspace, windows = true, isolated = true,
+        )
+
+        assertTrue(prompt.contains("isolated git worktree"), prompt)
+        assertTrue(prompt.contains("HAS `.git`"), prompt)
+        assertFalse(prompt.contains("NO `.git`"), prompt)
+        assertTrue(prompt.contains("NOTHING is merged"), prompt)
+        assertTrue(prompt.contains("b4w build"), prompt)
+        assertTrue(prompt.contains(workspace.toString()), prompt)
+    }
+
+    @Test
+    @DisplayName("a folder granted with --add-dir is named in the prompt so the model uses it")
+    fun permissionsBlockNamesAddedFolders() {
+        val added = Path.of("/corpus").toAbsolutePath().normalize()
+        val granted = CliAgentPrompt.hygiene(
+            true, workspace, AgentAccessPolicy().withAdditionalDirs(listOf(added)),
+        )
+        assertTrue(granted.contains("Extra folders granted"), granted)
+        assertTrue(granted.contains(added.toString()), "the absolute path must be usable as given: $granted")
+        assertTrue(granted.contains("writable"), granted)
+
+        // Under a read preset the folder is still named, but no write is promised there.
+        val read = CliAgentPrompt.hygiene(
+            true, workspace, AgentAccessPolicy(preset = AccessPreset.READ).withAdditionalDirs(listOf(added)),
+        )
+        assertTrue(read.contains("Extra folders granted"), read)
+        assertTrue(read.contains("writes there are refused"), read)
+
+        // No grant, no line.
+        val plain = CliAgentPrompt.hygiene(true, workspace, AgentAccessPolicy())
+        assertFalse(plain.contains("Extra folders granted"), plain)
     }
 }

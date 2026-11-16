@@ -81,11 +81,32 @@ data class CommandStatus(
     var instructResults: MutableList<InstructResult> = mutableListOf(),
 
     /**
-     * The directory the agent's tools wrote into (agent-backed tasks only, see
-     * [AgentTaskStatus.workspace]). Surfaced through [commandResult] so a caller can
-     * reach a deliverable the agent left on disk.
+     * The directory the agent's change landed in (agent-backed tasks only, see
+     * [AgentTaskStatus.workspace]). For a coding task this is the **main
+     * repository**; the isolated worktree travels in [isolatedWorkspace].
+     * Surfaced through [commandResult] so a caller can reach a deliverable the
+     * agent left on disk.
      */
     var workspace: String? = null,
+
+    /** The isolated git worktree a coding task ran in, when isolation was active. */
+    var isolatedWorkspace: String? = null,
+
+    /** `worktree` | `mirror` | `none` — how the coding workspace was provided. */
+    var isolation: String? = null,
+
+    /**
+     * Whether the isolated change reached the main work tree:
+     * `applied` / `refused` / `pending`.
+     *
+     * `refused` means nothing was applied — the run's files exist only in
+     * [isolatedWorkspace] — so a client must not present [workspace] as containing
+     * the work.
+     */
+    var merge: String? = null,
+
+    /** Patch kept for `b4w recover --revert <taskId>`. */
+    var patch: String? = null,
 
     /**
      * Machine-readable failure reason (`TOKEN_BUDGET`, `NOOP_LIMIT`, `CANCELLED`,
@@ -101,12 +122,34 @@ data class CommandStatus(
     var resumable: Boolean? = null,
 
     /**
-     * The token budget the run actually enforced (`0` = unlimited, `null` = unknown).
+     * The **cache-miss** token budget the run actually enforced (`0` = unlimited,
+     * `null` = unknown): uncached prompt + output, prompt-cache reads excluded.
      *
      * A budget abort without the number is unactionable: "5M was not enough" and
-     * "the configured limit was 20k by mistake" look identical.
+     * "the configured limit was 20k by mistake" look identical — and the CLI cannot
+     * offer "continue with a doubled budget" without the cap it just hit.
      */
     var effectiveTokenBudget: Long? = null,
+
+    /**
+     * Whether this task ran with the current OS user's own permissions
+     * (`agent run --unrestricted`), `null` when unknown (a non-agent row, or a row written before
+     * the flag existed).
+     *
+     * A power grant that removes every rail must be visible from `agent status`, not only in the
+     * backend log: a reviewer reading a finished task has to be able to see that it ran unrestricted.
+     */
+    var unrestricted: Boolean? = null,
+
+    /**
+     * Four-bucket attribution of the run (plan N3): `rounds`, `totalMs`,
+     * `buildMs` / `toolMs` / `callbackMs` / `modelMs`, and `tokens{in,cachedIn,out}`.
+     *
+     * Accumulated by the agent itself and carried through the status/result path, so a
+     * caller reads "where the time went" from the task result instead of re-deriving it
+     * from the memory event log.
+     */
+    var timings: Map<String, Any?>? = null,
 ) {
     val status: String get() = ResourceStatus.getStatusText(statusCode)
     var lastModifiedTime: Instant? = null
@@ -305,10 +348,21 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     status.finishTime = this.finishTime
     status.startedTime = this.startedTime
     status.toolExecutions = this.toolExecutions
-    status.workspace = this.workspace
+    // Coding isolation (plan §D2): the change belongs to the MAIN repository, so
+    // `workspace` reports the checkout the patch reached; the worktree is an extra
+    // field. Non-coding tasks have no sourceRepo and keep the per-task directory.
+    status.workspace = this.sourceRepo ?: this.workspace
+    status.isolatedWorkspace = this.isolatedWorkspace
+    status.isolation = this.isolationMode
+    status.merge = this.isolationMerge
+    status.patch = this.isolationPatch
     status.errorCode = this.errorCode
     status.resumable = this.resumable
     status.effectiveTokenBudget = this.effectiveTokenBudget
+    // The per-task power grant: `agent status` has to show that a task ran with the OS user's own
+    // permissions, because every other rail (preset, paths, sandbox) is off for it.
+    status.unrestricted = this.unrestricted
+    status.timings = this.timings
     // The page this task ended on. AgentTaskStatus now carries it (observed from
     // the live page, see DocumentHttpStatus); before that the conversion dropped
     // it and every agent/loop record shipped the model's 201/"created" default.
@@ -351,6 +405,10 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     val lastState = status.agentState
     val result = status.ensureCommandResult()
     result.keyFindings = lastState?.keyFindings?.takeIf { it.isNotEmpty() }
+    // What the agent proposes NEXT. The interactive CLI shows it as the numbered
+    // "likely next steps" block: the model just finished the work, so its own view
+    // of what is left beats anything inferred from the payload.
+    result.nextSuggestions = lastState?.nextSuggestions?.takeIf { it.isNotEmpty() }
     // A run that aborted before `system.taskComplete` (token budget, step cap,
     // cancellation) still wrote its artifacts; the runner snapshots them into
     // `deliverables`. Without this fallback the data looked lost although it was on
@@ -358,13 +416,20 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     result.filesChanged = lastState?.filesChanged?.takeIf { it.isNotEmpty() }
         ?: this.deliverables?.takeIf { it.isNotEmpty() }
     result.problems = lastState?.problems?.takeIf { it.isNotEmpty() }
-    result.workspace = this.workspace
+    // The result points at the main repository for a coding task (see the envelope
+    // mapping above) and carries the isolation facts next to it.
+    result.workspace = this.sourceRepo ?: this.workspace
+    result.isolatedWorkspace = this.isolatedWorkspace
+    result.isolation = this.isolationMode
+    result.merge = this.isolationMerge
+    result.patch = this.isolationPatch
     // Failure semantics travel with the payload too: a client that only reads
     // `result` (the CLI's `agent result --json`) must still see why the run failed
     // and whether resuming it is possible.
     result.errorCode = this.errorCode
     result.resumable = this.resumable
     result.effectiveTokenBudget = this.effectiveTokenBudget
+    result.timings = this.timings
     // An aborted run's summary must carry what it DID produce, not only the
     // exception text: "wrote top20.csv, resume with …" is what tells the operator
     // whether the work is lost. The files were already there; the summary just did

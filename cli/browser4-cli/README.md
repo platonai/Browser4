@@ -32,6 +32,10 @@ and one state directory:
 | AOT cache | shared | per checkout (no cross-checkout invalidation) |
 | `browser4-cli stop` | stops every managed backend | stops **only this checkout's** backends (`kill-all` stays global) |
 
+The per-checkout AOT cache is keyed by bundle tag + jar list + JVM flags, so a
+dev rebuild that changes the jar list/sizes retrains once in the background
+(~1–3 min, non-blocking); the first backend start after that uses it.
+
 So with 4.13 already serving on 8282, a command in 4.14 picks 8283
 automatically; each checkout remembers its own port, and both can run and be
 tested side by side — including **two headed browsers at once**, because each
@@ -42,6 +46,16 @@ development mode). Precedence for the server URL is unchanged:
 ```
 --server / BROWSER4_CLI_SERVER  >  config set server  >  this checkout's dev port
 ```
+
+`BROWSER4_CLI_SERVER` and `BROWSER4_CLI_SESSION` are **top-level defaults**: they are
+applied once, to the CLI's own command line, and never to `batch` steps or to the
+payload a `loop` forwards. A batch step therefore cannot trip over an exported
+variable, and the only way to point a run at another backend stays the top-level
+`--server`. The unit tests are expected to pass with either variable exported
+(`cargo test --lib`, `cargo test --bin browser4-cli`). Tests that assert on argv
+semantics call `parse_global_flags_no_env()` (or the shared `crate::test_env` lock
+directly), so an exported variable can neither change an assertion nor race a test
+that sets it on purpose.
 
 Escape hatches: `--server <url>` (or `config set server <url>`) targets a
 specific backend, `BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1` disables development mode
@@ -208,6 +222,7 @@ Full guide: [`skills/browser4-cli/references/network.md`](../../skills/browser4-
 | Command | Description |
 |---|---|
 | `profiles list` | List browser profile (context) directories under `~/.browser4/browser/chrome` |
+| `star` | Star the Browser4 repository as yourself. With the GitHub CLI (`gh`) signed in, the star is written through the GitHub REST API after one confirmation — `--gh` skips the confirmation for scripts you drive, `--no-gh` never uses the CLI. Without a signed-in `gh` it opens the repository in the browser you are already logged into: the attached browser, otherwise (once, after asking) a local browser started with `--remote-debugging-port`, otherwise your default browser, where you click Star yourself. `--check` reads the state from the API (or a repo tab in an attached browser) without opening anything, `--wait <seconds>` bounds the click wait, `--no-open` prints the URL without touching a browser or the API, `--dismiss` turns the periodic reminder off |
 
 ### Storage
 
@@ -242,7 +257,7 @@ extensions) are also possible via `open --profile` or PROTOTYPE mode. See
 | Command | Description |
 |---|---|
 | `extract <instruction>` | Extract data from the current page. Without `--schema` the result is always the fixed `{title, content, links}` envelope — the instruction shapes the text inside `content`; pass `--schema` (JSON Schema or `{"fields":[…]}`) to get named top-level fields |
-| `agent run <task>` | Run an autonomous agent task (async, returns task ID). `--wait` blocks for the result; `--wait-timeout <seconds>` tunes the wait window (default 600). `--follow` streams the task's steps (tool calls, model text, slow/failed tools) plus a throttled `tokens <used> / <budget> (<pct>)` line (80% warns once, 100% prints the abort line) and ends with the result — Ctrl+C cancels the task; `--ndjson` emits that stream as one JSON object per line. `-i` opens an interactive session: tasks one after another, and a line typed while a task runs steers it at the next model round — never queued as a second task (`/help` lists `/status`, `/stats`, `/cancel`, `/result`, `/new`, …; `/stats` reports the run's LLM rounds/requests, token usage and tool calls). A backend hiccup or an unreadable step never ends the live view: `-i` keeps following a task that still runs and skips the one unreadable step. Task type is browser by default; `--coding` explicitly marks a pure file/build task (never auto-detected). `--access <preset>` (`full`/`write`/`read-build`/`read`) narrows that task's coding tools — `read-build` keeps reads and the project build but refuses file edits and the shell; the preset is reset when the task ends. Reads are wider than writes: Browser4's own data root (`~/.browser4` — logs, task data, its `tmp/`), the source checkout and any `-Dbrowser4.agent.readPaths=<dirs>` folder are readable from every task but stay read-only, while the OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) stay refused (`coding.permissions` prints the roots in effect). A refused step is not a dead end: the agent calls `coding.requestAccess(effect, target)`, gets a pending requestId back immediately (it never blocks the task) and is approved by an operator via `POST api/agent/<taskId>/access/<requestId>/approve`; `denyTools`, protected paths and the workspace boundary are never approved away. Without a TTY nobody can answer an approval, so an unattended run starts from the backend's unattended default (`full`, network on) instead of the server-wide preset — `browser4.agent.access.unattended` overrides it, and a watched `-i` session on a TTY keeps `browser4.agent.access`. Each task runs in its own workspace (`--shared-workspace` opts into the old shared one; `--resume <id>` continues the interrupted task's); `--token-budget <n>` caps THIS task (0 = unlimited) without changing the backend default (`config set agent.token.budget.total <n>`). Extra positional arguments are rejected — quote the task. |
+| `agent run <task>` | Run an autonomous agent task (async, returns task ID). `--wait` blocks for the result; `--wait-timeout <seconds>` tunes the wait window (default 600). `--follow` streams the task's steps (tool calls, model text, slow/failed tools) plus a throttled `budget <charged> / <limit> (<pct>) · cache <read> (<pct>)` line (cache-miss accounting; 80% warns once, 100% prints the abort line) and ends with the result — Ctrl+C cancels the task; `--ndjson` emits that stream as one JSON object per line. `-i` opens an interactive session: tasks one after another, and a line typed while a task runs steers it at the next model round — never queued as a second task (`/help` lists `/status`, `/stats`, `/resume`, `/cancel`, `/result`, `/new`, …; `/stats` reports the run's LLM rounds/requests, token usage (prompt-cache reads/writes and hit rate included when reported) and tool calls; a budget abort offers a numbered "continue" with the cache-miss cap doubled, and every finished task is followed by 2–3 numbered predicted next *tasks* — the model's own `nextSuggestions` first, then what the payload left open (files to review/test/commit, findings to dig into, a failure to diagnose) — never a menu of CLI commands). Tasks of one session build on each other: each new task carries a compacted `## Session context` block (earlier tasks, their files, open problems, and any mid-session correction you typed — a revised goal supersedes the original one), auto-compressed under `browser4.agent.session.contextTokens`; `/new` starts a deliberately fresh context. `/result [--json] [--full]` re-prints the last payload — `--json` as pretty-printed JSON, `--full` with nothing folded. A backend hiccup or an unreadable step never ends the live view: `-i` keeps following a task that still runs and skips the one unreadable step. Task type is browser by default; `--coding` explicitly marks a pure file/build task (never auto-detected). `--access <preset>` (`full`/`write`/`read-build`/`read`) narrows that task's coding tools — `read-build` keeps reads and the project build but refuses file edits and the shell; the preset is reset when the task ends. `--add-dir <folder>` grants this task an extra **existing** folder besides its workspace (repeatable): readable, writable and usable as a shell working directory, with a relative path resolved against your shell directory and `~` as your home. The folder must exist on the backend machine, OS credential stores stay refused, `--access` still bounds what may be written there, and `--resume` inherits the grant. In `-i`, `/add-dir <folder>` grants one mid-session and `/dirs [clear]` lists or drops the grants. Reads are wider than writes: Browser4's own data root (`~/.browser4` — logs, task data, its `tmp/`), the source checkout and any `-Dbrowser4.agent.readPaths=<dirs>` folder are readable from every task but stay read-only, while the OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) stay refused (`coding.permissions` prints the roots in effect). A refused step is not a dead end: the agent calls `coding.requestAccess(effect, target)`, gets a pending requestId back immediately (it never blocks the task) and is approved by an operator via `POST api/agent/<taskId>/access/<requestId>/approve`; `denyTools`, protected paths and the workspace boundary are never approved away. Without a TTY nobody can answer an approval, so an unattended run starts from the backend's unattended default (`full`, network on) instead of the server-wide preset — `browser4.agent.access.unattended` overrides it, and a watched `-i` session on a TTY keeps `browser4.agent.access`. Each task runs in its own workspace (`--shared-workspace` opts into the old shared one; `--resume <id>` continues the interrupted task's); `--token-budget <n>` caps THIS task (0 = unlimited) without changing the backend default (`config set agent.token.budget.total <n>`). Extra positional arguments are rejected — quote the task. |
 | `agent status <id>` | Check a task — the shared status envelope (`status`: `queued`/`running`/`done`/`failed`/`cancelled`, plus `statusCode`, `message`, `errorCode`, `effectiveTokenBudget` and the agent's step count). `done`/`failed`/`cancelled` are terminal; an unknown id answers `statusCode: 404` with the reason and exits non-zero. |
 | `agent result <id>` | Get a completed task's result: its summary plus the agent's `keyFindings`, `filesChanged` (only files THIS run wrote), `problems`, `errorCode`/`resumable` and the `workspace` its deliverables live in. Human output renders them as sections (Summary / Key findings / Files written / Problems / Data); `--json` keeps the raw envelope. A failed or cancelled task exits non-zero after printing the payload (use `--allow-failed` to exit 0); the verdict line names the cause and the `--resume` command. |
 | `agent list` | List tracked agent tasks with the same statuses (refreshed from the backend on every call); `--clear` untracks the finished ones. |
@@ -710,6 +725,28 @@ backend's `/api/doctor/llm-status` endpoint whether `detectedVia` is
 `test_file_backed`. If the backend does not support the file-backed mock LLM,
 the scenario prints `SKIPPED` and continues with the rest of the suite instead
 of failing.
+
+### Process sweep scope (several checkouts on one machine)
+
+Before the first scenario and after the last one, the harness sweeps orphaned
+Browser4 processes. That sweep is **scoped to the checkout it runs from**: it
+stops only backends this checkout launched (recognised by the checkout root in
+the backend JVM's command line — the bundled JRE, the classpath, or
+`-Dbrowser4.agent.workspace`), the backends this workspace registered, and the
+browsers those backends started. A neighbouring checkout's backend — and any
+agent task it is running — is left alone, which is what makes several checkouts
+(running `cargo test --test e2e` in one while an agent works in another) safe on
+one machine.
+
+Each killed pid is logged as a `[sweep] kill pid=… source=… cmd=…` line, so a
+sweep can be audited after the fact.
+
+To get the old machine-wide sweep (every Browser4 backend and browser on the
+machine, the behaviour before issue #640):
+
+```bash
+BROWSER4_SWEEP_ALL_WORKSPACES=1 cargo test --test e2e -- --nocapture
+```
 
 ## License
 

@@ -43,7 +43,9 @@ object InferenceEventEmitter {
                 "duration" to inferenceResult.totalInferenceTimeMillis,
                 "inputToken" to inferenceResult.inputTokenCount,
                 "outputToken" to inferenceResult.outputTokenCount,
-                "totalToken" to inferenceResult.totalTokenCount
+                "totalToken" to inferenceResult.totalTokenCount,
+                "cachedInputToken" to inferenceResult.cachedInputTokenCount,
+                "cacheWriteInputToken" to inferenceResult.cacheWriteInputTokenCount
             )
         )
 
@@ -91,9 +93,11 @@ object InferenceEventEmitter {
                 "instruction" to instruction,
                 "resultLength" to response.content.length,
                 "duration" to inferenceTimeMillis,
-                "inputToken" to response.tokenUsage.inputTokenCount,
+                "inputToken" to response.tokenUsage.effectiveInputTokenCount,
                 "outputToken" to response.tokenUsage.outputTokenCount,
-                "totalToken" to response.tokenUsage.totalTokenCount
+                "totalToken" to response.tokenUsage.effectiveTotalTokenCount,
+                "cachedInputToken" to response.tokenUsage.cachedInputTokenCount,
+                "cacheWriteInputToken" to response.tokenUsage.cacheWriteInputTokenCount
             )
         )
 

@@ -30,11 +30,13 @@ mod webminer;
 mod skills;
 mod snapshot;
 mod snapshot_diff;
+mod star_guide;
 mod state;
 mod tips;
 mod update_check;
 mod agent_interactive;
 mod agent_result;
+mod timing;
 
 use std::collections::{HashMap, HashSet};
 use std::io::{IsTerminal, Read};
@@ -49,7 +51,8 @@ use serde_json::{json, Value};
 use args::{
     build_command_args, build_short_option_map, build_upload_args, parse_batch_args,
     parse_batch_json_commands, COMMAND_ARG_ALIASES,
-    parse_command_string, parse_global_flags, parse_raw_args, GlobalFlags,
+    parse_command_string, parse_global_flags, parse_raw_args,
+    GlobalFlags,
 };
 use commands::{commands_map, is_element_reference};
 use daemon::{
@@ -425,7 +428,6 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "attach",
         "profile-import",
         "goto",
-        "act",
         "batch",
         "chat",
         "chat-result",
@@ -15921,6 +15923,61 @@ fn apply_resume_task_id(extra: &mut Value, resume_task_id: Option<&str>) {
     }
 }
 
+/// The `--add-dir` values of a parsed `agent run` payload.
+///
+/// The command definition builds a JSON array; a single value may still arrive as a
+/// plain string (an older caller, or `--help-json`-driven clients), so both shapes
+/// are accepted. Blank entries are not folders and are dropped, keeping the order
+/// the user passed.
+fn add_dirs_of(raw: Option<&Value>) -> Vec<String> {
+    match raw {
+        Some(Value::Array(values)) => values
+            .iter()
+            .filter_map(|value| value.as_str())
+            .map(str::trim)
+            .filter(|dir| !dir.is_empty())
+            .map(ToOwned::to_owned)
+            .collect(),
+        Some(Value::String(dir)) => {
+            let dir = dir.trim();
+            if dir.is_empty() {
+                Vec::new()
+            } else {
+                vec![dir.to_string()]
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Forward `--add-dir <dir>` (repeatable) into the `command.run` payload.
+///
+/// The command definition already resolved each value to an absolute path against
+/// the shell directory the user typed the command in, so this only carries the
+/// list to the backend, which owns the "does it exist, is it a directory"
+/// decision (and knows whether it runs on the same machine). An empty list leaves
+/// the key out entirely, so the task keeps its workspace-only boundary.
+fn apply_add_dirs(extra: &mut Value, add_dirs: &[String]) {
+    if !add_dirs.is_empty() {
+        extra["addDirs"] = json!(add_dirs);
+    }
+}
+
+/// Forward `--unrestricted` into the `command.run` payload.
+///
+/// The flag is the per-task opt-in to run with the current OS user's own
+/// permissions: full preset, external access, network, destructive commands, no
+/// protected/sensitive rails, no OS sandbox, and the shell's command allow-list off
+/// as well (shapes the shell cannot decompose are handed to the platform shell in
+/// every mode). Only `true` is forwarded -- an
+/// absent key keeps the backend's server-wide policy, so the rails can never be
+/// removed by omission.
+fn apply_unrestricted(extra: &mut Value, unrestricted: bool) {
+    if unrestricted {
+        extra["unrestricted"] = json!(true);
+    }
+}
+
 /// Submit one agent task in async mode and return its task id.
 ///
 /// Shared by the one-shot forms and the interactive session, so every mode
@@ -16075,6 +16132,11 @@ async fn handle_agent_run(
         tool_params.get("tokenBudget").and_then(|v| v.as_i64()),
     );
     apply_resume_task_id(&mut extra, resume_task_id);
+    apply_add_dirs(&mut extra, &add_dirs_of(tool_params.get("addDirs")));
+    apply_unrestricted(
+        &mut extra,
+        tool_params.get("unrestricted").and_then(|v| v.as_bool()) == Some(true),
+    );
     let task_id = submit_agent_task(client, base_url, task, extra).await?;
 
     // Say which session the task was bound to.  A silent submission is exactly
@@ -16252,7 +16314,7 @@ async fn handle_agent_run(
                         &crate::agent_result::RenderOptions::default()
                             .with_color(crate::agent_interactive::color_enabled())
                             .with_full(pretty_active())
-                            .with_json_hint(format!("agent result {task_id} --json")),
+                            .with_json_hint(format!("agent result {task_id} --pretty")),
                     );
                     if !lines.is_empty() {
                         cli_println!();
@@ -16365,18 +16427,6 @@ async fn handle_chat_result(
 
     let response = http::get_chat_result(client, base_url, task_id).await?;
     cli_println!("{}", response);
-
-    Ok(())
-}
-
-async fn handle_act(client: &Client, base_url: &str, description: &str) -> Result<(), String> {
-    let result = http::execute_act_command(client, base_url, description).await?;
-
-    if result.is_empty() {
-        cli_println!("Action completed (no output).");
-    } else {
-        cli_println!("{}", result);
-    }
 
     Ok(())
 }
@@ -16766,7 +16816,7 @@ async fn handle_agent_result(
             &crate::agent_result::RenderOptions::default()
                 .with_color(crate::agent_interactive::color_enabled())
                 .with_full(pretty_active())
-                .with_json_hint(format!("agent result {id} --json")),
+                .with_json_hint(format!("agent result {id} --pretty")),
         );
         for line in &lines {
             cli_println!("{}", line);
@@ -19723,7 +19773,10 @@ async fn handle_experience_deep_learn(
     base_url: &str,
     tool_params: &Value,
 ) -> Result<(), String> {
-    cli_println!("Running deep learning analysis (this may take a few seconds)...");
+    // No page is opened and no analysis tool runs: this only re-derives the entry
+    // from the traces/stats already on disk, so the notice must not promise a
+    // multi-second page analysis (or the empty result reads as a failure).
+    cli_println!("Deep learning over stored traces (no page access)...");
     let result = call_tool(
         client,
         base_url,
@@ -27367,6 +27420,34 @@ fn format_uninstall_output(
     lines
 }
 
+/// Names the installers may create next to the CLI binary.
+///
+/// These are removed alongside the main binary so stale symlinks / hardlinks /
+/// `.cmd` wrappers don't linger after uninstall.
+///
+/// `browser4-cli-win32-x64.exe` is the release/npm sidecar and must be listed:
+/// the release installer hard-links `b4.exe` to it and both `.cmd` wrappers
+/// invoke it, so leaving it out kept a ~26 MB executable (and a resolvable
+/// `browser4-cli.cmd`) behind after the main binary was already gone.
+fn companion_binary_names() -> &'static [&'static str] {
+    #[cfg(windows)]
+    {
+        &[
+            "b4.exe",
+            "b4.cmd",
+            "browser4-cli.exe",
+            "browser4-cli.cmd",
+            "browser4-cli-win32-x64.exe",
+        ]
+    }
+    #[cfg(not(windows))]
+    {
+        // The `browser4-cli-linux-*` / `browser4-cli-darwin-*` sidecars live
+        // only inside an npm package directory, which npm removes wholesale.
+        &["b4", "browser4-cli"]
+    }
+}
+
 /// Attempt to remove the running browser4-cli binary from disk.
 ///
 /// On Unix, the file can be unlinked while the process is running — the
@@ -27374,14 +27455,6 @@ fn format_uninstall_output(
 /// process exits.  On Windows the running executable is locked, so we
 /// schedule a deferred deletion via a detached PowerShell script.
 fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
-    // Companion link names that the install scripts create alongside the binary.
-    // We clean these up too so stale symlinks / hardlinks / .cmd wrappers don't
-    // linger after uninstall.
-    #[cfg(windows)]
-    const COMPANION_NAMES: &[&str] = &["b4.exe", "b4.cmd", "browser4-cli.exe", "browser4-cli.cmd"];
-    #[cfg(not(windows))]
-    const COMPANION_NAMES: &[&str] = &["b4", "browser4-cli"];
-
     #[cfg(windows)]
     {
         let exe_str = exe_path.display().to_string();
@@ -27397,7 +27470,7 @@ fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
             .map(|p| p.display().to_string())
             .unwrap_or_default();
         let escaped_dir = exe_dir.replace('\'', "''");
-        for name in COMPANION_NAMES {
+        for name in companion_binary_names() {
             companion_lines.push_str(&format!(
                 "$c = Join-Path '{escaped_dir}' '{name}'\n\
                  if ((Test-Path -LiteralPath $c) -and ($c -ne $target)) {{\n\
@@ -27476,7 +27549,7 @@ fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
         // Clean up companion symlinks (b4, browser4-cli) from the same
         // directory.  These are best-effort — silently skip if missing.
         let dir = exe_path.parent().unwrap_or(std::path::Path::new("."));
-        for name in COMPANION_NAMES {
+        for name in companion_binary_names() {
             let companion = dir.join(name);
             if companion != exe_path {
                 match std::fs::remove_file(&companion) {
@@ -27577,20 +27650,14 @@ async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
     let npm = resolve_npm();
     let (npm_removed, npm_error) = if dry_run {
         // Check whether npm would find the package, but don't remove anything.
-        let installed = npm
-            .map(|npm| {
-                Command::new(npm)
-                    .args(["list", "-g", "browser4-cli", "--depth=0"])
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::null())
-                    .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false);
-        (installed, None)
+        (npm.map(npm_global_has_browser4_cli).unwrap_or(false), None)
     } else {
         match npm {
+            // Probe first: `npm uninstall -g browser4-cli` exits 0 even when the
+            // package was never installed, and a false `npm_removed` used to
+            // skip the binary self-removal below — the command then printed
+            // "uninstall complete" while the binary was still on disk.
+            Some(npm) if !npm_global_has_browser4_cli(npm) => (false, None),
             Some(npm) => {
                 let mut cmd = Command::new(npm);
                 cmd.args(["uninstall", "-g", "browser4-cli"])
@@ -27877,6 +27944,33 @@ fn resolve_npm() -> Option<&'static str> {
             .map(|s| s.success())
             .unwrap_or(false)
     })
+}
+
+/// Interpret the output of `npm list -g browser4-cli --depth=0`.
+///
+/// An installed package always prints as a `<name>@<version>` tree entry
+/// (`+-- browser4-cli@4.16.1`); a missing one prints `` `-- (empty) ``.
+///
+/// The exit code is deliberately *not* part of the signal: `npm ls -g` also
+/// exits non-zero when an unrelated global package is extraneous
+/// (ELSPROBLEMS), which would otherwise hide a real install.
+fn npm_list_reports_browser4_cli(stdout: &str) -> bool {
+    stdout.contains("browser4-cli@")
+}
+
+/// Whether `browser4-cli` is installed as an npm global package.
+///
+/// `npm uninstall -g <package that was never installed>` exits 0 (it only
+/// reports "up to date"), so the uninstall exit code alone cannot tell whether
+/// anything was removed.
+fn npm_global_has_browser4_cli(npm: &str) -> bool {
+    std::process::Command::new(npm)
+        .args(["list", "-g", "browser4-cli", "--depth=0"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map(|o| npm_list_reports_browser4_cli(&String::from_utf8_lossy(&o.stdout)))
+        .unwrap_or(false)
 }
 
 /// Whether the CLI self-upgrade step should be skipped entirely.
@@ -32084,13 +32178,17 @@ fn compile_batch_step(
     command_map: &HashMap<String, commands::CommandDef>,
     stdin_available: bool,
 ) -> Result<BatchStepPlan, String> {
-    // Guard against explicit argv-level --server / -s overrides in subcommands.
-    // We inspect the raw tokens directly instead of parse_global_flags(), because
-    // parse_global_flags also fills server_url / session_name from environment
-    // variables (BROWSER4_CLI_SERVER / BROWSER4_CLI_SESSION) that b4.run sets for
-    // routing — those are NOT user overrides and must NOT block batch subcommands.
-    if has_explicit_override_flag(&spec.tokens, "--server,-s,--session") {
+    // Guard against explicit argv-level --server / -s / --session overrides in
+    // subcommands.  We inspect the raw tokens directly instead of
+    // parse_global_flags(), because parse_global_flags also fills server_url /
+    // session_name from environment variables (BROWSER4_CLI_SERVER /
+    // BROWSER4_CLI_SESSION) that b4.run sets for routing — those are NOT user
+    // overrides and must NOT block batch subcommands.
+    if has_explicit_override_flag(&spec.tokens, "--server") {
         return Err("Batch subcommands cannot override --server.".to_string());
+    }
+    if has_explicit_override_flag(&spec.tokens, "-s,--session") {
+        return Err("Batch subcommands cannot override -s/--session.".to_string());
     }
 
     let nested_global = parse_global_flags(&spec.tokens);
@@ -32661,8 +32759,12 @@ fn apply_config_defaults(global: &mut GlobalFlags) {
 }
 
 fn main() {
+    // First statement in the process: every segment reported by `[timing]` is
+    // measured from here. Off unless BROWSER4_CLI_TIMING / TRACE is set.
+    timing::init();
     install_broken_pipe_panic_hook();
     init_root_search_start_dir_from_startup();
+    timing::mark("hooks");
 
     // Run the command on a manually created tokio runtime and drop it
     // explicitly before exiting. With `#[tokio::main]`, the macro-owned
@@ -32684,6 +32786,7 @@ fn main() {
 
     let exit_code = runtime.block_on(async {
         let raw_args: Vec<String> = std::env::args().skip(1).collect();
+        timing::mark("runtime");
 
         // Git Bash rewrites '/'-leading arguments into paths under the Git
         // installation directory before spawning this process.  The original
@@ -32711,6 +32814,7 @@ fn main() {
         }
         apply_config_defaults(&mut global);
         let json_mode = global.json;
+        timing::mark("flags");
 
         // Plugin-declared CLI commands (ToolSpec.cliName, spaced form like
         // `profile import`): resolved BEFORE normalize so the spaced name
@@ -32752,6 +32856,7 @@ fn main() {
 
         let (command, effective_global, from_spaced_prefix) =
             normalize_command_invocation(&global);
+        timing::mark("invocation");
 
         let declared_command = command.clone();
         match declared_result {
@@ -32778,6 +32883,9 @@ fn main() {
     drop(runtime);
     use std::io::Write;
     let _ = std::io::stdout().flush();
+    // One machine-readable line on stderr (never stdout: --json output must stay
+    // parseable). `CliProcessManager` parses it out of the child's stderr.
+    timing::emit_footer();
     std::process::exit(exit_code);
 }
 
@@ -33260,6 +33368,32 @@ async fn run(
     let cmd_def = match cmd_map.get(command) {
         Some(def) => def,
         None => {
+            // `act` was removed on 2026-11-12: it drove the server's one-shot
+            // natural-language→tool-call path, which reported a failed tool call
+            // as success (the CLI printed a constant "performAct") and could not
+            // target a session. Name the replacement instead of answering with a
+            // bare "Unknown command".
+            if command == "act" {
+                let description = global
+                    .args
+                    .iter()
+                    .skip(1)
+                    .skip_while(|s| *s == "--")
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let hint = if description.is_empty() {
+                    "<natural language task>".to_string()
+                } else {
+                    description
+                };
+                return Err(CliError(
+                    ExitCode::Usage,
+                    format!(
+                        "The 'act' command was removed. Use the CLI tool loop instead:\n  browser4-cli agent run \"{hint}\" --wait"
+                    ),
+                ));
+            }
             // Dynamic plugin commands: plugin-<name> where <name> is not a
             // known built-in (plugin-list, plugin-info, etc.).
             // Also handles bare `plugin` (no subcommand) — lists available tools.
@@ -33338,31 +33472,6 @@ async fn run(
             ));
         }
     };
-
-    // `act` is handled early — its description is variadic (multi-word),
-    // so we join all remaining positionals before the standard arg parser
-    // would reject them as "too many positional arguments".
-    if command == "act" {
-        let description = global
-            .args
-            .iter()
-            .skip(1)
-            .skip_while(|s| *s == "--")
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(" ");
-        if description.is_empty() {
-            return Err(CliError(
-                ExitCode::Usage,
-                "A description is required. Usage: browser4-cli act \"<natural language description>\"".to_string()
-            ));
-        }
-        // Ensure the server is running before dispatching to act
-        ensure_server_running(&base_url, should_enforce_server_version(global)).await?;
-        let client = make_client();
-        handle_act(&client, &base_url, &description).await?;
-        return Ok(());
-    }
 
     // Parse positional + named arguments BEFORE starting the backend, so
     // malformed/illegal commands fail fast without a 30 s server launch.
@@ -33594,6 +33703,17 @@ async fn run(
             emit_json_envelope_for_early_return(&command);
             return Ok(());
         }
+    }
+
+    // `star` needs neither the backend nor a session: with the GitHub CLI signed
+    // in the star goes straight through the REST API, and otherwise it only
+    // drives a browser the user is already logged into.  Dispatching before the
+    // server gate keeps it free of a cold server start (which can rebuild the
+    // runtime bundle first).
+    if command == "star" {
+        star_guide::run(&base_url, global.session_name.as_deref(), &parsed).await?;
+        emit_json_envelope_for_early_return(&command);
+        return Ok(());
     }
 
     // Ensure the Browser4 server is running (for relevant commands).
@@ -35234,6 +35354,10 @@ async fn run(
 
     // Show a relevant tip on stderr to help AI agents discover advanced features.
     tips::show_tip(command);
+
+    // …and, once in a while, tell a human about the repository itself.  Gated
+    // on a TTY, frequency-capped, and silent in every machine-readable mode.
+    star_guide::maybe_show_cta(command);
 
     Ok(())
 }
@@ -38670,7 +38794,6 @@ mod tests {
 
     #[test]
     fn is_not_page_dependent_for_async() {
-        assert!(!is_page_dependent_command("act"));
         assert!(!is_page_dependent_command("batch"));
         assert!(!is_page_dependent_command("crawl"));
         assert!(!is_page_dependent_command("swarm-create"));
@@ -42620,6 +42743,43 @@ linkGroups:
         assert!(absent.get("tokenBudget").is_none(), "got {absent}");
     }
 
+    /// `--add-dir` (repeatable) reaches `command.run` as a `addDirs` array; a blank
+    /// value is not a folder, and no value at all must leave the key out so the
+    /// task keeps the workspace-only boundary.
+    #[test]
+    fn apply_add_dirs_forwards_every_real_folder_and_omits_blanks() {
+        let mut extra = build_agent_run_extra("cli", None, false, false, false, None, None, None, None);
+        let dirs = add_dirs_of(Some(&json!(["/corpus/a", "  ", "/corpus/b"])));
+        assert_eq!(dirs, vec!["/corpus/a".to_string(), "/corpus/b".to_string()]);
+        apply_add_dirs(&mut extra, &dirs);
+        assert_eq!(extra["addDirs"], json!(["/corpus/a", "/corpus/b"]));
+
+        // A single value (not an array) is still a folder.
+        assert_eq!(add_dirs_of(Some(&json!(" /corpus/a "))), vec!["/corpus/a".to_string()]);
+
+        let mut absent = build_agent_run_extra("cli", None, false, false, false, None, None, None, None);
+        apply_add_dirs(&mut absent, &add_dirs_of(Some(&json!(["  "]))));
+        assert!(absent.get("addDirs").is_none(), "got {absent}");
+
+        apply_add_dirs(&mut absent, &add_dirs_of(None));
+        assert!(absent.get("addDirs").is_none(), "got {absent}");
+    }
+
+    /// `--unrestricted` reaches the backend only when the task asked for it; the key
+    /// is omitted otherwise so the server-wide policy stays in force.
+    #[test]
+    fn apply_unrestricted_forwards_only_an_explicit_opt_in() {
+        let mut set =
+            build_agent_run_extra("cli", None, false, false, false, None, None, None, None);
+        apply_unrestricted(&mut set, true);
+        assert_eq!(set["unrestricted"], json!(true));
+
+        let mut absent =
+            build_agent_run_extra("cli", None, false, false, false, None, None, None, None);
+        apply_unrestricted(&mut absent, false);
+        assert!(absent.get("unrestricted").is_none(), "got {absent}");
+    }
+
     #[test]
     fn collect_state_namespaces_without_all_lists_only_the_current_workspace() {
         let temp = test_temp_dir();
@@ -45784,8 +45944,32 @@ linkGroups:
         ));
     }
 
+    #[test]
+    fn compile_batch_step_ignores_ambient_server_env() {
+        // `BROWSER4_CLI_SERVER` is a *top-level* default.  A step's tokens never carry
+        // `--server`, so an exported variable must not be read as a per-step override —
+        // doing so rejected every step of a `batch` run in a shell that exports it.
+        let _env = set_env("BROWSER4_CLI_SERVER", "http://localhost:8283");
+
+        let spec = BatchCommandSpec {
+            display: "tab-close".to_string(),
+            tokens: vec!["tab-close".to_string()],
+        };
+
+        let plan = compile_batch_step(&spec, &commands_map(), true)
+            .expect("ambient env defaults must not fail a batch step");
+
+        match plan.action {
+            BatchStepAction::Tool { tool_name, .. } => {
+                assert_eq!(tool_name, "browser_tabs");
+            }
+            other => panic!("expected a tool step, got {other:?}"),
+        }
+    }
+
     // -------------------------------------------------------------------
     // format_csv tests
+
     // -------------------------------------------------------------------
 
     #[test]
@@ -50550,6 +50734,62 @@ linkGroups:
             "https://example.com/home",
             "https://x.com/i/jf/onboarding/web?mode=login"
         ));
+    }
+
+    // ── uninstall: npm probe ──
+    //
+    // `npm uninstall -g browser4-cli` exits 0 even when the package was never
+    // installed.  Treating that as "removed" skipped the binary self-removal,
+    // so `browser4-cli uninstall -y` reported success while leaving the
+    // binary and every wrapper on PATH.  The probe below is what makes
+    // `npm_removed` truthful.
+
+    #[test]
+    fn npm_list_output_identifies_an_installed_browser4_cli() {
+        // `npm ls -g browser4-cli --depth=0`, package installed.
+        let installed = "C:\\Users\\x\\AppData\\Roaming\\npm -> .\\\n`-- browser4-cli@4.16.1\n\n";
+        assert!(npm_list_reports_browser4_cli(installed));
+        // Nested under another global package — still an install to remove.
+        assert!(npm_list_reports_browser4_cli("`-- other@1.0.0\n  `-- browser4-cli@4.16.1\n"));
+    }
+
+    #[test]
+    fn npm_list_output_identifies_a_missing_browser4_cli() {
+        // Package absent: npm exits 1 and prints an empty tree.  The exact
+        // output of npm 11 on Windows.
+        let missing = "C:\\Users\\x\\AppData\\Roaming\\npm -> .\\\n`-- (empty)\n\n";
+        assert!(!npm_list_reports_browser4_cli(missing));
+        // An error that merely names the package is not an install entry.
+        assert!(!npm_list_reports_browser4_cli("npm error 404 browser4-cli"));
+        // The version anchor keeps a bare mention from counting.
+        assert!(!npm_list_reports_browser4_cli("browser4-cli"));
+    }
+
+    // ── uninstall: companion links ──
+
+    #[test]
+    fn uninstall_companion_names_cover_the_primary_command_names() {
+        let names = companion_binary_names();
+        assert!(
+            names.contains(&"b4") || names.contains(&"b4.exe"),
+            "b4 wrapper must be swept: {names:?}"
+        );
+        assert!(
+            names.contains(&"browser4-cli") || names.contains(&"browser4-cli.exe"),
+            "browser4-cli binary must be swept: {names:?}"
+        );
+    }
+
+    /// The sidecar is what `.cmd` wrappers invoke and what `b4.exe` hard-links
+    /// to, so omitting it from the sweep left a ~26 MB executable behind (and
+    /// kept `browser4-cli.cmd` resolvable) after the main binary was removed.
+    #[cfg(windows)]
+    #[test]
+    fn uninstall_companion_names_include_the_windows_sidecar_and_wrappers() {
+        let names = companion_binary_names();
+        assert!(names.contains(&"browser4-cli-win32-x64.exe"), "{names:?}");
+        assert!(names.contains(&"b4.cmd"), "{names:?}");
+        assert!(names.contains(&"browser4-cli.cmd"), "{names:?}");
     }
 }
 

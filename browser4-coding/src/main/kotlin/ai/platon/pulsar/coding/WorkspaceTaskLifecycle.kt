@@ -137,22 +137,11 @@ class WorkspaceTaskLifecycle(
         absolute != real
     }.getOrDefault(false)
 
-    /** Capture `git status --porcelain` in [sourceRepo] as the pre-task baseline
-     *  (one entry per changed file). Returns empty if git is unavailable or the
-     *  repo has no working tree. */
+    /** Capture the pre-task `git status` of [sourceRepo] (one entry per changed file).
+     *  Returns empty when git is unavailable or the repo has no working tree. */
     fun captureGitBaseline(sourceRepo: Path?): Set<String> {
-        if (sourceRepo == null || !Files.isDirectory(sourceRepo.resolve(".git"))) return emptySet()
-        return runCatching {
-            val proc = ProcessBuilder("git", "-C", sourceRepo.toString(), "status", "--porcelain")
-                .redirectErrorStream(true)
-                .start()
-            val out = proc.inputStream.bufferedReader().readText()
-            proc.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
-            out.lineSequence()
-                .filter { it.isNotBlank() }
-                .map { it.substringAfter(' ').trim() }
-                .toSet()
-        }.getOrDefault(emptySet())
+        if (sourceRepo == null) return emptySet()
+        return GitStatus.changedFiles(sourceRepo)?.toSet() ?: emptySet()
     }
 
     /** filesChanged = (Δgit from baseline) ∪ (mutation log deliverables). */

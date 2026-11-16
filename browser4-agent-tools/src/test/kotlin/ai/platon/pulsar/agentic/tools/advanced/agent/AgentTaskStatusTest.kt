@@ -324,11 +324,18 @@ class AgentTaskStatusTest {
         status.effectiveTokenBudget = 5_000_000
         status.errorCode = AgentTaskStatus.ERROR_TOKEN_BUDGET
         status.resumable = true
+        // Plan N3: the four-bucket attribution must survive the snapshot the runner
+        // publishes, or `agent result` would silently lose it.
+        status.timings = mapOf("rounds" to 3, "modelMs" to 4_814L)
 
         val snapshot = status.detachedSnapshot(includeHistory = false)
 
         assertEquals(5_000_000L, snapshot.effectiveTokenBudget)
         assertEquals(AgentTaskStatus.ERROR_TOKEN_BUDGET, snapshot.errorCode)
         assertEquals(true, snapshot.resumable)
+        // Numbers may come back boxed as Int or Long depending on the path; the value is
+        // what matters.
+        assertEquals(3L, (snapshot.timings?.get("rounds") as Number).toLong())
+        assertEquals(4_814L, (snapshot.timings?.get("modelMs") as Number).toLong())
     }
 }

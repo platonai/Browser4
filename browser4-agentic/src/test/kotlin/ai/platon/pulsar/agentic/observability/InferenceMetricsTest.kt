@@ -61,6 +61,42 @@ class InferenceMetricsTest {
         assertTrue(finalOutput >= initialOutput + 250, 
             "Total output tokens should have increased by at least 250")
     }
+
+    @Test
+    fun recordTokenUsageWithCacheBreakdown() {
+        val initialCached = InferenceMetrics.getTotalCachedInputTokens()
+        val initialWritten = InferenceMetrics.getTotalCacheWriteInputTokens()
+
+        InferenceMetrics.recordTokenUsage(
+            "claude-3",
+            inputTokens = 1_000,
+            outputTokens = 40,
+            cachedInputTokens = 900,
+            cacheWriteInputTokens = 88,
+        )
+
+        assertTrue(
+            InferenceMetrics.getTotalCachedInputTokens() >= initialCached + 900,
+            "Cache-read tokens should be accumulated",
+        )
+        assertTrue(
+            InferenceMetrics.getTotalCacheWriteInputTokens() >= initialWritten + 88,
+            "Cache-write tokens should be accumulated",
+        )
+    }
+
+    @Test
+    fun unreportedCacheDoesNotMoveCacheCounters() {
+        // An unknown cache must not be recorded as a zero-measurement: only a
+        // provider report changes the counters.
+        val before = InferenceMetrics.getTotalCachedInputTokens()
+        val beforeWritten = InferenceMetrics.getTotalCacheWriteInputTokens()
+
+        InferenceMetrics.recordTokenUsage("gpt-4", inputTokens = 10, outputTokens = 1)
+
+        assertEquals(before, InferenceMetrics.getTotalCachedInputTokens())
+        assertEquals(beforeWritten, InferenceMetrics.getTotalCacheWriteInputTokens())
+    }
     
     @Test
     fun recordCircuitBreakerTrip() {

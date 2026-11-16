@@ -175,7 +175,6 @@ pub const CATEGORY_TITLES: &[(&str, &str)] = &[
     ("network", "Network"),
     ("agent", "Agent"),
     ("swarm", "Swarm"),
-    ("act", "Act"),
     ("browsers", "Browser sessions"),
     ("config", "Config"),
     ("install", "Install"),
@@ -1821,6 +1820,43 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    backend-wide browser4.agent.access applies; the preset is reset when the task ends.".to_string(),
         );
         lines.push(
+            "  - --unrestricted runs this task with YOUR own OS permissions: full preset, external"
+                .to_string(),
+        );
+        lines.push(
+            "    access, network, destructive commands, no protected rails, no OS sandbox, and the"
+                .to_string(),
+        );
+        lines.push(
+            "    shell's command allow-list is off too, so inline scripts and PowerShell cmdlets run"
+                .to_string(),
+        );
+        lines.push(
+            "    as written (shapes the checker cannot decompose are handed to the platform shell)."
+                .to_string(),
+        );
+        lines.push(
+            "    It removes the rails"
+                .to_string(),
+        );
+        lines.push(
+            "    as well as the scope, so it is opt-in per task, is audited (coding.access), and a"
+                .to_string(),
+        );
+        lines.push(
+            "    --resume of that task keeps it. With -i it applies to every task of the session."
+                .to_string(),
+        );
+        lines.push(
+            "    OS credential stores (~/.ssh, ~/.aws, ~/.gnupg, ~/.config/gcloud) stay refused, as"
+                .to_string(),
+        );
+        lines.push(
+            "    do the commands that would kill or rebuild this backend: 'my permissions' is not"
+                .to_string(),
+        );
+        lines.push("    'my secrets', and a task must not destroy its own runtime.".to_string());
+        lines.push(
             "  - Reads are wider than writes: Browser4's own folders (the data root, e.g. ~/.browser4".to_string(),
         );
         lines.push(
@@ -1868,22 +1904,54 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
+            "    Inside the session, /add-dir <dir> grants the following tasks an extra folder and"
+                .to_string(),
+        );
+        lines.push(
+            "    /dirs [clear] lists or drops those grants; /coding, /quiet, /verbose and"
+                .to_string(),
+        );
+        lines.push("    /noop-limit tune the other knobs live.".to_string());
+        lines.push(
             "  - A finished task's payload is rendered as sections (Summary / Key findings / Files".to_string(),
         );
         lines.push(
             "    written / Problems / Data) instead of one line of raw JSON; /result --json prints".to_string(),
         );
         lines.push(
-            "    the raw envelope. --ndjson stays machine-only and is unaffected.".to_string(),
+            "    the envelope as pretty JSON and /result --full shows every entry. After each task".to_string(),
+        );
+        lines.push(
+            "    the session predicts 2-3 next steps - the model's own nextSuggestions first, then".to_string(),
+        );
+        lines.push(
+            "    what the payload left open - so type the number, or your own task.".to_string(),
+        );
+        lines.push(
+            "  - Every task of a session inherits a compacted `## Session context` block (the".to_string(),
+        );
+        lines.push(
+            "    earlier tasks, their files, open problems and your corrections - a revised goal".to_string(),
+        );
+        lines.push(
+            "    wins), so /new is only for a deliberately".to_string(),
+        );
+        lines.push(
+            "    fresh context. --ndjson stays machine-only and is unaffected.".to_string(),
         );
         lines.push(
             "  - -i, --follow and --wait end with the same line: `✔ Agent completed in 41.3s ·".to_string(),
         );
         lines.push(
-            "    <id> · 3 round(s) · 39 tool(s) · 54.4k tokens` (a cost part is omitted when the".to_string(),
+            "    <id> · 3 round(s) · 39 tool(s) · 54.4k tokens · cache 80%` (a cost part is omitted"
+                .to_string(),
         );
         lines.push(
-            "    backend does not answer the stats call within 2s).".to_string(),
+            "    when the backend does not answer the stats call within 2s; `cache <pct>` appears"
+                .to_string(),
+        );
+        lines.push(
+            "    only when the provider reported prompt-cache details).".to_string(),
         );
         lines.push(
             "  - A run silent for 30s prints `⋯ still running · N step(s) · 30s since the last".to_string(),
@@ -1915,8 +1983,29 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    and tool calls (served by the backend's run counters; /stats <task-id> for another task)."
+            "    (prompt-cache reads/writes and the hit ratio included when the provider reports"
                 .to_string(),
+        );
+        lines.push(
+            "    them) and tool calls (served by the backend's run counters; /stats <task-id> for"
+                .to_string(),
+        );
+        lines.push(
+            "    another task).".to_string(),
+        );
+        lines.push(
+            "  - In the session, /resume [--budget <n>] [task-id] continues an interrupted or"
+                .to_string(),
+        );
+        lines.push(
+            "    budget-aborted task with its workspace and files; after every task ends, -i"
+                .to_string(),
+        );
+        lines.push(
+            "    offers 2-3 numbered next TASKS predicted from what the run produced (type the".to_string(),
+        );
+        lines.push(
+            "    number, or your own task).".to_string(),
         );
         lines.push(
             "  - A step the CLI cannot parse is skipped (one notice line) instead of ending the"
@@ -1946,18 +2035,66 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    unlimited). The configured default applies again to the next task; `config set` is"
+            "    unlimited). The budget counts CACHE-MISS tokens (uncached prompt + output):"
                 .to_string(),
         );
         lines.push(
-            "    the process-wide knob and changes every later task on the backend.".to_string(),
-        );
-        lines.push(
-            "  - --follow prints a `tokens <used> / <budget> (<pct>)` line every 10 requests or 15s,"
+            "    prompt-cache reads cost ~10% of the input price and are free here, so a cached"
                 .to_string(),
         );
         lines.push(
-            "    a one-time warning at 80% of the budget, and an explicit abort line at 100%."
+            "    loop no longer aborts a run that costs little. The configured default applies"
+                .to_string(),
+        );
+        lines.push(
+            "    again to the next task; `config set` is the process-wide knob.".to_string(),
+        );
+        lines.push(
+            "  - --follow prints a `budget <charged> / <limit> (<pct>) · cache <read> (<pct>)`"
+                .to_string(),
+        );
+        lines.push(
+            "    line every 10 requests or 15s (the cache part only when the provider reports it),"
+                .to_string(),
+        );
+        lines.push(
+            "    a one-time warning at 80% of the budget, and an explicit abort line at 100%. A"
+                .to_string(),
+        );
+        lines.push(
+            "    budget abort is resumable: `-i` offers to continue with a doubled budget, and"
+                .to_string(),
+        );
+        lines.push(
+            "    `agent run --resume <id> --token-budget <n>` does the same from a script."
+                .to_string(),
+        );
+        lines.push(
+            "  - --add-dir <dir> grants this task's agent an extra folder besides its workspace:"
+                .to_string(),
+        );
+        lines.push(
+            "    readable, writable and usable as a shell working directory. Repeat the flag for"
+                .to_string(),
+        );
+        lines.push(
+            "    more folders; a relative path resolves against your shell directory and a leading"
+                .to_string(),
+        );
+        lines.push(
+            "    ~ is your home directory. The folder must already exist on the backend machine, OS"
+                .to_string(),
+        );
+        lines.push(
+            "    credential stores (~/.ssh, ~/.aws, ~/.gnupg, ~/.config/gcloud) stay refused, and the"
+                .to_string(),
+        );
+        lines.push(
+            "    grant lasts for this task only. The preset still decides what may be done there"
+                .to_string(),
+        );
+        lines.push(
+            "    (--access read keeps it read-only); coding.permissions lists the folders in effect."
                 .to_string(),
         );
         lines.push(String::new());
@@ -1976,6 +2113,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(
             "  browser4-cli agent run \"Fix the failing test\" --coding --access read --follow"
+                .to_string(),
+        );
+        lines.push(
+            "  browser4-cli agent run \"Port the helpers from ../shared-libs\" --coding --add-dir ../shared-libs"
                 .to_string(),
         );
         lines.push(
@@ -2027,31 +2168,6 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli agent list --clear".to_string());
     }
 
-    if cmd.name == "act" {
-        lines.push("Notes:".to_string());
-        lines.push(
-            "  - Accepts natural language descriptions of browser actions."
-                .to_string(),
-        );
-        lines.push(
-            "  - The description is automatically translated to a browser4-cli command using AI."
-                .to_string(),
-        );
-        lines.push(
-            "  - Executes the command immediately against your current browser session."
-                .to_string(),
-        );
-        lines.push(
-            "  - Requires an LLM provider to be configured on the Browser4 server."
-                .to_string(),
-        );
-        lines.push(String::new());
-        lines.push("Examples:".to_string());
-        lines.push("  browser4-cli act \"scroll by 200px\"".to_string());
-        lines.push("  browser4-cli act \"go to https://example.com\"".to_string());
-        lines.push("  browser4-cli act \"click the search button and type hello\"".to_string());
-        lines.push("  browser4-cli act \"take a screenshot and save it as my-screen.png\"".to_string());
-    }
 
     if cmd.name == "attach" {
         lines.push("Notes:".to_string());
@@ -4214,6 +4330,30 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli sessionstorage-clear".to_string());
     }
 
+    if cmd.name == "star" {
+        // `add_note_line` inserts directly below the heading, so these are
+        // written back-to-front to read top-to-bottom.
+        add_note_line(
+            &mut lines,
+            "The reminder printed after value-producing commands appears at most 3 times, at least \
+             7 days apart, and never in --json/--quiet output; BROWSER4_NO_PROMO=1 turns it off \
+             permanently.",
+        );
+        add_note_line(
+            &mut lines,
+            "Browser order (no signed-in `gh`, or --no-gh): the attached browser you are already \
+             using, then (only after you confirm) a local browser started with \
+             --remote-debugging-port, then your default browser. Only the first two can be \
+             verified, so the fallback says so.",
+        );
+        add_note_line(
+            &mut lines,
+            "A star is only ever written by a `star` you ran yourself: interactive runs ask once \
+             ([Y/n]), and a piped or agent-driven run only writes it with --gh. `gh` owns the \
+             credentials — the CLI never reads a token.",
+        );
+    }
+
     // Subcommands — `config` never mentioned `config get|set|delete`, `crawl`
     // never mentioned `crawl resume`, `doctor` never mentioned `doctor log`, and
     // so on: the family was only visible in the top-level reference, which is
@@ -5012,6 +5152,14 @@ const CLI_EXAMPLES: &[(&str, &[&str])] = &[
     (
         "plugin-remove",
         &["browser4-cli plugin remove captcha --yes"],
+    ),
+    (
+        "star",
+        &[
+            "browser4-cli star",
+            "browser4-cli star --gh",
+            "browser4-cli star --check",
+        ],
     ),
 ];
 
@@ -6858,18 +7006,6 @@ mod tests {
         assert!(result_help.contains("browser4-cli agent result <id>"));
         assert!(result_help.contains("browser4-cli agent result agent-task-1"));
         assert!(!result_help.contains("browser4-cli agent-result"));
-    }
-
-    #[test]
-    fn test_generate_command_help_act() {
-        let cmds = all_commands();
-        let cmd = cmds.iter().find(|c| c.name == "act").unwrap();
-        let help = generate_command_help(cmd);
-        assert!(help.contains("browser4-cli act <description>"));
-        assert!(help.contains("natural language descriptions"));
-        assert!(help.contains("browser4-cli act \"scroll by 200px\""));
-        assert!(help.contains("browser4-cli act \"go to https://example.com\""));
-        assert!(help.contains("LLM provider"));
     }
 
     #[test]

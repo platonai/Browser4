@@ -17,10 +17,10 @@ suspend fun main() {
     var page = session.open(url)
     var document = session.parse(page)
     var fields = session.extract(document, mapOf("title" to "#title"))
-    var result = agent.act("scroll to the bottom")
-    result = agent.act("scroll to the top")
-    result = agent.act("enter 'pulsar' into the search box and submit the form (RESULTS will display in the same page)")
-    result = agent.act("click search button")
+    agent.run("scroll to the bottom")
+    agent.run("scroll to the top")
+    agent.run("enter 'pulsar' into the search box and submit the form (RESULTS will display in the same page)")
+    agent.run("click search button")
     var content = driver.selectFirstTextOrNull("body")
     content = driver.selectFirstTextOrNull("body")
     var history = agent.run("find the search box, type 'web scraping' and submit the form (RESULTS will display in the same page)")
@@ -28,7 +28,7 @@ suspend fun main() {
     document = session.parse(page)
     fields = session.extract(document, mapOf("title" to "#title"))
 
-    result = agent.act("click the first link that contains 'Show HN' or 'Ask HN'")
+    agent.run("click the first link that contains 'Show HN' or 'Ask HN'")
 
     content = driver.selectFirstTextOrNull("body")
 
@@ -36,13 +36,13 @@ suspend fun main() {
 
     history = agent.run("goto https://www.amazon.com/dp/B08PP5MSVB , search for 'calabi-yau' and submit the form")
 
-    result = agent.act("navigate back")
+    agent.run("navigate back")
 
-    result = agent.act("navigate forward")
+    agent.run("navigate forward")
 
     history = agent.run("goto https://en.cppreference.com/index.html , extract first 10 articles with there titles and hrefs from the main list")
 
-    result = agent.act("navigate back")
+    agent.run("navigate back")
 
     page = session.capture(driver)
     document = session.parse(page)

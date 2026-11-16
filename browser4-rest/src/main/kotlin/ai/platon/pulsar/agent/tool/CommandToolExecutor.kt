@@ -7,6 +7,7 @@ import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.TaskEnvelopes
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.coding.AccessPreset
+import ai.platon.pulsar.coding.AdditionalDirs
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.entities.statusWord
@@ -104,6 +105,16 @@ class CommandToolExecutor(
                         "narrows the derived default.",
                 ),
                 ToolSpec.Arg(
+                    "unrestricted", "Boolean?", "null",
+                    "Run this task with the current OS user's own permissions (`agent run " +
+                        "--unrestricted`): full preset, external access, network, destructive commands, " +
+                        "no protected/sensitive rails, the OS sandbox is not applied, and the coding " +
+                        "shell's command allow-list is off too, so inline scripts and PowerShell " +
+                        "cmdlets run as written (shapes it cannot decompose are handed to the platform " +
+                        "shell in every mode). Opt-in per task and audited; " +
+                        "inherited by `resumeTaskId`. Omit to keep the normal rails.",
+                ),
+                ToolSpec.Arg(
                     "resumeTaskId", "String?", "null",
                     "Resume an interrupted task by id: the new run starts from that task's checkpoint — " +
                         "its instruction, workspace and the files already written — and inherits its " +
@@ -112,9 +123,21 @@ class CommandToolExecutor(
                 ),
                 ToolSpec.Arg(
                     "tokenBudget", "Long?", "null",
-                    "Token budget for THIS task (`agent run --token-budget`), overriding " +
+                    "**Cache-miss** token budget for THIS task (`agent run --token-budget`), overriding " +
                         "`agent.token.budget.total` for this run only — a per-run override, never a " +
-                        "process-wide config write. 0 means unlimited. Omit to use the configured default.",
+                        "process-wide config write. The charge is uncached prompt + output; prompt-cache " +
+                        "reads do not count, and a provider that reports no cache details charges its " +
+                        "whole prompt. 0 means unlimited. Omit to use the configured default.",
+                ),
+                ToolSpec.Arg(
+                    "addDirs", "List<String>?", "null",
+                    "Extra folders this task's agent may reach besides its workspace " +
+                        "(`agent run --add-dir`, repeatable). Each entry must be an absolute path to an " +
+                        "existing directory on the backend machine; relative paths, missing folders and " +
+                        "OS credential stores are rejected at submission. An added folder is readable, " +
+                        "writable and usable as a shell working directory for this task only (the grant " +
+                        "is reset when it ends), while the access preset still decides whether anything " +
+                        "may be written there.",
                 ),
             ),
             returnType = "String",
@@ -138,6 +161,9 @@ class CommandToolExecutor(
                 Pass coding=true for a pure coding task (read/write files, run builds):
                 the agent then works from its coding tool set without a browser page.
                 Tasks are browser tasks unless the caller says otherwise.
+                addDirs grants extra absolute folders besides the workspace ("agent run
+                --add-dir"): the task may read, write and run commands there, the access
+                preset still limits what may be written, and the grant ends with the task.
             """.trimIndent(),
             examples = listOf(
                 ToolExample(
@@ -260,7 +286,7 @@ class CommandToolExecutor(
                     args,
                     allowed = setOf(
                         "command", "async", "noopLimit", "engine", "coding", "freshWorkspace", "sharedWorkspace",
-                        "access", "unattended", "resumeTaskId", "tokenBudget",
+                        "access", "unattended", "resumeTaskId", "tokenBudget", "addDirs", "unrestricted",
                     ) + SESSION_ARG,
                     // `agent run --resume <id>` may omit the task text: the instruction
                     // comes from the interrupted task's checkpoint. Validated below.
@@ -311,19 +337,28 @@ class CommandToolExecutor(
                 // Plan P4-1: nobody is watching a submitted job by default, so it derives the
                 // documented access default. The interactive CLI passes false on a TTY.
                 val unattended = paramBool(args, "unattended", functionName, required = false, default = true) ?: true
+                // `--unrestricted` is a capability opt-in, so it is parsed strictly: a non-boolean
+                // value must fail rather than silently leaving the rails in place (or, worse, off).
+                val unrestricted = paramBool(args, "unrestricted", functionName, required = false, default = null)
                 // Per-task token budget: a negative value is not a budget, so it is
                 // rejected rather than silently becoming "unlimited".
                 val tokenBudget = paramLong(args, "tokenBudget", functionName, required = false, default = null)
                     ?.also { require(it >= 0) { "tokenBudget must be >= 0 (0 = unlimited), actual=$it" } }
+                // Extra folders granted to this task (`agent run --add-dir`). Resolved and validated
+                // here — the single decision point — so a missing directory fails the call with an
+                // actionable message instead of starting a task whose grant silently means nothing.
+                val addDirs = AdditionalDirs.resolveAll(
+                    paramStringList(args, "addDirs", functionName, required = false)
+                )
                 if (isAsync) {
                     service.submitPlainCommand(
                         sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
-                        resumeTaskId, tokenBudget,
+                        resumeTaskId, tokenBudget, addDirs, unrestricted,
                     )
                 } else {
                     val status = service.executePlainCommand(
                         sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
-                        resumeTaskId, tokenBudget,
+                        resumeTaskId, tokenBudget, addDirs, unrestricted,
                     )
                     pulsarObjectMapper().writeValueAsString(status)
                 }

@@ -64,7 +64,7 @@
   - `experience_save` — **Fast Learning**：保存执行痕迹 + 更新统计（~数毫秒）
   - `experience_query` — **Intent-Based 查询**：6 级回退链解析知识（domain,intent → domain,url → family,intent → category,intent → universal,intent → cold start）
   - `experience_list` — 按 domain/intent/status 列出已存储知识
-  - `experience_deep_learn` — **Deep Learning**：运行分析工具、构建事实、晋升验证状态
+  - `experience_deep_learn` — **Deep Learning**：从已存轨迹与统计重建事实并晋升验证状态（不访问页面、不跑 htmlsnapshot/inspect、不调 LLM；选择器只能通过 `save --facts` 写入）
 
 - `ExperienceModels` — 数据模型：`TaskType`（12 种任务类型）、`SuccessCriteria`（默认成功条件）、`SelectorEntry`（带稳定性评分的 CSS 选择器）、`ActionStep`（单个操作步骤）、`ExecutionTrace`（完整执行痕迹）、查询/保存/Deep Learn/列表结果类型
 

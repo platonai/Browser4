@@ -6,16 +6,6 @@ object InferencePromptBuilder {
 
     private val promptBuilder = PromptBuilder()
 
-    fun buildObserveMessages(params: ObserveParams): AgentMessageList {
-        return if (params.multistep) {
-            // Multistep agents uses start with agent.run()
-            promptBuilder.buildMultistepAgentMessageListAll(params.context, params.codingMode)
-        } else {
-            // Single step agents uses observe() -> act()
-            promptBuilder.buildSingleObserveMessageListAll(params, params.context)
-        }
-    }
-
     fun buildExtractionPrompt(params: ExtractParams): AgentMessageList {
         val messages = AgentMessageList()
 

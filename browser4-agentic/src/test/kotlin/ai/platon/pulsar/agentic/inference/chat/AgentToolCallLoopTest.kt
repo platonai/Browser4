@@ -13,6 +13,8 @@ import dev.langchain4j.data.message.ToolExecutionResultMessage
 import dev.langchain4j.data.message.UserMessage
 import dev.langchain4j.model.chat.request.ChatRequest
 import dev.langchain4j.model.chat.response.ChatResponse
+import dev.langchain4j.model.anthropic.AnthropicTokenUsage
+import dev.langchain4j.model.openai.OpenAiTokenUsage
 import dev.langchain4j.model.output.TokenUsage
 import io.mockk.coEvery
 import io.mockk.every
@@ -22,6 +24,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
@@ -461,6 +464,88 @@ class AgentToolCallLoopTest {
         assertEquals(2, seen[1].first)
         assertEquals(100, seen[0].second.tokenUsage()?.inputTokenCount(),
             "the callback must carry the provider usage for token persistence")
+    }
+
+    @Test
+    @DisplayName("the returned usage keeps the prompt-cache breakdown of an OpenAI-style provider")
+    fun returnedUsageKeepsOpenAiCacheBreakdown() = runBlocking {
+        val model = mockk<BrowserChatModel>()
+        val coordinator = mockk<ToolExecutionCoordinator>()
+        val usage = OpenAiTokenUsage.builder()
+            .inputTokenCount(1_000)
+            .outputTokenCount(100)
+            .totalTokenCount(1_100)
+            .inputTokensDetails(
+                OpenAiTokenUsage.InputTokensDetails.builder().cachedTokens(800).build()
+            )
+            .build()
+        coEvery { model.langChainChat(any<ChatRequest>(), any()) } returns
+            ChatResponse.builder().aiMessage(AiMessage.from("done")).tokenUsage(usage).build()
+
+        val response = loop(model, coordinator).generate(listOf(UserMessage.from("do it")))
+
+        // OpenAI counts cache hits inside prompt_tokens: no double counting.
+        assertEquals(1_000, response.tokenUsage.inputTokenCount)
+        assertEquals(1_100, response.tokenUsage.totalTokenCount)
+        assertEquals(800, response.tokenUsage.cachedInputTokenCount)
+        assertNull(response.tokenUsage.cacheWriteInputTokenCount)
+        assertEquals(0.8, response.tokenUsage.cacheHitRatio!!, 1e-9)
+    }
+
+    @Test
+    @DisplayName("Anthropic-style cache tokens are folded into the prompt count exactly once")
+    fun returnedUsageNormalizesAnthropicCacheTokens() = runBlocking {
+        val model = mockk<BrowserChatModel>()
+        val coordinator = mockk<ToolExecutionCoordinator>()
+        val usage = AnthropicTokenUsage.builder()
+            .inputTokenCount(12)
+            .outputTokenCount(40)
+            .cacheReadInputTokens(900)
+            .cacheCreationInputTokens(88)
+            .build()
+        coEvery { model.langChainChat(any<ChatRequest>(), any()) } returns
+            ChatResponse.builder().aiMessage(AiMessage.from("done")).tokenUsage(usage).build()
+
+        val response = loop(model, coordinator).generate(listOf(UserMessage.from("do it")))
+
+        // Anthropic reports input_tokens as the uncached remainder only; the prompt
+        // the model processed is 12 + 900 + 88.
+        assertEquals(1_000, response.tokenUsage.inputTokenCount)
+        assertEquals(1_040, response.tokenUsage.totalTokenCount)
+        assertEquals(900, response.tokenUsage.cachedInputTokenCount)
+        assertEquals(88, response.tokenUsage.cacheWriteInputTokenCount)
+        assertTrue(response.tokenUsage.cacheCountedInInputTokenCount)
+    }
+
+    @Test
+    @DisplayName("multi-round usage sums prompt tokens and cache reads across requests")
+    fun multiRoundUsageSumsCacheReads() = runBlocking {
+        val model = mockk<BrowserChatModel>()
+        val coordinator = mockk<ToolExecutionCoordinator>()
+        val callMessage = AiMessage.from("calling", listOf(toolRequest("c1")))
+        val finalMessage = AiMessage.from("done")
+        val firstUsage = OpenAiTokenUsage.builder()
+            .inputTokenCount(100).outputTokenCount(20).totalTokenCount(120)
+            .inputTokensDetails(OpenAiTokenUsage.InputTokensDetails.builder().cachedTokens(60).build())
+            .build()
+        val secondUsage = OpenAiTokenUsage.builder()
+            .inputTokenCount(200).outputTokenCount(10).totalTokenCount(210)
+            .inputTokensDetails(OpenAiTokenUsage.InputTokensDetails.builder().cachedTokens(150).build())
+            .build()
+        coEvery { model.langChainChat(any<ChatRequest>(), any()) } returnsMany listOf(
+            ChatResponse.builder().aiMessage(callMessage).tokenUsage(firstUsage).build(),
+            ChatResponse.builder().aiMessage(finalMessage).tokenUsage(secondUsage).build(),
+        )
+        every { coordinator.execute(any()) } returns
+            ToolExecutionResultMessage.from("c1", "coding.read", "ok")
+
+        val response = loop(model, coordinator, maxIterations = 2)
+            .generate(listOf(UserMessage.from("do it")))
+
+        assertEquals(300, response.tokenUsage.inputTokenCount)
+        assertEquals(30, response.tokenUsage.outputTokenCount)
+        assertEquals(330, response.tokenUsage.totalTokenCount)
+        assertEquals(210, response.tokenUsage.cachedInputTokenCount)
     }
 
     @Test

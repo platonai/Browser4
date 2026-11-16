@@ -692,7 +692,7 @@ class CodingToolExecutorTest {
         @Test
         @DisplayName("grep calls fs.grep with defaults")
         fun testGrepDefaults() = runBlocking {
-            coEvery { fs.grep(any(), any(), any(), any()) } returns "3 matches"
+            coEvery { fs.grep(any(), any(), any(), any(), any()) } returns "3 matches"
 
             val tc = ToolCall(
                 domain = "coding",
@@ -701,14 +701,14 @@ class CodingToolExecutorTest {
             )
 
             val result = executor.callFunctionOn(tc, target)
-            coVerify { fs.grep("TODO", ".", "*", false) }
+            coVerify { fs.grep("TODO", ".", "*", false, CodingAgentFileSystem.DEFAULT_GREP_LIMIT) }
             assertEquals("3 matches", result.value)
         }
 
         @Test
         @DisplayName("grep calls fs.grep with all args")
         fun testGrepWithArgs() = runBlocking {
-            coEvery { fs.grep(any(), any(), any(), any()) } returns "1 match"
+            coEvery { fs.grep(any(), any(), any(), any(), any()) } returns "1 match"
 
             val tc = ToolCall(
                 domain = "coding",
@@ -722,7 +722,22 @@ class CodingToolExecutorTest {
             )
 
             executor.callFunctionOn(tc, target)
-            coVerify { fs.grep("class\\s+\\w+", "src/", "*.kt", true) }
+            coVerify { fs.grep("class\\s+\\w+", "src/", "*.kt", true, CodingAgentFileSystem.DEFAULT_GREP_LIMIT) }
+        }
+
+        @Test
+        @DisplayName("grep passes an explicit match limit")
+        fun testGrepLimit() = runBlocking {
+            coEvery { fs.grep(any(), any(), any(), any(), any()) } returns "1 match"
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "grep",
+                arguments = mutableMapOf("pattern" to "TODO", "limit" to 25)
+            )
+
+            executor.callFunctionOn(tc, target)
+            coVerify { fs.grep("TODO", ".", "*", false, 25) }
         }
 
         @Test
@@ -1031,10 +1046,10 @@ class CodingToolExecutorTest {
         }
 
         @Test
-        @DisplayName("getToolSpecs returns 57 registered specs")
+        @DisplayName("getToolSpecs returns 58 registered specs")
         fun testToolSpecsCount() {
             val specs = executor.getToolSpecs()
-            assertEquals(57, specs.size)
+            assertEquals(58, specs.size)
         }
 
         @Test
@@ -1044,7 +1059,10 @@ class CodingToolExecutorTest {
             val expectedMethods = setOf(
                 "shell", "shellOutput", "shellStatus", "shellList", "shellSetEnv",
                 "toolsDetect", "projectType", "permissions", "explain", "requestAccess",
-                "read", "readLines", "write", "append", "replace", "delete", "mkdir", "checksum",
+                // `readFiles` (bounded multi-file read) belongs in the middle of the read family:
+                // it was added by 9dd0cc0c5f and this golden list was not updated with it, which
+                // left the module suite red until the assertion was told the truth.
+                "read", "readLines", "readFiles", "write", "append", "replace", "delete", "mkdir", "checksum",
                 "copy", "move", "listDir", "glob", "grep", "stat", "diff",
                 "changeSummary", "languages", "workspaceRoot",
                 "scaffold", "scaffoldToDir", "validate",

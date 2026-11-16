@@ -122,6 +122,7 @@ class CliProcessManager(
             sessionId = request.sessionId,
             taskId = request.taskId,
             env = buildWhitelistedEnv(backendBaseUrl),
+            stdin = request.stdin,
         )
     }
 
@@ -179,7 +180,13 @@ class CliProcessManager(
         // `--stdin`) hung for the full 300s on the 2026-10-29 smoke run. Node's
         // `spawn(..., { stdio: ["ignore", …] })` — what pi's shell transport uses for
         // argv commands — reads from NUL instead, so such commands see EOF at once.
-        pb.redirectInput(nullDevice())
+        //
+        // A caller that supplies a payload ([CliRunSpec.stdin]) is the exception: it
+        // wants the command to read stdin, so the pipe must stay open until the
+        // payload is written and closed (see `startStdinWriter`).
+        if (spec.stdin == null) {
+            pb.redirectInput(nullDevice())
+        }
 
         val proc = try {
             withContext(Dispatchers.IO) {
@@ -196,6 +203,7 @@ class CliProcessManager(
         val stderr = HeadTailBuffer(spec.outputBufferBytes)
         val outThread = startReader(proc.inputStream, stdout)
         val errThread = startReader(proc.errorStream, stderr)
+        spec.stdin?.let { startStdinWriter(proc, it) }
 
         val outcome: Outcome = try {
             withTimeoutOrNull(spec.timeoutMs.milliseconds) {
@@ -231,22 +239,34 @@ class CliProcessManager(
         }
         val durationMs = System.currentTimeMillis() - startMs
         val outText = stdout.text()
-        val errText = stderr.text()
+        // The CLI's per-segment `[timing]` footer is instrumentation, not output:
+        // pull it out of stderr so it never reaches the model, and keep the parsed
+        // segments on the result (E-4). The CLI's clock starts inside itself, so
+        // whatever the *launcher* spent (a shell interpreter, the process spawn) is
+        // not in its `total`; the subprocess duration makes it visible.
+        val (errText, parsedTiming) = extractCliTiming(stderr.text())
+        val timing = parsedTiming?.copy(
+            launchMs = (durationMs - parsedTiming.totalMs).coerceAtLeast(0),
+        )
+        if (timing != null) {
+            logger.debug("cli timing {} | {}", spec.commandLine, timing.format())
+        }
         CliMetrics.recordCall(
             durationMs = durationMs,
             timedOut = outcome == Outcome.TimedOut,
             truncated = outText.contains("dropped") || errText.contains("dropped"),
         )
+        timing?.let { CliMetrics.recordTiming(it) }
 
         return when (outcome) {
             is Outcome.Exited -> CliResult(
-                outcome.code, outText, errText, durationMs = durationMs
+                outcome.code, outText, errText, durationMs = durationMs, timing = timing
             )
             Outcome.TimedOut -> CliResult(
-                null, outText, errText, timedOut = true, durationMs = durationMs
+                null, outText, errText, timedOut = true, durationMs = durationMs, timing = timing
             )
             Outcome.Aborted -> CliResult(
-                null, outText, errText, aborted = true, durationMs = durationMs
+                null, outText, errText, aborted = true, durationMs = durationMs, timing = timing
             )
         }
     }
@@ -331,6 +351,29 @@ class CliProcessManager(
             if (!p.waitFor(5, TimeUnit.SECONDS)) p.destroyForcibly()
         }
     }
+
+    /**
+     * Feed [payload] to the child's stdin, then close it so the command sees EOF.
+     *
+     * Runs on its own daemon thread: the payload can be larger than the OS pipe
+     * buffer, and the child may not read stdin until after it has talked to the
+     * backend — writing inline would block the deadline loop (and the two readers
+     * are already draining the child's output, so there is no lockstep risk).
+     * A failed write is expected when the child exits first, and is not an error
+     * of the invocation itself: the exit code still decides.
+     */
+    private fun startStdinWriter(proc: Process, payload: String): Thread =
+        Thread({
+            runCatching {
+                java.io.OutputStreamWriter(proc.outputStream, StandardCharsets.UTF_8).use { writer ->
+                    writer.write(payload)
+                    writer.flush()
+                }
+            }
+        }, "cli-process-stdin").apply {
+            isDaemon = true
+            start()
+        }
 
     private fun startReader(stream: InputStream, buffer: HeadTailBuffer): Thread =
         Thread({
@@ -435,6 +478,15 @@ class CliProcessManager(
     private fun buildShellInvocation(binary: Path, args: String): Triple<String, List<String>, String> {
         val quotedBinary = quoteForShell(binary.toString())
         val commandLine = "$quotedBinary $args".trimEnd()
+        // No shell needed: the command line has no quoting, no metacharacters and no
+        // non-ASCII, so splitting it on whitespace IS what the shell would do, and nothing
+        // else about a shell is used. Starting one costs ~200 ms per call on Windows
+        // (measured, evaluation §12.4) — and a browser task makes 11-20 `b4.run` calls, so
+        // the plain subset is where that money is. Direct execution also reports the child's
+        // own exit code instead of `exit $LASTEXITCODE` through a script.
+        directArgvOrNull(args)?.let { argv ->
+            return Triple(binary.toString(), listOf(binary.toString()) + argv, commandLine)
+        }
         return if (isWindows) {
             val shell = if (pwshAvailable.get()) "pwsh" else "powershell"
             val preamble = windowsPowerShellPreamble()
@@ -548,6 +600,11 @@ class CliProcessManager(
         env["GIT_PAGER"] = "cat"
         // M0: force the CLI onto the same backend and disable plugin warm restart.
         env["BROWSER4_CLI_DISABLE_PLUGIN_WARM_RESTART"] = "1"
+        // E-4: ask the CLI for its `[timing]` footer (startup / http / server / net).
+        // One stderr line per invocation: the manager strips it from the child's
+        // stderr before anything model-visible is assembled and records the
+        // segments as metrics, so a `b4.run` can be attributed without a probe run.
+        env["BROWSER4_CLI_TIMING"] = "1"
         backendBaseUrl?.let { env["BROWSER4_CLI_SERVER"] = it }
         // Extension-attach passthrough: the agent may drive `attach --extension`
         // through the b4 domain.  The local dev extension (loaded unpacked)
@@ -719,3 +776,39 @@ internal fun encodePowerShellCommand(commandLine: String, preamble: String): Str
         .encodeToString(script.toByteArray(StandardCharsets.UTF_16LE))
     return if (encoded.length <= PWSH_ENCODED_COMMAND_LIMIT) encoded else null
 }
+
+/**
+ * The argv for a command line that needs no shell interpreter, or `null` when a shell must
+ * run it.
+ *
+ * The accepted subset is deliberately tiny — the point is to be obviously safe, not clever:
+ *
+ * - **printable ASCII only.** The PowerShell preamble exists to pin UTF-8 console I/O
+ *   (2026-10-28: a cp936 host mangled a child's UTF-8 output); taking the shell away must
+ *   not change how either side encodes anything, so anything that could need that stays put.
+ * - **no quoting.** The shell resolves quotes, and `ProcessBuilder` would re-quote for the
+ *   CRT; guessing between the two is what produced the 2026-10-29 `ParserError`.
+ * - **no character a supported shell treats specially**: double quote, single quote,
+ *   backtick, backslash, `$`, `|`, `&`, `;`, `<`, `>`, `(`, `)`, `{`, `}`, `[`, `]`, `*`,
+ *   `?`, `!`, `^`, `#`, `~`. (Backslash and `$` are escapes in sh, `#` starts a comment,
+ *   `~` expands a home directory.)
+ * - at least one token.
+ *
+ * A command line inside this subset has exactly one reasonable reading — split on whitespace
+ * — which is what a shell does with it too. Everything else (an `eval --json '{…}'`, a pipe,
+ * a redirect, a Chinese search term) keeps the shell path unchanged.
+ */
+internal fun directArgvOrNull(args: String): List<String>? {
+    val trimmed = args.trim()
+    if (trimmed.isEmpty()) return null
+    // Whitespace runs are the separator; the loop below rejects tabs/newlines outright.
+    for (ch in trimmed) {
+        if (ch.code < 0x20 || ch.code > 0x7E) return null
+        if (ch in SHELL_SPECIAL_CHARS) return null
+    }
+    return trimmed.split(' ').filter { it.isNotEmpty() }
+}
+
+/** Characters that mean "a shell has to run this" — see [directArgvOrNull]. */
+private val SHELL_SPECIAL_CHARS: Set<Char> =
+    "\"'`\\$|&;<>(){}[]*?!^#~".toSet()

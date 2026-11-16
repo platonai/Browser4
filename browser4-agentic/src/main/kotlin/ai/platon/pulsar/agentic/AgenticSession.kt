@@ -4,8 +4,6 @@ import ai.platon.pulsar.agentic.agents.RobustBrowserAgent
 import ai.platon.pulsar.agentic.context.GenericAgenticContext
 import ai.platon.pulsar.agentic.context.StaticAgenticContext
 import ai.platon.pulsar.agentic.context.sql.AbstractBrowser4SQLContext
-import ai.platon.pulsar.agentic.inference.SessionActExecutor
-import ai.platon.pulsar.agentic.model.ToolCallResult
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.ql.SessionConfig
 import ai.platon.pulsar.ql.h2.AbstractH2SQLSession
@@ -14,18 +12,24 @@ import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import ai.platon.pulsar.skeleton.session.AbstractPulsarSession
 import ai.platon.pulsar.skeleton.session.PulsarSession
 
+/**
+ * A [PulsarSession] that can drive the page through a [companionAgent].
+ *
+ * The legacy one-shot text→action entry point (`act(action: String)`, backed by
+ * `SessionActExecutor` / `TextToAction.generateActions`) was removed on
+ * 2026-11-12: it translated a description with one LLM call and executed the
+ * resulting tool calls directly, which bypassed the tool loop's error handling,
+ * timeouts and observability — a failed tool call was still reported as success
+ * with a constant `"performAct"` output. Use [companionAgent]'s
+ * [PerceptiveAgent.run] (the CLI tool loop, also reachable as `command.run` /
+ * `browser4-cli agent run`) instead.
+ */
 interface AgenticSession : PulsarSession {
 
-    val companionAgent: PerceptiveAgent
-
     /**
-     * Instructs the webdriver to perform a series of actions based on the given prompt.
-     * This function converts the prompt into a sequence of webdriver actions, which are then executed.
-     *
-     * @param action The textual prompt that describes the actions to be performed by the webdriver.
-     * @return The response from the model, though in this implementation, the return value is not explicitly used.
-     */
-    suspend fun act(action: String): List<ToolCallResult>
+     * The agent bound to this session, driving the page through the CLI tool loop.
+     * */
+    val companionAgent: PerceptiveAgent
 }
 
 abstract class AbstractAgenticSession(
@@ -57,10 +61,6 @@ open class AbstractAgenticQLSession(
 
     override val companionAgent: PerceptiveAgent by lazy { createCompanionAgent() }
 
-    private val executor by lazy { SessionActExecutor(this) }
-
-    override suspend fun act(action: String) = executor.performActs(action)
-
     @Synchronized
     private fun createCompanionAgent(): RobustBrowserAgent {
         return RobustBrowserAgent(this).also { registerClosable(it) }
@@ -88,10 +88,6 @@ open class BasicAgenticSession(
 
     override val companionAgent: PerceptiveAgent by lazy { createCompanionAgent() }
 
-    private val executor by lazy { SessionActExecutor(this) }
-
-    override suspend fun act(action: String) = executor.performActs(action)
-
     @Synchronized
     private fun createCompanionAgent(): RobustBrowserAgent {
         return RobustBrowserAgent(this).also { registerClosable(it) }
@@ -105,10 +101,6 @@ open class GenericAgenticSession(
 ) : AbstractAgenticSession(context, sessionConfig, id) {
 
     override val companionAgent: PerceptiveAgent by lazy { createCompanionAgent() }
-
-    private val executor by lazy { SessionActExecutor(this) }
-
-    override suspend fun act(action: String) = executor.performActs(action)
 
     @Synchronized
     private fun createCompanionAgent(): RobustBrowserAgent {

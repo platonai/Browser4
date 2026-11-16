@@ -606,7 +606,7 @@ These commands operate on Browser4's learned experience store.
 | `experience save <url> <trace>` | Save a task execution trace. Supports `--outcome`, `--intent`, `--task-type` (canonical types including `publish_post`), and `--facts <inline JSON \| @file.json>` — merges retrospective knowledge (`selectors` / `interaction_hints` / `known_blockers` / `anti_patterns`, camelCase or snake_case keys) into the (domain, intent) facts entry; the merge is refused when that entry is VERIFIED (immutable). |
 | `experience query <url>` | Query known selectors, blockers, and hints for a URL/domain. Supports `--intent`. |
 | `experience list` | List stored experience entries. Supports `--filter`, `--intent-filter`, `--page`, `--page-size`. |
-| `experience deep-learn <url> <intent>` | Run deeper analysis on stored traces. Supports `--force`. |
+| `experience deep-learn <url> <intent>` | Re-derive the (domain, intent) knowledge entry from stored traces and promote it (no page access). Supports `--force`. |
 
 #### Plugins
 
@@ -619,13 +619,11 @@ Plugins are server-side JARs that extend Browser4.
 | `plugin install <file>` | Install a plugin from a local JAR file. Supports `--replace`. |
 | `plugin remove <name>` | Remove a plugin. Supports `-y`, `--yes`. |
 
-#### Advanced and currently hidden commands
+#### Removed commands
 
-These commands exist in the CLI but are intentionally kept out of the default public help.
-
-| Command | Description |
+| Command | Replacement |
 |---|---|
-| `act <description>` | Experimental natural-language action translator that turns plain text into a browser command and runs it. |
+| `act <description>` | Removed in 4.16: the server-side `/api/act` one-shot text→tool-call translator (which reported a failed tool call as success) is gone. Use `agent run "<task>" --wait` — the CLI tool loop is the only agent engine. |
 
 ### Timeout environment variables
 

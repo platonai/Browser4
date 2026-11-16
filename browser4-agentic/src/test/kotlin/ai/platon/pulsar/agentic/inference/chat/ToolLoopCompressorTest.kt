@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.inference.chat
 
+import ai.platon.pulsar.agentic.inference.TokenBudgetExceededException
 import ai.platon.pulsar.coding.SafeText
 import dev.langchain4j.agent.tool.ToolExecutionRequest
 import dev.langchain4j.data.message.AiMessage
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -64,11 +66,13 @@ class ToolLoopCompressorTest {
         enabled: Boolean = true,
         thresholdTokens: Long = 500L,
         retainTokens: Long = 100L,
+        summarizationRetries: Int = 1,
         summarizer: ToolLoopSummarizer = ToolLoopSummarizer { validSummary() },
     ): ToolLoopCompressor = ToolLoopCompressor(
         enabled = enabled,
         thresholdTokens = thresholdTokens,
         retainTokens = retainTokens,
+        summarizationRetries = summarizationRetries,
         pruneThresholdChars = 1_500,
         pruneHeadChars = 800,
         pruneTailChars = 400,
@@ -605,5 +609,29 @@ class ToolLoopCompressorTest {
 
         assertTrue(recovered, "a prune-only recovery still counts as a durable reduction")
         assertTrue((messages[2] as ToolExecutionResultMessage).text().contains(ToolLoopCompressor.PRUNE_MARKER))
+    }
+
+    @Test
+    @DisplayName("a token-budget abort during summarization is rethrown, never retried or disguised")
+    fun compressRethrowsTokenBudgetAbort() {
+        // The summarizer charges the run budget, so a compaction request can be the call that
+        // crosses the cap. Swallowing it as "compaction failed" re-runs (and re-charges) the
+        // request and hides the real cause from the CLI and the supervisor, so it must bypass
+        // the validation retries and end the run as a budget abort.
+        val calls = AtomicInteger()
+        val c = compressor(summarizationRetries = 1) {
+            calls.incrementAndGet()
+            throw TokenBudgetExceededException(consumedTokens = 6_000, budgetTokens = 5_000)
+        }
+        val messages = baseConversation(rounds = 6)
+        val before = messages.toList()
+
+        val failure = assertFailsWith<TokenBudgetExceededException> {
+            runBlocking { c.compressIfNeeded(messages) }
+        }
+
+        assertEquals(5_000L, failure.budgetTokens)
+        assertEquals(1, calls.get(), "the retry loop must not re-spend a budget breach")
+        assertEquals(before, messages, "an aborted compaction leaves the conversation untouched")
     }
 }

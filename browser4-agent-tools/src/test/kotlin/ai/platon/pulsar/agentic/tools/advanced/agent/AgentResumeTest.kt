@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -94,6 +95,19 @@ class AgentResumeTest {
 
         val text = resumeInstruction("", checkpoint)
         assertTrue(text.contains("previous workspace is no longer available"), text)
+    }
+
+    @Test
+    @DisplayName("a resume inherits the folders the interrupted task was granted")
+    fun checkpointCarriesAddedDirs(@TempDir tmp: Path) {
+        val dirs = listOf(tmp.resolve("corpus").toString())
+        val granted = status(workspace = tmp).apply { addedDirs = dirs }
+
+        assertEquals(dirs, resumeCheckpointOf(granted).additionalDirs)
+
+        // A row written before the field existed (or a task that named no folder) inherits nothing,
+        // so a resume never widens the boundary by accident.
+        assertTrue(resumeCheckpointOf(status(workspace = tmp)).additionalDirs.isEmpty())
     }
 
     @Test
@@ -195,5 +209,43 @@ class AgentResumeTest {
             taskWorkspaceFor(tmp, "task-d", resumeWorkspace = checkpoint, sharedWorkspace = true),
             "a resume keeps the interrupted task's workspace even with --shared-workspace",
         )
+    }
+
+    @Test
+    @DisplayName("an unrestricted grant is carried by the checkpoint, so a resume keeps it")
+    fun checkpointCarriesTheUnrestrictedGrant() {
+        // Decision (2026-11-14): a resume keeps the grant and cannot drop it — the continued
+        // instruction was written against "run with my own permissions", and there is no
+        // --no-unrestricted. `StatefulAgentRunner` merges `flag ?: checkpoint.unrestricted ?: false`,
+        // so a row that predates the flag stays "not unrestricted" (the safe default).
+        val granted = status().apply { unrestricted = true }
+        assertEquals(true, resumeCheckpointOf(granted).unrestricted)
+
+        assertNull(
+            resumeCheckpointOf(status()).unrestricted,
+            "a row written before the flag existed must stay unknown, not become a grant",
+        )
+    }
+
+    @Test
+    @DisplayName("a resume of a worktree task continues in that tree, and refuses to run it without isolation")
+    fun resumeOfWorktreeTaskTargetsThatTree(@TempDir tmp: Path) {
+        // The interrupted task's files exist ONLY in its worktree (the checkout was never
+        // written), so a resume has to reopen that exact tree.
+        val tree = tmp.resolve(".browser4/worktrees/task-a")
+        assertEquals(tree, resumeWorktreeOf("task-b", tree, isolationEnabled = true))
+
+        // An ordinary per-task workspace, or no workspace at all, is not a worktree resume.
+        assertNull(resumeWorktreeOf("task-b", tmp.resolve("workspace.task-a"), isolationEnabled = true))
+        assertNull(resumeWorktreeOf("task-b", null, isolationEnabled = true))
+
+        // With isolation off there is no merge step, so continuing in the tree would end with
+        // the change outside the checkout and no warning: refuse instead.
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            resumeWorktreeOf("task-b", tree, isolationEnabled = false)
+        }
+        assertTrue(error.message!!.contains("isolation is off"), error.message!!)
+        assertTrue(error.message!!.contains(tree.toString()), error.message!!)
+        assertTrue(error.message!!.contains("--resume"), error.message!!)
     }
 }

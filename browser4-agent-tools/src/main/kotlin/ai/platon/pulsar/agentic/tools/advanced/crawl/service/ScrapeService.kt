@@ -35,6 +35,14 @@ class ScrapeService(
      * */
     private val responseStatusIndex = MultiMapUtils.newListValuedHashMap<Int, String>()
 
+    /**
+     * Loads one page and applies the request's natural-language actions to it.
+     *
+     * The actions run through the session's companion agent (the CLI tool loop):
+     * they used to go through the removed one-shot `session.act(...)` path, which
+     * resolved a description with a single LLM call, ignored the driver the event
+     * hands us, and reported a failed tool call as success.
+     */
     suspend fun loadDocument(request: PageVisitRequest, eventHandlers: PageEventHandlers): Pair<WebPage, FeaturedDocument> {
         val args = request.enhanceArgs()
         val options = session.options(args, eventHandlers)
@@ -43,13 +51,13 @@ class ScrapeService(
 
         request.onBrowserLaunchedActions?.let { actions ->
             be.onBrowserLaunched.addLast { _, _ ->
-                actions.forEach { session.act(it) }
+                actions.forEach { session.companionAgent.run(it) }
             }
         }
 
         request.onPageReadyActions?.let { actions ->
             be.onDocumentFullyLoaded.addLast { _, _ ->
-                actions.forEach { session.act(it) }
+                actions.forEach { session.companionAgent.run(it) }
             }
         }
 

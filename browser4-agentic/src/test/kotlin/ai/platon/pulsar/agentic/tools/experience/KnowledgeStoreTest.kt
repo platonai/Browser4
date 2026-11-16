@@ -10,6 +10,7 @@ import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 import kotlin.io.path.*
 import kotlin.test.*
 
@@ -76,6 +77,32 @@ class KnowledgeStoreTest {
             assertEquals("amazon.com", loaded.domain)
             assertEquals(1, loaded.actions.size)
         }
+
+        @Test
+        @DisplayName("round-trip preserves trace/action timestamps and the redacted flag")
+        fun testTimestampsSurviveRoundTrip() {
+            // Regression: mapToTrace/mapToAction ignored their own `timestamp`
+            // column, so a reloaded trace claimed to have happened "now" — and
+            // `redacted` was never read back either, so every loaded trace
+            // reported the default `true` whatever had been stored.
+            val traceAt = Instant.parse("2026-02-03T04:05:06Z")
+            val actionAt = Instant.parse("2026-02-03T04:05:07Z")
+            val trace = TraceRecord(
+                intent = "buy", domain = "amazon.com",
+                url = "https://amazon.com/dp/test", urlPattern = "/dp/*",
+                outcome = "success",
+                actions = listOf(ActionStep(1, "click", selector = "#btn", result = "success", timestamp = actionAt)),
+                timestamp = traceAt,
+                redacted = false,
+            )
+            val path = store.saveTrace(trace)
+
+            val loaded = store.loadTrace(path)
+            assertNotNull(loaded)
+            assertEquals(traceAt, loaded.timestamp)
+            assertEquals(actionAt, loaded.actions.single().timestamp)
+            assertFalse(loaded.redacted, "a trace saved unredacted must not reload as redacted")
+        }
     }
 
     @Nested
@@ -124,6 +151,69 @@ class KnowledgeStoreTest {
             assertEquals(1, stats.failures)
             assertEquals("selector_drift", stats.failureStats.keys.firstOrNull())
         }
+
+        @Test
+        @DisplayName("reload keeps each selector's last_success timestamp")
+        fun testSelectorTimestampsSurviveRoundTrip() {
+            val at = Instant.now().minus(3, ChronoUnit.DAYS)
+            store.updateStats(
+                TraceRecord(
+                    intent = "buy", domain = "amazon.com",
+                    url = "https://amazon.com/dp/test", urlPattern = "/dp/*",
+                    outcome = "success",
+                    actions = listOf(ActionStep(1, "click", selector = "#btn", result = "success")),
+                    timestamp = at,
+                )
+            )
+
+            val stats = store.loadStats("amazon.com", "buy")
+            assertEquals(at, stats.selectorStats.getValue("#btn").lastSuccess)
+        }
+
+        @Test
+        @DisplayName("reload keeps last_updated, so recency decay actually applies")
+        fun testRecencyDecaySurvivesRoundTrip() {
+            // Fresh evidence, written through the store: last_updated = now.
+            store.updateStats(successTrace("fresh.com"))
+            val fresh = store.loadStats("fresh.com", "buy")
+
+            // The very same single success, dated 240 days ago (4 half-lives →
+            // recency 0.0625). mapToStats used to drop `last_updated`, so the
+            // reloaded stats looked brand new and confidence never decayed.
+            writeStatsFile("stale.com", "buy", lastUpdated = Instant.now().minus(240, ChronoUnit.DAYS))
+            val stale = store.loadStats("stale.com", "buy")
+
+            assertTrue(
+                stale.confidence < fresh.confidence,
+                "stale confidence ${stale.confidence} must be below fresh ${fresh.confidence}"
+            )
+            assertEquals("P2", fresh.retrievalTier)
+            assertEquals("P3", stale.retrievalTier, "decay must downgrade the retrieval tier")
+        }
+
+        private fun successTrace(domain: String): TraceRecord = TraceRecord(
+            intent = "buy", domain = domain,
+            url = "https://$domain/dp/test", urlPattern = "/dp/*",
+            outcome = "success", actions = emptyList(),
+        )
+
+        /** Hand-write a stats file the way an older run would have left it on disk. */
+        private fun writeStatsFile(domain: String, intent: String, lastUpdated: Instant) {
+            val dir = tempDir.resolve("experience").resolve(domain)
+            Files.createDirectories(dir)
+            Files.writeString(
+                dir.resolve("$intent.yaml"),
+                """
+                intent: $intent
+                domain: $domain
+                url_pattern: /dp/*
+                total_attempts: 1
+                successes: 1
+                failures: 0
+                last_updated: '$lastUpdated'
+                """.trimIndent() + "\n",
+            )
+        }
     }
 
     @Nested
@@ -154,6 +244,53 @@ class KnowledgeStoreTest {
         @DisplayName("loadFacts returns null for unknown domain")
         fun testLoadFactsNull() {
             assertNull(store.loadFacts("unknown.com", "buy"))
+        }
+
+        @Test
+        @DisplayName("round-trip preserves created_at, updated_at and promotion dates")
+        fun testTimestampsSurviveRoundTrip() = runBlocking {
+            val created = Instant.parse("2026-01-02T03:04:05Z")
+            val updated = Instant.parse("2026-02-03T04:05:06Z")
+            val promoted = Instant.parse("2026-03-04T05:06:07Z")
+            val facts = KnowledgeFacts(
+                intent = "buy", domain = "amazon.com", urlPattern = "/dp/*",
+                promotionHistory = listOf(
+                    PromotionEvent(from = "hypothesis", to = "candidate", date = promoted, reason = "seeded"),
+                ),
+                createdAt = created,
+                updatedAt = updated,
+            )
+            store.saveFacts(facts)
+
+            val loaded = store.loadFacts("amazon.com", "buy")
+            assertNotNull(loaded)
+            assertEquals(created, loaded.createdAt)
+            assertEquals(updated, loaded.updatedAt)
+            assertEquals(promoted, loaded.promotionHistory.single().date)
+        }
+
+        @Test
+        @DisplayName("a load-modify-save cycle leaves created_at alone")
+        fun testCreatedAtIsImmutableAcrossRewrites() = runBlocking {
+            // The deep_learn write path is load → copy(updatedAt = now) → save.
+            // created_at used to be dropped on load, so it was silently rewritten
+            // to "now" on every pass; the audit trail said the entry was created
+            // by the most recent command.
+            val created = Instant.parse("2026-01-02T03:04:05Z")
+            store.saveFacts(
+                KnowledgeFacts(
+                    intent = "buy", domain = "amazon.com", urlPattern = "/dp/*",
+                    createdAt = created, updatedAt = created,
+                )
+            )
+
+            val existing = store.loadFacts("amazon.com", "buy")
+            assertNotNull(existing)
+            store.saveFacts(existing.copy(updatedAt = Instant.now()))
+
+            val reloaded = store.loadFacts("amazon.com", "buy")
+            assertNotNull(reloaded)
+            assertEquals(created, reloaded.createdAt, "created_at must survive the rewrite")
         }
 
         @Test
@@ -228,6 +365,22 @@ class KnowledgeStoreTest {
         fun testEmptyList() {
             val result = store.list()
             assertEquals(0, result.total)
+        }
+
+        @Test
+        @DisplayName("entries report the page type stored in page_facts")
+        fun testListReportsTaskTypes() = runBlocking {
+            // `task_types` was hardcoded to an empty list, so a fact that did
+            // carry `page_facts.page_type` showed nothing in `experience list`.
+            store.saveFacts(
+                KnowledgeFacts(
+                    intent = "extract", domain = "zhuanlan.zhihu.com", urlPattern = "/p/*",
+                    pageFacts = PageFacts(pageType = "article-detail"),
+                )
+            )
+
+            val entry = store.list().entries.single()
+            assertEquals(listOf("article-detail"), entry.taskTypes)
         }
     }
 

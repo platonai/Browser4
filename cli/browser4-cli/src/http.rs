@@ -19,8 +19,6 @@ const TEXT_INPUT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_INPUT_TIMEOUT_SECS";
 const SNAPSHOT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_SNAPSHOT_TIMEOUT_SECS";
 const AGENT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_AGENT_TIMEOUT_SECS";
 const CODING_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_CODING_TIMEOUT_SECS";
-const ACT_REQUEST_TIMEOUT_SECS: u64 = 60;
-const ACT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_ACT_TIMEOUT_SECS";
 /// Env var set by the CLI when the user passes `--timeout <seconds>`.
 /// This overrides per-tool defaults so that the global timeout flag
 /// affects all tool calls, including those made by command handlers
@@ -549,16 +547,31 @@ async fn call_tool_with_timeout(
         request
     };
 
+    // E-4: the first tool request ends the "startup" segment, and the round trip
+    // itself is split into the backend's own handler time (page action) and the
+    // rest (dispatch, sockets, serialization) as soon as the response arrives.
+    crate::timing::note_tool_request();
+    let request_started = std::time::Instant::now();
+
     let response = request
         .send()
         .await
         .map_err(|e| format_mcp_transport_error(tool, &url, &args, timeout, &e))?;
 
     let status = response.status();
+    // `X-Browser4-Duration-Ms`: how long the backend needed for the tool itself.
+    // Absent on older backends and non-Browser4 servers → `server` stays 0 and
+    // the whole round trip is reported as network.
+    let server_ms = response
+        .headers()
+        .get("x-browser4-duration-ms")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok());
     let response_text = response
         .text()
         .await
         .map_err(|e| format!("Failed to read response body: {e}"))?;
+    crate::timing::record_http(request_started.elapsed().as_millis() as u64, server_ms);
 
     if !status.is_success() {
         // A rejected REST call can still carry the structured failure fields
@@ -792,73 +805,6 @@ pub async fn get_chat_result(
     }
 
     Ok(response_text)
-}
-
-/// Submit a natural language description to the server, which translates it
-/// to a CLI command via LLM and executes it synchronously.
-/// Returns the command output on success.
-pub async fn execute_act_command(
-    client: &Client,
-    base_url: &str,
-    description: &str,
-) -> Result<String, String> {
-    let url = build_endpoint_url(base_url, "/api/act");
-    let timeout = std::time::Duration::from_secs(timeout_secs_from_env(
-        ACT_REQUEST_TIMEOUT_ENV,
-        ACT_REQUEST_TIMEOUT_SECS,
-    ));
-    let response = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .json(&json!({ "description": description }))
-        .timeout(timeout)
-        .send()
-        .await
-        .map_err(|e| {
-            if e.is_timeout() {
-                format!(
-                    "Act request timed out after {}s. Increase with {} env var.",
-                    timeout.as_secs(),
-                    ACT_REQUEST_TIMEOUT_ENV
-                )
-            } else {
-                format!("Failed to call act endpoint: {e}")
-            }
-        })?;
-
-    let status = response.status();
-    let response_text = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read act response body: {e}"))?;
-
-    if !status.is_success() {
-        return Err(format_http_error(status, &response_text));
-    }
-
-    // Parse the JSON response: { "success": true, "output": "..." }
-    // or { "success": false, "error": "..." }
-    let parsed: Value = serde_json::from_str(&response_text)
-        .map_err(|e| format!("Failed to parse act response: {e}"))?;
-
-    let success = parsed
-        .get("success")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-
-    if success {
-        Ok(parsed
-            .get("output")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .unwrap_or_default())
-    } else {
-        let error_msg = parsed
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Unknown error");
-        Err(error_msg.to_string())
-    }
 }
 
 /// Append an optional `batchId` query parameter to a REST path.

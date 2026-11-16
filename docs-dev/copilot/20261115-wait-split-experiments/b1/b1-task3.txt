@@ -1,0 +1,1 @@
+Open https://www.selenium.dev/selenium/web/web-form.html and fill the form: put "Browser4 measurement" in the text input, select "Two" from the dropdown, tick the first checkbox, and click the Submit button. Then report the title of the page you land on and the message it shows.

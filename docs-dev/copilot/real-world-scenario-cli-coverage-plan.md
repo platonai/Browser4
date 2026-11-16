@@ -593,7 +593,7 @@ pwsh ./browser4-tests/real-world-scenarios/scripts/coverage.ps1 -List   # 覆盖
 
 #### Act（实验）（1）
 
-**处置**：Wave 2 #16：`generated/tta/act/act-demo.html` 现成多页 fixture；需 LLM key（POST `/api/act`）。hidden + Excluded，先确认是否转正再投入
+**处置**：**已作废（2026-11-12）**——`act` 命令与 `/api/act` 随 `session.act()` 一起下线（见 `20261112-act-removal.md`），不再需要 LLM 场景测试；替代路径 `agent run` 已有自己的场景覆盖。
 
 **前置条件**：LLM key + 后端
 

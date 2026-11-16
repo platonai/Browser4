@@ -1,24 +1,19 @@
 package ai.platon.pulsar.agentic.inference.action
 
-import ai.platon.pulsar.agentic.event.AgentEventBus
-import ai.platon.pulsar.agentic.event.AgenticEvents
 import ai.platon.pulsar.agentic.inference.*
 import ai.platon.pulsar.agentic.inference.chat.*
-import ai.platon.pulsar.agentic.model.ActionDescription
-import ai.platon.pulsar.agentic.model.ExecutionContext
 import ai.platon.pulsar.agentic.observability.InferenceMetrics
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.ExperimentalApi
-import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.common.event.EventBus
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.external.BrowserChatModel
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
+import ai.platon.pulsar.external.TokenUsage
 import ai.platon.pulsar.skeleton.llm.TestChatModelFactory
 import dev.langchain4j.data.image.Image
 import dev.langchain4j.data.message.ChatMessage
@@ -43,14 +38,30 @@ open class ContextToAction(
     val chatModel: BrowserChatModel
         get() = TestChatModelFactory.getOrCreate(chatModelConf) ?: ChatModelFactory.getOrCreate(chatModelConf)
 
-    val tta = TextToAction(conf)
-
     /**
      * Per-agent token budget, enforced on every LLM call that flows through
      * [generateResponseRaw]. Prevents runaway agent loops from burning
      * unbounded provider credits.
      */
-    val tokenBudget: AgentTokenBudget = AgentTokenBudget.from(conf)
+    @Volatile
+    var tokenBudget: AgentTokenBudget = AgentTokenBudget.from(conf)
+        private set
+
+    /**
+     * Install a fresh token budget for one agent run.
+     *
+     * A [ContextToAction] is cached on the agent (`BasicBrowserAgent.cta`) and
+     * reused across the tasks of an interactive session. A single budget
+     * instance would make task N inherit the spend of tasks 1..N-1, aborting a
+     * fresh task with a spurious `TokenBudgetExceededException` and reporting a
+     * cross-task cumulative token count. Every run starts from a clean budget.
+     *
+     * @param runConf the configuration whose `agent.token.budget.total` applies
+     * @param taskTokens the per-task override (`agent run --token-budget`), when given
+     * @return the budget now installed for this run
+     */
+    fun beginRun(runConf: ImmutableConfig = conf, taskTokens: Long? = null): AgentTokenBudget =
+        AgentTokenBudget.forRun(runConf, taskTokens).also { tokenBudget = it }
 
     /**
      * Per-request token limiter — caps the estimated token count of each
@@ -299,76 +310,6 @@ open class ContextToAction(
         Files.createDirectories(baseDir)
     }
 
-    @Deprecated("Use the CLI tool-loop engine path instead")
-    @ExperimentalApi
-    open suspend fun generate(messages: AgentMessageList, context: ExecutionContext): ActionDescription {
-        onWillGenerate(context, messages)
-
-        try {
-            val instruction = context.instruction
-
-            val response = generateResponseRaw(messages, context.screenshotB64)
-            val internalToolsExecuted = lastLoopExecutedTools
-
-            // Opt-in hard failure on tool-loop overflow: with the flag off, the
-            // overflow digest flows into the next step's prompt (progress kept);
-            // with it on, the step is marked failed instead of "success, no action".
-            val overflowError = response.modelError
-            if (toolLoopFailOnOverflow &&
-                overflowError?.startsWith(AgentToolCallLoop.OVERFLOW_ERROR_PREFIX) == true
-            ) {
-                throw ToolLoopOverflowException(overflowError)
-            }
-
-            val actionDescription = tta.modelResponseToActionDescription(instruction, context.agentState, response)
-                .let { ad -> if (internalToolsExecuted) ad.copy(internalToolsExecuted = true) else ad }
-
-            // The copy above creates a new instance when internal tools executed —
-            // republish it so the state carries the flag (data-class equality
-            // would otherwise trip the require below).
-            if (internalToolsExecuted) {
-                context.agentState.actionDescription = actionDescription
-            }
-
-            require(context.agentState.actionDescription == actionDescription) {
-                "Required: context.agentState.actionDescription == actionDescription"
-            }
-
-            onDidGenerate(context, messages, actionDescription)
-
-            return actionDescription
-        } catch (e: TokenBudgetExceededException) {
-            // Must propagate — a budget breach must not be swallowed into an
-            // error ActionDescription (which would let the agent loop continue
-            // stepping and keep burning tokens).
-            throw e
-        } catch (e: RequestTokenLimitExceededException) {
-            // Must propagate — the task must stop and report status so the
-            // user can decide whether to raise the limit and re-launch.
-            throw e
-        } catch (e: ToolLoopOverflowException) {
-            // Must propagate — with browser4.agent.toolLoop.failOnOverflow=true
-            // an overflow is a hard step failure that the resolve pipeline
-            // retries and then aborts on, instead of "success, no action".
-            throw e
-        } catch (e: Exception) {
-            val errorResponse = ModelResponse("Unknown exception: " + e.brief(), ResponseState.OTHER)
-            val actionDescription = ActionDescription(
-                context.instruction,
-                exception = e,
-                modelResponse = errorResponse,
-                context = context
-            )
-            context.agentState.actionDescription = actionDescription
-            // Record the failure on the state too — a step whose generation
-            // crashed used to stay isSuccess=true in the history.
-            context.agentState.exception = e
-
-            return actionDescription
-        } finally {
-        }
-    }
-
     @ExperimentalApi
     open suspend fun generateResponseRaw(messages: AgentMessageList, screenshotB64: String? = null): ModelResponse {
         // Halt the task when a single request would exceed the per-request
@@ -389,29 +330,43 @@ open class ContextToAction(
      * Resilient to null/zero usage (some providers omit counts on errors).
      */
     private fun accountTokenUsage(response: ModelResponse) {
-        val usage = response.tokenUsage
+        // Normalized: the prompt count is cache-inclusive, so a cache read is never
+        // charged twice (OpenAI-style) and never dropped (Anthropic-style).
+        val usage = response.tokenUsage.normalized()
         val input = usage.inputTokenCount.toLong().coerceAtLeast(0L)
         val output = usage.outputTokenCount.toLong().coerceAtLeast(0L)
+        val cached = usage.cachedInputTokenCount?.toLong()?.coerceAtLeast(0L) ?: 0L
         if (input == 0L && output == 0L) return
 
-        val total = tokenBudget.add(input, output)
+        // Cache-miss accounting: prompt-cache reads are billed at ~10% and are not
+        // charged, so a cached loop no longer burns the budget it did not spend.
+        val total = tokenBudget.add(input, output, cached)
 
         // Feed the existing Micrometer metrics — previously never recorded in
-        // production, leaving the token gauges at zero.
+        // production, leaving the token gauges at zero. The cache breakdown is
+        // recorded alongside the headline counts.
         runCatching {
-            InferenceMetrics.recordTokenUsage(metricsModelName, input.toInt(), output.toInt())
+            InferenceMetrics.recordTokenUsage(
+                metricsModelName, input.toInt(), output.toInt(),
+                cachedInputTokens = usage.cachedInputTokenCount,
+                cacheWriteInputTokens = usage.cacheWriteInputTokenCount,
+            )
         }
 
         if (tokenBudget.shouldWarn()) {
-            logger.warn("⚠️ token usage at 80%+ of budget: $tokenBudget")
+            logger.warn("⚠️ cache-miss token usage at 80%+ of budget: $tokenBudget")
         }
 
         if (tokenBudget.isExceeded) {
             logger.error(
-                "🛑 token budget exceeded: consumed {} tokens, budget {} — aborting agent run",
-                total, tokenBudget.maxTotalTokens
+                "🛑 cache-miss token budget exceeded: charged {} tokens (cache reads not charged), budget {} — aborting agent run",
+                total, tokenBudget.effectiveMaxTotalTokens
             )
-            throw TokenBudgetExceededException(total, tokenBudget.maxTotalTokens)
+            throw TokenBudgetExceededException(
+                total,
+                tokenBudget.effectiveMaxTotalTokens,
+                tokenBudget.consumedCacheReadTokens,
+            )
         }
     }
 
@@ -617,15 +572,13 @@ open class ContextToAction(
      */
     private fun chatResponseToModelResponse(response: ChatResponse): ModelResponse {
         val content = response.aiMessage().text() ?: ""
-        val lc4jUsage = response.tokenUsage()
+        // Keep the provider's prompt-cache breakdown and normalize it, so the
+        // budget/metrics see one meaning regardless of the provider protocol.
+        val usage = TokenUsage.from(response.tokenUsage()).normalized()
         return ModelResponse(
             content = content,
             state = ResponseState.STOP,
-            tokenUsage = ai.platon.pulsar.external.TokenUsage(
-                inputTokenCount = lc4jUsage?.inputTokenCount() ?: 0,
-                outputTokenCount = lc4jUsage?.outputTokenCount() ?: 0,
-                totalTokenCount = lc4jUsage?.totalTokenCount() ?: 0,
-            ),
+            tokenUsage = usage,
         )
     }
 
@@ -695,55 +648,5 @@ open class ContextToAction(
             val name = modelName?.lowercase()?.trim() ?: return true
             return TEXT_ONLY_MODEL_PREFIXES.none { name.startsWith(it) }
         }
-    }
-
-    private fun onWillGenerate(context: ExecutionContext, messages: AgentMessageList) {
-        // Emit AgentEventBus inference event
-        AgentEventBus.emitInferenceEvent(
-            eventType = AgenticEvents.ContextToAction.ON_WILL_GENERATE,
-            agentId = context.uuid,
-            message = "Starting LLM inference",
-            metadata = mapOf(
-                "context" to context.sid,
-                "step" to context.step
-            )
-        )
-
-        EventBus.emit(
-            AgenticEvents.ContextToAction.ON_WILL_GENERATE, mapOf(
-                "context" to context,
-                "messages" to messages
-            )
-        )
-    }
-
-    private fun onDidGenerate(
-        context: ExecutionContext,
-        messages: AgentMessageList,
-        actionDescription: ActionDescription
-    ) {
-        val modelResponse = actionDescription.modelResponse!!
-
-        // Emit AgentEventBus inference event
-        AgentEventBus.emitInferenceEvent(
-            eventType = AgenticEvents.ContextToAction.ON_DID_GENERATE,
-            agentId = context.uuid,
-            message = "LLM inference completed,",
-            metadata = mapOf(
-                "context" to context.sid,
-                "step" to context.step,
-                "inputToken" to modelResponse.tokenUsage.inputTokenCount,
-                "outputToken" to modelResponse.tokenUsage.outputTokenCount,
-                "totalToken" to modelResponse.tokenUsage.totalTokenCount
-            )
-        )
-
-        EventBus.emit(
-            AgenticEvents.ContextToAction.ON_DID_GENERATE, mapOf(
-                "context" to context,
-                "messages" to messages,
-                "actionDescription" to actionDescription
-            )
-        )
     }
 }

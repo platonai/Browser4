@@ -6,6 +6,8 @@ import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.agents.AgentRunEvent
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.agents.RobustBrowserAgent
+import ai.platon.pulsar.agentic.agents.RunPhase
+import ai.platon.pulsar.agentic.agents.RunPhaseClock
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.detail.DefaultServerSideAgentEventHandlers
 import ai.platon.pulsar.agentic.model.AgentHistory
@@ -14,6 +16,15 @@ import ai.platon.pulsar.api.AbstractWebDriver
 import ai.platon.pulsar.api.Browser
 import ai.platon.pulsar.coding.AccessPreset
 import ai.platon.pulsar.coding.AgentAccessPolicy
+import ai.platon.pulsar.coding.CodingWorkspace
+import ai.platon.pulsar.coding.IsolationGate
+import ai.platon.pulsar.coding.MavenBuildSupport
+import ai.platon.pulsar.coding.RepoLock
+import ai.platon.pulsar.coding.SessionWorktree
+import ai.platon.pulsar.coding.ShadowBoot
+import ai.platon.pulsar.coding.WorkspaceIsolation
+import ai.platon.pulsar.coding.WorkspaceManifestStore
+import ai.platon.pulsar.coding.WorktreeRetention
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -119,6 +130,22 @@ open class StatefulAgentRunner(
 
     /** Guards [pendingInputs] so an enqueue can never race a drain (see [enqueueInput]). */
     private val inputLock = Any()
+
+    /**
+     * The session's cross-task conversation: a compacted record of the tasks this
+     * runner already finished, prepended to the next task's instruction.
+     *
+     * Every task used to start from zero, so a session of ten related tasks had the
+     * user restating the same background ten times. This is the memory that fixes
+     * it; [SessionConversation] also owns its budget-driven compression, which is
+     * what keeps a long session's prompt from growing without bound.
+     *
+     * `null` when `browser4.agent.session.contextEnabled=false`.
+     */
+    private val conversation: SessionConversation? =
+        runCatching { SessionConversation.fromConf(session.sessionConfig) }
+            .onFailure { logger.warn("session conversation disabled: {}", it.message) }
+            .getOrNull()
 
     /**
      * Shared per process: all runners write the same global JSONL file, so they
@@ -352,6 +379,8 @@ open class StatefulAgentRunner(
             inputTokens = event.inputTokens,
             outputTokens = event.outputTokens,
             totalTokens = event.totalTokens,
+            cachedInputTokens = event.cachedInputTokens,
+            cacheWriteInputTokens = event.cacheWriteInputTokens,
             budgetTokens = event.budgetTokens,
             cumulativeTokens = event.cumulativeTokens,
         )
@@ -480,9 +509,14 @@ open class StatefulAgentRunner(
         unattended: Boolean = true,
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
+        addDirs: List<Path> = emptyList(),
+        unrestricted: Boolean? = null,
     ): AgentTaskStatus {
         val status = create()
-        execute(plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId, tokenBudget)
+        execute(
+            plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId,
+            tokenBudget, addDirs, unrestricted,
+        )
         return status
     }
 
@@ -506,9 +540,14 @@ open class StatefulAgentRunner(
         unattended: Boolean = true,
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
+        addDirs: List<Path> = emptyList(),
+        unrestricted: Boolean? = null,
     ): Job {
         val job = taskScope.launch(start = CoroutineStart.LAZY) {
-            execute(plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId, tokenBudget)
+            execute(
+                plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
+                resumeTaskId, tokenBudget, addDirs, unrestricted,
+            )
         }
         runningJobs[status.id] = job
         job.start()
@@ -580,11 +619,14 @@ open class StatefulAgentRunner(
         unattended: Boolean = true,
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
+        addDirs: List<Path> = emptyList(),
+        unrestricted: Boolean? = null,
     ) {
         try {
             runMutex.withLock {
                 executeSerialized(
-                    plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId, tokenBudget
+                    plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
+                    resumeTaskId, tokenBudget, addDirs, unrestricted,
                 )
             }
         } catch (e: CancellationException) {
@@ -601,6 +643,201 @@ open class StatefulAgentRunner(
             }
             throw e
         }
+    }
+
+    /**
+     * Start the isolated worktree for a coding task (self-development isolation
+     * plan §D1), or null when the task must run in its per-task directory.
+     *
+     * Resume re-attaches to the interrupted task's worktree, so the files it
+     * already changed are what the new run continues from. That tree is the **only**
+     * copy of those files until a merge, so a resume that cannot reopen it fails the
+     * task instead of quietly starting a fresh tree (which would look successful and
+     * leave the interrupted work behind). A workspace that cannot be isolated at all
+     * (no git work tree) fails the task too: the mirror fallback would write the
+     * user's checkout with no merge step to apply.
+     */
+    private suspend fun startIsolation(
+        taskId: String,
+        sessionId: String,
+        resumeWorkspace: Path?,
+        sharedWorkspace: Boolean?,
+    ): IsolationStart {
+        val isolationEnabled = CodingWorkspace.isIsolationEnabled()
+        // Throws when the resume names a managed worktree but isolation is off: no
+        // merge step would run, so the change could never reach the checkout.
+        val resumable = resumeWorktreeOf(taskId, resumeWorkspace, isolationEnabled)
+        if (!isolationEnabled) {
+            return IsolationStart(null, null)
+        }
+        if (sharedWorkspace == true) {
+            // A shared directory is not a worktree, and reusing another task's tree is
+            // exactly the attribution problem isolation removes. Refuse instead of
+            // silently running the coding task in the legacy mirror.
+            throw IllegalArgumentException(
+                "--shared-workspace cannot be combined with --coding: a coding task runs in its " +
+                    "own git worktree and merges the change into the checkout. Drop the flag, or " +
+                    "set -Dbrowser4.agent.workspace.isolation=off to run in place."
+            )
+        }
+        if (resumable != null) {
+            val reopened = runCatching { WorkspaceIsolation.reopen(resumable, taskId) }
+                .onFailure { logger.warn("Agent task {}: could not reopen worktree {}: {}", taskId, resumable, it.message) }
+                .getOrNull()
+                ?: throw IllegalStateException(
+                    "task $taskId: the isolated worktree of the resumed task is gone ($resumable). Its " +
+                        "unmerged changes are the only copy and cannot be recovered, so the task was not " +
+                        "started. Re-run without --resume to start from the current checkout, or run " +
+                        "`b4w recover --status` to see what is left."
+                )
+            // The lock is acquired on the MAIN checkout, not on the worktree.
+            val lock = RepoLock.acquire(reopened.repoRoot, taskId)
+            sweepWorktrees(reopened.repoRoot, exclude = resumable, taskId = taskId)
+            logger.info("Agent task {}: resuming the isolated worktree at {}", taskId, resumable)
+            return IsolationStart(reopened, lock)
+        }
+        val source = runCatching { CodingWorkspace.workspaceRoot }.getOrNull()
+            ?: return IsolationStart(null, null)
+        // Isolation was requested but cannot be provided: fail instead of silently
+        // degrading. The per-task workspace is a mirror of the checkout (its module
+        // entries link back into the real tree), so "no isolation" would write the user's
+        // checkout with no merge step and no `merge`/`isolatedWorkspace` in the result.
+        WorkspaceIsolation.isolationUnavailableReason(source)?.let { reason ->
+            throw IllegalStateException("task $taskId: $reason")
+        }
+        // Throws when another coding task holds the checkout: running this one
+        // unisolated would collide at merge time and in the Maven build cache.
+        val lock = RepoLock.acquire(source, taskId)
+
+        // Session-scoped reuse (plan S4-3): only when the previous task merged, and
+        // only when the operator opted in. A refused/interrupted task keeps its tree
+        // and the new task gets its own — unmerged work must stay inspectable.
+        val sessionDir = if (CodingWorkspace.isSessionReuseEnabled()) {
+            SessionWorktree.dirFor(source, sessionId)
+        } else null
+        sweepWorktrees(source, exclude = sessionDir, taskId = taskId)
+        if (sessionDir != null && Files.isDirectory(sessionDir)) {
+            val reusable = SessionWorktree.isReusable(
+                runCatching { WorkspaceManifestStore().read(sessionDir) }.getOrNull()
+            )
+            if (reusable) {
+                val reused = runCatching { WorkspaceIsolation.reopen(sessionDir, taskId) }.getOrNull()
+                if (reused != null && reused.rebase()) {
+                    logger.info("Agent task {}: reusing the session worktree {}", taskId, sessionDir)
+                    return IsolationStart(reused, lock)
+                }
+                logger.info(
+                    "Agent task {}: session worktree {} could not be reset; starting a task worktree",
+                    taskId, sessionDir
+                )
+            } else {
+                logger.info(
+                    "Agent task {}: the session worktree {} has unmerged work; starting a task worktree",
+                    taskId, sessionDir
+                )
+            }
+        }
+        val runId = sessionDir?.let { SessionWorktree.runIdFor(sessionId) } ?: taskId
+        return runCatching { WorkspaceIsolation.begin(source, runId) }.fold(
+            onSuccess = { IsolationStart(it, lock) },
+            onFailure = { e ->
+                logger.warn(
+                    "Agent task {}: workspace isolation could not start ({}); running in the per-task workspace",
+                    taskId, e.message
+                )
+                lock.release()
+                IsolationStart(null, null)
+            },
+        )
+    }
+
+    /**
+     * Reclaim stale worktrees (isolation plan S4). Runs while this task holds the
+     * checkout lock, so nothing else can be using a worktree being removed.
+     * Best-effort: a GC failure is logged and must never fail the task.
+     */
+    private fun sweepWorktrees(repoRoot: Path, exclude: Path?, taskId: String) {
+        if (!WorktreeRetention.isEnabled()) return
+        runCatching { WorktreeRetention.sweep(repoRoot, exclude = exclude) }
+            .onSuccess { if (it.changed) logger.info("Agent task {}: {}", taskId, it.summary()) }
+            .onFailure { logger.warn("Agent task {}: worktree gc failed: {}", taskId, it.message) }
+    }
+
+    /** One task's isolation handles: the worktree and the checkout lock guarding it. */
+    private data class IsolationStart(
+        val isolation: WorkspaceIsolation?,
+        val lock: RepoLock?,
+    )
+
+    /**
+     * Gate the isolated change and apply it to the main work tree (§D3/D4).
+     *
+     * A refused merge fails the task: reporting success while the change exists only
+     * in a hidden worktree is exactly the "where did my work go?" failure this design
+     * exists to prevent.
+     */
+    private suspend fun finishIsolation(
+        agent: PerceptiveAgent,
+        status: AgentTaskStatus,
+        isolation: WorkspaceIsolation,
+    ) {
+        status.sourceRepo = isolation.repoRoot.toString()
+        status.isolatedWorkspace = isolation.isolatedRoot.toString()
+        status.isolationMode = "worktree"
+        val changed = isolation.changedFiles()
+        // Every verdict this run recorded: a change spanning ecosystems is covered by
+        // more than one, and no single module covers both.
+        val verdicts = (agent as? BasicBrowserAgent)?.let { a ->
+            a.innerVerdictJsonList.ifEmpty { listOfNotNull(a.lastInnerVerdictJson) }
+        }.orEmpty()
+        val decision = IsolationGate.evaluate(changed, verdicts, worktree = isolation.isolatedRoot)
+        if (!decision.allow) {
+            markIsolationRefused(status, isolation, decision.reason, changed)
+            return
+        }
+        // Boot probe (plan §D9): a change that compiles can still fail to start.
+        // Opt-in (`browser4.agent.isolation.shadowBoot`); `auto` probes boot-chain
+        // changes only. An unavailable probe is skipped, a failed one refuses the merge.
+        val shadow = withContext(Dispatchers.IO) {
+            runCatching { ShadowBoot.verify(isolation.repoRoot, isolation.isolatedRoot, changed) }
+                .getOrElse { e -> ShadowBoot.Outcome(false, false, "shadow boot failed: ${e.message}") }
+        }
+        if (!shadow.ok) {
+            val reason = if (shadow.logTail.isBlank()) shadow.reason else "${shadow.reason}\n${shadow.logTail}"
+            markIsolationRefused(status, isolation, reason, changed)
+            return
+        }
+        if (!shadow.skipped) {
+            logger.info("Agent task {}: {}", status.id, shadow.reason)
+        }
+        val outcome = isolation.applyToMain(status.id)
+        status.isolationPatch = outcome.patchPath
+        if (!outcome.ok) {
+            markIsolationRefused(status, isolation, outcome.message, outcome.changedFiles.ifEmpty { changed })
+            return
+        }
+        status.isolationMerge = "applied"
+        logger.info(
+            "Agent task {}: merged {} file(s) into {} (patch: {})",
+            status.id, outcome.changedFiles.size, isolation.repoRoot, outcome.patchPath
+        )
+    }
+
+    /** Fail the task and name where the unmerged change lives. */
+    private fun markIsolationRefused(
+        status: AgentTaskStatus,
+        isolation: WorkspaceIsolation,
+        reason: String,
+        changedFiles: List<String>,
+    ) {
+        status.isolationMerge = "refused"
+        val detail = "Changes were NOT applied to ${isolation.repoRoot}: $reason. " +
+            "The isolated worktree is kept at ${isolation.isolatedRoot}."
+        logger.warn("Agent task {}: {}", status.id, detail)
+        status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
+        status.failureReason = detail
+        status.message = detail
+        status.deliverables = changedFiles.takeIf { it.isNotEmpty() } ?: status.deliverables
     }
 
     /**
@@ -632,6 +869,8 @@ open class StatefulAgentRunner(
         unattended: Boolean = true,
         resumeTaskId: String? = null,
         tokenBudget: Long? = null,
+        addDirs: List<Path> = emptyList(),
+        unrestricted: Boolean? = null,
     ) {
         val agent = session.companionAgent
 
@@ -658,8 +897,25 @@ open class StatefulAgentRunner(
             }
         }
         val instruction = resume?.let { resumeInstruction(plainCommand, it) } ?: plainCommand
+        // What this session already did, as a compacted `## Session context` block.
+        // Empty for the first task of a session (so a one-shot `agent run` is
+        // byte-identical to before) and whenever the feature is switched off.
+        val sessionBlock = conversation?.renderBlock().orEmpty()
+        val effectiveInstruction =
+            if (sessionBlock.isEmpty()) instruction else "$instruction\n\n$sessionBlock"
         val codingMode = coding ?: resume?.codingMode ?: false
         val accessPreset = access ?: resume?.accessPreset?.let { AccessPreset.parse(it) }
+        // Extra folders granted to THIS task (`agent run --add-dir`). Explicit values win; an
+        // omitted flag on a resumed run inherits the interrupted task's grant, the same way the
+        // preset and the workspace do — a resume that silently lost its folders would fail on the
+        // exact paths the new instruction tells it to continue with.
+        val addedDirs: List<Path> = addDirs.ifEmpty {
+            resume?.additionalDirs.orEmpty().mapNotNull { runCatching { Path.of(it) }.getOrNull() }
+        }
+        // `agent run --unrestricted`: an explicit per-task opt-in to run with the current OS user's
+        // own permissions. Inherited on resume exactly like the preset and the added folders, and
+        // never widened for another task: the policy is applied and restored per task below.
+        val effectiveUnrestricted: Boolean = unrestricted ?: resume?.unrestricted ?: false
 
         // The companion agent keeps ONE cumulative stateHistory across every task
         // executed in the session. Remember where this task's states begin so the
@@ -673,12 +929,31 @@ open class StatefulAgentRunner(
         // detached final snapshot taken in the finally block below.
         val runHasReturned = AtomicBoolean(false)
 
+        // The task's isolated worktree (coding tasks only). Declared here because the
+        // catch/finally paths must still report where the unmerged change lives.
+        var isolation: WorkspaceIsolation? = null
+        // The checkout lock taken for this task, released in the finally.
+        var repoLock: RepoLock? = null
+
+        // B2: names the phases around the tool loop. The four buckets only cover the loop,
+        // so without this the setup/isolation/merge/finalize time stays anonymous — on the
+        // four measured tasks that was 9% of the wall clock, and any "do more work while
+        // waiting" decision needs those seconds to have names.
+        val phaseClock = RunPhaseClock()
+
+        // C1: the speculative-build counters are process-wide. The task reports the delta
+        // between entry and exit, otherwise the second task in a JVM inherits the first one's
+        // numbers and an A/B cannot tell the arms apart.
+        val speculativeAtStart = MavenBuildSupport().speculativeStats()
+
         try {
             status.refresh(ResourceStatus.SC_PROCESSING)
             // Record what this run is: the effective flags decide a later resume's
             // inheritance, and `resumedFrom` links the two task ids.
             status.codingMode = codingMode
             status.accessPreset = accessPreset?.id
+            status.unrestricted = effectiveUnrestricted
+            status.addedDirs = addedDirs.map { it.toString() }.takeIf { it.isNotEmpty() }
             status.resumedFrom = resume?.taskId
             // The submit-time row says "created"; record the transition to
             // "in progress" immediately so a restart cannot revive a task that had
@@ -722,6 +997,12 @@ open class StatefulAgentRunner(
                 // --fresh-workspace is still accepted and is now the default behaviour;
                 // its old `workspace.fresh.*` directory is no longer created.
                 //
+                // Coding tasks run in a git worktree (self-development isolation plan
+                // §D1): the worktree IS the task workspace, so it must be created
+                // BEFORE the rebind. Failure to start isolation is logged and falls
+                // back to the per-task directory — never to "write straight into the
+                // user's checkout".
+                //
                 // The rebind happens BEFORE the access policy is applied below:
                 // `applyAccessPolicy` loads `<workspace>/.browser4/access-policy.json` and
                 // rebuilds the coding components from the *current* workspace root, so
@@ -729,14 +1010,42 @@ open class StatefulAgentRunner(
                 // No tool can run between the two calls — the task thread starts after
                 // this block — so the components rebuilt here with the previous policy
                 // are never dispatched.
-                val taskWorkspace = taskWorkspaceFor(it.baseDir, status.id, resume?.workspace, sharedWorkspace)
+                // The worktree creation is often seconds (git + checkout) and used to be
+                // part of the anonymous residue: mark it as its own share of setup.
+                phaseClock.mark(RunPhase.ISOLATION)
+                val started = if (codingMode) {
+                    startIsolation(status.id, session.uuid.toString(), resume?.workspace, sharedWorkspace)
+                } else IsolationStart(null, null)
+                repoLock = started.lock
+                // Back to SETUP: the rebind/policy work below is setup, not isolation.
+                phaseClock.mark(RunPhase.SETUP)
+                val startedIsolation = started.isolation
+                isolation = startedIsolation
+                it.workspaceIsolation = startedIsolation
+                // Publish the live isolation facts BEFORE the run: `agent status` used to
+                // learn the worktree only when the merge decided its fate, so an operator
+                // watching a long coding task could not tell where its files were, and a
+                // client could not tell "not applicable" from "in progress".
+                startedIsolation?.let { iso ->
+                    status.sourceRepo = iso.repoRoot.toString()
+                    status.isolatedWorkspace = iso.isolatedRoot.toString()
+                    status.isolationMode = "worktree"
+                    status.isolationMerge = "pending"
+                    runCatching { persistProgress(status, force = true) }
+                        .onFailure { e ->
+                            logger.warn("Agent task {}: persisting the pending isolation row failed: {}", status.id, e.message)
+                        }
+                }
+                val taskWorkspace = startedIsolation?.isolatedRoot
+                    ?: taskWorkspaceFor(it.baseDir, status.id, resume?.workspace, sharedWorkspace)
                 if (taskWorkspace != null) {
                     java.nio.file.Files.createDirectories(taskWorkspace)
                     it.workspaceDirOverride = taskWorkspace
                     it.agentToolManager.rebindWorkspace(taskWorkspace)
                     logger.info(
-                        "Agent task {} (session={}): workspace at {} (resume={}, shared={})",
-                        status.id, session.uuid, taskWorkspace, resume != null, sharedWorkspace == true
+                        "Agent task {} (session={}): workspace at {} (resume={}, shared={}, isolation={})",
+                        status.id, session.uuid, taskWorkspace, resume != null, sharedWorkspace == true,
+                        startedIsolation?.let { "worktree" } ?: "none"
                     )
                 } else {
                     logger.info(
@@ -752,11 +1061,16 @@ open class StatefulAgentRunner(
                 // TTY run keeps the server-wide policy. The finally below restores the
                 // server default either way, so a companion agent shared across tasks
                 // never inherits the previous task's grant.
-                val effectivePolicy = when {
+                val basePolicy = when {
                     accessPreset != null -> AgentAccessPolicy.serverDefault.withTaskOverrides(accessPreset)
                     unattended -> AgentAccessPolicy.unattendedDefault
                     else -> AgentAccessPolicy.serverDefault
                 }
+                // Extra folders (`agent run --add-dir`) join the boundary for THIS task only: the
+                // grant is scope, not power — the preset above still decides whether a write there
+                // is possible. Applied here, after the workspace rebind, so the boundary is built
+                // once for the workspace this task really runs in.
+                val effectivePolicy = basePolicy.withAdditionalDirs(addedDirs)
                 if (accessPreset == null && unattended) {
                     ai.platon.pulsar.coding.PermissionAudit.writeEvent(
                         tool = "coding.access",
@@ -765,7 +1079,24 @@ open class StatefulAgentRunner(
                             "allowNetwork=${effectivePolicy.allowNetwork} source=default task=${status.id}",
                     )
                 }
-                it.agentToolManager.applyAccessPolicy(effectivePolicy, status.id)
+                // `--unrestricted` is the last word: the pass-through policy (full preset, no
+                // protected/sensitive rails, external access, network and destructive commands
+                // allowed; the coding shell's command allow-list lifted) is applied
+                // on top of the preset and the added folders. It is audited, because "run with the
+                // operator's own permissions" is exactly the grant a reviewer must be able to find
+                // later.
+                val taskPolicy = if (effectiveUnrestricted) {
+                    ai.platon.pulsar.coding.PermissionAudit.writeEvent(
+                        tool = "coding.access",
+                        code = ai.platon.pulsar.coding.PermissionAudit.CODE_ACCESS_APPROVED,
+                        detail = "unrestricted: task=${status.id} source=flag " +
+                            "basePreset=${effectivePolicy.preset.id}",
+                    )
+                    effectivePolicy.withUnrestricted()
+                } else {
+                    effectivePolicy
+                }
+                it.agentToolManager.applyAccessPolicy(taskPolicy, status.id)
                 // Explicit coding flag, never auto-detected: the coding flag is
                 // opt-in per call (`command_run`'s coding argument, e.g. the CLI's
                 // agent run --coding). A resumed run inherits it from its checkpoint.
@@ -777,7 +1108,16 @@ open class StatefulAgentRunner(
                 // below: the companion agent outlives the task and is shared by
                 // every other caller of the session.
                 it.runEventListener = { event -> recordRunEvent(status.id, event) }
-                it.steeringSource = { drainInputs(status.id) }
+                it.steeringSource = {
+                    val drained = drainInputs(status.id)
+                    // A line typed into a running task is a user instruction — often a
+                    // correction ("no, use CSV not XLSX"). It used to die with the run it
+                    // steered; the session keeps it so later tasks still honour it.
+                    if (drained.isNotEmpty()) {
+                        conversation?.noteUserInput(drained)
+                    }
+                    drained
+                }
             }
 
             // Create and wire up ServerSideAgentEventHandlers for this command
@@ -787,6 +1127,7 @@ open class StatefulAgentRunner(
             // Start with an empty task-scoped snapshot (never the live cumulative list).
             status.agentHistory = taskScopedHistory(agent.stateHistory, startIndex)
 
+            phaseClock.mark(RunPhase.RUN)
             supervisorScope {
                 // Start a child coroutine to collect events and update status
                 val eventCollectorJob = launch {
@@ -819,16 +1160,30 @@ open class StatefulAgentRunner(
                     AgentEventBus.withServerSideAgentEventHandlers(serverSideAgentEventHandlers) {
                         if (runDispatcher != null) {
                             withContext(runDispatcher) {
-                                executeAgentCommand(instruction, status, agent, runHasReturned, startIndex, codingMode, freshWorkspace)
+                                executeAgentCommand(effectiveInstruction, status, agent, runHasReturned, startIndex, codingMode, freshWorkspace)
                             }
                         } else {
-                            executeAgentCommand(instruction, status, agent, runHasReturned, startIndex, codingMode, freshWorkspace)
+                            executeAgentCommand(effectiveInstruction, status, agent, runHasReturned, startIndex, codingMode, freshWorkspace)
                         }
                     }
                 } finally {
                     // Cancel event collector when command completes
                     eventCollectorJob.cancel()
                 }
+            }
+
+            // Isolation merge (plan S1). Reaching this line means the run itself
+            // finished without throwing — the only point at which a patch may reach
+            // the main work tree. A refused merge fails the task here, before the
+            // finally block publishes the terminal state.
+            phaseClock.mark(RunPhase.MERGE)
+            isolation?.let { iso ->
+                runCatching { finishIsolation(agent, status, iso) }
+                    .onFailure { e ->
+                        logger.warn("Agent task {}: isolation merge failed: {}", status.id, e.message)
+                        val changed = runCatching { iso.changedFiles() }.getOrDefault(emptyList())
+                        markIsolationRefused(status, iso, "isolation merge failed: ${e.message}", changed)
+                    }
             }
         } catch (e: CancellationException) {
             logger.warn("Agent task {} cancelled: {}", status.id, e.message)
@@ -845,6 +1200,14 @@ open class StatefulAgentRunner(
             // the deliverables that are already on disk. Attributed to THIS task —
             // files from earlier runs in a shared workspace are not ours to claim.
             status.deliverables = currentRunDeliverables(agent, status).takeIf { it.isNotEmpty() }
+            // The change exists only in the isolated tree: say so, or the caller reads
+            // "workspace: <repo>" and finds nothing there.
+            isolation?.let { iso ->
+                status.sourceRepo = iso.repoRoot.toString()
+                status.isolatedWorkspace = iso.isolatedRoot.toString()
+                status.isolationMode = "worktree"
+                status.isolationMerge = "refused"
+            }
             throw e
         } catch (e: Throwable) {
             logger.error("Failed to execute agent command: {} (agentSession={})", plainCommand, session.uuid, e)
@@ -855,6 +1218,12 @@ open class StatefulAgentRunner(
             // empty although the data was already written (2026-10-28: a complete
             // 20×75 CSV, task reported as `failed (417)` with no artifacts).
             status.deliverables = currentRunDeliverables(agent, status).takeIf { it.isNotEmpty() }
+            isolation?.let { iso ->
+                status.sourceRepo = iso.repoRoot.toString()
+                status.isolatedWorkspace = iso.isolatedRoot.toString()
+                status.isolationMode = "worktree"
+                status.isolationMerge = "refused"
+            }
             // Persist the terminal row NOW. The finally block below runs task bookkeeping
             // (endTask, workspace reset, policy reset) before it appends again, and a
             // status poll landing in that window used to read the last RUNNING row from
@@ -863,6 +1232,14 @@ open class StatefulAgentRunner(
             runCatching { onStatusChanged(status) }
                 .onFailure { logger.warn("persisting failed status for {} failed: {}", status.id, it.message) }
         } finally {
+            // Everything from here to the status persist is the run's tail: manifest
+            // endTask, history strip, result assembly. Measured, because it is the last
+            // anonymous block between the loop and the answer.
+            phaseClock.mark(RunPhase.FINALIZE)
+            // Release the checkout lock first: a slow manifest/persistence write must
+            // not keep the next coding task blocked on a finished one.
+            runCatching { repoLock?.release() }
+                .onFailure { logger.warn("could not release the coding lock: {}", it.message) }
             // Reset the per-task overrides: the companion agent is shared with callers
             // outside this runner's mutex (chat, direct agent tools), and a stale
             // --noop-limit override would silently change those runs too.
@@ -886,8 +1263,24 @@ open class StatefulAgentRunner(
                     status.failureReason != null -> ai.platon.pulsar.coding.TaskStatus.FAILED
                     else -> ai.platon.pulsar.coding.TaskStatus.COMPLETE
                 }
-                runCatching { it.agentToolManager.endTask(status.id, taskStatus) }
-                    .onFailure { logger.warn("endTask failed for {}: {}", status.id, it.message) }
+                // A row that still says "pending" means no merge decision was recorded:
+                // nothing reached the checkout, and a terminal row must never claim a merge
+                // was still in flight.
+                if (status.isolationMerge == "pending") {
+                    status.isolationMerge = if (isolation != null) "refused" else null
+                }
+                runCatching {
+                    it.agentToolManager.endTask(
+                        status.id,
+                        taskStatus,
+                        merge = status.isolationMerge,
+                        patch = status.isolationPatch,
+                        preRef = isolation?.let { iso -> ai.platon.pulsar.coding.WorkspaceIsolation.preRef(status.id) },
+                    )
+                }.onFailure { logger.warn("endTask failed for {}: {}", status.id, it.message) }
+                // Drop the isolation handle: the companion agent is shared, and a stale
+                // worktree reference would make the next task write into this one's tree.
+                it.workspaceIsolation = null
                 // Reset the fresh-workspace override (if any) back to the default
                 // workspace so subsequent tasks in this session don't inherit it.
                 if (it.workspaceDirOverride != null) {
@@ -905,7 +1298,29 @@ open class StatefulAgentRunner(
             // affordance are derived from the terminal state while it is still in
             // hand, so `agent result` can exit non-zero with a reason instead of prose
             // only, and the `task.failed` step carries the same code.
-            (agent as? RobustBrowserAgent)?.lastRunTokenBudget?.let { status.effectiveTokenBudget = it }
+            // Assigned unconditionally: a `null` must CLEAR the field instead of
+            // leaving the value of an earlier task in place. The agent is shared by
+            // every task of an interactive session, and a run that was cancelled (or
+            // failed) before it installed its budget reports `null` - a supervisor
+            // must see "unknown", never the previous task's limit.
+            status.effectiveTokenBudget = (agent as? RobustBrowserAgent)?.lastRunTokenBudget
+            // N3 + B2: the run's attribution travels with the result, so "where did the
+            // six minutes go" is answerable from `agent result` alone. The four buckets
+            // say where the tool loop spent its time; `phases` says what surrounded the
+            // loop (setup / worktree / merge / finalize), which is where the remaining 9%
+            // of wall clock on the measured tasks lived.
+            // `runOverheadMs` is the part of agent.run() that happened OUTSIDE the tool
+            // loop (prompt build, memory recall, state writes) — the number a plan that
+            // wants to hide work inside the model window needs to size the window.
+            val loopTimings = (agent as? RobustBrowserAgent)?.lastRunTimings
+            val phases = phaseClock.snapshot()
+            status.timings = (loopTimings?.toMap() ?: emptyMap<String, Any?>()).toMutableMap().apply {
+                put("phases", phases.toMap())
+                put("runOverheadMs", (phases.runMs - (loopTimings?.totalMs ?: 0L)).coerceAtLeast(0L))
+                // C1: what the speculative builds cost and whether the requests used them.
+                // `reuseRatio` is the keep-or-drop metric; `speculativeMs` is the CPU bill.
+                put("speculative", MavenBuildSupport().speculativeStats().deltaSince(speculativeAtStart).toMap())
+            }
             status.errorCode = AgentTaskStatus.errorCodeOf(status.failureReason, status.cancelled)
             status.resumable = if (status.cancelled || status.failureReason != null) {
                 AgentTaskStatus.isResumable(status.errorCode)
@@ -913,6 +1328,10 @@ open class StatefulAgentRunner(
                 null
             }
             status.done()
+            // The record must not carry the prompt prelude: the session block that ran
+            // is a few KB and would otherwise multiply into every published snapshot.
+            runCatching { stripSessionBlockFromHistory(status.agentHistory) }
+                .onFailure { logger.debug("stripping the session block failed for {}: {}", status.id, it.message) }
             onStatusChanged(status)
             // Close the live feed: the terminal step is what makes a follower
             // stop, and the steering queue can never be drained after this point.
@@ -922,6 +1341,14 @@ open class StatefulAgentRunner(
             } else {
                 recordLifecycle(status, AgentTaskEvent.TYPE_DONE, status.message)
             }
+            // Remember this task for the rest of the session: the next task's
+            // instruction carries a compacted version of it (see [SessionConversation]),
+            // so a multi-task session builds on what it already did instead of
+            // restarting from zero. Recorded here, in the terminal path, so cancelled
+            // and failed runs are remembered too — "that attempt failed this way" is
+            // exactly the context the next task needs.
+            runCatching { conversation?.record(status) }
+                .onFailure { logger.warn("Recording the session conversation failed for {}: {}", status.id, it.message) }
         }
     }
 
@@ -976,10 +1403,11 @@ open class StatefulAgentRunner(
     ) {
         // Record the submitted instruction so callers can verify they're
         // getting results for the right task (prevents cross-talk confusion).
-        // A resumed run's prompt carries a `## Resume context` block that is not
-        // part of what the user submitted, so store the task text without it —
-        // otherwise a second resume would nest blocks.
-        status.submittedTask = stripResumeBlock(plainCommand)
+        // The prompt may carry blocks this runner appended — a `## Resume context`
+        // block and/or this session's `## Session context` — and neither is part of
+        // what the user submitted: storing them would nest blocks on a later resume
+        // and misreport the task in `agent status`.
+        status.submittedTask = stripResumeBlock(stripSessionBlock(plainCommand))
 
         // Record where this task's tools may write, so a finished task can point its
         // caller at the deliverables instead of leaving them to search app-data.

@@ -36,14 +36,14 @@ sync_skills_for_runtime()           main.rs:14330   (2–5s)
 sync_skills_to_agents_dir()         main.rs:14344   (1–2s)
 ```
 
-本机实测 install 总时长 ~20–40s；AOT 训练（完整 Spring Boot 启动 + AOTCache 写出）实测 60–180s。
+本机实测 install 总时长 ~20–40s；AOT 训练（完整 Spring Boot 启动 + AOTCache 写出）实测 60–180s（v4.16.7 上另测 197 s，见 [实测记录](aot-cache-startup-benchmark-2026-11-15.md)）。
 
 ### 2.2 现有 AOT 机制（上一轮已落地，本设计直接复用）
 
 - `ensure_aot_cache_trained(runtime)` daemon.rs:4698（当前 `fn`，私有）：
   - 幂等：缓存有效（当前 key 目录内存在 `app.aot`）→ 直接返回；`training.lock` 新鲜（<5min）→ "训练进行中"返回。
   - 无效 → 删该 key 目录内的旧产物 → 原子抢 `training.lock`（`create_new`）→ `spawn_aot_training`（daemon.rs:4795 附近）。
-- `spawn_aot_training`：Windows 以 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BELOW_NORMAL_PRIORITY_CLASS` 启动（"detached" 由 creation flags 实现，丢弃 `Child` 句柄只等于放弃等待；否则控制台销毁会在 JVM 写出缓存时强杀它）、`--server.port=0`、`-Xmx1G`、`-Dbrowser4.aot.training=true`（训练模式跳过 MCP/Chrome）、输出进 `<key>/training.log`（追加写）；JVM 写 `app.aot.tmp`，由 `training.cmd` / `training.sh` 在**退出码为 0 且产物不少于 1 MiB** 时 `rename` 为 `app.aot`，所以半写或写出失败的文件不会被后端加载（实测 Temurin 25 在写出失败时仍返回 0，仅凭退出码会提交 0 字节产物）。
+- `spawn_aot_training`：Windows 以 `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_BELOW_NORMAL_PRIORITY_CLASS` 启动（`CREATE_NO_WINDOW` 让包装进程 `cmd.exe` 拿到一个**没有窗口**的隐藏控制台、训练 JVM 继承它，用户桌面不会出现终端窗口；**不能用 `DETACHED_PROCESS`**——它只作用于直接子进程，而孙进程 `java.exe` 会被 Windows 分配一个新的可见控制台窗口；且两者叠加时 `DETACHED_PROCESS` 会覆盖 `CREATE_NO_WINDOW`，详见 `20261101-aot-training-jvm-console-detach-review.md` §8.10。丢弃 `Child` 句柄只等于放弃等待，控制台独立性由 creation flags 决定）、`--server.port=0`、`-Xmx1G`、`-Dbrowser4.aot.training=true`（训练模式跳过 MCP/Chrome）、输出进 `<key>/training.log`（追加写）；JVM 写 `app.aot.tmp`，由 `training.cmd` / `training.sh` 在**退出码为 0 且产物不少于 1 MiB** 时 `rename` 为 `app.aot`，所以半写或写出失败的文件不会被后端加载（实测 Temurin 25 在写出失败时仍返回 0，仅凭退出码会提交 0 字节产物）。
 - 缓存位于 state dir，按 key 隔离：`~/.browser4/aot-cache/<key>/`（跨卸载保留），key = tag + jar 列表 + JVM flags。每个 key 目录自带 marker / pid / log，多版本不会互相删缓存或抢锁；根目录只按 LRU 修剪 key 子目录（保留最近 3 个，不触碰根下的 legacy 文件）。
 - 训练进程判活：`training.pid` 记录 PID + 启动时刻，Windows 用 `GetProcessTimes` 校验创建时间（容差 10s），PID 被复用不会再被误判为"仍在训练"。
 - CI 关闭开关：`BROWSER4_CLI_DISABLE_AOT_CACHE=1`（ensure 入口已检查）。
@@ -86,6 +86,7 @@ ensure_aot_cache_trained(&runtime);   // NEW
 - 训练在 install 尾部即开始（与 Chrome 检查、skills 同步并行），install 返回后 ~1–3min 完成。
 - "装完稍后才用"（看文档/配 key/装插件——主流路径）的用户：**首次 `open` 直接命中缓存，秒级启动**。
 - "装完立即 open" 的用户：与现状一致（open 不阻塞，训练继续跑），无回退。
+- **实测（2026-11-15，v4.16.7 / Temurin 25.0.5，见 [aot-cache-startup-benchmark-2026-11-15.md](aot-cache-startup-benchmark-2026-11-15.md)）**：训练 197 s、产出 90.8 MB；命中缓存后 Spring `Started in` 2.00 s → 1.12 s，**CLI 判定"后端可用"（`/actuator/health` UP 且 `/mcp/tools` 就绪）3.59 s → 2.25 s（中位）**，降幅约 40%。
 - 与 open 路径（`resolve_server_launch_spec` → ensure）**天然去重**：marker 锁保证只训一次，
   先到者胜出，后到者打印一条 "already in progress" 后正常继续。
 - 升级场景：新版本 jar 列表变化 → key 变化 → 自动重训（现有逻辑）。

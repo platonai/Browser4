@@ -24,7 +24,6 @@ pub enum Category {
     WebMiner,
     Snapshot,
     Skill,
-    Act,
     Skills,
     Plugins,
     Code,
@@ -50,7 +49,6 @@ impl Category {
             Category::WebMiner => "webminer",
             Category::Snapshot => "snapshot",
             Category::Skill => "skill",
-            Category::Act => "act",
             Category::Skills => "skills",
             Category::Plugins => "plugins",
             Category::Code => "code",
@@ -228,8 +226,70 @@ fn absolutize_local_dir(dir: &str) -> String {
     }
 }
 
+/// Expand a leading `~` against the user's home directory, leaving any other
+/// path verbatim.
+///
+/// A native command never receives PowerShell/bash tilde expansion when the
+/// token is quoted (`--add-dir "~/corpus"`), and an unexpanded `~` would be
+/// absolutized against the CLI's CWD into a path that cannot exist
+/// (`<cwd>/~/corpus`). Only a *leading* `~` is a home reference; `~user` forms
+/// are not expanded because neither shell passes them through.
+fn expand_home_dir(dir: &str) -> String {
+    let trimmed = dir.trim();
+    let rest = match trimmed.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') => rest,
+        _ => return trimmed.to_string(),
+    };
+    let Some(home) = dirs::home_dir() else {
+        return trimmed.to_string();
+    };
+    let rest = rest.trim_start_matches(['/', '\\']);
+    if rest.is_empty() {
+        home.to_string_lossy().into_owned()
+    } else {
+        home.join(rest).to_string_lossy().into_owned()
+    }
+}
+
+/// Resolve one `--add-dir <dir>` value into the absolute path the backend is
+/// given.
+///
+/// The backend's working directory is the runtime bundle, not the user's shell
+/// directory, so a relative folder has to be resolved here — in the process the
+/// user actually typed the command in — exactly like `--output-dir` values are
+/// (see [`absolutize_local_dir`]). Whether the folder exists is decided on the
+/// backend, which is the only side that can see its own file system.
+///
+/// Shared with the interactive session's `/add-dir` command, so a folder granted
+/// mid-session names the same directory as `--add-dir` would.
+pub(crate) fn resolve_add_dir(dir: &str) -> String {
+    absolutize_local_dir(&expand_home_dir(dir))
+}
+
 fn get_opt_str<'a>(map: &'a HashMap<String, Value>, key: &str) -> Option<&'a str> {
     map.get(key).and_then(|v| v.as_str())
+}
+
+/// Values of a **repeatable** option, in the order the user passed them.
+///
+/// `parse_raw_args` collects repeated non-boolean options into a JSON array
+/// (`-e PAT1 -e PAT2`), while a single occurrence stays a plain string. Both
+/// shapes are read here so a repeatable option behaves the same whether it was
+/// given once or many times. Blank values are dropped: `--add-dir ""` must not
+/// reach the backend as a folder named "". A non-string value (a stray boolean)
+/// is ignored for the same reason.
+fn get_str_list(map: &HashMap<String, Value>, key: &str) -> Vec<String> {
+    let raw: Vec<&Value> = match map.get(key) {
+        Some(Value::Array(values)) => values.iter().collect(),
+        Some(value) => vec![value],
+        None => Vec::new(),
+    };
+    raw.into_iter()
+        .filter_map(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn get_string_value(map: &HashMap<String, Value>, key: &str) -> Option<String> {
@@ -3870,6 +3930,25 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "star",
+            description: "Star the Browser4 repository as yourself. With the GitHub CLI (`gh`) signed in, the star is written through the GitHub REST API after one confirmation — `--gh` skips the confirmation (for scripts you drive), `--no-gh` never uses the CLI. Without a signed-in `gh` it opens the repository in the browser you are already logged into: the attached browser when there is one, otherwise (after asking) a local browser started with --remote-debugging-port, otherwise your default browser, where you click Star yourself. `star --check` asks the API, or re-reads a tab that already shows the repository, and never opens one.",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "check", description: "Report the current state instead of opening anything: whether you are signed in and whether the repository is already starred. Uses the GitHub CLI API when it is signed in; otherwise reloads a tab that already shows the repository. Never opens one.", is_bool: true, short: None },
+                OptionDef { name: "gh", description: "Star through the GitHub CLI REST API without asking first (requires `gh auth login`). Interactive runs confirm once instead; this flag is the explicit opt-in for scripts.", is_bool: true, short: None },
+                OptionDef { name: "no-gh", description: "Never use the GitHub CLI: open the repository in the browser and leave the Star click to you", is_bool: true, short: None },
+                OptionDef { name: "no-open", description: "Do not touch any browser or the GitHub API: print the URL and the commands that would star it", is_bool: true, short: None },
+                OptionDef { name: "wait <seconds>", description: "How long to wait for your click in the attached browser (default: 60, 0 = return immediately, max: 600)", is_bool: false, short: None },
+                OptionDef { name: "dismiss", description: "Turn the periodic star reminder off permanently (same as BROWSER4_NO_PROMO=1)", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
             name: "doctor",
             description: "Run system diagnostics: build info, LLM status, and auto-clean stale daemon files. Use --verbose to include logs and metrics, --fix for destructive repairs.",
             category: Category::Browsers,
@@ -4171,8 +4250,10 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "fresh-workspace", description: "Deprecated compatibility switch: every task now runs in its own workspace directory, so this is a no-op. Use --shared-workspace for the opposite", is_bool: true, short: None },
                 OptionDef { name: "shared-workspace", description: "Run this task in the shared workspace (the old default) instead of its own per-task workspace, so it sees and mutates previous tasks' files. --resume still uses the interrupted task's workspace", is_bool: true, short: None },
                 OptionDef { name: "access", description: "Access preset for this task's coding tools: full (default), write (no shell), read-build (read + project build, no shell, no file mutation), read. Omit to use the server-wide browser4.agent.access default. Reset when the task ends", is_bool: false, short: None },
-                OptionDef { name: "resume", description: "Resume an interrupted task by id: the new run is seeded with that task's instruction, workspace and files already written (the checkpoint must exist on the same backend). The task description may be omitted", is_bool: false, short: None },
-                OptionDef { name: "token-budget", description: "Token budget for THIS task, overriding agent.token.budget.total for this run only (0 = unlimited). A per-run override, never a process-wide config change; the next task keeps the configured default", is_bool: false, short: None },
+                OptionDef { name: "add-dir <dir>", description: "Grant this task's agent an extra folder besides its workspace: readable, writable and usable as a shell working directory. Repeatable (one flag per folder); relative paths resolve against the current shell directory and ~ expands to the home directory. The folder must already exist on the backend machine, and the OS credential stores (~/.ssh, ~/.aws, ~/.gnupg, ~/.config/gcloud) stay refused. The grant lasts for this task only and is reset when it ends", is_bool: false, short: None },
+                OptionDef { name: "unrestricted", description: "Run this task with the current OS user's own permissions: full preset, external access, network, destructive commands, no protected rails, no OS sandbox, and the shell's command allow-list is off too (inline scripts and PowerShell cmdlets run as written; shapes the checker cannot decompose are handed to the platform shell in every mode). The OS credential stores (~/.ssh, ~/.aws, ~/.gnupg, ~/.config/gcloud) stay refused, as do the commands that would kill or rebuild this backend. Opt-in per task, audited, inherited by --resume; with -i it applies to every task of the session", is_bool: true, short: None },
+                OptionDef { name: "resume", description: "Resume an interrupted task by id: the new run is seeded with that task's instruction, workspace and files already written (the checkpoint must exist on the same backend). The task description may be omitted. After a budget abort, pass a larger --token-budget too, otherwise the run stops at the same cap", is_bool: false, short: None },
+                OptionDef { name: "token-budget", description: "Cache-miss token budget for THIS task (uncached prompt + output; prompt-cache reads do not count), overriding agent.token.budget.total for this run only (0 = unlimited). A per-run override, never a process-wide config change; the next task keeps the configured default", is_bool: false, short: None },
                 OptionDef { name: "engine", description: "Deprecated compatibility option: the CLI tool loop is the only agent engine. `cli` is accepted; the removed `observe-act` engine is rejected", is_bool: false, short: None },
                 OptionDef { name: "follow", description: "Stream the task's steps (tool calls, model text, failures) while waiting, then print the result. Implies waiting; a slow tool or failure is always reported, successful fast tools are not", is_bool: true, short: None },
                 OptionDef { name: "ndjson", description: "With --follow: emit one JSON object per step (NDJSON) for machine consumption instead of human-readable lines", is_bool: true, short: None },
@@ -4208,6 +4289,24 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if let Some(access) = get_opt_str(args, "access") {
                     p["access"] = json!(access);
+                }
+                // `--add-dir <dir>` (repeatable): extra folders this task's agent may read,
+                // write and execute in. Forwarded only when at least one was given, so an
+                // absent key keeps the workspace-only boundary. Each value is resolved to an
+                // absolute path here (the backend runs in the runtime bundle, not the user's
+                // shell directory); existence is checked on the backend.
+                let add_dirs: Vec<String> = get_str_list(args, "add-dir")
+                    .iter()
+                    .map(|dir| resolve_add_dir(dir))
+                    .collect();
+                if !add_dirs.is_empty() {
+                    p["addDirs"] = json!(add_dirs);
+                }
+                // `--unrestricted`: opt in, for THIS task, to running with the current OS
+                // user's own permissions. Only `true` is forwarded: an absent key keeps the
+                // server-wide policy, so the flag can never switch itself on.
+                if get_bool(args, "unrestricted").unwrap_or(false) {
+                    p["unrestricted"] = json!(true);
                 }
                 // Backend-side resume: forwarded as-is. A blank value must not
                 // become a checkpoint id, so only a non-blank one is sent.
@@ -5334,25 +5433,6 @@ pub fn all_commands() -> Vec<CommandDef> {
                 json!({ "ref": r })
             },
         },
-        // ---- Act ----
-        CommandDef {
-            name: "act",
-            description: "Execute a natural language browser action. Translates plain text to a browser4-cli command and runs it immediately.",
-            category: Category::Act,
-            hidden: true,
-            batch_supported: false,
-            args: &[ArgDef {
-                name: "description",
-                description: "Natural language description of the browser action to perform",
-                optional: false,
-            }],
-            options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
-            tool_name_fn: |_| String::new(),
-            tool_params_fn: |args| {
-                json!({ "description": get_str(args, "description").unwrap_or_default() })
-            },
-        },
         // ---- Experience ----
         CommandDef {
             name: "experience-save",
@@ -5428,7 +5508,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "experience-deep-learn",
-            description: "Run deep learning analysis on stored experience traces. Builds or updates verified knowledge facts (selectors, blockers, page structure). Promotes knowledge from hypothesis to verified when confidence thresholds are met.",
+            description: "Re-derive the (domain, intent) knowledge entry from the traces and stats already stored, and promote it when the confidence and visit thresholds are met. It opens no page and runs no analysis tools (no htmlsnapshot/inspect, no LLM): selectors enter the knowledge base through 'experience save --facts'. Use --force to bypass the confidence >= 0.90 sampling check.",
             category: Category::Agent,
             hidden: false,
             batch_supported: false,
@@ -5784,8 +5864,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "path", description: "Directory to search in (default: workspace root)", optional: true },
             ],
             options: &[
-                OptionDef { name: "file-pattern", description: "File name glob filter (default: *)", is_bool: false, short: None },
+                OptionDef { name: "file-pattern", description: "File name glob (default: *), or a path glob below PATH when it contains a separator (src/**/*.kt)", is_bool: false, short: None },
                 OptionDef { name: "ignore-case", description: "Case-insensitive search", is_bool: true, short: None },
+                OptionDef { name: "limit", description: "Maximum matches to collect (default 100; the scan stops when it is reached)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested, // coding tool family mock scenario
             tool_name_fn: |_| "coding_grep".to_string(),
@@ -5795,6 +5876,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(path) = get_opt_str(args, "path") { p["path"] = json!(path); }
                 if let Some(fp) = get_opt_str(args, "file-pattern") { p["filePattern"] = json!(fp); }
                 if get_bool(args, "ignore-case").unwrap_or(false) { p["ignoreCase"] = json!(true); }
+                if let Some(lim) = get_opt_str(args, "limit") {
+                    if let Ok(n) = lim.parse::<i32>() { p["limit"] = json!(n); }
+                }
                 p
             },
         },
@@ -6354,7 +6438,6 @@ mod tests {
             "plugin-info",
             "plugin-install",
             "plugin-remove",
-            "act",
             "config",
             "config-list",
             "config-get",
@@ -7464,6 +7547,97 @@ mod tests {
         assert_eq!(params["tokenBudgetInvalid"], "-5");
     }
 
+    /// `--add-dir` grants extra folders: repeatable, forwarded as one `addDirs`
+    /// array in the order given, with every value resolved to an absolute path.
+    /// A relative folder must be resolved on the CLI side — the backend runs in the
+    /// runtime bundle, so resolving it there would name a different directory.
+    #[test]
+    fn test_agent_run_forwards_add_dir_repeatedly_as_absolute_paths() {
+        let map = commands_map();
+        let cmd = map.get("agent-run").unwrap();
+        let absolute = if cfg!(windows) { "C:\\corpus\\docs" } else { "/corpus/docs" };
+
+        // Repeated non-boolean options arrive as a JSON array (see insert_arg).
+        let mut args = HashMap::new();
+        args.insert("task".to_string(), json!("summarize the corpus"));
+        args.insert("add-dir".to_string(), json!([absolute, "../shared-libs"]));
+        let params = (cmd.tool_params_fn)(&args);
+        let dirs = params["addDirs"].as_array().expect("addDirs must be an array");
+        assert_eq!(dirs.len(), 2, "got {params}");
+        assert_eq!(dirs[0], json!(absolute));
+        let relative = dirs[1].as_str().unwrap();
+        assert!(
+            std::path::Path::new(relative).is_absolute(),
+            "a relative folder must be resolved against the shell directory, got {relative}"
+        );
+        assert!(relative.ends_with("shared-libs"), "got {relative}");
+    }
+
+    /// `--unrestricted` is a per-task opt-in: forwarded as `true` when given, and
+    /// absent (never `false`) when it is not, so an unnamed flag cannot look like a
+    /// decision the user made.
+    #[test]
+    fn test_agent_run_forwards_unrestricted_only_when_set() {
+        let map = commands_map();
+        let cmd = map.get("agent-run").unwrap();
+
+        let mut set = HashMap::new();
+        set.insert("task".to_string(), json!("collect"));
+        set.insert("unrestricted".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&set);
+        assert_eq!(params["unrestricted"], true, "got {params}");
+
+        let mut absent = HashMap::new();
+        absent.insert("task".to_string(), json!("collect"));
+        let params = (cmd.tool_params_fn)(&absent);
+        assert!(params.get("unrestricted").is_none(), "got {params}");
+    }
+
+    /// A single `--add-dir` is still one folder, and no flag at all leaves the key
+    /// out so the backend keeps the workspace-only boundary.
+    #[test]
+    fn test_agent_run_forwards_one_add_dir_and_omits_it_when_unset() {
+        let map = commands_map();
+        let cmd = map.get("agent-run").unwrap();
+        let absolute = if cfg!(windows) { "C:\\corpus\\docs" } else { "/corpus/docs" };
+
+        let mut single = HashMap::new();
+        single.insert("task".to_string(), json!("summarize"));
+        single.insert("add-dir".to_string(), json!(absolute));
+        let params = (cmd.tool_params_fn)(&single);
+        assert_eq!(params["addDirs"], json!([absolute]));
+
+        let mut blank = HashMap::new();
+        blank.insert("task".to_string(), json!("summarize"));
+        blank.insert("add-dir".to_string(), json!("   "));
+        let params = (cmd.tool_params_fn)(&blank);
+        assert!(params.get("addDirs").is_none(), "a blank folder is not a folder, got {params}");
+
+        let mut absent = HashMap::new();
+        absent.insert("task".to_string(), json!("summarize"));
+        let params = (cmd.tool_params_fn)(&absent);
+        assert!(params.get("addDirs").is_none(), "got {params}");
+    }
+
+    /// A quoted `--add-dir "~/corpus"` reaches the CLI unexpanded: the leading `~`
+    /// must become the home directory instead of a `<cwd>/~` folder that cannot
+    /// exist. `~user` forms and other paths are left alone.
+    #[test]
+    fn expand_home_dir_expands_only_a_leading_tilde() {
+        let Some(home) = dirs::home_dir() else {
+            return;
+        };
+        assert_eq!(expand_home_dir("~"), home.to_string_lossy());
+        assert_eq!(
+            expand_home_dir("~/corpus"),
+            home.join("corpus").to_string_lossy()
+        );
+
+        assert_eq!(expand_home_dir("~other/corpus"), "~other/corpus");
+        assert_eq!(expand_home_dir("../corpus"), "../corpus");
+        assert_eq!(expand_home_dir(" /corpus/x "), "/corpus/x");
+    }
+
     #[test]
     fn test_agent_status_tool_name() {
         let map = commands_map();
@@ -7482,22 +7656,6 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("id".to_string(), json!("abc-123"));
         assert_eq!((cmd.tool_name_fn)(&args), "command_result");
-    }
-
-    #[test]
-    fn test_act_command_params() {
-        let map = commands_map();
-        let cmd = map.get("act").unwrap();
-        assert_eq!(cmd.name, "act");
-        assert_eq!(cmd.category, Category::Act);
-        assert!(cmd.hidden);
-
-        let mut args = HashMap::new();
-        args.insert("description".to_string(), json!("scroll by 200px"));
-        let params = (cmd.tool_params_fn)(&args);
-        assert_eq!(params["description"], "scroll by 200px");
-        // tool_name_fn returns empty — act is handled CLI-side, not via MCP
-        assert_eq!((cmd.tool_name_fn)(&args), "");
     }
 
     #[test]
@@ -11492,6 +11650,46 @@ mod tests {
             "fill tool_params must keep 'ref' key for batch normalisation"
         );
         assert_eq!(params["text"], "batch fill text");
+    }
+
+    // =========================================================================
+    // code-grep command — tool name and params
+    // =========================================================================
+
+    #[test]
+    fn test_code_grep_tool_params_include_limit_and_filters() {
+        let map = commands_map();
+        let cmd = map.get("code-grep").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&HashMap::new()), "coding_grep");
+
+        let mut args = HashMap::new();
+        args.insert("pattern".to_string(), json!("TODO"));
+        args.insert("path".to_string(), json!("src"));
+        args.insert("file-pattern".to_string(), json!("*.kt"));
+        args.insert("ignore-case".to_string(), json!(true));
+        args.insert("limit".to_string(), json!("25"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["pattern"], "TODO");
+        assert_eq!(params["path"], "src");
+        assert_eq!(params["filePattern"], "*.kt");
+        assert_eq!(params["ignoreCase"], json!(true));
+        assert_eq!(params["limit"], json!(25), "limit must reach the tool as a number");
+    }
+
+    #[test]
+    fn test_code_grep_omits_optional_args_when_absent() {
+        let map = commands_map();
+        let cmd = map.get("code-grep").unwrap();
+        let mut args = HashMap::new();
+        args.insert("pattern".to_string(), json!("needle"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["pattern"], "needle");
+        assert!(params.get("limit").is_none());
+        assert!(params.get("path").is_none());
+        assert!(params.get("filePattern").is_none());
+        assert!(params.get("ignoreCase").is_none());
     }
 
     // =========================================================================

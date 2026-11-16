@@ -18,6 +18,12 @@ import java.util.concurrent.atomic.AtomicReference
  *
  * - the Browser4 data root — `app.data.dir` when set, else `~/.browser4` (this includes the
  *   app's own `tmp/`, so "the Browser4 temp folder" is covered);
+ * - [browser4Home] — `~/.browser4`, **always**, because a managed (`--workspace`) backend puts its
+ *   data root under `<home>/workspaces/<checkout>/app-data` while the task ledger
+ *   (`async-tasks.json`), the session registry and the other runs' task workspaces stay under the
+ *   home. Without it a run could not answer "what happened to the previous task?" at all;
+ * - [runWorkspaceRoot] — the CLI workspace that owns `<app data>` (it holds `async-tasks.json`
+ *   and `cli-state.json`), so the task's own status is readable wherever the data root lives;
  * - the source checkout the backend runs from, when there is one
  *   ([WorkspaceMirror.defaultSourceRepo]); a packaged runtime has none.
  *
@@ -80,11 +86,52 @@ object ReadablePaths {
     fun roots(): List<Path> =
         cachedRoots(rootsCache, environmentKey()) { (builtinRoots() + configuredRoots()).distinct() }
 
-    /** The built-in roots: the Browser4 data root and the source checkout it runs from. */
+    /**
+     * The built-in roots: the Browser4 data root, the Browser4 home, the CLI workspace that owns
+     * the data root, and the source checkout the backend runs from.
+     */
     fun builtinRoots(): List<Path> = buildList {
         appDataRoot()?.let(::add)
+        browser4Home()?.let(::add)
+        runWorkspaceRoot()?.let(::add)
         sourceCheckout()?.let(::add)
     }
+
+    /**
+     * `~/.browser4` when it exists, `null` otherwise.
+     *
+     * The data root moves when the backend is launched with `--workspace`
+     * (`<home>/workspaces/<checkout>/app-data`), but the task ledger, the session registry and every
+     * other task's workspace stay under the home. Reading them is how a run answers "what did the
+     * previous task do, and what is my own status?" — the exact question that came back
+     * `PERMISSION_DENIED | code=COMMAND_PATH_DENIED | path guard: … resolves to a credential
+     * location` before this root existed.
+     *
+     * Existence is part of the answer on purpose: on a machine that never created the folder there
+     * is nothing to read, and a non-existent root would only widen the scope for tests.
+     */
+    fun browser4Home(): Path? {
+        val home = System.getProperty("user.home")?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val candidate = absoluteOrNull(home)?.resolve(DEFAULT_DATA_DIR_NAME)?.normalize() ?: return null
+        return candidate.takeIf { Files.isDirectory(it) }
+    }
+
+    /**
+     * The CLI workspace that owns [appDataRoot] (`<workspace>/app-data`), or `null`.
+     *
+     * That directory holds the run's own ledger — `async-tasks.json` (`lastStatus`, `completedAt`
+     * per task) and `cli-state.json` — so a task asked to report its status can read it. The
+     * folder is only accepted when it actually looks like a CLI workspace; guessing from the
+     * parent alone would widen the scope to an unrelated directory.
+     */
+    fun runWorkspaceRoot(): Path? {
+        val parent = appDataRoot()?.parent ?: return null
+        val looksLikeRunWorkspace = RUN_WORKSPACE_MARKERS.any { Files.isRegularFile(parent.resolve(it)) }
+        return parent.takeIf { looksLikeRunWorkspace }
+    }
+
+    /** Files that mark the directory owning `<app data>` as a CLI workspace ([runWorkspaceRoot]). */
+    private val RUN_WORKSPACE_MARKERS = listOf("async-tasks.json", "cli-state.json", "cli-managed-processes.json")
 
     /**
      * The Browser4 data root: `app.data.dir` when set, else `~/.browser4`.
@@ -175,11 +222,21 @@ object ReadablePaths {
     /** A one-line description for `coding.permissions`; `none` when nothing is configured. */
     fun describe(): String = roots().joinToString(", ").ifEmpty { "none" }
 
+    /**
+     * The environment the cached [roots] depend on.
+     *
+     * [browser4Home] and [runWorkspaceRoot] are folded in because they depend on the *file system*,
+     * not only on a property: the CLI creates `async-tasks.json` when the first task is submitted,
+     * so on a long-lived backend the marker can appear after the roots were first computed and a
+     * property-only key would keep answering "not a run workspace" for the rest of the process.
+     */
     private fun environmentKey(): String = listOf(
         System.getProperty(PROP_READ_PATHS).orEmpty(),
         System.getProperty(PROP_APP_DATA_DIR).orEmpty(),
         System.getProperty("user.dir").orEmpty(),
         System.getProperty("user.home").orEmpty(),
+        browser4Home()?.toString().orEmpty(),
+        runWorkspaceRoot()?.toString().orEmpty(),
     ).joinToString("\u0000")
 
     private fun cachedRoots(cache: AtomicReference<CacheEntry?>, key: String, compute: () -> List<Path>): List<Path> {

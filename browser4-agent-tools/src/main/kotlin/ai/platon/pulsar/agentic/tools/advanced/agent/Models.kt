@@ -165,6 +165,33 @@ data class AgentTaskStatus(
     var workspace: String? = null
 
     /**
+     * The checkout this task's edits landed in, for a coding task.
+     *
+     * Isolation runs the task in a worktree but the **change belongs to the main
+     * repository**: `agent result.workspace` reports this path, and
+     * [isolatedWorkspace] carries the worktree as an extra fact. Keeping the two
+     * separate is what stops a run from being reported as "delivered to
+     * .browser4/worktrees/..." when the patch also reached the checkout.
+     */
+    var sourceRepo: String? = null
+
+    /** The isolated worktree the coding tools wrote into (`null` without isolation). */
+    var isolatedWorkspace: String? = null
+
+    /** `worktree` | `mirror` | `none` — how the coding workspace was provided. */
+    var isolationMode: String? = null
+
+    /**
+     * Whether the isolated change reached the main work tree:
+     * `applied` | `refused` | `pending`. `refused` means the change exists **only**
+     * in [isolatedWorkspace] (verify gate or a merge conflict).
+     */
+    var isolationMerge: String? = null
+
+    /** Patch kept for `b4w recover --revert <taskId>` (when a merge was attempted). */
+    var isolationPatch: String? = null
+
+    /**
      * Files the run had already produced in [workspace] when it ended **without**
      * reporting them — a token-budget abort, the step cap, a cancellation.
      *
@@ -185,6 +212,24 @@ data class AgentTaskStatus(
     /** Access preset id this task ran under (null when unknown), reused on resume. */
     var accessPreset: String? = null
 
+    /**
+     * Whether this task ran with the current OS user's own permissions (`agent run --unrestricted`),
+     * null for rows written before the field existed. Persisted so `agent run --resume <id>` keeps
+     * the grant the interrupted instruction was written against.
+     */
+    var unrestricted: Boolean? = null
+
+    /**
+     * Extra folders granted to this task besides its workspace (`agent run --add-dir`),
+     * as absolute paths (null when none were granted).
+     *
+     * Recorded for two reasons: `coding.permissions` and the status envelope can say where the
+     * run was allowed to work, and `agent run --resume <id>` inherits the grant — a resumed run
+     * that silently lost it would fail on exactly the folders its instruction tells it to
+     * continue with.
+     */
+    var addedDirs: List<String>? = null
+
     /** The interrupted task this run resumes, when started with `agent run --resume <id>`. */
     var resumedFrom: String? = null
 
@@ -196,8 +241,19 @@ data class AgentTaskStatus(
      * number attached, so a caller could not tell whether the configured 5M default
      * was too small or the run was runaway. Filled from the agent's own budget at the
      * end of the run (see `RobustBrowserAgent.lastRunTokenBudget`).
+     *
+     * The cap is counted in **cache-miss** tokens: uncached prompt + output, with
+     * prompt-cache reads excluded (they cost ~10% of the input price). A CLI client
+     * uses it to offer "continue with a doubled budget" after a `TOKEN_BUDGET` abort.
      */
     var effectiveTokenBudget: Long? = null
+
+    /**
+     * Four-bucket attribution of this run (plan N3): rounds, build/tool/callback/model
+     * milliseconds and token counts, accumulated by the agent
+     * (`RobustBrowserAgent.lastRunTimings`) and carried to `agent result`.
+     */
+    var timings: Map<String, Any?>? = null
 
     /**
      * Machine-readable failure reason (`TOKEN_BUDGET`, `NOOP_LIMIT`, `CANCELLED`,
@@ -373,15 +429,23 @@ fun AgentTaskStatus.detachedSnapshot(includeHistory: Boolean = true): AgentTaskS
     snapshot.submittedTask = submittedTask
     snapshot.failureReason = failureReason
     snapshot.workspace = workspace
+    snapshot.sourceRepo = sourceRepo
+    snapshot.isolatedWorkspace = isolatedWorkspace
+    snapshot.isolationMode = isolationMode
+    snapshot.isolationMerge = isolationMerge
+    snapshot.isolationPatch = isolationPatch
     snapshot.toolExecutions = toolExecutions
     // Body-declared fields the resume/finish paths read back from disk: `copy()`
     // resets every one of them, so a progress row used to lose the flags a later
     // `agent run --resume` inherits and the artifacts an aborted run produced.
     snapshot.codingMode = codingMode
     snapshot.accessPreset = accessPreset
+    snapshot.unrestricted = unrestricted
+    snapshot.addedDirs = addedDirs
     snapshot.resumedFrom = resumedFrom
     snapshot.deliverables = deliverables
     snapshot.effectiveTokenBudget = effectiveTokenBudget
+    snapshot.timings = timings
     snapshot.errorCode = errorCode
     snapshot.resumable = resumable
     return snapshot

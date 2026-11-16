@@ -1,7 +1,5 @@
 package ai.platon.pulsar.agentic.model
 
-import ai.platon.pulsar.agentic.ActResult
-import ai.platon.pulsar.agentic.ObserveResult
 import ai.platon.pulsar.api.model.MergedDOMTreeNode
 import ai.platon.pulsar.coding.Effect
 import ai.platon.pulsar.common.*
@@ -27,15 +25,6 @@ data class DetailedActResult constructor(
     val exception: Exception? = null,
 ) {
     val success: Boolean get() = exception == null && toolCallResult?.evaluate?.exception == null
-
-    fun toActResult(): ActResult {
-        return ActResult(
-            action = actionDescription.instruction,
-            message = description ?: "",
-            result = toolCallResult,
-            detail = this
-        )
-    }
 
     fun toJson(): String {
         return Pson.toJson(this)
@@ -601,30 +590,6 @@ data class ActionDescription constructor(
     fun toActionDescriptions(): List<ActionDescription> {
         val elements = observeElements ?: return emptyList()
         return elements.map { this.copy(observeElements = listOf(it)) }
-    }
-
-    fun toObserveResults(agentState: AgentState): List<ObserveResult> {
-        val results = observeElements?.map { ele ->
-            ObserveResult(
-                domain = ele.domain?.ifBlank { null },
-                method = ele.method?.ifBlank { null },
-                arguments = ele.arguments?.takeIf { it.isNotEmpty() },
-                description = ele.description ?: "(No comment ...)",
-
-                screenshotContentSummary = ele.screenshotContentSummary,
-                currentPageContentSummary = ele.currentPageContentSummary,
-                evaluationPreviousGoal = ele.evaluationPreviousGoal,
-                nextGoal = ele.nextGoal,
-                thinking = ele.thinking,
-
-                backendNodeId = ele.backendNodeId,
-                observeElement = ele,
-                agentState = agentState,
-                actionDescription = this,
-            )
-        }
-
-        return results ?: emptyList()
     }
 
     override fun toString(): String {

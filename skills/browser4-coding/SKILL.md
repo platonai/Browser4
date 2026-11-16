@@ -182,6 +182,20 @@ by the file system, the shell, the tool registry and the MCP direct-call path:
   `PERMISSION_DENIED | code=… | tool=… | detail=… | hint=…` (`TOOL_DENIED`, `READ_ONLY`,
   `EXEC_DISABLED`, `COMMAND_NOT_ALLOWED`, `PROTECTED_PATH`, `SENSITIVE_PATH`,
   `PATH_OUTSIDE_WORKSPACE`, `COMMAND_PATH_DENIED`).
+- **There is no syntax gate.** On Windows a single-line `if` is parsed — `if [not] exist
+  <path> <cmd>`, `if [/i] [not] <a>==<b> <cmd>`, `if [not] defined <var> <cmd>`,
+  `if [not] errorlevel <n> <cmd>`, optionally wrapped as `(<cmd>)` with one `else (<cmd>)` — and the
+  command behind the condition is validated exactly like a top-level one, so `if exist x (del y)`
+  is refused as a *destructive* command, not as a grammar limit. A shape the checker cannot
+  decompose — `for` loops, `else if`, nested blocks, `&`/`|` inside a block, `goto`/`call`
+  payloads — is handed to the platform shell **verbatim**, in every mode, and the shell reports its
+  own parse error; there is no `UNSUPPORTED_SYNTAX` refusal and nothing to count. The vetoes that do
+  not need the decomposition still refuse: blocked patterns, the command tier, credential and
+  protected paths, and the runtime vetoes (killing or rebuilding this backend, `mklink`/`ln`/`mount`)
+  — their `hint=` says `no approval lifts this` instead of offering a request. Use a script file run
+  **by path** (`.\run.cmd`, `./run.sh`) when the shell's own parse error gets in the way; a bare
+  filename is read as a program name and refused. Windows builtins supported inline: `set` (bare or
+  `NAME=value`), `mkdir`/`md`, `echo` (`echo.` is normalized).
 
 Relations that hold regardless of preset:
 
@@ -207,12 +221,12 @@ Relations that hold regardless of preset:
 
 ## Shell & Filesystem Tools
 
-- `coding.shell(command, timeoutSeconds?, workingDir?)` — execute allowed dev commands (git/cargo/mvn/npm/python/...). The WHOLE command line is validated: every segment split on `&&` `||` `;` `|` `&`, every `$(...)`/backtick substitution, and every inline `sh -c "..."` / `pwsh -Command "..."` / `cmd /c ...` script is checked against the same allow-list. Windows launcher names normalize first (`mvnw.cmd` → `mvnw`).
+- `coding.shell(command, timeoutSeconds?, workingDir?)` — execute allowed dev commands (git/cargo/mvn/npm/python/...). The WHOLE command line is validated: every segment split on `&&` `||` `;` `|` `&`, every `$(...)`/backtick substitution, and every inline `sh -c "..."` / `pwsh -Command "..."` / `cmd /c ...` script body is checked for the same vetoes (blocked patterns, deny lists, credentials, protected writes, runtime). Windows launcher names normalize first (`mvnw.cmd` → `mvnw`). An **inline body is a script, not a command line**, so the tier spelling does not judge it in any mode: `powershell -Command "Get-Content x"` runs as written (a shape the checker cannot decompose is handed to the platform shell verbatim in every mode too — there is no syntax gate); under `agent run --unrestricted` the command allow-list no longer applies to the command line either. `workingDir` may be the workspace, a mirrored module, the checkout those mirrors come from, or an `--add-dir` folder — a toolchain cache (`%TEMP%`, `~/.m2`, the JDK) is not a project directory and is refused.
 - File ops: `read`, `readLines`, `write`, `append`, `replace`, `replaceRegex`, `editLines`, `insertAfter`, `revert`, `delete`, `mkdir`, `copy`, `move`, `stat`, `diff` (myers/patience), `checksum`
 - **Optimistic concurrency**: `coding.checksum(path)` returns `sha256:…`; pass it as `coding.write(path, content, expectedChecksum=…)` and a concurrent edit fails loudly instead of being overwritten. Write snapshots are persisted under `.browser4/coding-snapshots/`, so `coding.revert` still works after a backend restart.
 - **Provisioned agent workspace**: a coding-mode agent run (`browser4-cli agent run "<task>" --coding` — the coding mode is always requested explicitly, never auto-detected) gets the checkout mirrored into its scratch workspace before the first tool call — every `<module>` of the root pom is junctioned/symlinked and `pom.xml`/`mvnw`/`mvnw.cmd`/`.mvn`/`VERSION`/`ROOT.md` are copied (`WorkspaceMirror`), so Maven resolves modules from the first try and the agent never has to repair workspace topology itself.
 - **Resumable execution**: `coding.devTask(execute=true)` records a checkpoint per step under `.browser4/devtask-checkpoints/` and prints its id; after a crash/failure resume it with `coding.resumeDevTask(taskId="dt-…")` (CLI: `browser4-cli code resume <id>`) — completed steps are skipped and a failed isolated run continues inside the worktree it kept.
-- **Transactional workspace** (opt-in, `-Dbrowser4.agent.workspace.isolation=worktree`): `coding.devTask(..., execute=true)` runs its steps inside a `git worktree` under `.browser4/worktrees/`, merges the change back only when every step succeeded, and otherwise discards the worktree — a failed task leaves the developer's working tree untouched.
+- **Transactional workspace** (default, `-Dbrowser4.agent.workspace.isolation=worktree`): `coding.devTask(..., execute=true)` runs its steps inside a `git worktree` under `.browser4/worktrees/`, merges the change back only when every step succeeded, and otherwise discards the worktree — a failed task leaves the developer's working tree untouched. The run holds the checkout lock (`.git/b4-coding.lock`, the same one `agent run --coding` takes), so two dev-tasks — or a dev-task and a coding agent run — never merge into one checkout at the same time; a second one fails immediately naming the holder. A dev-task that is itself running inside an isolated worktree takes no second lock (its outer task owns the checkout).
 - Search: `glob`, `grep` (skip excluded dirs), `languages`
 - **Repo governance protection**: EVERY write path — write/append/replace/replaceRegex/editLines/insertAfter/copy/move/delete/revert — is BLOCKED for VERSION, AGENTS.md, CLAUDE.md, root pom.xml, browser4-dependencies/pom.xml (BOM), .github/workflows/ci.yml — do not try to work around this; ask the user for explicit intent instead. Add session-level protections with `coding.protect(path, on)`. Writes are atomic (temp file + move) and line-range edits preserve the file's CRLF/LF style.
 - `coding.runCode(language, code)` — sandboxed snippet execution (kotlin/js/python/bash)

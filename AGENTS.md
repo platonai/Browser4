@@ -138,6 +138,14 @@ spinner appears) and then starts the Browser4 backend (Spring Boot + JVM,
 invocations. The spinner shows stage-level progress (JVM → Spring Boot → MCP
 tools).
 
+On JDK 24+ the first backend start of a bundle also trains the JVM AOT cache in
+the background (detached, below-normal priority, ~1–3 min, ~90 MB under the CLI
+state dir; it never blocks the command). Later starts attach it — measured on a
+reference machine: readiness 3.6 s → 2.2 s, Spring `Started in` 2.0 s → 1.1 s
+([benchmark](docs-dev/copilot/aot-cache-startup-benchmark-2026-11-15.md)).
+`BROWSER4_CLI_DISABLE_AOT_CACHE=1` disables training and loading; `status` prints
+an `AOT cache: …` line.
+
 ### Prerequisites for development
 
 - **[Rust](https://rustup.rs/)** — via `rustup`; needed to compile the CLI binary.
@@ -456,6 +464,7 @@ When adding a new CLI option or changing command behavior, always check these lo
 - [Build from Source](docs/build-from-source.md)
 - [Configuration Guide](docs/config.md)
 - [Browser Behavior Modules](docs/browser-behavior-modules.md)
+- [IP Proxy & Egress IP](docs/ip-proxy.md) / [IP 代理与出口 IP](docs/ip-proxy.zh.md)
 - [CLI Skill Guide](skills/browser4-cli/SKILL.md)
 - [ARIA Snapshots](docs/aria-snapshots.md)
 - [HTML Snapshot](docs/htmlsnapshot-inspect-summary.md)

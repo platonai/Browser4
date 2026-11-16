@@ -46,6 +46,66 @@ browser4-cli agent run "Fix the failing test" --coding --access read-build --fol
 An unknown `--access` value is rejected with an error instead of silently falling back — a
 typo must not quietly grant `full`.
 
+### Unrestricted tasks — `agent run --unrestricted`
+
+`--unrestricted` is the escape hatch for a task that genuinely needs everything the **current
+OS user** can do: a one-off repair on a dev box, a migration that must reach services outside the
+workspace, a task that installs tooling.
+
+```bash
+browser4-cli agent run "Upgrade the pinned Maven plugins and run the full build" --coding --unrestricted
+```
+
+It is not another preset — it is applied **on top of** `--access` and replaces the rails with
+pass-through ones for that one task:
+
+| Rail | Normally | With `--unrestricted` |
+|---|---|---|
+| preset gate | `--access` / backend default | `full` — every tool domain |
+| path boundary | workspace + mirrored modules + the checkout they mirror + readable roots + `--add-dir` | every path the OS user can reach |
+| protected paths | refused for writes (reads are fine) | allowed (the OS still governs) |
+| shell's own rule (command allow-list) | applied, except inside an inline-script body | **not** applied at all — programs the list never knew (`Get-Content`, `wmic`) run as written; shapes it cannot decompose are handed to the platform shell in every mode |
+| OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) | refused | **still refused** — see below |
+| network, destructive commands | per preset | allowed |
+| OS sandbox (`browser4.agent.sandbox`) | applied | **not** applied — plain child processes |
+| runtime-protection vetoes (`taskkill` on the backend, `b4w build/stop`, `bin/build.ps1`, `mklink`/`ln`/`mount`) | refused | **still refused** |
+
+The shell's remaining rule is the command allow-list, and it only looks like a rail: it does not
+confine a process — the same script body already ran unexamined through `powershell -File`, and
+`python -c` is on the list — so refusing `powershell -Command "Get-Content x"` only cost rounds
+(2026-11-14 run). **An inline body is a script, not a command line**, so the allow-list does not
+judge it in any mode: the body is still checked for every veto (blocked patterns, explicit deny,
+credentials, protected writes, the runtime vetoes) but not for the tier spelling. Command shapes the
+checker cannot decompose (`for` loops, blocks) are handed to the platform shell in every mode, not
+only under this flag. Every row marked **still refused** above keeps refusing, and the shell's
+`hint=` says `no approval lifts this` instead of offering a request that cannot be granted.
+
+What it does **not** do:
+
+- It never widens another task: the policy is applied when the task starts and the backend
+  default is restored when it ends.
+- It does not escalate the OS user, and it does not turn "my permissions" into "my secrets":
+  `~/.ssh`, `~/.aws`, `~/.gnupg` and `~/.config/gcloud` stay refused whatever the flag says, so
+  a task cannot read a private key into its context. Nothing runs as root/Administrator that
+  would not from the same shell.
+- It never lets the task destroy the runtime it runs inside: the path/credential string guards are
+  gone, but a `for` loop body still may not `taskkill` the backend, run `b4w build`, or rewrite
+  the workspace topology with `mklink`/`ln`.
+- It is inherited by `agent run --resume <id>` — a continued instruction must not lose the grant
+  it was written against — and recorded on the task row (`unrestricted`) so `agent status` reports
+  it and `coding.permissions` states it (`Unrestricted: YES`, with the sandbox line reading `off`).
+  **A resume cannot drop the grant**: there is no `--no-unrestricted`, so going back to the rails
+  means starting a new task rather than continuing that one.
+- It is audited: the first time the policy is applied the backend writes a `coding.access`
+  approval event with `source=flag`.
+
+`--add-dir` has no effect next to `--unrestricted` (there is no boundary for an added folder to
+join); the flag is harmless, not additive — the whole filesystem is already in scope.
+
+Prefer the narrow tools when the task needs *one* extra capability: `--access read-build` /
+`write`, `--add-dir <path>`, or an operator approval through `coding.requestAccess`.
+`--unrestricted` is all-or-nothing and belongs in scripts, not in an agent's default invocation.
+
 ### Which tool domains the presets gate
 
 The presets bound **workspace power**, so they gate the domains that can write, execute or
@@ -75,6 +135,8 @@ logs, task data, temp files and checkout are.
 | Root | Default |
 |---|---|
 | Browser4 data root (`app.data.dir`, else `~/.browser4`) | readable — `logs/`, `data/`, `memory/`, the per-task `agent/…/workspace.<id>` trees and Browser4's own `tmp/` |
+| `~/.browser4` itself | readable even when the data root was moved (a managed `--workspace` backend keeps it under `<home>/workspaces/<checkout>/app-data`) — the task ledger (`async-tasks.json`) and the other runs' workspaces live under the home, which is how a task answers "what did the previous task do?" |
+| The CLI workspace owning `app-data` | readable when it holds `async-tasks.json` / `cli-state.json` — the run's own status |
 | Source checkout the backend runs from | readable when one is detected (a packaged runtime has none) |
 | `browser4.agent.readPaths` | operator-added folders: `;`-separated, `~` expanded |
 
@@ -83,15 +145,37 @@ logs, task data, temp files and checkout are.
 BROWSER4_SERVER_OPTS="-Dbrowser4.agent.readPaths=D:/corpus;%TEMP%" browser4-cli open
 ```
 
-These roots are **read-only**. Writes, deletes, copies and moves still happen only in the workspace
-and its mirrored modules; a write into a readable root is refused and counted as `READ_ONLY`. The
-access preset does not change them — `read` and `full` see the same readable roots, because reading
-logs is not workspace power — and `coding.permissions` prints the list in effect while
-`coding.explain(path=…)` dry-runs one path.
+These roots are **read-only**. Writes, deletes, copies and moves never land there; a write into a
+readable root is refused and counted as `READ_ONLY`. Writing happens in the workspace, in its
+mirrored module roots and in the **checkout those mirrors come from** — that last one is a boundary
+grant rather than a readable root: a task whose workspace mirrors a repository may edit the
+repository it is developing (`.git`, `bin/`, `cli/`, `docs/` and the absolute spelling of a module
+path only exist there), while the protected rails still refuse `pom.xml`, `VERSION`,
+`.github/workflows` and friends. The access preset does not change the readable roots — `read` and
+`full` see the same ones, because reading logs is not workspace power — and `coding.permissions`
+prints the list in effect while `coding.explain(path=…)` dry-runs one path.
 
 A readable root that also sits on the sensitive list (the data root does — it is `~/.browser4`) is
 readable by design: that is the relaxation. The OS credential stores stay refused whatever is
 configured — adding `$HOME` as a readable root does **not** expose `~/.ssh`.
+
+### Added folders — `agent run --add-dir`
+
+`--add-dir <folder>` grants one task extra folders besides its workspace. Unlike the readable roots
+these are **read-write scope**, and they can be a `coding.shell` working directory — but the grant
+is still scope, not power:
+
+| Question | Answer |
+|---|---|
+| May the task read/write there? | yes under `full`/`write`; a `read` or `read-build` preset keeps the folder **read-only** (same `READ_ONLY` refusal as the workspace) |
+| May it run commands there? | only when the preset grants the shell (`full`) — the folder does not unlock execution |
+| Which folders are accepted? | an **existing** directory on the backend machine, absolute; `~` is expanded, credential stores are refused; a missing path fails the submission |
+| How long does it last? | this task only — reset when it ends; `--resume <id>` inherits the interrupted task's folders |
+| Can it change mid-session? | yes: in `agent run -i`, `/add-dir <folder>` grants the following tasks a folder and `/dirs [clear]` lists or drops the grants |
+| Where does the agent see them? | the task prompt names them and `coding.permissions` lists them |
+
+The OS sandbox is told the same folders (`browser4.agent.sandbox=windows-acl` provisions them as
+writable roots), so an allowed step is not denied by the OS afterwards.
 
 ### Refusal codes
 
@@ -111,6 +195,16 @@ credentials), `PROTECTED_PATH` (governance file or protected directory, such as
 also carries `needed=…` and the raw OS evidence stays in the log). A refusal is structural:
 it must not be retried with different quoting or an interpreter. `coding.permissions` prints
 the same view MCP clients get — the preset, the allowed routes and the protections.
+
+There is **no syntax gate**. A single-line Windows `if` **is** parsed (`if [not] exist <path> <cmd>`,
+`if [/i] [not] <a>==<b> <cmd>`, `if [not] defined <var> <cmd>`, `if [not] errorlevel <n> <cmd>`,
+optionally `(<cmd>)` with one `else (<cmd>)`) and its payload is validated like a top-level command.
+What is not parsed — `for` loops, `else if`, nested blocks, `&`/`|` inside a block, `goto`/`call`
+payloads — is handed to the platform shell **verbatim**, and the shell reports its own parse error.
+The vetoes that do not need the decomposition still refuse (blocked patterns, the command tier,
+credentials and protected paths, and killing or rebuilding this backend), and those are ordinary
+policy refusals. Use a script file run by path (`.\run.cmd`, `./run.sh`) when the shell's parse
+error is in the way.
 
 ### Operator approval: `coding.requestAccess`
 
@@ -255,6 +349,45 @@ coding.permissions()      # preset, granted tools, protections, pending requests
 Use this when the agent keeps hitting refusals: it is the same view a client gets, so the
 answer to "why was this refused" is one call away.
 
+### One example per preset
+
+Pick the narrowest preset whose row in the table above covers every tool the task must call.
+The four commands differ only in `--access`; what changes is what the run may do on its next step.
+
+**`full` — fix it, run the test, commit it.** The only preset that can execute the commands it
+reasons about, which is why it is also the one to keep off an untrusted repository:
+
+```bash
+browser4-cli agent run "Fix XTest#loadsTheProfile, run that test, then commit the change" \
+  --coding --access full
+```
+
+**`write` — edit the files and let the build check them.** `mvnBuild`/`verify` still run (a
+`write` task can compile and run project tests), but there is no shell: `git`, `npm install`,
+`coding.runCode` and skill scripts are gone, so review with `coding.diff` / `coding.checksum`
+instead of `git diff`:
+
+```bash
+browser4-cli agent run "Rename the preset ids across browser4-coding, then verify the module compiles" \
+  --coding --access write
+```
+
+**`read-build` — diagnose with compile evidence.** Reads and builds, never edits; a step that
+really needs a write files a `coding.requestAccess` request instead of failing the task. Remember
+the build executes the repository's own code, so this is a guard against mistakes, not a sandbox:
+
+```bash
+browser4-cli agent run "Which module fails to compile, and why?" --coding --access read-build
+```
+
+**`read` — answer, touch nothing.** No build either, so a "does it compile" conclusion has to be
+argued from the source and belongs in `problems` when the task cannot settle it. Reading is
+independent of the preset, so Browser4's own logs and task ledger are in scope:
+
+```bash
+browser4-cli agent run "Read the previous task's log and explain why it failed" --coding --access read
+```
+
 ## Flags
 
 | Flag / property | Applies to | Effect |
@@ -272,7 +405,7 @@ answer to "why was this refused" is one call away.
 |---|---|---|
 | `code=TOOL_DENIED` | the preset does not grant the method | use a wider preset, or call `coding.requestAccess` and have an operator approve that effect |
 | `code=EXEC_DISABLED` | shell/code execution is off under the preset | run the step another way, request `fs.exec` approval, or widen to `full` |
-| `code=COMMAND_NOT_ALLOWED` | the command is outside the shell's tier | use the project build (`mvnBuild`), a script file, or a different command |
+| `code=COMMAND_NOT_ALLOWED` | the command is outside the shell's tier | use the project build (`mvnBuild`), an allowed equivalent (`type`/`cat`/`dir`/`grep`) or a `coding.*` file tool, a script file, or a different command — an inline body (`powershell -Command …`, `bash -c …`) is not tier-checked at all and `--unrestricted` drops the tier on the command line; a `no approval lifts this` hint means the command is a permanent veto (runtime/credential/deny) |
 | `code=PATH_DENIED` | the path is outside the workspace | see [agent-workspace.md](agent-workspace.md) — name the input, use `--coding`, or widen paths |
 | `code=PROTECTED_PATH` / `code=SENSITIVE_PATH` | rails, not capabilities | never approvable; copy the data somewhere allowed |
 | `code=SANDBOX_DENIED` | the OS sandbox refused the operation (the step's `needed` names the granted roots) | keep the command inside the workspace and granted roots; change the sandbox configuration, not the command |
@@ -283,3 +416,4 @@ answer to "why was this refused" is one call away.
 - [agent.md](agent.md) — `agent run|status|result`, `--coding`, `--follow`
 - [agent-workspace.md](agent-workspace.md) — the path boundary, sensitive and protected locations
 - [config.md](config.md) — `config` command family and server-side overrides
+- [agent-permissions.md](../../../docs/agent-permissions.md) — internals: the enforcement layers, the rails, approval capabilities, the OS sandbox

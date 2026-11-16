@@ -2,15 +2,25 @@ package ai.platon.pulsar.coding
 
 import org.slf4j.LoggerFactory
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
 import java.nio.charset.Charset
+import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.nio.file.*
 import java.nio.file.attribute.BasicFileAttributes
 import java.time.Duration
+import java.util.concurrent.Callable
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.coroutines.CoroutineContext
 import kotlin.io.path.*
 
 /**
@@ -106,6 +116,15 @@ class CodingAgentFileSystem(
      * writes stay in the workspace.
      */
     private val readableRoots: Set<Path> = emptySet(),
+    /**
+     * Folders granted to this task besides the workspace (`agent run --add-dir`).
+     *
+     * They are read **and** write scope, exactly like the workspace; only the boundary authorizer
+     * injected by [CodingComponents.fs] needs them for the fallback used by direct construction.
+     * The preset still decides whether a write is possible at all ([readOnly]/[readOnlyProvider]),
+     * and the credential guard below still refuses the sensitive locations.
+     */
+    private val additionalDirs: Set<Path> = emptySet(),
 ) {
     /**
      * The boundary [Authorizer] actually in effect — the injected shared instance, or the
@@ -139,6 +158,85 @@ class CodingAgentFileSystem(
          */
         const val DEFAULT_LIST_LIMIT = 50
 
+        /**
+         * Default cap on the matches [grep] collects; the scan stops as soon as it is reached.
+         *
+         * The old 500 was pure waste: only ~1,600 characters of a grep result ever reach the
+         * model (`ToolOutcome.BODY_BUDGETS`), i.e. roughly six lines. Scanning until 500 matches
+         * were found bought nothing the caller could see.
+         */
+        const val DEFAULT_GREP_LIMIT = 100
+
+        /** Hard upper bound for a caller-supplied [grep] match cap. */
+        const val MAX_GREP_RESULTS = 1_000
+
+        /**
+         * Default wall-clock budget of one [grep] call.
+         *
+         * The cost is per opened file, not per byte (a cold tree pays 3-24 ms per file for the
+         * antivirus first touch), so a full-tree scan of a large workspace runs for minutes.
+         * `coding_grep` is called behind a 30 s HTTP budget: an unbounded scan is reported to the
+         * model as a timeout, which then re-issues the same scan. A labelled partial answer after
+         * 10 s is strictly better than blocking.
+         */
+        const val DEFAULT_GREP_BUDGET_MS = 10_000L
+
+        /** Hard upper bound for a caller-supplied [grep] budget; `budgetMillis <= 0` disables it. */
+        const val MAX_GREP_BUDGET_MS = 60_000L
+
+        /** Below this many candidates [grep] scans on the caller's thread (no pool overhead). */
+        private const val GREP_MIN_PARALLEL_FILES = 64
+
+        /** Candidates per worker; keeps small slices from paying more pool than I/O. */
+        private const val GREP_FILES_PER_THREAD = 32
+
+        /** Concurrent file readers [grep] may use; the server JVM also drives a browser. */
+        private const val GREP_MAX_THREADS = 8
+
+        /** Characters of a matching line that are reported. */
+        private const val GREP_MATCH_TEXT_CHARS = 200
+
+        /**
+         * Leading context kept before the match when the reported line is windowed onto a
+         * far-right match. `text` is `…<context><match>…`, so this is how much of the
+         * pre-match text survives.
+         */
+        private const val GREP_MATCH_LEAD_CHARS = 60
+
+        /** How a replacement character renders in a note; `\uFFFD` is unreadable in a log. */
+        private const val REPLACEMENT_GLYPH = "U+FFFD"
+
+        /** [grep] walked the tree itself. */
+        private const val ENGINE_SCAN = "scan"
+
+        /** [grep] let [RipgrepSupport] list the candidate files. */
+        private const val ENGINE_RIPGREP = "ripgrep"
+
+        /**
+         * Extra wall-clock time [grep]'s matcher may use after the candidate pass already
+         * exhausted the budget, so a cut-short candidate list still yields its matches.
+         */
+        private const val MATCH_GRACE_MS = 2_000L
+
+        /**
+         * How long [grep] walks the tree before handing the candidate collection to ripgrep.
+         *
+         * A small workspace finishes the walk well inside this and never pays for a process
+         * start; a large tree (multi-checkout, dependency dirs that slipped through) gives up
+         * here and lets ripgrep scan it in one pass.
+         */
+        private const val GREP_PROBE_MS = 1_200L
+
+        /** System property that overrides [GREP_PROBE_MS] (tests force the ripgrep path with it). */
+        const val PROBE_MS_PROPERTY = "browser4.coding.grep.probeMs"
+
+        /** Regex metacharacters; a pattern without them can be byte-searched before decoding. */
+        private val REGEX_METACHARACTERS =
+            charArrayOf('\\', '.', '?', '*', '+', '(', ')', '[', ']', '{', '}', '|', '^', '$')
+
+        /** Names the `b4-grep-<n>` worker threads so they are identifiable in a thread dump. */
+        private val grepPoolSeq = AtomicInteger(0)
+
         /** Agent scratch directory inside a workspace (helper scripts, progress notes). */
         private const val SCRATCH_DIR = ".b4scratch"
 
@@ -162,6 +260,14 @@ class CodingAgentFileSystem(
             "pom.xml",          // root aggregator pom — module registration lives here
             "browser4-dependencies/pom.xml", // BOM
             ".github/workflows/ci.yml",
+            // Launch path (self-development isolation plan §D8). A task that edits how
+            // the backend starts can make the recovery route unusable — the very
+            // scripts an operator needs when the checkout no longer builds.
+            "b4w.ps1", "b4w.sh", "b4w.bat",
+            "bin/build.ps1", "bin/build/build.ps1",
+            "bin/recover.ps1", "bin/recover.tests.ps1",
+            "browser4-apps/browser4-bundle/build-runtime-bundle.ps1",
+            "mvnw", "mvnw.cmd",
         )
 
         /**
@@ -178,6 +284,8 @@ class CodingAgentFileSystem(
         val DEFAULT_PROTECTED_DIRS: Set<String> = setOf(
             ".browser4",
             ".github/workflows",
+            // Maven wrapper configuration: part of how the project is built.
+            ".mvn",
         )
 
         /**
@@ -196,15 +304,47 @@ class CodingAgentFileSystem(
             "~/.browser4",
         )
 
-        /** Directories skipped by recursive searches by default. */
+        /**
+         * Directories skipped by recursive searches by default ([glob], [grep], [listDir],
+         * [collectTextFiles]).
+         *
+         * Two lessons from live runs shaped this list:
+         * - it must cover the **dependency and cache** directories of every ecosystem an agent
+         *   meets, not just the JVM ones: each missed directory is scanned file by file, and a
+         *   cold file open costs milliseconds, so a `vendor/` or `obj/` tree dominates the scan;
+         * - `bin` was removed: plenty of repositories (this one included) keep *scripts* in a
+         *   top-level `bin/`, and hiding them made `coding.grep`/`glob` silently blind to files
+         *   the docs point at. Build-output `bin/` (.NET/IDE layouts) is still skipped — see
+         *   [isExcludedSearchDir].
+         *
+         * The agent's own bookkeeping is excluded from *recursive* scans:
+         * `.browser4/coding-snapshots/` holds copies of edited sources (duplicate matches under a
+         * different path), `.b4scratch/` holds generated scripts and captured dumps, `.b4inputs/`
+         * holds the task's copied input files, `.b4build/` the previous runtime bundle kept for
+         * `b4w recover`, and `.test-sessions/`/`.build-state/` hold run artifacts. Naming any of
+         * them as the search root still searches it, because the visitor never skips the root
+         * itself.
+         */
         val DEFAULT_SEARCH_EXCLUDED_DIRS: Set<String> = setOf(
             ".git", ".svn", ".hg",
-            "node_modules", "bower_components",
-            "target", "build", "dist", "out", "bin",
-            ".gradle", ".idea", ".vscode", ".claude", ".mvn",
+            "node_modules", "bower_components", "vendor", "deps", "Pods", "site-packages",
+            "target", "build", "dist", "out", "obj", "coverage", "DerivedData",
+            ".gradle", ".idea", ".vscode", ".claude", ".mvn", ".terraform", ".svelte-kit",
             "__pycache__", ".venv", "venv", ".tox",
-            ".next", ".nuxt", ".cache", ".parcel-cache",
+            ".next", ".nuxt", ".cache", ".parcel-cache", ".turbo", ".yarn", ".pnpm-store",
+            ".pytest_cache", ".mypy_cache", ".ruff_cache",
+            ".b4scratch", ".b4build", ".b4inputs", ".browser4", ".test-sessions", ".build-state",
         )
+
+        /**
+         * Child names that mark a directory literally called `bin` as a *build output*
+         * (.NET `bin/Debug`, `bin/Release`, `bin/x64`, `bin/x86`; Eclipse puts classes there
+         * next to a `src/` tree). A `bin/` without any of these stays searchable.
+         */
+        private val BUILD_OUTPUT_BIN_CHILDREN: Set<String> = setOf("debug", "release", "x64", "x86", "classes")
+
+        /** Prefix of Bazel's convenience symlinks (`bazel-bin`, `bazel-out`, …), never real sources. */
+        private const val BAZEL_OUTPUT_PREFIX = "bazel-"
 
         /** Version-control metadata directories — protected from recursive deletion. */
         val VCS_DIRS: Set<String> = setOf(".git", ".svn", ".hg")
@@ -244,6 +384,55 @@ class CodingAgentFileSystem(
 
     private val canonicalRoot: Path by lazy { workspaceRoot.toRealPath() }
 
+    /** [searchExcludedDirs] lowercased: Windows compares directory names case-insensitively. */
+    private val excludedDirNamesLower: Set<String> by lazy { searchExcludedDirs.mapTo(HashSet()) { it.lowercase() } }
+
+    /**
+     * How long a [grep] call walks the tree before handing the candidate collection to
+     * [RipgrepSupport]. Overridable with `-Dbrowser4.coding.grep.probeMs` so tests (and
+     * operators tuning a specialist workspace) can force the ripgrep path on a small tree.
+     */
+    private val grepProbeMillis: Long =
+        System.getProperty(PROBE_MS_PROPERTY)?.toLongOrNull()?.coerceAtLeast(0L) ?: GREP_PROBE_MS
+
+    /**
+     * True when a recursive search must not descend into [dir].
+     *
+     * Besides the caller's [searchExcludedDirs] this recognises three shapes that a plain
+     * name set cannot express:
+     * - a directory literally named `bin` that is a *build output* (.NET/IDE layout), while a
+     *   repo-level `bin/` of scripts stays searchable;
+     * - Bazel's `bazel-<something>` convenience symlinks;
+     * - the same names in a different case on Windows (`Target/`, `Build/`).
+     */
+    private fun isExcludedSearchDir(dir: Path): Boolean {
+        val name = dir.fileName?.toString() ?: return false
+        if (isExcludedDirName(name)) return true
+        if (name.length > BAZEL_OUTPUT_PREFIX.length && name.startsWith(BAZEL_OUTPUT_PREFIX, ignoreCase = true)) {
+            return true
+        }
+        return name.equals("bin", ignoreCase = true) && isBuildOutputBin(dir)
+    }
+
+    private fun isExcludedDirName(name: String): Boolean =
+        if (IS_WINDOWS) name.lowercase() in excludedDirNamesLower else name in searchExcludedDirs
+
+    private fun isBuildOutputBin(dir: Path): Boolean {
+        val parent = dir.parent
+        // Visual Studio writes bin/ and obj/ side by side; either one alone names a build tree.
+        if (parent != null && Files.isDirectory(parent.resolve("obj"))) return true
+        return try {
+            Files.list(dir).use { children ->
+                children.anyMatch { child ->
+                    Files.isDirectory(child) &&
+                        child.fileName.toString().lowercase() in BUILD_OUTPUT_BIN_CHILDREN
+                }
+            }
+        } catch (_: IOException) {
+            false
+        }
+    }
+
     /**
      * File change tracker for reverting.
      *
@@ -282,6 +471,14 @@ class CodingAgentFileSystem(
     /** Snapshot of the mutation log, oldest first. */
     fun mutationsSnapshot(): List<FileMutation> = mutationLog.toList()
 
+    /**
+     * How many mutations this task has recorded — the cheap "did anything change" probe.
+     *
+     * Plan C1 uses it so a trigger that runs on every model round (a speculative build)
+     * does not re-hash the whole source tree when nothing was written since its last look.
+     */
+    val mutationEpoch: Int get() = mutationCount.get()
+
     /** Reset the log (a new task started). */
     fun clearMutations() {
         mutationLog.clear()
@@ -308,6 +505,11 @@ class CodingAgentFileSystem(
         snapshots.clear()
         changeCounter.set(0)
         clearMutations()
+        // P0-1: a task boundary also invalidates the build short-circuit for this workspace.
+        // The content digest already makes a stale hit impossible; this keeps a long-lived
+        // JVM from carrying dozens of dead buckets across tasks.
+        runCatching { BuildCache.shared.invalidate(workspaceRoot) }
+            .onFailure { logger.warn("beginTask: failed to invalidate the build cache", it) }
     }
 
     private fun resetPersistedSnapshots(archiveDir: Path?) {
@@ -349,8 +551,17 @@ class CodingAgentFileSystem(
     }
 
     private fun recordMutation(op: String, path: Path, ok: Boolean) {
-        val relative = runCatching { workspaceRoot.relativize(path.toAbsolutePath().normalize()).toString() }
-            .getOrElse { path.toString() }
+        val absolute = path.toAbsolutePath().normalize()
+        // A file in an `--add-dir` folder (or an explicitly allowed external write) is not a
+        // workspace-relative deliverable: `relativize` would produce a `..` chain (or throw on
+        // another drive), which names nothing the report or the finish gate can match. Record the
+        // absolute path for those; writes inside the workspace keep their relative form.
+        val root = runCatching { workspaceRoot.toAbsolutePath().normalize() }.getOrNull()
+        val relative = if (root != null && absolute.startsWith(root)) {
+            runCatching { root.relativize(absolute).toString() }.getOrElse { absolute.toString() }
+        } else {
+            absolute.toString()
+        }
         val normalized = relative.replace('\\', '/')
         // Agent state (scratch scripts, tool snapshots, build output) is not a
         // repository change: recording it makes the finish gate reject a *successful*
@@ -358,6 +569,13 @@ class CodingAgentFileSystem(
         // "the run modified 23 file(s) the report does not list: .b4scratch/outline.py, …"
         // right after coding.verify passed).
         if (isNonDeliverableMutationPath(normalized)) return
+        // C1: a write makes any build started ahead of the request compile the tree this
+        // write just changed. Cancel it at the same funnel that drops the build cache, so
+        // the speculative build and the cache entry can never disagree about the sources.
+        if (root != null && absolute.startsWith(root)) {
+            runCatching { SpeculativeBuild.shared.cancel(BuildCache.rootKey(workspaceRoot)) }
+                .onFailure { logger.debug("recordMutation: could not cancel the speculative build", it) }
+        }
         mutationLog.addLast(FileMutation(op, normalized, ok))
         if (mutationCount.incrementAndGet() > MAX_MUTATION_LOG) {
             mutationLog.pollFirst()
@@ -1115,7 +1333,7 @@ class CodingAgentFileSystem(
 
         Files.walkFileTree(baseDir, object : SimpleFileVisitor<Path>() {
             override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
-                if (dir != baseDir && dir.fileName.toString() in searchExcludedDirs) {
+                if (dir != baseDir && isExcludedSearchDir(dir)) {
                     return FileVisitResult.SKIP_SUBTREE
                 }
                 return FileVisitResult.CONTINUE
@@ -1172,13 +1390,42 @@ class CodingAgentFileSystem(
 
     /**
      * Search file contents for a regex pattern (like grep -r).
+     *
+     * The cost of a scan is dominated by the number of files it **opens**, not by their
+     * byte count: on a cold Windows tree an open costs 3-24 ms (antivirus first touch)
+     * against ~0.15 ms warm, so an unconditional full-tree scan of a large workspace runs
+     * for minutes. The call is therefore bounded four ways:
+     *
+     * - it stops once [maxResults] matches are collected;
+     * - it opens files from a small fixed pool — the walk itself stays sequential and is
+     *   cheap (~30 ms per 25,000 files), the per-file open is what parallelism amortises;
+     * - it honours [budgetMillis] and returns the matches found so far with an explicit
+     *   `partial:` footer. `coding_grep` sits behind a 30 s HTTP budget, so an unbounded
+     *   scan is reported to the model as a timeout and then repeated — a labelled partial
+     *   answer is strictly better than blocking for minutes;
+     * - for a plain literal [pattern] it searches the raw bytes first, so a file that cannot
+     *   match is never decoded; a file that is not valid UTF-8 is decoded with replacement
+     *   instead of being dropped (a GBK/UTF-16 source file must not read as "no such text"),
+     *   and UTF-16 BOMs are honoured.
+     *
+     * [filePattern] is matched against the file name (`*.kt`), or against the path relative to
+     * `path` when it contains a separator (`src/**/*.kt`).
+     *
+     * Matches are sorted by path then line, so the same tree renders the same text. When
+     * the match cap or the budget cuts the scan short, the result says so explicitly: an
+     * empty result from a partial scan must never read as "the workspace has no such text".
+     *
+     * @param maxResults match cap, clamped to 1..[MAX_GREP_RESULTS].
+     * @param budgetMillis wall-clock budget; values <= 0 disable the budget, otherwise
+     *   clamped to 1..[MAX_GREP_BUDGET_MS]. Defaults to [DEFAULT_GREP_BUDGET_MS].
      */
     suspend fun grep(
         pattern: String,
         path: String = ".",
         filePattern: String = "*",
         ignoreCase: Boolean = false,
-        maxResults: Int = 500,
+        maxResults: Int = DEFAULT_GREP_LIMIT,
+        budgetMillis: Long = DEFAULT_GREP_BUDGET_MS,
     ): String {
         val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
         if (!resolved.exists()) return errorResult("Not found: $path")
@@ -1188,58 +1435,521 @@ class CodingAgentFileSystem(
         } catch (e: Exception) {
             return errorResult("Invalid regex pattern: $pattern — ${e.message}")
         }
+        val pathMatcher = try {
+            FileSystems.getDefault().getPathMatcher("glob:$filePattern")
+        } catch (e: Exception) {
+            return errorResult("Invalid filePattern '$filePattern' — ${e.message}")
+        }
 
-        return try {
-            val results = mutableListOf<String>()
-            val pathMatcher = FileSystems.getDefault().getPathMatcher("glob:$filePattern")
+        val limit = maxResults.coerceIn(1, MAX_GREP_RESULTS)
+        val budget = if (budgetMillis <= 0) 0L else budgetMillis.coerceIn(1L, MAX_GREP_BUDGET_MS)
+        // A pattern without regex metacharacters can be byte-searched before decoding.
+        val literal = if (ignoreCase) null else literalBytesOrNull(pattern)
+        // `filePattern` names a path only when it carries a separator; otherwise it is a
+        // name glob and must keep matching plain file names (`*.kt` in any subdirectory).
+        val matchRelativePath = filePattern.contains('/') || filePattern.contains('\\')
+        val callContext = currentCoroutineContext()
 
+        val scan = try {
             withContext(Dispatchers.IO) {
-                Files.walkFileTree(resolved, object : SimpleFileVisitor<Path>() {
-                    override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
-                        if (dir != resolved && dir.fileName.toString() in searchExcludedDirs) {
-                            return FileVisitResult.SKIP_SUBTREE
-                        }
-                        return FileVisitResult.CONTINUE
-                    }
-
-                    override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
-                        if (results.size >= maxResults) return FileVisitResult.TERMINATE
-                        val ext = file.extension.lowercase()
-                        if (ext in BINARY_EXTENSIONS) return FileVisitResult.CONTINUE
-                        if (Files.size(file) > MAX_READ_SIZE_BYTES) return FileVisitResult.CONTINUE
-                        if (!pathMatcher.matches(file.fileName)) return FileVisitResult.CONTINUE
-
-                        try {
-                            val lines = Files.readAllLines(file)
-                            for ((i, line) in lines.withIndex()) {
-                                if (regex.containsMatchIn(line)) {
-                                    val rel = resolved.relativize(file)
-                                    results.add("$rel:${i + 1}: ${line.trim().take(200)}")
-                                    if (results.size >= maxResults) break
-                                }
-                            }
-                        } catch (_: Exception) {}
-                        return FileVisitResult.CONTINUE
-                    }
-
-                    override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult {
-                        return FileVisitResult.SKIP_SUBTREE
-                    }
-                })
-            }
-
-            if (results.isEmpty()) {
-                "No matches for '$pattern' in $path"
-            } else {
-                buildString {
-                    appendLine("Found ${results.size} match(es) for '$pattern':")
-                    results.take(200).forEach { appendLine(it) }
-                    if (results.size > 200) appendLine("  ... (${results.size - 200} more)")
-                }.trimEnd()
+                scanForMatches(
+                    resolved, pathMatcher, matchRelativePath, pattern, ignoreCase,
+                    regex, literal, limit, budget, callContext,
+                )
             }
         } catch (e: IOException) {
-            errorResult("Grep failed: ${e.message}")
+            return errorResult("Grep failed: ${e.message}")
         }
+
+        return renderGrep(scan, pattern, path, limit, budget)
+    }
+
+    /** One reported match: path relative to the search root, 1-based line, trimmed text. */
+    private data class GrepMatch(val rel: String, val line: Int, val text: String)
+
+    /** Outcome of one bounded scan: the matches plus why the scan stopped. */
+    private class GrepScan(
+        val matches: List<GrepMatch>,
+        val candidates: Int,
+        val scanned: Int,
+        /** Files that were not valid UTF-8 and were matched after byte replacement. */
+        val recoded: Int,
+        /** Candidate files whose bytes could not be read at all. */
+        val unreadable: Int,
+        val elapsedMillis: Long,
+        val budgetExhausted: Boolean,
+        val limitReached: Boolean,
+        /** Which engine produced the candidate list: [ENGINE_SCAN] or [ENGINE_RIPGREP]. */
+        val engine: String = ENGINE_SCAN,
+    )
+
+    /**
+     * Walk [root] (or let ripgrep list the candidate files), then match them from a bounded pool.
+     *
+     * The walk only collects paths (attributes are already in hand from `walkFileTree`),
+     * so it costs ~30 ms per 25,000 files; the expensive part is opening each file, which
+     * is what the pool amortises. When ripgrep is available it does the "which files can
+     * match" pass instead ([RipgrepSupport]); the result rendering is unchanged either way.
+     */
+    private fun scanForMatches(
+        root: Path,
+        pathMatcher: PathMatcher,
+        matchRelativePath: Boolean,
+        pattern: String,
+        ignoreCase: Boolean,
+        regex: Regex,
+        literal: ByteArray?,
+        limit: Int,
+        budgetMillis: Long,
+        callContext: CoroutineContext,
+    ): GrepScan {
+        val startedAt = System.nanoTime()
+        val deadline = if (budgetMillis <= 0) Long.MAX_VALUE else startedAt + budgetMillis * 1_000_000L
+        var engine = ENGINE_SCAN
+
+        // 1) Cheap probe first: for the usual workspace the built-in walk answers in tens of
+        //    milliseconds, faster than starting a process (measured: 110 ms vs 128 ms on a
+        //    3,950-file / 77 MB checkout). So ripgrep is only consulted when the tree is too
+        //    large to walk inside the probe window.
+        val probeDeadline = minOf(deadline, startedAt + grepProbeMillis * 1_000_000L)
+        val probe = collectGrepCandidates(root, pathMatcher, matchRelativePath, probeDeadline, callContext)
+        var candidates = probe.files
+        var walkExpired = probe.expired
+
+        // 2) Too large for the probe: let ripgrep list the candidate files in one pass instead
+        //    of opening every file from the JVM. Without ripgrep the walk resumes with the
+        //    caller's full budget.
+        if (walkExpired) {
+            val remainingBudget =
+                if (deadline == Long.MAX_VALUE) 0L else ((deadline - System.nanoTime()) / 1_000_000L).coerceAtLeast(0L)
+            val narrowing = if (budgetMillis > 0 && remainingBudget <= 0) {
+                null
+            } else {
+                callContext.ensureActive()
+                RipgrepSupport.narrow(root, pattern, ignoreCase, searchExcludedDirs, remainingBudget)
+            }
+            if (narrowing != null) {
+                engine = ENGINE_RIPGREP
+                walkExpired = narrowing.timedOut
+                val narrowed = ArrayList<Path>(minOf(narrowing.files.size, 512))
+                for (file in narrowing.files) {
+                    val size = try {
+                        Files.size(file)
+                    } catch (_: IOException) {
+                        continue
+                    }
+                    grepCandidateOrNull(file, size, root, pathMatcher, matchRelativePath)?.let { narrowed.add(it) }
+                }
+                candidates = narrowed
+            } else {
+                val resumed = collectGrepCandidates(root, pathMatcher, matchRelativePath, deadline, callContext)
+                candidates = resumed.files
+                walkExpired = resumed.expired
+            }
+        }
+
+        val scanned = AtomicInteger(0)
+        val recoded = AtomicInteger(0)
+        val unreadable = AtomicInteger(0)
+        val found = AtomicInteger(0)
+        // A candidate list that was cut short (walk or ripgrep hit the budget) must still be
+        // matched: reporting "0 comments scanned" would waste the work already done. The
+        // matcher therefore gets a small grace window past the deadline.
+        val matchDeadline = if (walkExpired) System.nanoTime() + MATCH_GRACE_MS * 1_000_000L else deadline
+        val expired = AtomicBoolean(false)
+        val capped = AtomicBoolean(false)
+        val collected = ArrayList<GrepMatch>(minOf(limit, 256))
+
+        val threads = grepThreadCount(candidates.size)
+        if (candidates.isNotEmpty()) {
+            if (threads <= 1) {
+                collected += scanRange(
+                    candidates, root, 0, candidates.size, regex, literal, limit,
+                    matchDeadline, callContext, scanned, recoded, unreadable, found, expired, capped,
+                )
+            } else {
+                val pool = Executors.newFixedThreadPool(threads) { runnable ->
+                    Thread(runnable, "b4-grep-${grepPoolSeq.incrementAndGet()}").apply { isDaemon = true }
+                }
+                try {
+                    val futures = (0 until threads).map { index ->
+                        val from = candidates.size * index / threads
+                        val to = candidates.size * (index + 1) / threads
+                        pool.submit(Callable {
+                            scanRange(
+                                candidates, root, from, to, regex, literal, limit,
+                                matchDeadline, callContext, scanned, recoded, unreadable, found, expired, capped,
+                            )
+                        })
+                    }
+                    for (future in futures) {
+                        collected += try {
+                            future.get()
+                        } catch (e: ExecutionException) {
+                            throw e.cause ?: e
+                        }
+                    }
+                } finally {
+                    pool.shutdownNow()
+                }
+            }
+        }
+
+        val ordered = collected
+            .sortedWith(compareBy({ it.rel }, { it.line }))
+            .take(limit)
+        return GrepScan(
+            matches = ordered,
+            candidates = candidates.size,
+            scanned = scanned.get(),
+            recoded = recoded.get(),
+            unreadable = unreadable.get(),
+            elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000L,
+            budgetExhausted = expired.get() || walkExpired,
+            limitReached = capped.get() || ordered.size >= limit,
+            engine = engine,
+        )
+    }
+
+    /** Candidate files of one tree walk, and whether the walk ran out of time. */
+    private class GrepCandidates(val files: ArrayList<Path>, val expired: Boolean)
+
+    /**
+     * Walk [root] and collect the files [grep] would open, honouring [deadline].
+     *
+     * Attributes come from the walk itself, so this costs no extra `stat`; a deadline hit is
+     * reported instead of silently truncating the list.
+     */
+    private fun collectGrepCandidates(
+        root: Path,
+        pathMatcher: PathMatcher,
+        matchRelativePath: Boolean,
+        deadline: Long,
+        callContext: CoroutineContext,
+    ): GrepCandidates {
+        val files = ArrayList<Path>(512)
+        var expired = false
+        Files.walkFileTree(root, object : SimpleFileVisitor<Path>() {
+            override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                if (dir != root && isExcludedSearchDir(dir)) {
+                    return FileVisitResult.SKIP_SUBTREE
+                }
+                if (System.nanoTime() > deadline) {
+                    expired = true
+                    return FileVisitResult.TERMINATE
+                }
+                callContext.ensureActive()
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                val candidate = grepCandidateOrNull(file, attrs.size(), root, pathMatcher, matchRelativePath)
+                    ?: return FileVisitResult.CONTINUE
+                if (System.nanoTime() > deadline) {
+                    expired = true
+                    return FileVisitResult.TERMINATE
+                }
+                files.add(candidate)
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult {
+                return FileVisitResult.CONTINUE
+            }
+        })
+        return GrepCandidates(files, expired)
+    }
+
+    /**
+     * The candidate predicate both engines share: readable text, inside the size cap, not
+     * under an excluded directory, and matching `filePattern`.
+     *
+     * The directory-chain check is what keeps ripgrep narrowing honest: ripgrep's own glob
+     * exclusions are case-sensitive and cannot express the "`bin/` unless it is a build
+     * output" rule, so the listed files are re-checked here.
+     */
+    private fun grepCandidateOrNull(
+        file: Path,
+        size: Long,
+        root: Path,
+        pathMatcher: PathMatcher,
+        matchRelativePath: Boolean,
+    ): Path? {
+        // Empty files cannot contain a match; oversized ones are skipped like today.
+        if (size == 0L || size > MAX_READ_SIZE_BYTES) return null
+        if (file.extension.lowercase() in BINARY_EXTENSIONS) return null
+        if (isUnderExcludedSearchDir(file, root)) return null
+        val target = if (matchRelativePath) {
+            runCatching { root.relativize(file) }.getOrNull() ?: file.fileName
+        } else {
+            file.fileName
+        }
+        if (target == null || !pathMatcher.matches(target)) return null
+        return file
+    }
+
+    private fun isUnderExcludedSearchDir(file: Path, root: Path): Boolean {
+        var dir = file.parent
+        while (dir != null && dir != root && dir.startsWith(root)) {
+            if (isExcludedSearchDir(dir)) return true
+            dir = dir.parent
+        }
+        return false
+    }
+
+    /**
+     * Match the candidate slice `[from, to)` and return its matches, obeying the shared
+     * cap/budget/cancellation flags. Slices are contiguous so the scan keeps the walk's
+     * on-disk locality; the caller sorts the merged result, so slice scheduling cannot
+     * change the rendered order.
+     */
+    private fun scanRange(
+        candidates: List<Path>,
+        root: Path,
+        from: Int,
+        to: Int,
+        regex: Regex,
+        literal: ByteArray?,
+        limit: Int,
+        deadline: Long,
+        callContext: CoroutineContext,
+        scanned: AtomicInteger,
+        recoded: AtomicInteger,
+        unreadable: AtomicInteger,
+        found: AtomicInteger,
+        expired: AtomicBoolean,
+        capped: AtomicBoolean,
+    ): List<GrepMatch> {
+        val matches = ArrayList<GrepMatch>(16)
+        for (index in from until to) {
+            if (found.get() >= limit) {
+                capped.set(true)
+                break
+            }
+            if (expired.get()) break
+            if (System.nanoTime() > deadline) {
+                expired.set(true)
+                break
+            }
+            callContext.ensureActive()
+
+            val file = candidates[index]
+            scanned.incrementAndGet()
+            val scan = try {
+                matchFile(file, regex, literal, limit - found.get())
+            } catch (_: IOException) {
+                unreadable.incrementAndGet()
+                null
+            }
+            if (scan == null) continue
+            if (scan.recoded) recoded.incrementAndGet()
+            if (scan.lines.isEmpty()) continue
+
+            val rel = try {
+                root.relativize(file).toString()
+            } catch (_: Exception) {
+                file.toString()
+            }
+            for ((lineNumber, text) in scan.lines) {
+                matches.add(GrepMatch(rel, lineNumber, text))
+                if (found.incrementAndGet() >= limit) {
+                    capped.set(true)
+                    break
+                }
+            }
+        }
+        return matches
+    }
+
+    /** Matches found in one file; [recoded] marks a file that was not valid UTF-8. */
+    private class FileMatches(val lines: List<Pair<Int, String>>, val recoded: Boolean = false)
+
+    /**
+     * Match one file, honouring [remaining] (the caller's leftover match budget).
+     *
+     * With a literal [pattern] the raw bytes are searched first, so files that cannot match
+     * are never decoded. A file that is not valid UTF-8 is decoded with replacement rather
+     * than dropped: a GBK/UTF-16 source file used to disappear from the result entirely
+     * (`Files.readAllLines` uses a strict decoder), which reads exactly like "no such text".
+     * UTF-16 BOMs are decoded as UTF-16 — their bytes interleave NULs, so the literal
+     * pre-filter cannot see the needle and must be skipped for them.
+     */
+    private fun matchFile(
+        file: Path,
+        regex: Regex,
+        literal: ByteArray?,
+        remaining: Int,
+    ): FileMatches {
+        if (remaining <= 0) return FileMatches(emptyList())
+        val bytes = Files.readAllBytes(file)
+        val encoding = detectTextEncoding(bytes)
+        // The byte pre-filter only proves a *miss* for ASCII needles in an ASCII-compatible
+        // encoding (UTF-8/GBK/Shift-JIS/Latin-1): a UTF-16 file interleaves NULs, and a
+        // non-ASCII needle is stored in the file's own encoding, not as UTF-8 bytes.
+        if (literal != null && isAscii(literal) && encoding == TextEncoding.UTF8 && !hasUtf8Bom(bytes)) {
+            if (indexOfBytes(bytes, literal) < 0) return FileMatches(emptyList())
+        }
+        val decoded = decodeText(bytes, encoding)
+        return FileMatches(matchLines(decoded.text, regex, remaining), decoded.recoded)
+    }
+
+    private fun isAscii(bytes: ByteArray): Boolean = bytes.all { it >= 0 }
+
+    /** Line matches of one decoded file. */
+    private fun matchLines(text: String, regex: Regex, remaining: Int): List<Pair<Int, String>> {
+        val matches = ArrayList<Pair<Int, String>>(4)
+        var lineNumber = 0
+        for (line in text.lineSequence()) {
+            lineNumber++
+            val found = regex.find(line) ?: continue
+            matches.add(lineNumber to grepMatchText(line, found.range.first))
+            if (matches.size >= remaining) break
+        }
+        return matches
+    }
+
+    /** Text encoding of a file, decided by its BOM (text without a BOM is treated as UTF-8). */
+    private enum class TextEncoding { UTF8, UTF16LE, UTF16BE }
+
+    /** Decoded file text; [recoded] marks a file that was not valid UTF-8. */
+    private class DecodedText(val text: String, val recoded: Boolean)
+
+    private fun hasUtf8Bom(bytes: ByteArray): Boolean =
+        bytes.size >= 3 &&
+            bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte()
+
+    private fun detectTextEncoding(bytes: ByteArray): TextEncoding {
+        if (bytes.size >= 2) {
+            if (bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte()) return TextEncoding.UTF16LE
+            if (bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte()) return TextEncoding.UTF16BE
+        }
+        return TextEncoding.UTF8
+    }
+
+    /**
+     * Decode [bytes] as [encoding], never throwing on malformed input.
+     *
+     * UTF-8 is attempted strictly first so the usual case stays byte-exact; a file that fails
+     * is re-decoded with replacement ([DecodedText.recoded] = true) instead of being dropped,
+     * so the ASCII part of a GBK/Shift-JIS source file still matches a symbol search.
+     */
+    private fun decodeText(bytes: ByteArray, encoding: TextEncoding): DecodedText {
+        val offset = when {
+            encoding != TextEncoding.UTF8 -> 2
+            hasUtf8Bom(bytes) -> 3
+            else -> 0
+        }
+        val length = bytes.size - offset
+        if (length <= 0) return DecodedText("", false)
+        return when (encoding) {
+            TextEncoding.UTF16LE ->
+                DecodedText(String(bytes, offset, length, StandardCharsets.UTF_16LE), false)
+
+            TextEncoding.UTF16BE ->
+                DecodedText(String(bytes, offset, length, StandardCharsets.UTF_16BE), false)
+
+            TextEncoding.UTF8 -> try {
+                val decoder = StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                DecodedText(decoder.decode(ByteBuffer.wrap(bytes, offset, length)).toString(), false)
+            } catch (_: CharacterCodingException) {
+                DecodedText(String(bytes, offset, length, StandardCharsets.UTF_8), true)
+            }
+        }
+    }
+
+    /**
+     * The reported text of a matching line, windowed around the match.
+     *
+     * The old `line.trim().take(200)` cut the match itself out of the output whenever it sat
+     * past column 200 (minified JS, single-line JSON): the model saw a "match" line with
+     * nothing matched in it. The window keeps the plain prefix for normal lines and shifts to
+     * `…<context>` for far-right matches.
+     */
+    private fun grepMatchText(line: String, matchStart: Int): String {
+        val indent = line.indexOfFirst { !it.isWhitespace() }.let { if (it < 0) 0 else it }
+        val content = line.substring(indent)
+        val offset = (matchStart - indent).coerceAtLeast(0)
+        if (offset <= GREP_MATCH_TEXT_CHARS - GREP_MATCH_LEAD_CHARS) return content.take(GREP_MATCH_TEXT_CHARS)
+        val from = (offset - GREP_MATCH_LEAD_CHARS).coerceAtLeast(0)
+        return "…" + content.substring(from).take(GREP_MATCH_TEXT_CHARS)
+    }
+
+    /** Plain needle search over bytes; there is no `ByteArray.indexOf(ByteArray)` in the JDK. */
+    private fun indexOfBytes(haystack: ByteArray, needle: ByteArray): Int {
+        if (needle.isEmpty() || haystack.size < needle.size) return -1
+        val last = haystack.size - needle.size
+        val first = needle[0]
+        var i = 0
+        while (i <= last) {
+            if (haystack[i] == first) {
+                var j = 1
+                while (j < needle.size && haystack[i + j] == needle[j]) j++
+                if (j == needle.size) return i
+            }
+            i++
+        }
+        return -1
+    }
+
+    /** The pattern's bytes when it is a plain literal (no regex metacharacters), else null. */
+    private fun literalBytesOrNull(pattern: String): ByteArray? {
+        if (pattern.isEmpty()) return null
+        if (pattern.any { it in REGEX_METACHARACTERS }) return null
+        return pattern.toByteArray(StandardCharsets.UTF_8)
+    }
+
+    private fun grepThreadCount(candidateCount: Int): Int {
+        if (candidateCount < GREP_MIN_PARALLEL_FILES) return 1
+        val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+        return minOf(GREP_MAX_THREADS, cores, candidateCount / GREP_FILES_PER_THREAD).coerceAtLeast(2)
+    }
+
+    /**
+     * Render the scan. The footer is not decoration: a partial or capped result must be
+     * distinguishable from "the text is not in the workspace", or the model re-runs the
+     * same expensive search (observed on large workspaces before the budget existed).
+     */
+    private fun renderGrep(scan: GrepScan, pattern: String, path: String, limit: Int, budgetMillis: Long): String {
+        return buildString {
+            if (scan.matches.isEmpty()) {
+                // A cut-short scan must never read as "the workspace does not contain it".
+                if (scan.budgetExhausted) {
+                    append(
+                        "No matches for '$pattern' in the ${scan.scanned} of ${scan.candidates} " +
+                            "candidate file(s) scanned so far"
+                    )
+                } else {
+                    append("No matches for '$pattern' in $path")
+                }
+            } else {
+                appendLine("Found ${scan.matches.size} match(es) for '$pattern':")
+                for (match in scan.matches) {
+                    appendLine("  ${match.rel}:${match.line}: ${match.text}")
+                }
+                if (scan.limitReached) {
+                    appendLine("  ... (stopped at the $limit match cap — narrow `path`/`filePattern` or raise `limit`)")
+                }
+            }
+            if (scan.budgetExhausted) {
+                val source = if (scan.engine == ENGINE_RIPGREP) "ripgrep candidate scan stopped early; " else ""
+                appendLine(
+                    "partial: $source" + "scanned ${scan.scanned} of ${scan.candidates} candidate file(s) in " +
+                        "${scan.elapsedMillis} ms (budget ${budgetMillis} ms exhausted) — this result is " +
+                        "INCOMPLETE; narrow `path`/`filePattern` instead of re-running the same search"
+                )
+            }
+            if (scan.recoded > 0) {
+                appendLine(
+                    "note: ${scan.recoded} file(s) were not valid UTF-8; their text was still searched " +
+                        "after replacement (non-ASCII bytes are shown as $REPLACEMENT_GLYPH)"
+                )
+            }
+            if (scan.unreadable > 0) {
+                appendLine("note: ${scan.unreadable} candidate file(s) could not be read")
+            }
+        }.trimEnd()
     }
 
     /**
@@ -1260,7 +1970,7 @@ class CodingAgentFileSystem(
             withContext(Dispatchers.IO) {
                 Files.walkFileTree(resolved, object : SimpleFileVisitor<Path>() {
                     override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
-                        if (dir != resolved && dir.fileName.toString() in searchExcludedDirs) {
+                        if (dir != resolved && isExcludedSearchDir(dir)) {
                             return FileVisitResult.SKIP_SUBTREE
                         }
                         return FileVisitResult.CONTINUE
@@ -1504,12 +2214,17 @@ class CodingAgentFileSystem(
 
     /**
      * Fallback boundary [Authorizer] used when none was injected. Holds a single canonical-scope
-     * grant over the workspace real root and every mirrored module root [MirrorRoots] finds, plus
-     * the readable roots for reads only ([ReadablePaths]). Built lazily so the mirror scan runs once
-     * per instance and only when a path is actually resolved.
+     * grant over the workspace real root, every mirrored module root [MirrorRoots] finds, the
+     * checkout those mirrors come from ([MirrorRoots.sourceRoot] — writable, so a self-development
+     * task can edit the repository it runs from), plus the readable roots for reads only
+     * ([ReadablePaths]) and the folders `agent run --add-dir` granted for reads and writes. Built
+     * lazily so the mirror scan runs once per instance and only when a path is actually resolved.
      */
     private val fallbackBoundaryAuthorizer: Authorizer by lazy {
-        val roots = (setOf(canonicalRoot) + MirrorRoots.derive(workspaceRoot)).toSet()
+        val roots = (
+            setOf(canonicalRoot) + MirrorRoots.derive(workspaceRoot) +
+                listOfNotNull(MirrorRoots.sourceRoot(workspaceRoot)) + resolvedAdditionalDirs
+            ).toSet()
         Authorizer(
             listOf(
                 Capability(
@@ -1523,6 +2238,11 @@ class CodingAgentFileSystem(
                 ),
             ),
         )
+    }
+
+    /** [additionalDirs] as absolute normalised paths; resolved once per instance. */
+    private val resolvedAdditionalDirs: List<Path> by lazy {
+        additionalDirs.map { it.toAbsolutePath().normalize() }
     }
 
     /** [readableRoots] as absolute normalised paths; resolved once per instance. */
@@ -1797,7 +2517,8 @@ class CodingAgentFileSystem(
         code = PermissionAudit.CODE_PATH_DENIED,
         detail = "path '$path' is outside the workspace (readable roots are read-only), lies in a " +
             "sensitive location, or is protected",
-        hint = "writes go under the workspace; reading is allowed for the readable roots listed by " +
+        hint = "writes go under the workspace or under a folder granted with `agent run --add-dir` " +
+            "(coding.permissions lists them); reading is allowed for the readable roots listed by " +
             "coding.permissions (add your own with -Dbrowser4.agent.readPaths=...), and the " +
             "deprecated allowExternalAccess opt-in still relaxes the boundary check only — the OS " +
             "sandbox still enforces the boundary, and credential locations stay refused either way",
@@ -1817,7 +2538,14 @@ class CodingAgentFileSystem(
     private fun protectionViolation(resolved: Path): String? {
         val real = runCatching { if (Files.exists(resolved)) resolved.toRealPath() else null }.getOrNull()
         val effective = if (real != null && real.startsWith(canonicalRoot)) real else resolved
-        val rel = canonicalRoot.relativize(effective).toString().replace('\\', '/')
+        // A path outside the workspace (an `--add-dir` folder, possibly on another drive) has no
+        // workspace-relative form: `relativize` would throw for a different root. Such a path is
+        // outside the protected subtree by definition, so the checks below cannot match it.
+        val rel = if (effective.startsWith(canonicalRoot)) {
+            canonicalRoot.relativize(effective).toString().replace('\\', '/')
+        } else {
+            effective.toString().replace('\\', '/')
+        }
         val protected = protectedFiles.any { p ->
             // Exact relative path, or basename match for single-file governance
             // entries (VERSION, AGENTS.md, CLAUDE.md). pom.xml is matched only by

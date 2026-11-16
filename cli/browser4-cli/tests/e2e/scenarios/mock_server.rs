@@ -9132,3 +9132,199 @@ pub(super) fn test_e2e_experience_save_forwards_facts(ctx: &mut E2ECtx) {
         save_calls[2].arguments
     );
 }
+
+// ---------------------------------------------------------------------------
+// star — GitHub CLI (gh) REST path
+// ---------------------------------------------------------------------------
+
+/// Write a stub `gh` that answers exactly the three REST calls the star
+/// command makes, logging each one to `calls.log` next to it.  The star
+/// command reaches it through the undocumented `BROWSER4_STAR_GH` hook, so no
+/// real account, network call, or browser is involved.
+///
+/// Answers: `api user` → `{"login":"stub-user"}`; `api /user/starred/...` →
+/// exit 1 with `gh: Not Found (HTTP 404)` (not starred); `api --method PUT
+/// /user/starred/...` → exit 0 and one `PUT` line in the log.
+fn write_gh_stub(dir: &Path) -> PathBuf {
+    fs::write(dir.join("calls.log"), "").expect("create gh stub log");
+
+    #[cfg(windows)]
+    {
+        let stub = dir.join("gh-stub.cmd");
+        // A batch file is started through cmd.exe by std's Command, so the
+        // stub behaves like the real console binary on Windows.
+        let body = r#"@echo off
+if "%~1"=="api" if "%~2"=="user" (
+  echo {"login":"stub-user"}
+  exit /b 0
+)
+if "%~1"=="api" if "%~2"=="--method" (
+  echo PUT %~4 >>"%~dp0calls.log"
+  exit /b 0
+)
+if "%~1"=="api" (
+  echo GET %~2 >>"%~dp0calls.log"
+  echo gh: Not Found HTTP 404 1>&2
+  exit /b 1
+)
+exit /b 2
+"#;
+        fs::write(&stub, body).expect("write gh stub");
+        return stub;
+    }
+
+    #[cfg(unix)]
+    {
+        let stub = dir.join("gh-stub");
+        let body = r#"#!/bin/sh
+log="$(dirname "$0")/calls.log"
+if [ "$1" = "api" ] && [ "$2" = "user" ]; then
+  printf '{"login":"stub-user"}\n'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "--method" ]; then
+  printf 'PUT %s\n' "$4" >> "$log"
+  exit 0
+fi
+if [ "$1" = "api" ]; then
+  printf 'GET %s\n' "$2" >> "$log"
+  printf 'gh: Not Found (HTTP 404)\n' >&2
+  exit 1
+fi
+exit 2
+"#;
+        fs::write(&stub, body).expect("write gh stub");
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&stub).expect("stat gh stub").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&stub, perms).expect("chmod gh stub");
+        return stub;
+    }
+
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = dir;
+        panic!("no gh stub available for this platform");
+    }
+}
+
+fn read_gh_stub_calls(dir: &Path) -> String {
+    fs::read_to_string(dir.join("calls.log")).unwrap_or_default()
+}
+
+/// `star --gh` writes the star through the GitHub CLI's REST API: probe the
+/// account, read the starred state, PUT the star, record it, and stay
+/// idempotent.  A stub `gh` keeps the real account, network, and browser out.
+pub(super) fn test_star_gh_api(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    ctx.unset_env("BROWSER4_STAR_GH");
+    let started_at = Instant::now();
+
+    let stub_dir = ctx.workspace_dir.join("gh-stub");
+    fs::create_dir_all(&stub_dir).expect("create gh stub dir");
+    let stub = write_gh_stub(&stub_dir);
+    let stub_str = stub.to_string_lossy().into_owned();
+    ctx.set_env("BROWSER4_STAR_GH", &stub_str);
+    ctx.record_step("write gh stub", started_at.elapsed());
+
+    // 1. Not starred yet: one read (404) and one write.
+    let starred = run_command(ctx, &["star", "--gh", "--json"]);
+    assert_eq!(
+        starred.exit_code, 0,
+        "star --gh failed:\nstdout: {}\nstderr: {}",
+        starred.stdout, starred.stderr
+    );
+    for expected in [
+        "\"page\":\"starred\"",
+        "\"login\":\"stub-user\"",
+        "\"method\":\"gh-api\"",
+    ] {
+        assert!(
+            starred.stdout.contains(expected),
+            "expected {expected} in:\n{}",
+            starred.stdout
+        );
+    }
+    let calls = read_gh_stub_calls(&stub_dir);
+    assert!(
+        calls.contains("GET /user/starred/platonai/Browser4"),
+        "expected the starred state to be read first:\n{calls}"
+    );
+    assert!(
+        calls.contains("PUT /user/starred/platonai/Browser4"),
+        "expected the star write:\n{calls}"
+    );
+
+    // The local record is what silences the recurring CTA, exactly like a star
+    // confirmed from the page.
+    let state_path = ctx.runtime_dir.join("star-guide.json");
+    let state = fs::read_to_string(&state_path).expect("star --gh must write star-guide.json");
+    assert!(
+        !state.contains("\"starred_at\": null"),
+        "starred_at must be recorded:\n{state}"
+    );
+
+    // 2. A second run is idempotent: the local record short-circuits before any
+    //    `gh` call, so no second star escapes.
+    let again = run_command(ctx, &["star", "--gh", "--json"]);
+    assert_eq!(
+        again.exit_code, 0,
+        "second star failed:\nstdout: {}\nstderr: {}",
+        again.stdout, again.stderr
+    );
+    assert!(
+        again.stdout.contains("\"page\":\"starred\""),
+        "expected the second run to report the recorded star:\n{}",
+        again.stdout
+    );
+    assert_eq!(
+        read_gh_stub_calls(&stub_dir).matches("PUT ").count(),
+        1,
+        "a second `star` must not write again:\n{}",
+        read_gh_stub_calls(&stub_dir)
+    );
+
+    // 3. `--check` asks the API (the stub still answers 404) and corrects the
+    //    stale local record instead of claiming a star that is gone.
+    let checked = run_command(ctx, &["star", "--check", "--json"]);
+    assert_eq!(
+        checked.exit_code, 0,
+        "star --check failed:\nstdout: {}\nstderr: {}",
+        checked.stdout, checked.stderr
+    );
+    for expected in [
+        "\"page\":\"not-starred\"",
+        "\"login\":\"stub-user\"",
+        "\"method\":\"gh-api\"",
+    ] {
+        assert!(
+            checked.stdout.contains(expected),
+            "expected {expected} in:\n{}",
+            checked.stdout
+        );
+    }
+    let state = fs::read_to_string(&state_path).expect("star-guide.json must still exist");
+    assert!(
+        state.contains("\"starred_at\": null"),
+        "--check must clear a stale record:\n{state}"
+    );
+
+    // 4. `--gh` asks for the API path explicitly, so a missing `gh` is an
+    //    actionable usage error — never a silent "nothing happened".
+    let missing = stub_dir.join("missing-gh");
+    let missing_str = missing.to_string_lossy().into_owned();
+    ctx.set_env("BROWSER4_STAR_GH", &missing_str);
+    let failed = run_command_allowing_failure(ctx, &["star", "--gh", "--json"]);
+    assert_eq!(
+        failed.exit_code, 2,
+        "a missing `gh` under --gh must be a usage error:\nstdout: {}\nstderr: {}",
+        failed.stdout, failed.stderr
+    );
+    assert!(
+        failed.stdout.contains("USAGE_ERROR") && failed.stdout.contains("not installed"),
+        "expected an actionable error envelope:\n{}",
+        failed.stdout
+    );
+
+    ctx.unset_env("BROWSER4_STAR_GH");
+}

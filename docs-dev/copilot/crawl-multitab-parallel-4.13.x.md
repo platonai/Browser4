@@ -105,7 +105,7 @@ Rust 侧 13 条新用例覆盖 `--parallel` 的校验与 `parallel → parallelT
 
 ## 5. 已知边界
 
-* **驱动池才是硬上限**（`browser.context.number` × `browser.max.active.tabs`，
+* **驱动池才是硬上限**（`browser.context.number` × `browser.max.open.tabs`，
   默认 2×8）。预算高于池容量时峰值会低于预算——响应里两个数字都在，差值就是证据。
   池队列容量在池创建时就固定了，改配置**不能**给已存在的池扩容。
 * `depth>=1` 的预算是**轮次数**，不是页数：一轮内部的出链由池按 tab 并行。

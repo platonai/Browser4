@@ -113,6 +113,10 @@ class AgentToolExecutor : AbstractToolExecutor() {
                     agent.extract(paramString(args, "instruction", functionName)!!)
                 }
             }
+            // Kept for backward compatibility only: `agent.run` is no longer advertised
+            // as an MCP tool (`@MCP` was removed), so new callers cannot discover it,
+            // but a client that still spells `agent_run` keeps working instead of
+            // hitting "Unsupported agent method". `command.run` is the supported entry.
             "run" -> {
                 requireLLMConfigured(agent)
                 validateArgs(args, allowed = setOf("task"), required = setOf("task"), functionName)

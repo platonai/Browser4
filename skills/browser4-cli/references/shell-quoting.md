@@ -95,22 +95,31 @@ echo 'a[href]' | browser4-cli htmlsnapshot inspect --stdin
 | | `--stdin` | `echo 'a[href]' \| htmlsnapshot inspect --stdin` |
 | | `--selector-base64` | `--selector-base64 <base64>` |
 
-## Agent `b4.run`: one PowerShell layer, no stdin
+## Agent `b4.run`: PowerShell for shell syntax, stdin for payloads
 
 `b4.run("…")` inside an agent task is not a shell you can pipe into. On Windows the
 command text is handed to PowerShell as an **encoded** command (`pwsh -EncodedCommand`),
 so the quoting you write survives into the CLI — `b4.run("eval --json \"1+1\"")` reaches
 `eval` with one quoted argument instead of a `ParserError` (fixed 2026-10-29; before that
-Java's argv quoting was undone by PowerShell's own `-Command` parser).
+Java's argv quoting was undone by PowerShell's own `-Command` parser). A command line with
+no quoting and no metacharacters skips PowerShell entirely and execs the binary directly.
 
-Two consequences:
+Three consequences:
 
 - The text is still **PowerShell** syntax: quote `@file` references (`--sql "@query.sql"`)
   and do not use `cmd.exe` builtins (`dir /b`, `%VAR%`).
-- There is **no stdin**: a command that reads it sees EOF at once. `eval --js` is a
+- Quoting is the only reason a plain command needs that PowerShell layer (~200 ms per
+  call on Windows). Put the payload on the tool's `stdin` argument instead and the command
+  line has nothing to quote: `b4.run(args="eval --stdin --json", stdin="document.title")`.
+  The payload goes straight to the child's stdin — nothing parses it.
+- Without `stdin` a command that reads stdin sees **EOF** at once. `eval --js` is a
   *bool* shorthand for `eval --stdin`, so `b4.run("eval --js \"…\"")` fails immediately
   with `Error: Stdin was empty …` (exit 2) instead of hanging for the whole timeout. Pass
-  the JavaScript with `eval --file <path>` or as a quoted positional expression.
+  the JavaScript with `eval --stdin` + the `stdin` argument, `eval --file <path>`, or as a
+  quoted positional expression.
+
+For a fixed sequence of commands, `b4.batch(commands="…\n…")` runs them all in one process
+(the list travels on stdin, so no step needs quoting either).
 
 ## Errors & Recovery
 
@@ -118,7 +127,7 @@ Two consequences:
 |---------|-------|-----|
 | `--sql "…"` output is mangled or empty | Shell reinterprets nested quotes (Windows/Git Bash) | Use `--sql @file.sql` or `--sql-stdin` |
 | `eval "…"` returns `null` or syntax errors | Quotes stripped across the 4 shell layers | Use `--file` / `--stdin` / `--base64` |
-| Agent `b4.run("eval --js \"…\"")` exits 2 with `Stdin was empty` | `--js` is a bool shorthand for `--stdin`, and `b4.run` has no stdin | Use `eval --file <path>` or a quoted positional (`eval "1+1"`) |
+| Agent `b4.run("eval --js \"…\"")` exits 2 with `Stdin was empty` | `--js` is a bool shorthand for `--stdin`, and no `stdin` argument was passed | Pass `stdin="…"` with `eval --stdin`, or use `eval --file <path>` / a quoted positional (`eval "1+1"`) |
 | `htmlsnapshot inspect --selector "…"` breaks on special chars | `$`, backticks, or quotes in the selector | Use `@file`, `--stdin`, or `--selector-base64` |
 | A `/`-leading value is mangled | MSYS path conversion | Omit `--path` if `/` is the default, or use `./b4w.sh` / `MSYS2_ARG_CONV_EXCL='*'` |
 
@@ -194,9 +203,11 @@ fails in the other:
 
 | Tool | Executed as | Rules |
 |---|---|---|
-| `b4.run(args=…)` | `pwsh -Command "& browser4-cli …"` | PowerShell parses `args`: quote `@file` (`'--sql @q.sql'`), `&&` works, `dir /b` does not |
+| `b4.run(args=…)` | `pwsh -Command "& browser4-cli …"` — unless the line has no quoting and no metacharacters, in which case it goes straight to the binary (no shell, ~200 ms cheaper) | PowerShell parses `args`: quote `@file` (`'--sql @q.sql'`), `&&` works, `dir /b` does not |
+| `b4.run(args=…, stdin=…)` | the same, but the payload is written to the child's stdin | nothing parses the payload: `b4.run(args="eval --stdin --json", stdin="document.title")` needs no quoting at all, and the command line stays in the no-shell subset. Prefer this over inlining a script/quoted argument |
+| `b4.batch(commands=…)` | one `batch --json` process, the command list on stdin | newline-separated commands, same syntax as `args`; a command with its arguments still determined up front. A step cannot use `--stdin` (stdin carries the list) |
 | `coding.shell` | `cmd.exe` | POSIX tools (`head`, `sed`) and `$()` fail; pipes/redirection are restricted |
-| `coding.shell` inline scripts | refused — `PERMISSION_DENIED \| code=COMMAND_NOT_ALLOWED` | `powershell -Command …` / `bash -c …` are blocked by the command guard |
+| `coding.shell` inline scripts | allowed — the body is a script, not a command line | `powershell -Command …` / `bash -c …` run as written in every mode; the body is still checked for blocked patterns, deny lists, credential paths, protected writes and the runtime vetoes (`--unrestricted` lifts the tier on the command line as well) |
 
 Observed 2026-10-28 (20-product supervision run): an unquoted `@.b4scratch/x-asin.sql`
 inside `b4.run` produced 18 `ParserError`s — and the Chinese parse error came back as

@@ -1,9 +1,7 @@
 package ai.platon.pulsar.agentic.model
 
-import ai.platon.pulsar.agentic.ObserveOptions
 import ai.platon.pulsar.agentic.agents.AgentConfig
 import ai.platon.pulsar.agentic.inference.ExtractParams
-import ai.platon.pulsar.agentic.inference.ObserveParams
 import ai.platon.pulsar.common.serialize.json.Pson
 import com.fasterxml.jackson.annotation.JsonIgnore
 import java.time.Instant
@@ -12,13 +10,13 @@ import java.util.UUID
 /**
  * Captures the runtime context for a single agent execution step.
  *
- * An [ExecutionContext] is the glue object passed through observe/act/extract flows. It keeps the original
+ * An [ExecutionContext] is the glue object passed through the run/extract flows. It keeps the original
  * instruction, the current step/event identity, the current [AgentState], and the shared session-level artifacts
  * that later prompts and persistence rely on.
  *
  * Although this is a `data class`, it is intentionally stateful:
  * - A new instance is created for each step/event pair, but [sessionId] stays stable across a multistep run.
- * - [agentState] is updated in place as the agent observes, acts, and records results for the current step.
+ * - [agentState] is updated in place as the agent acts and records results for the current step.
  * - [stateHistory] is shared session history, not a defensive copy, so later contexts see prior successful steps.
  * - [screenshotB64] may be attached after construction when a prompt needs the latest screenshot.
  *
@@ -33,7 +31,7 @@ import java.util.UUID
  * the ordered steps of a multistep run.
  * @property instruction The user goal being executed. This should remain consistent across all contexts in one session.
  * @property screenshotB64 The latest screenshot snapshot, when one is attached for prompting or debugging.
- * @property event The lifecycle event handled by this context, such as `act`, `observe`, `extract`, or `summary`.
+ * @property event The lifecycle event handled by this context, such as `run`, `extract`, or `summary`.
  * @property targetUrl The page URL the step is expected to operate on. This is often inherited from the previous state.
  * @property agentState The mutable state snapshot for the current step.
  * @property stateHistory The shared history of successful states accumulated during the current session.
@@ -81,43 +79,6 @@ data class ExecutionContext constructor(
     override fun toString(): String {
         return "step: $step, event: $event, targetUrl: $targetUrl, sessionId: $sessionId, instruction: $instruction"
     }
-}
-
-/**
- * Builds observe parameters that preserve the current context and merge caller-provided observe options with
- * agent-level configuration.
- */
-@Deprecated("Use the CLI tool-loop engine path instead")
-fun ExecutionContext.createObserveParams(
-    options: ObserveOptions,
-    fromAct: Boolean,
-    multistep: Boolean,
-    codingMode: Boolean = false,
-): ObserveParams {
-    return ObserveParams(
-        context = this,
-        returnAction = options.returnAction ?: false,
-        logInferenceToFile = config.logInferenceToFile,
-        fromAct = fromAct,
-        multistep = multistep,
-        codingMode = codingMode,
-    )
-}
-
-/**
- * Convenience factory for the common "observe in order to act" flow, where the model is expected to return an
- * actionable result and logging should honor the current agent configuration.
- */
-@Deprecated("Use the CLI tool-loop engine path instead")
-fun ExecutionContext.createObserveActParams(multistep: Boolean, codingMode: Boolean = false): ObserveParams {
-    return ObserveParams(
-        context = this,
-        fromAct = true,
-        returnAction = true,
-        multistep = multistep,
-        logInferenceToFile = config.logInferenceToFile,
-        codingMode = codingMode,
-    )
 }
 
 /**

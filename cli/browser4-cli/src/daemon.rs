@@ -61,15 +61,35 @@ const BACKEND_CREATION_FLAGS: u32 = {
 
 /// Windows: creation flags for the background AOT training run.
 ///
-/// The training process has the same lifetime problem as the backend — an
-/// attached console is torn down when the CLI's terminal goes away, and the
-/// process is force-terminated while `-XX:AOTCacheOutput` may still be
-/// writing.  `CREATE_BELOW_NORMAL_PRIORITY_CLASS` keeps it from competing
-/// with the server launch the user is waiting on.
+/// The training run has the same lifetime problem as the backend — an attached
+/// console is torn down when the CLI's terminal goes away, and the process is
+/// force-terminated while `-XX:AOTCacheOutput` may still be writing.  So it
+/// must not share the caller's console.
+///
+/// It must not put a console *window* on the user's desktop either, and here
+/// it cannot reuse [`BACKEND_CREATION_FLAGS`]: the training run is not the
+/// direct child.  [`spawn_aot_training`] starts `cmd.exe /d /c training.cmd`
+/// and the JVM is what `cmd.exe` launches, so `DETACHED_PROCESS` would only
+/// strip the console from `cmd.exe`.  Windows gives a console-subsystem
+/// program started by a console-less parent a brand-new console, and the
+/// default terminal host displays that as a visible terminal tab titled with
+/// the java command line for the whole run (measured: a fresh `conhost.exe`
+/// parented by `java.exe` plus a visible `CASCADIA_HOSTING_WINDOW_CLASS`
+/// window over ~60–180 s of training).
+///
+/// `CREATE_NO_WINDOW` gives `cmd.exe` a console of its own that has no window;
+/// the JVM inherits it, nothing is ever displayed, and the console is still
+/// not the caller's — the lifetime guarantee stays.  The two flags are not
+/// additive: with both set, `DETACHED_PROCESS` wins and the window comes back
+/// (measured), so `DETACHED_PROCESS` must stay out of this set.
+/// `CREATE_BELOW_NORMAL_PRIORITY_CLASS` keeps the run from competing with the
+/// server launch the user is waiting on.
 #[cfg(windows)]
 const AOT_TRAINING_CREATION_FLAGS: u32 = {
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const CREATE_BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
-    BACKEND_CREATION_FLAGS | CREATE_BELOW_NORMAL_PRIORITY_CLASS
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_BELOW_NORMAL_PRIORITY_CLASS
 };
 
 /// Windows: `HANDLE_FLAG_INHERIT` — the bit `SetHandleInformation` toggles.
@@ -1444,10 +1464,19 @@ pub const DEV_SERVER_PORT_START: u16 = 8282;
 /// up (8282–8313).
 pub const DEV_SERVER_PORT_SCAN_LIMIT: u16 = 32;
 
-/// Timeout for a single loopback probe during port allocation.  Short on
-/// purpose: a closed port refuses immediately, and an unusable port must not
-/// stall the scan.
-const DEV_PORT_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
+/// Timeout for a single loopback probe during port allocation.
+///
+/// This budget is the per-command price of the development-mode port decision,
+/// so it is deliberately tiny. A listening loopback socket completes the TCP
+/// handshake in kernel time (sub-millisecond), so "no answer within this budget"
+/// already meant "not ours" long before the number was lowered. What it costs is
+/// the opposite case: on a host whose loopback filters SYNs, a *closed* port only
+/// reports ECONNREFUSED after ~2 s (measured here), so every probe of a free port
+/// burns the whole budget. At 250 ms that was the 256 ms that every development
+/// command paid inside a checkout (evaluation §12.5, E-3); at 30 ms it is noise.
+/// Reuse of a port this workspace already owns no longer probes at all (see
+/// `dev_port_is_usable`).
+const DEV_PORT_PROBE_TIMEOUT: Duration = Duration::from_millis(30);
 
 static DEV_WORKSPACE_ROOT: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
 
@@ -1517,8 +1546,25 @@ fn is_tcp_port_in_use(port: u16) -> bool {
 /// True when [port] is usable by this checkout: nothing is listening, or the
 /// listener is a Browser4 server this checkout started (registry entry with a
 /// live PID — the registry itself is per-workspace).
+///
+/// The registry is consulted first and *replaces* the TCP probe when it answers:
+/// a live entry proves the port is ours, and reading it is a small local JSON
+/// file (sub-millisecond), while the probe costs a full timeout on a host that
+/// filters loopback SYNs (E-3). Every `b4.run` inside a development checkout goes
+/// through this function, so the difference is per-action.
 fn dev_port_is_usable(port: u16) -> bool {
-    !is_tcp_port_in_use(port) || crate::managed_processes::managed_port_has_live_server(port)
+    let ours = crate::managed_processes::managed_port_has_live_server(port);
+    if crate::timing::tracing() {
+        crate::timing::mark(&format!("port-{port}-registry"));
+    }
+    if ours {
+        return true;
+    }
+    let in_use = is_tcp_port_in_use(port);
+    if crate::timing::tracing() {
+        crate::timing::mark(&format!("port-{port}-connect"));
+    }
+    !in_use
 }
 
 /// First port in `DEV_SERVER_PORT_START..+DEV_SERVER_PORT_SCAN_LIMIT` that this
@@ -6822,6 +6868,25 @@ fn collect_jvm_opts_and_program_args() -> (Vec<String>, Vec<String>) {
         ));
     }
 
+    // The agent's progressive experience memory (`knowledge.dir`) defaults to a
+    // *cwd-relative* `./knowledge`, and the backend's cwd is the runtime bundle.
+    // Two consequences, both observed: in development mode a `-Rebuild`
+    // assembled a fresh bundle over the store and silently deleted everything
+    // the agent had learned, and an installed backend wrote user data inside the
+    // installed bundle (gone on the next upgrade).  Pin the store under the app
+    // data root instead — the same root that holds `memory/`, `logs/` and the
+    // browser profiles, and that no rebuild touches.  Workspace-scoped in
+    // development (one store per checkout, so two backends never write the same
+    // domain file), user-global otherwise.  Placed before BROWSER4_SERVER_OPTS
+    // so an explicit -Dknowledge.dir from the user still wins.
+    let knowledge_parent = workspace_app_data
+        .clone()
+        .unwrap_or_else(production_app_data_dir);
+    jvm_opts.push(format!(
+        "-Dknowledge.dir={}",
+        normalize_jvm_windows_path_text(&knowledge_parent.join("knowledge").to_string_lossy())
+    ));
+
     // Limit JIT compilation to C1 (client) tier for faster startup.
     // Placed before BROWSER4_SERVER_OPTS so users can override with
     // -XX:TieredStopAtLevel=4 in the env var for peak throughput.
@@ -7381,18 +7446,18 @@ pub fn aot_cache_status_line() -> String {
     if let Some(dir) = training {
         return format!(
             "training in progress (log: {})",
-            dir.join(AOT_TRAINING_LOG_FILE_NAME).display()
+            plain_windows_path_text(&dir.join(AOT_TRAINING_LOG_FILE_NAME).display().to_string())
         );
     }
     if trained > 0 {
         format!(
             "{trained} trained cache(s) under {} — attached when the server starts",
-            root.display()
+            plain_windows_path_text(&root.display().to_string())
         )
     } else {
         format!(
             "none yet under {} — the next server start trains it in the background",
-            root.display()
+            plain_windows_path_text(&root.display().to_string())
         )
     }
 }
@@ -7417,8 +7482,8 @@ fn aot_training_script_contents(java: &Path, cache_dir: &Path) -> String {
              if %AOT_OUTPUT_BYTES% LSS {} exit /b 1\r\n\
              move /y \"{}\" \"{}\" >nul 2>&1\r\n\
              exit /b %errorlevel%\r\n",
-            cache_dir.display(),
-            java.display(),
+            plain_windows_path_text(&cache_dir.display().to_string()),
+            plain_windows_path_text(&java.display().to_string()),
             AOT_TRAINING_ARGFILE_FILE_NAME,
             AOT_TRAINING_OUTPUT_FILE_NAME,
             AOT_TRAINING_OUTPUT_FILE_NAME,
@@ -7457,7 +7522,7 @@ fn posix_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-/// Spawn the detached JVM that trains the AOT cache, without waiting for it.
+/// Spawn the background JVM that trains the AOT cache, without waiting for it.
 ///
 /// The training run reuses the same JVM flags and classpath as production
 /// (required for cache validity), but binds a random port, runs in AOT
@@ -7467,11 +7532,15 @@ fn posix_single_quote(value: &str) -> String {
 /// `-XX:AOTCacheOutput` peak (2× heap) bounded; heap size is not part of the
 /// AOT cache validity check.
 ///
-/// The run is detached on Windows (`DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`
-/// via [`AOT_TRAINING_CREATION_FLAGS`]); dropping the `Child` handle only gives
-/// up waiting, it does not detach anything by itself.  Detaching matters because
-/// the JVM dumps the cache during shutdown — an attached console would kill the
-/// process mid-write.
+/// On Windows the run is started in a console of its own that has no window
+/// (`CREATE_NO_WINDOW` via [`AOT_TRAINING_CREATION_FLAGS`]); dropping the
+/// `Child` handle only gives up waiting, it does not detach anything by
+/// itself.  That console is not the caller's, so closing the terminal the CLI
+/// ran in does not kill the run — the JVM dumps the cache during shutdown,
+/// and an attached caller console used to take the process down mid-write.
+/// `DETACHED_PROCESS` cannot be used here: the direct child is `cmd.exe`, so
+/// it would leave the JVM to allocate a *visible* console window of its own
+/// (see [`AOT_TRAINING_CREATION_FLAGS`]).
 ///
 /// The JVM writes [`AOT_TRAINING_OUTPUT_FILE_NAME`], not the cache itself;
 /// [`aot_training_script_file`] renames it to `app.aot` only when the JVM
@@ -7535,7 +7604,7 @@ fn spawn_aot_training(
     if let Err(e) = fs::write(&script_file, script) {
         eprintln!(
             "AOT cache: cannot write training wrapper {}: {e}; skipping training",
-            script_file.display()
+            plain_windows_path_text(&script_file.display().to_string())
         );
         release_aot_training_marker(key);
         return;
@@ -7543,7 +7612,12 @@ fn spawn_aot_training(
 
     let mut cmd = if cfg!(windows) {
         let mut c = Command::new("cmd.exe");
-        c.arg("/d").arg("/c").arg(&script_file);
+        // `cmd.exe` cannot open a verbatim `\\?\` script path ("The system
+        // cannot find the path specified"), so the canonicalized state dir must
+        // be stripped here as well as inside the script (`cd /d`).
+        c.arg("/d")
+            .arg("/c")
+            .arg(plain_windows_path_text(&script_file.display().to_string()));
         c
     } else {
         let mut c = Command::new("sh");
@@ -7571,7 +7645,7 @@ fn spawn_aot_training(
         Err(e) => {
             eprintln!(
                 "AOT cache: cannot open training log {}: {e}",
-                log_file.display()
+                plain_windows_path_text(&log_file.display().to_string())
             );
             cmd.stdout(Stdio::null());
             cmd.stderr(Stdio::null());
@@ -7594,13 +7668,14 @@ fn spawn_aot_training(
             // long as the training JVM it waits on, so a later launch can
             // detect a dead (or PID-recycled) run and retrain immediately.
             write_aot_training_pid(key, child.id());
-            // Dropping the handle only gives up waiting; the run is detached
-            // from any console by AOT_TRAINING_CREATION_FLAGS.
+            // Dropping the handle only gives up waiting; the run keeps its own
+            // (windowless) console from AOT_TRAINING_CREATION_FLAGS, so it
+            // outlives this CLI and shows nothing on the desktop.
             drop(child);
             eprintln!(
                 "AOT cache training started in the background (log: {}) — \
                 the server starts without AOT acceleration until training completes",
-                log_file.display()
+                plain_windows_path_text(&log_file.display().to_string())
             );
         }
         Err(e) => {
@@ -7646,7 +7721,13 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
         if let Ok(key) = aot_cache_invalidation_key(runtime, &jvm_opts) {
             let cache_file = aot_cache_file(&key);
             if cache_file.is_file() {
-                jvm_opts.push(format!("-XX:AOTCache={}", cache_file.display()));
+                // The path is a JVM argument, so it takes the same verbatim-
+                // prefix strip and separator normalization as the classpath:
+                // a `\\?\` state dir must not reach the JVM command line.
+                jvm_opts.push(format!(
+                    "-XX:AOTCache={}",
+                    normalize_jvm_windows_path_text(&cache_file.display().to_string())
+                ));
             }
         }
     }
@@ -7708,6 +7789,22 @@ fn normalize_jvm_windows_path_text(text: &str) -> String {
     text.replace(r"\\?\UNC\", "//")
         .replace(r"\\?\", "")
         .replace('\\', "/")
+}
+
+/// Strip a Windows verbatim (`\\?\`) prefix while keeping native separators.
+///
+/// `cmd.exe` rejects a verbatim path as its current directory ("CMD does not
+/// support UNC paths as current directories"), so every path interpolated into
+/// the training wrapper must be plain.  A state dir taken from
+/// `BROWSER4_CLI_STATE_DIR` is canonicalized (see `user_state_dir_override`),
+/// which is exactly how a `\\?\` path reaches the wrapper — and silently killed
+/// every training run before its JVM started.
+fn plain_windows_path_text(text: &str) -> String {
+    if cfg!(windows) {
+        text.replace(r"\\?\UNC\", r"\\").replace(r"\\?\", "")
+    } else {
+        text.to_string()
+    }
 }
 
 /// Normalize one JVM argument for embedding in a Java `@argfile`.
@@ -10311,10 +10408,12 @@ pub fn resolve_base_url_with_origin(
     session_name: Option<&str>,
 ) -> ResolvedBaseUrl {
     let state = read_state(None, session_name);
+    crate::timing::mark("state");
     let recorded = state.base_url.trim_end_matches('/').to_string();
     // "A state file recorded a choice" is different from "the state struct has
     // a default": only a persisted record can be rejected as stale.
     let has_state = crate::state::has_persisted_state(session_name);
+    crate::timing::mark("persisted-state");
 
     let (url, source) = if let Some(flag_url) = override_url.filter(|u| !u.trim().is_empty()) {
         (flag_url.trim_end_matches('/').to_string(), BaseUrlSource::ServerFlag)
@@ -10325,12 +10424,14 @@ pub fn resolve_base_url_with_origin(
     {
         (configured.trim_end_matches('/').to_string(), BaseUrlSource::Config)
     } else if is_dev_mode() {
+        crate::timing::mark("dev-mode");
         let (url, decision) = decide_dev_base_url(
             &recorded,
             has_state,
             &dev_port_is_usable,
             &first_available_dev_port,
         );
+        crate::timing::mark("dev-port");
         let source = match decision {
             DevBaseUrlDecision::Allocated => BaseUrlSource::DevAllocation,
             DevBaseUrlDecision::ReusedRecorded => BaseUrlSource::RecordedState,
@@ -10791,19 +10892,34 @@ mod tests {
         assert_eq!(windows_quote_arg(r#"say "hi""#), "\"say \\\"hi\\\"\"");
     }
 
-    /// The training run has the same console-lifetime problem as the backend,
-    /// and it is the process the JVM dumps the AOT cache from — a console
-    /// teardown mid-dump used to leave a truncated cache that the launch path
-    /// attaches blindly (it only checks `is_file`).
+    /// The training run must never put a console window on the user's desktop,
+    /// and it must still outlive the terminal the CLI ran in.
+    ///
+    /// It is a *grandchild* (`cmd.exe /d /c training.cmd` → `java.exe`), which
+    /// is why `DETACHED_PROCESS` is the wrong flag here: it only strips the
+    /// console from `cmd.exe`, and Windows gives a console-subsystem program
+    /// started by a console-less parent a fresh console — displayed as a
+    /// visible terminal tab for the whole training run. `CREATE_NO_WINDOW`
+    /// gives `cmd.exe` a hidden console that the JVM inherits; the two are not
+    /// additive (measured: `DETACHED_PROCESS` wins and the window returns), so
+    /// this test pins both halves of the decision and then re-checks the real
+    /// process tree's console.
     #[cfg(windows)]
     #[test]
-    fn aot_training_launch_detaches_from_the_callers_console() {        const DETACHED_PROCESS: u32 = 0x0000_0008;
+    fn aot_training_launch_shows_no_console_window() {
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         const CREATE_BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        assert_eq!(
+            AOT_TRAINING_CREATION_FLAGS & CREATE_NO_WINDOW,
+            CREATE_NO_WINDOW,
+            "the training run must own a console that has no window"
+        );
         assert_eq!(
             AOT_TRAINING_CREATION_FLAGS & DETACHED_PROCESS,
-            DETACHED_PROCESS,
-            "the training run must not die with the caller's console"
+            0,
+            "DETACHED_PROCESS overrides CREATE_NO_WINDOW and brings the console window back"
         );
         assert_eq!(
             AOT_TRAINING_CREATION_FLAGS & CREATE_NEW_PROCESS_GROUP,
@@ -10815,6 +10931,118 @@ mod tests {
             CREATE_BELOW_NORMAL_PRIORITY_CLASS,
             "training must not compete with the server launch"
         );
+
+        let report = run_aot_console_probe();
+        assert!(
+            report.contains("hwnd=0") && report.contains("visible=0"),
+            "the training process tree must not own a visible console, got: {report}"
+        );
+    }
+
+    /// Env var that turns the test binary into the console probe of
+    /// [`run_aot_console_probe`]; unset during a normal suite run.
+    #[cfg(windows)]
+    const AOT_CONSOLE_PROBE_ENV: &str = "BROWSER4_AOT_CONSOLE_PROBE_OUT";
+
+    /// Grandchild half of [`aot_training_launch_shows_no_console_window`]:
+    /// report the console this process was given. It is re-invoked through the
+    /// same `cmd.exe` wrapper shape [`spawn_aot_training`] uses, so the console
+    /// Windows hands it is the one the training JVM would get.
+    #[cfg(windows)]
+    #[test]
+    fn aot_training_console_probe_child() {
+        let Ok(report_path) = std::env::var(AOT_CONSOLE_PROBE_ENV) else {
+            // Normal suite run: this only exists to be re-invoked as a probe.
+            return;
+        };
+        let (hwnd, visible) = current_console_window();
+        write(
+            &report_path,
+            format!("hwnd={hwnd}\nvisible={}\n", u8::from(visible)),
+        )
+        .expect("write console probe report");
+    }
+
+    /// Console window handle of this process and whether Windows shows it.
+    /// `(0, false)` means "attached to a console that has no window", which is
+    /// what `CREATE_NO_WINDOW` creates and what the training run must use.
+    #[cfg(windows)]
+    fn current_console_window() -> (isize, bool) {
+        extern "system" {
+            fn GetConsoleWindow() -> *mut core::ffi::c_void;
+        }
+        #[link(name = "user32")]
+        extern "system" {
+            fn IsWindowVisible(hwnd: *mut core::ffi::c_void) -> i32;
+        }
+
+        // SAFETY: both calls only take or return handles; no pointer is
+        // dereferenced.
+        unsafe {
+            let hwnd = GetConsoleWindow();
+            let visible = !hwnd.is_null() && IsWindowVisible(hwnd) != 0;
+            (hwnd as isize, visible)
+        }
+    }
+
+    /// Run the real training process tree — `cmd.exe /d /c wrapper.cmd` with
+    /// [`AOT_TRAINING_CREATION_FLAGS`], wrapper → console probe — and return
+    /// the probe's report.
+    #[cfg(windows)]
+    fn run_aot_console_probe() -> String {
+        let exe = std::env::current_exe().expect("path of the test binary");
+        let dir = TempDir::new().expect("probe temp dir");
+        let report_path = dir.path().join("console.txt");
+        let wrapper = dir.path().join("probe.cmd");
+        write(
+            &wrapper,
+            format!(
+                "@echo off\r\nset \"{env}={report}\"\r\n\"{exe}\" --exact daemon::tests::aot_training_console_probe_child\r\n",
+                env = AOT_CONSOLE_PROBE_ENV,
+                report = report_path.display(),
+                exe = exe.display()
+            ),
+        )
+        .expect("write probe wrapper");
+
+        let mut cmd = Command::new("cmd.exe");
+        cmd.arg("/d").arg("/c").arg(&wrapper).stdin(Stdio::null());
+        // Same stdio shape as `spawn_aot_training`: both streams go to a log
+        // file, so a regression cannot hide behind a different redirect.
+        let log_path = dir.path().join("probe.log");
+        match fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&log_path)
+        {
+            Ok(log) => {
+                let stderr = log.try_clone().expect("clone the probe log handle");
+                cmd.stdout(Stdio::from(log));
+                cmd.stderr(Stdio::from(stderr));
+            }
+            Err(_) => {
+                cmd.stdout(Stdio::null());
+                cmd.stderr(Stdio::null());
+            }
+        }
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(AOT_TRAINING_CREATION_FLAGS);
+        }
+        let mut child = cmd.spawn().expect("spawn the training-shaped tree");
+
+        let mut report = String::new();
+        for _ in 0..600 {
+            if let Ok(text) = fs::read_to_string(&report_path) {
+                report = text;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(!report.is_empty(), "the console probe did not run");
+        report
     }
 
     /// The wrapper is the only place that sees the training exit code, so the
@@ -10838,6 +11066,51 @@ mod tests {
         );
         assert!(script.contains("move /y \"app.aot.tmp\" \"app.aot\""));
         assert!(script.contains("@training-args.txt"));
+    }
+
+    /// A state dir taken from `BROWSER4_CLI_STATE_DIR` is canonicalized to a
+    /// verbatim `\\?\` path, and `cmd.exe` refuses that as its current
+    /// directory ("CMD does not support UNC paths as current directories"): the
+    /// wrapper then exits at the `cd` line and the JVM never starts, so the
+    /// cache is silently never trained.  The wrapper must embed plain paths.
+    #[cfg(windows)]
+    #[test]
+    fn aot_training_wrapper_strips_the_verbatim_state_dir_prefix() {
+        let script = aot_training_script_contents(
+            std::path::Path::new(r"\\?\C:\Program Files\Java\jdk\bin\java.exe"),
+            std::path::Path::new(r"\\?\C:\Users\me\.browser4\aot-cache"),
+        );
+        assert!(
+            !script.contains(r"\\?\"),
+            "cmd.exe cannot cd into a verbatim path, got: {script}"
+        );
+        assert!(
+            script.contains("cd /d \"C:\\Users\\me\\.browser4\\aot-cache\""),
+            "the cache dir must stay a plain, quoted Windows path, got: {script}"
+        );
+        assert!(
+            script.contains("\"C:\\Program Files\\Java\\jdk\\bin\\java.exe\" @training-args.txt"),
+            "the java path must stay quoted and plain, got: {script}"
+        );
+    }
+
+    /// The prefix strip has to keep native separators (the wrapper is a batch
+    /// file) and restore a UNC path instead of leaving a half-stripped `//`.
+    #[cfg(windows)]
+    #[test]
+    fn plain_windows_path_text_strips_verbatim_prefixes() {
+        assert_eq!(
+            plain_windows_path_text(r"\\?\C:\Users\me\.browser4"),
+            r"C:\Users\me\.browser4"
+        );
+        assert_eq!(
+            plain_windows_path_text(r"\\?\UNC\server\share\dir"),
+            r"\\server\share\dir"
+        );
+        assert_eq!(
+            plain_windows_path_text(r"C:\Users\me\.browser4"),
+            r"C:\Users\me\.browser4"
+        );
     }
 
     /// The WMI path must not leave a terminal window on the user's desktop.
@@ -10892,8 +11165,11 @@ mod tests {
     }
 
     /// The fallback must actually run when the hidden attempt fails: a script
-    /// that always fails plays the hidden attempt, a real `ping` plays the
-    /// backend created by the plain attempt.
+    /// that always fails plays the hidden attempt, a live console-free process
+    /// plays the backend created by the plain attempt (see
+    /// `console_free_sleeper` — a console-app payload here pops a real terminal
+    /// window on every test run, because the plain script carries no
+    /// `Win32_ProcessStartup`).
     #[cfg(windows)]
     #[test]
     fn wmi_create_fallback_creates_the_backend_after_a_hidden_attempt_failure() {
@@ -10903,8 +11179,11 @@ mod tests {
 
         let failing_script =
             "$ErrorActionPreference = 'Stop'; [Console]::Error.Write('simulated rejection'); exit 1";
-        let plain_script =
-            windows_wmi_create_script("ping -n 20 127.0.0.1", temp.path(), false);
+        let plain_script = windows_wmi_create_script(
+            &console_free_sleeper(temp.path()),
+            temp.path(),
+            false,
+        );
         let pid = run_wmi_create_with_fallback(failing_script, &plain_script, &startup_log_path)
             .expect("the plain attempt must create the backend after the hidden one fails");
 
@@ -11181,6 +11460,35 @@ mod tests {
         String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))
     }
 
+    /// Command line for a surrogate process that owns **no console**.
+    ///
+    /// `Win32_Process.Create` allocates a console for a console-subsystem child
+    /// and the default terminal host (Windows Terminal on current Windows) hands
+    /// that console a window. A surrogate therefore has to be GUI-subsystem,
+    /// otherwise every `cargo test` run of a test that creates a process
+    /// *without* `Win32_ProcessStartup` pops a terminal tab on the developer's
+    /// desktop for the surrogate's whole lifetime — the exact noise
+    /// `windows_wmi_create_script(.., hide_console = true)` exists to avoid in
+    /// production. What such a test needs to prove is that
+    /// `Win32_Process.Create` still creates a live process when the startup
+    /// info is absent, not that a console app can be started.
+    ///
+    /// `wscript.exe` is GUI-subsystem and `//B` runs the script in batch mode
+    /// without dialogs, so a `WScript.Sleep` gives the surrogate the lifetime
+    /// the liveness assertion needs and never puts a window on the desktop. The
+    /// script lives in the caller's temp dir, so it disappears with it.
+    ///
+    /// A host without a script engine (`wscript.exe` missing) fails this loudly
+    /// through `Win32_Process.Create`'s non-zero return value rather than
+    /// silently skipping the assertion.
+    #[cfg(windows)]
+    fn console_free_sleeper(dir: &Path) -> String {
+        let script_path = dir.join("wmi-sleeper.vbs");
+        std::fs::write(&script_path, "WScript.Sleep 20000\n")
+            .expect("write the console-free sleeper script");
+        format!("wscript //B \"{}\"", script_path.display())
+    }
+
     /// The parent pid of a live process via WMI; `0` when it cannot be read.
     #[cfg(windows)]
     fn windows_parent_pid(pid: u32) -> u32 {
@@ -11447,6 +11755,59 @@ mod tests {
         assert!(
             auto < user_override,
             "injected app.tmp.base.dir must precede the user override: {jvm_opts:?}"
+        );
+    }
+
+    #[test]
+    fn test_collect_jvm_opts_pins_the_knowledge_store_outside_the_runtime_bundle() {
+        let _env_guard = lock_env_mutex();
+        let prev_server_opts = env::var(BROWSER4_SERVER_OPTS_ENV).ok();
+        unsafe {
+            env::set_var(BROWSER4_SERVER_OPTS_ENV, "-Dknowledge.dir=/custom/knowledge");
+        }
+        let (jvm_opts, _) = collect_jvm_opts_and_program_args();
+        unsafe {
+            match prev_server_opts {
+                Some(v) => env::set_var(BROWSER4_SERVER_OPTS_ENV, v),
+                None => env::remove_var(BROWSER4_SERVER_OPTS_ENV),
+            }
+        }
+
+        // Development mode scopes the store to the workspace app data root; a
+        // production backend keeps the user-global `~/.browser4` one.
+        let app_data = workspace_app_data_dir().unwrap_or_else(production_app_data_dir);
+        let expected = format!(
+            "-Dknowledge.dir={}",
+            normalize_jvm_windows_path_text(&app_data.join("knowledge").to_string_lossy())
+        );
+        let injected = jvm_opts
+            .iter()
+            .position(|o| *o == expected)
+            .unwrap_or_else(|| {
+                panic!("expected {expected} in jvm opts: {jvm_opts:?}");
+            });
+
+        // The value must be absolute and outside the bundle. A relative default
+        // resolves against the server's cwd — the runtime bundle — which is the
+        // directory a rebuild replaces, taking the accumulated experience with it.
+        let value = expected.trim_start_matches("-Dknowledge.dir=");
+        assert!(
+            Path::new(value).is_absolute(),
+            "knowledge.dir must be absolute: {value}"
+        );
+        assert!(
+            !value.contains("runtime-bundle"),
+            "the store must not live inside the rebuildable runtime bundle: {value}"
+        );
+
+        // Java keeps the last -D for a key, so the user's override must come last.
+        let user_override = jvm_opts
+            .iter()
+            .position(|o| o == "-Dknowledge.dir=/custom/knowledge")
+            .expect("user -Dknowledge.dir must be present");
+        assert!(
+            injected < user_override,
+            "injected knowledge.dir must precede the user override: {jvm_opts:?}"
         );
     }
 

@@ -201,6 +201,32 @@ class SourceCodeToToolCallTest {
     }
 
     @Test
+    @DisplayName("PerceptiveAgent specs generated from the mirrored source match the bundled JSON fallback")
+    fun perceptiveAgentSpecsFromMirroredSourceMatchBundledJson() {
+        // Symmetric to webDriverSpecsFromMirroredSourceMatchBundledJson: a JAR without the
+        // mirrored sources serves the bundled JSON to the model, so a source change that is
+        // not accompanied by a regenerated snapshot advertises tools that no longer exist
+        // (e.g. the removed `agent.observe` / `agent.act`) and every call fails at runtime.
+        val sourceCode = B4LLMUtils.readSourceFileFromResource("browser4-agentic", "PerceptiveAgent.kt")
+        val tools = ToolSpecGenerator.extractInterface("agent", sourceCode, "PerceptiveAgent")
+        assertTrue(tools.isNotEmpty(), "Agent tool list should not be empty")
+        val generated = ToolSpecGenerator.normalizeToLinuxLineEndings(
+            ToolSpecGenerator.toSnapshotJson(tools)
+        )
+
+        // B4ResourceLoader.readString appends a trailing newline; strip it on both sides.
+        val committed = B4ResourceLoader.readString("code-mirror/agent-tool-call-specs.json")
+            .replace("\r\n", "\n").replace('\r', '\n')
+            .trimEnd('\n')
+
+        assertEquals(
+            committed,
+            generated,
+            "Specs generated from the mirrored PerceptiveAgent.kt must match the bundled JSON fallback"
+        )
+    }
+
+    @Test
     @DisplayName("extract methods from WebDriver resource")
     fun extractMethodsFromWebdriverResource() {
         val sourceCode =

@@ -92,35 +92,6 @@ class EventBusObservabilityTest {
     }
 
     @Test
-    fun testPerceptiveAgentObserveEvents() {
-        val willEventType = AgenticEvents.PerceptiveAgent.ON_WILL_OBSERVE
-        val didEventType = AgenticEvents.PerceptiveAgent.ON_DID_OBSERVE
-
-        // Simulate observing
-        val options = mapOf("instruction" to "find button")
-        EventBus.emit(willEventType, mapOf("options" to options, "uuid" to "test-uuid"))
-
-        Thread.sleep(100)
-
-        val results = listOf(mapOf("locator" to "1,123"))
-        EventBus.emit(didEventType, mapOf(
-            "options" to options,
-            "uuid" to "test-uuid",
-            "observeResults" to results
-        ))
-
-        Thread.sleep(100)
-
-        val willEvents = capturedEvents[willEventType]
-        val didEvents = capturedEvents[didEventType]
-
-        assertTrue(willEvents != null, "Will events should be captured")
-        assertTrue(didEvents != null, "Did events should be captured")
-        assertTrue(willEvents!!.isNotEmpty())
-        assertTrue(didEvents!!.isNotEmpty())
-    }
-
-    @Test
     fun testPerceptiveAgentActEvents() {
         val willEventType = AgenticEvents.PerceptiveAgent.ON_WILL_ACT
         val didEventType = AgenticEvents.PerceptiveAgent.ON_DID_ACT
@@ -208,39 +179,6 @@ class EventBusObservabilityTest {
         assertTrue(willEvents!!.isNotEmpty())
         assertTrue(didEvents!!.isNotEmpty())
         assertEquals("Summary of the page", didEvents[0]["result"])
-    }
-
-    @Test
-    fun testInferenceEngineObserveEvents() {
-        val willEventType = AgenticEvents.ContextToAction.ON_WILL_GENERATE
-        val didEventType = AgenticEvents.ContextToAction.ON_DID_GENERATE
-
-        val context = mapOf("step" to 1)
-        val messages = mapOf("content" to "test message")
-
-        EventBus.emit(willEventType, mapOf(
-            "context" to context,
-            "messages" to messages
-        ))
-
-        Thread.sleep(100)
-
-        val actionDescription = mapOf("method" to "click")
-        EventBus.emit(didEventType, mapOf(
-            "context" to context,
-            "messages" to messages,
-            "actionDescription" to actionDescription
-        ))
-
-        Thread.sleep(100)
-
-        val willEvents = capturedEvents[willEventType]
-        val didEvents = capturedEvents[didEventType]
-
-        assertTrue(willEvents != null)
-        assertTrue(didEvents != null)
-        assertTrue(willEvents!!.isNotEmpty())
-        assertTrue(didEvents!!.isNotEmpty())
     }
 
     @Test

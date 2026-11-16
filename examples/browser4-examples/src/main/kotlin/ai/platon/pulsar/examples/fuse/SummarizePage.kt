@@ -27,11 +27,12 @@ class SummarizePage {
         result("page", page)
 
         step("Action: Extract the full text of the webpage")
-        var result = agent.act("Extract the full text of the webpage")
-        result("action result", result)
+        val history = agent.run("Extract the full text of the webpage")
+        result("action history", history.finalResult)
+        val extractedText = history.finalResult?.toolCallResult?.evaluate?.value?.toString().orEmpty()
 
         step("Action: Summarize the full text of the webpage")
-        val response = session.chat("Summarize the full text of the webpage: \n\n\n" + result.tcEvalValue)
+        val response = session.chat("Summarize the full text of the webpage: \n\n\n$extractedText")
         result("action result", response)
 
         AgenticContexts.close()

@@ -84,6 +84,11 @@ tools ≈1.2 KB), though it now keeps its line structure. That is enough to read
 never a whole batch: write the batch to a file and inspect slices of it (`coding.stat`,
 `coding.grep`, `python -c` printing selected columns).
 
+`coding.grep` is bounded as well: it collects at most `limit` matches (default 100) and stops
+after a 10 s budget on a large tree, printing `partial:` when it stopped early. A partial
+result means "not found *yet*", never "absent" — narrow `path`/`filePattern` and search again
+instead of re-running the same whole-tree scan.
+
 ## Patterns
 
 ### Batch: crawl straight to CSV
@@ -176,14 +181,22 @@ missing columns).
 
 ### Quote `@file` correctly when an agent drives the CLI
 
-`b4.run(args=…)` is executed as `pwsh -Command "& browser4-cli …"`, so PowerShell parses
-the line: quote `@file` or it is treated as splatting. `coding.shell` is `cmd.exe`
-instead, and inline interpreters (`powershell -Command …`, `bash -c …`) are refused by the
-command guard.
+`b4.run(args=…)` is executed as `pwsh -Command "& browser4-cli …"` whenever the line needs
+shell syntax, so PowerShell parses the line: quote `@file` or it is treated as splatting.
+`coding.shell` is `cmd.exe` instead, and inline interpreters (`powershell -Command …`,
+`bash -c …`) are refused by the command guard.
 
 ```text
 ✗ b4.run(args="crawl --sql @.b4scratch/q.sql …")     → PowerShell ParserError
 ✓ b4.run(args="crawl --sql '@.b4scratch/q.sql' …")   → the file is read
+```
+
+Better where it applies: put the payload on `stdin` and the command line has no quoting at
+all, so it skips the shell entirely (~200 ms per call on Windows):
+
+```text
+✓ b4.run(args="eval --stdin --json", stdin="[document.title, ...document.querySelectorAll('h2')]")
+✓ b4.batch(commands="goto <url>\nsnapshot -v 0\nclick e12")   # one process for the sequence
 ```
 
 ## Flags
@@ -209,7 +222,7 @@ command guard.
 | The same pages are fetched in several rounds | rows/progress kept only in the conversation | append each row + id to `.b4scratch/` as you collect |
 | Titles/prices in the wrong language or currency, or you land on a "change language & currency" page | the site localized for the profile/IP | open the picker on the page and choose language + currency (`snapshot` → `select`/`click`), then verify one product; `set headers`/`?language=` are only hints |
 | `ParserError` from a `b4.run` command | PowerShell parsed an unquoted `@file` | quote it: `'--sql @q.sql'` (see [shell-quoting.md](shell-quoting.md)) |
-| `PERMISSION_DENIED \| code=COMMAND_NOT_ALLOWED` | inline interpreter or a blocked command | keep each shell's syntax in its own tool; use `b4.run` or a script file |
+| `PERMISSION_DENIED \| code=COMMAND_NOT_ALLOWED` | a blocked command | keep each shell's syntax in its own tool; use `b4.run` or a script file (an inline `powershell -Command …` body is a script and is not tier-checked in any mode; an `--unrestricted` task lifts the tier on the command line too; shapes the checker cannot decompose are handed to the platform shell in every mode) |
 | Extracted CSV has the wrong columns | spec not compared with the output | diff the header row against the field spec; report missing columns in `problems` |
 | `coding.read` refuses the file | binary (`.xlsx`, `.pdf`, `.zip`, image) | extract with a script, or convert to CSV once |
 | Deliverable "missing" after a green run | written under the task workspace, not the repo | `agent result` → `workspace`, then copy the CSV out |

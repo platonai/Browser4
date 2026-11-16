@@ -1,0 +1,97 @@
+# E-3 / E-1 raw output — AFTER the fix (2026-11-15, debug binary, no backend running)
+
+Two changes are in this binary:
+
+- `dev_port_is_usable` asks the managed-process registry first (a live backend on the
+  recorded port proves the port is ours → no probe), then probes with a 30 ms budget;
+- `is_process_running` uses `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` instead of
+  spawning `tasklist`.
+
+## 1. startup trace, inside the checkout
+
+```
+[startup] flags=5ms
+[startup] runtime=0ms
+[startup] invocation=5ms
+[startup] state=6ms
+[startup] persisted-state=6ms
+[startup] dev-mode=6ms
+[startup] port-8283-registry=7ms
+[startup] port-8283-connect=49ms
+[startup] dev-port=49ms
+browser4-cli 4.16.8
+[timing] startup=50ms http=0ms server=0ms net=0ms calls=0 total=50ms
+```
+
+`port-8283-registry` = 1 ms (registry read + OpenProcess liveness).
+`port-8283-connect` = 42 ms: still a *closed* port on a filtering host, so the 30 ms
+budget is spent — the remaining development-mode cost, ~6× smaller than before and
+zero when this checkout's own backend is running (the registry short-circuits).
+
+## 2. wall clock, `--version`
+
+```
+inside checkout:  52, 62, 63, 78, 57, 62
+fresh state dir:  51, 60, 45, 46
+outside checkout: 50, 33, 28
+```
+
+Before: 278–358 ms inside, 14–25 ms outside. The checkout-only 256 ms is gone; what is
+left is the same 20–50 ms an installed CLI pays plus one bounded probe.
+
+The *other* checkout §12.4 measured at 1,007 ms (`Browser4-4.16-feat`, 23 worktrees) was
+re-measured with this same fixed binary, run from inside that directory so it resolves that
+checkout's state and dev port:
+
+```
+fixed CLI, in Browser4-4.16-feat: 64, 60, 61, 61
+[startup] dev-mode=5ms
+[startup] port-8282-registry=6ms
+[startup] port-8282-connect=47ms
+[startup] dev-port=47ms
+[timing] startup=48ms ... total=48ms
+```
+
+1,007 ms → 60–64 ms. Nothing about that checkout was different: it was the same 250 ms per
+probe, paid three or four times as the scan walked past free ports.
+
+## 3. E-1: direct exec vs shell, same static command
+
+Startup *inside* the CLI (`BROWSER4_CLI_TIMING=1`), so the launcher is not counted:
+
+```
+help eval (direct):    47, 43, 49, 52, 48
+help "eval" (shell):   54, 51, 51, 50, 48
+```
+
+Both ~50 ms — because the CLI's clock starts after the shell already ran. The launcher
+cost belongs to the caller and is reported as `[timing] launch=<ms>` by
+`CliProcessManager` (subprocess duration − the CLI's own `total`).
+
+## 4. the PowerShell floor the payload commands used to pay
+
+```
+pwsh -NoLogo -NoProfile -NonInteractive -Command $true:          289, 206, 214, 237, 245
+pwsh -NoLogo -NoProfile -NonInteractive -EncodedCommand $true:   223, 221, 228, 210, 224
+```
+
+Per payload action, development checkout, before → after:
+
+```
+eval --json "…"        : 220 (shell) + 278 (dev startup) ≈ 500 ms
+eval --stdin --json    :   0 (direct) +  50 (startup)    ≈  50 ms
+```
+
+Production equivalent (no development mode, shell only): `199 + ~20 ≈ 220 ms` → `~20 ms`.
+
+## 5. E-4 sample: a real MCP round trip (`--server <running backend> status`)
+
+```
+cold:  [timing] startup=545ms http=34ms server=0ms net=34ms calls=1 total=581ms
+warm:  [timing] startup=56ms  http=5ms  server=0ms net=5ms  calls=1 total=62ms
+```
+
+`server=0ms` because that backend predates the `X-Browser4-Duration-Ms` header; without
+it the whole round trip is reported as `net`. The same command through
+`pwsh -EncodedCommand` prints the same `total` — the ~220 ms of shell is outside the
+CLI's clock, which is why the manager adds `launch=`.

@@ -264,6 +264,28 @@ class MCPToolControllerTest {
     }
 
     @Test
+    @DisplayName("call_tool reports its own handler time in X-Browser4-Duration-Ms")
+    fun callToolStampsTheHandlerDuration() = runBlocking {
+        // E-4: the CLI can only split its round trip into "backend" and "transport"
+        // if the backend says how long the tool itself took. A header keeps every
+        // client's JSON contract unchanged.
+        val request = MCPToolCallRequest(tool = "list_sessions")
+        `when`(sessionManager.getAllSessions()).thenReturn(emptyList())
+
+        controller.callTool(request, response)
+
+        val names = ArgumentCaptor.forClass(String::class.java)
+        val values = ArgumentCaptor.forClass(String::class.java)
+        Mockito.verify(response, Mockito.atLeastOnce()).addHeader(names.capture(), values.capture())
+        val index = names.allValues.indexOf(MCPToolController.TOOL_DURATION_HEADER)
+        assertTrue(index >= 0, "the duration header must be set: ${names.allValues}")
+        val raw = values.allValues[index]
+        val durationMs = raw.toLongOrNull()
+        assertNotNull(durationMs, "the header carries plain milliseconds: '$raw'")
+        assertTrue(durationMs!! >= 0, "duration must not be negative: $durationMs")
+    }
+
+    @Test
     @DisplayName("list_sessions derives displayMode from the headed capability flag")
     fun testListSessionsDerivesDisplayModeFromHeadedFlag() = runBlocking {
         val request = MCPToolCallRequest(tool = "list_sessions")

@@ -57,7 +57,7 @@
 
 | 已占用 | 说明 | 本设计的选择 |
 |---|---|---|
-| `POST /api/x/**` | 既有 `ScrapeController`（X-SQL/URL 抓取 + 任务） | **不动**。新端点用 `/api/scrape`（当前未被占用：已占用前缀为 `api/x`、`api/crawl`、`api/swarm`、`api/extractions`、`api/act`、`api/pages`、`api/config`、`api/system`、`api/doctor`、`api/plugins`、`api/skills`、`api/mcp`） |
+| `POST /api/x/**` | 既有 `ScrapeController`（X-SQL/URL 抓取 + 任务） | **不动**。新端点用 `/api/scrape`（当前未被占用：已占用前缀为 `api/x`、`api/crawl`、`api/swarm`、`api/extractions`、`api/pages`、`api/config`、`api/system`、`api/doctor`、`api/plugins`、`api/skills`、`api/mcp`；`api/act` 已于 2026-11-12 随 `act()` 下线释放） |
 | `<domain>.scrape` | 已有 `html_snapshot.scrape`（单元素取值） | 新工具 domain 用 `page`，方法 `scrape` → MCP 名 `page_scrape`；**避免**与 `html_snapshot_scrape` 混淆 |
 | CLI `scrape` | 当前无该命令（`crawl` 已存在） | 采用单词命令 `scrape`（按 `AGENTS.md`：无子命令的单词命令保持裸 kebab） |
 

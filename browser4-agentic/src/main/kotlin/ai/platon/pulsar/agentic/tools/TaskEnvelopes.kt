@@ -98,7 +98,8 @@ object TaskEnvelopes {
      *   instead of parsing [error], and `statusCode` (417 for every failure) cannot
      *   tell the cases apart.
      * @param resumable whether the task can be continued (agent tasks only)
-     * @param effectiveTokenBudget the token budget the run enforced (`0` = unlimited)
+     * @param effectiveTokenBudget the **cache-miss** token budget the run enforced
+     *   (`0` = unlimited): uncached prompt + output, prompt-cache reads excluded
      */
     fun of(
         taskId: String,
@@ -172,13 +173,9 @@ object TaskEnvelopes {
         "queued" to "Task queued, waiting to start",
         "onWillRun" to "Agent starting up",
         "onDidRun" to "Agent run completed, finalizing",
-        "onWillObserve" to "Agent observing the page",
-        "onDidObserve" to "Agent observed the page",
         "onWillAct" to "Agent planning next action",
         "onDidAct" to "Agent completed an action",
         "onToolExecuted" to "Agent is working",
-        "onWillGenerate" to "Agent generating response",
-        "onDidGenerate" to "Agent response generated",
         "onWillExtract" to "Agent extracting page data",
         "onDidExtract" to "Agent extracted page data",
         "onWillSummarize" to "Agent summarizing the page",

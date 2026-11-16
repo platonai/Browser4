@@ -134,7 +134,7 @@ class TaskEnvelopesTest {
             "Agent is working", TaskEnvelopes.progressMessage("PerceptiveAgent.onToolExecuted"),
             "the branch the rest-side copy had lost must resolve for both domains",
         )
-        assertEquals("Agent observing the page", TaskEnvelopes.progressMessage("InferenceEngine.onWillObserve"))
+        assertEquals("Agent planning next action", TaskEnvelopes.progressMessage("InferenceEngine.onWillAct"))
     }
 
     @Test

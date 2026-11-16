@@ -3,6 +3,7 @@ package ai.platon.pulsar.agentic.tools.builtin
 import ai.platon.pulsar.coding.AccessApprovals
 import ai.platon.pulsar.coding.AccessPreset
 import ai.platon.pulsar.coding.AccessRequest
+import ai.platon.pulsar.coding.AdditionalDirs
 import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.coding.ArtifactScaffolds
 import ai.platon.pulsar.coding.ArtifactValidator
@@ -29,6 +30,7 @@ import ai.platon.pulsar.coding.ModuleMap
 import ai.platon.pulsar.coding.PermissionAudit
 import ai.platon.pulsar.coding.ReadablePaths
 import ai.platon.pulsar.coding.RepoConsistencyReporter
+import ai.platon.pulsar.coding.RepoLock
 import ai.platon.pulsar.coding.Request
 import ai.platon.pulsar.coding.SkeletonExtractor
 import ai.platon.pulsar.coding.TokenEstimator
@@ -37,6 +39,7 @@ import ai.platon.pulsar.coding.CodingTokenStats
 import ai.platon.pulsar.coding.ValidationResult
 import ai.platon.pulsar.coding.VerificationReport
 import ai.platon.pulsar.coding.VerificationRunner
+import ai.platon.pulsar.coding.ModuleResolver
 import ai.platon.pulsar.coding.WorkspaceIsolation
 import ai.platon.pulsar.coding.WorkspaceMirror
 import ai.platon.pulsar.coding.Target as CodingTarget
@@ -85,7 +88,7 @@ import kotlin.reflect.KClass
  * - `move(source, dest)` — Move/rename file/directory
  * - `listDir(path?, maxDepth?)` — List directory contents
  * - `glob(pattern)` — Find files by glob pattern
- * - `grep(pattern, path?, filePattern?)` — Search file contents
+ * - `grep(pattern, path?, filePattern?, ignoreCase?, limit?)` — Search file contents
  * - `stat(path)` — Get file/directory info
  * - `diff(path)` — Show changes since snapshot
  * - `changeSummary()` — Show all tracked changes
@@ -224,7 +227,16 @@ class CodingToolExecutor : AbstractToolExecutor() {
             ),
             returnType = "String",
             description = "Execute a shell command. Supports git, cargo, mvn, npm, python, node, javac, and hundreds more dev tools. Use for building, testing, running scripts, and version control. " +
-                "Windows runs the command through cmd.exe (use Windows syntax: dir, type, cd /); Linux/macOS through sh -c."
+                "Windows runs the command through cmd.exe (use Windows syntax: dir, type, cd /); Linux/macOS through sh -c. " +
+                "Chaining with &&, ; and | is fine (every segment is checked). On Windows a single-line `if` is " +
+                "supported — `if [not] exist <path> <cmd>`, `if [/i] [not] <a>==<b> <cmd>`, " +
+                "`if [not] defined <var> <cmd>`, `if [not] errorlevel <n> <cmd>`, optionally `(<cmd>)` with one " +
+                "`else (<cmd>)` — and the command behind the condition is validated like a top-level one. " +
+                "A shape the checker cannot decompose (`for` loops, `else if`, nested blocks, goto/call " +
+                "payloads) is handed to the platform shell verbatim, and the shell's own parse error is the " +
+                "feedback; the command tier, blocked patterns, credentials/protected paths and the runtime " +
+                "vetoes (killing or rebuilding this backend, mklink/ln/mount) still refuse. " +
+                "Under `agent run --unrestricted` the command allow-list is lifted as well."
         )
         toolSpec["shellOutput"] = ToolSpec(
             domain = domain, method = "shellOutput",
@@ -323,6 +335,29 @@ class CodingToolExecutor : AbstractToolExecutor() {
             ),
             returnType = "String",
             description = "Read specific line range from a file"
+        )
+        toolSpec["readFiles"] = ToolSpec(
+            domain = domain, method = "readFiles",
+            arguments = listOf(
+                ToolSpec.Arg(
+                    "paths", "List<String>", null,
+                    "Files to read, in order. A comma-separated string is accepted too.",
+                ),
+                ToolSpec.Arg("startLine", "Int", "1", "First line of every file."),
+                ToolSpec.Arg(
+                    "maxLinesPerFile", "Int", "60",
+                    "Lines read per file; -1 reads from startLine to the end.",
+                ),
+                ToolSpec.Arg(
+                    "maxTotalChars", "Int", "4000",
+                    "Character budget for the whole reply (clamped to 4600 so the tool envelope never truncates it).",
+                ),
+            ),
+            returnType = "String",
+            description = "Read several files in ONE call, bounded per file and in total. " +
+                "Use it for ANY batch of 2+ files you can already name — a glob's result, a sample " +
+                "of several modules — instead of looping coding.readLines once per file. " +
+                "The reply says which files the char budget skipped."
         )
         toolSpec["write"] = ToolSpec(
             domain = domain, method = "write",
@@ -468,11 +503,25 @@ class CodingToolExecutor : AbstractToolExecutor() {
             arguments = listOf(
                 ToolSpec.Arg("pattern", "String"),
                 ToolSpec.Arg("path", "String", "\".\""),
-                ToolSpec.Arg("filePattern", "String", "*"),
+                ToolSpec.Arg(
+                    "filePattern", "String", "*",
+                    "File name glob (`*.kt`), or a path glob below `path` when it contains a " +
+                        "separator (`src/**/*.kt`).",
+                ),
                 ToolSpec.Arg("ignoreCase", "Boolean", "false"),
+                ToolSpec.Arg(
+                    "limit", "Int", "100",
+                    "Maximum matches to collect (1..1000); the scan stops when it is reached.",
+                ),
             ),
             returnType = "String",
-            description = "Search file contents for a regex pattern (like grep -r)"
+            description = "Search file contents for a regex pattern (like grep -r). Collects at most " +
+                "`limit` matches (default 100) and stops there; a large tree is scanned under a 10 s " +
+                "budget, and a cut-short result says `partial:` — narrow `path`/`filePattern` " +
+                "instead of re-running the same search. Recursive scans skip build/dependency dirs " +
+                "(target, node_modules, vendor, dist, bin/Debug…) as well as the agent's own " +
+                ".b4scratch/.browser4; name one of them as `path` to search it. Non-UTF-8 files are " +
+                "searched with replacement characters rather than skipped."
         )
         toolSpec["stat"] = ToolSpec(
             domain = domain, method = "stat",
@@ -1043,6 +1092,21 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     endLine = paramInt(args, "endLine", functionName, required = false, default = -1) ?: -1,
                 )
             }
+            "readFiles" -> {
+                validateArgs(
+                    args,
+                    allowed = setOf("paths", "startLine", "maxLinesPerFile", "maxTotalChars"),
+                    required = setOf("paths"),
+                    functionName,
+                )
+                readFilesBatch(
+                    fs = fs,
+                    paths = paramStringList(args, "paths", functionName),
+                    startLine = paramInt(args, "startLine", functionName, required = false, default = 1) ?: 1,
+                    maxLinesPerFile = paramInt(args, "maxLinesPerFile", functionName, required = false, default = 60) ?: 60,
+                    maxTotalChars = paramInt(args, "maxTotalChars", functionName, required = false, default = 4000) ?: 4000,
+                )
+            }
             "write" -> {
                 validateArgs(
                     args,
@@ -1155,12 +1219,19 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 fs.glob(paramString(args, "pattern", functionName)!!)
             }
             "grep" -> {
-                validateArgs(args, allowed = setOf("pattern", "path", "filePattern", "ignoreCase"), required = setOf("pattern"), functionName)
+                validateArgs(
+                    args, allowed = setOf("pattern", "path", "filePattern", "ignoreCase", "limit"),
+                    required = setOf("pattern"), functionName
+                )
                 fs.grep(
                     pattern = paramString(args, "pattern", functionName)!!,
                     path = paramString(args, "path", functionName, required = false, default = ".") ?: ".",
                     filePattern = paramString(args, "filePattern", functionName, required = false, default = "*") ?: "*",
                     ignoreCase = paramBool(args, "ignoreCase", functionName, required = false, default = false) ?: false,
+                    maxResults = paramInt(
+                        args, "limit", functionName, required = false,
+                        default = CodingAgentFileSystem.DEFAULT_GREP_LIMIT,
+                    ) ?: CodingAgentFileSystem.DEFAULT_GREP_LIMIT,
                 )
             }
             "stat" -> {
@@ -1532,6 +1603,9 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     code,
                     timeoutSeconds = timeout.coerceIn(1, 120),
                     networkAllowed = policy.allowNetwork || policy.hasActiveNetworkGrant(),
+                    // Same seam as `coding.shell` for this task: an unrestricted run is unsandboxed
+                    // here too, and every other policy keeps the process-wide backend choice.
+                    sandbox = CodingComponents.sandbox(policy),
                 )
                 buildString {
                     if (result.timedOut) appendLine("⏱ Timed out after ${timeout}s — process killed")
@@ -1939,6 +2013,27 @@ class CodingToolExecutor : AbstractToolExecutor() {
         store: DevTaskCheckpointStore,
         resumed: Boolean,
     ): String {
+        // A dev-task may create a worktree and merge it into the checkout; the checkout
+        // lock is what serialises that against an `agent run --coding` merge (another
+        // process) or a second dev-task. Null when the workspace is already a managed
+        // worktree — a dev-task nested inside an isolated run is covered by its own
+        // task's lock, and taking a second one would deadlock against it.
+        val lock = acquireDevTaskLock(receiver.fs.workspaceRoot, checkpointIn.id)
+        return try {
+            runCheckpointedPlanBody(planText, plan, receiver, checkpointIn, store, resumed)
+        } finally {
+            lock?.release()
+        }
+    }
+
+    private suspend fun runCheckpointedPlanBody(
+        planText: String,
+        plan: DevTaskPlanner.DevPlan,
+        receiver: Target,
+        checkpointIn: DevTaskCheckpoint,
+        store: DevTaskCheckpointStore,
+        resumed: Boolean,
+    ): String {
         var checkpoint = checkpointIn
 
         // A failed isolated run keeps its worktree; a resume continues inside it.
@@ -2105,8 +2200,30 @@ class CodingToolExecutor : AbstractToolExecutor() {
         return buildString {
             appendLine("Access preset: ${policy.preset.id}")
             appendLine("Workspace root: ${fs.workspaceRoot}")
-            appendLine("Isolation: ${CodingWorkspace.isolationMode}" +
-                (WorkspaceMirror.defaultSourceRepo()?.let { " (mirror of $it)" } ?: " (no source checkout detected)"))
+            // An unrestricted task must say so before the rest of the report: the rails below are
+            // empty because the flag removed them, not because nothing was configured, and the model
+            // (or an operator reading over its shoulder) has to be able to tell those apart.
+            if (policy.unrestricted) {
+                appendLine(
+                    "Unrestricted: YES (`agent run --unrestricted`) — this task runs with the current OS " +
+                        "user's own permissions: no preset, workspace, protected or sensitive rails and no OS " +
+                        "sandbox. The OS credential stores stay refused (see `always refused` below), as do the " +
+                        "commands that would destroy or rebuild the runtime this task runs inside."
+                )
+            }
+            // Isolation, in the terms the model needs: an isolated run has a worktree
+            // as its workspace and the change lands in the MAIN checkout; an in-place
+            // run edits whatever the workspace names.
+            val mainCheckout = runCatching { WorkspaceIsolation.resolveMainRepoRoot(fs.workspaceRoot) }.getOrNull()
+            val isolationLine = when {
+                mainCheckout != null -> "worktree (changes merge into $mainCheckout)"
+                CodingWorkspace.isIsolationEnabled() ->
+                    "requested, but this workspace is not a linked worktree — running in place"
+                else ->
+                    "${CodingWorkspace.isolationMode} " +
+                        (WorkspaceMirror.defaultSourceRepo()?.let { "(mirror of $it)" } ?: "(no source checkout detected)")
+            }
+            appendLine("Isolation: $isolationLine")
             // Reads are not limited by the preset: the readable roots are where Browser4's own
             // data/temp/checkout live, and a model that was refused a workspace write needs to
             // know it can still read them (and where the list comes from).
@@ -2114,6 +2231,15 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "Readable roots (read-only, outside the workspace): " +
                     ReadablePaths.describe() + " (+ -Dbrowser4.agent.readPaths=...)"
             )
+            // `agent run --add-dir`: extra folders this task may read, write and run commands in.
+            // Listed separately because they are neither the workspace nor read-only, and the
+            // model needs their absolute paths — a relative path can only name the workspace.
+            if (policy.additionalDirs.isNotEmpty()) {
+                appendLine(
+                    "Added folders (read+write scope for this task, --add-dir): " +
+                        AdditionalDirs.describe(policy.additionalDirs)
+                )
+            }
             appendLine("Files:")
             appendLine("  read workspace           : $yes")
             appendLine("  write workspace          : ${if (policy.allowsFileMutation()) yes else no}")
@@ -2138,9 +2264,27 @@ class CodingToolExecutor : AbstractToolExecutor() {
             // touch — `protectedList()` alone only shows the session's dynamic protections, which
             // made the report answer "No protections." next to a guarded bookkeeping tree.
             appendLine("Protections:")
-            appendLine("  protected files   : ${policy.protectedFiles.sorted().joinToString(", ")}")
-            appendLine("  protected dirs    : ${policy.protectedDirs.sorted().joinToString(", ")}")
-            appendLine("  credential paths  : ${policy.sensitivePaths.sorted().joinToString(", ")}")
+            // An empty list next to "Unrestricted: YES" would read as "nothing configured", which is
+            // a different statement from "this task dropped the rails" — say which one it is.
+            val noProtections = if (policy.unrestricted) "none (unrestricted)" else "none"
+            appendLine(
+                "  protected files   : " +
+                    policy.protectedFiles.sorted().joinToString(", ").ifEmpty { noProtections }
+            )
+            appendLine(
+                "  protected dirs    : " +
+                    policy.protectedDirs.sorted().joinToString(", ").ifEmpty { noProtections }
+            )
+            appendLine(
+                "  credential paths  : " + policy.sensitivePaths.sorted().joinToString(", ").ifEmpty {
+                    if (policy.unrestricted) {
+                        // The policy list is empty on purpose; the hard rail is the static list.
+                        "none in this policy — the `always refused` stores below still apply"
+                    } else {
+                        "none"
+                    }
+                }
+            )
             // A readable root relaxes a credential entry (the data root is on both lists), so the
             // model must know which locations are still refused whatever it configures.
             appendLine("  always refused    : ${ReadablePaths.ALWAYS_REFUSED.sorted().joinToString(", ")}")
@@ -2152,15 +2296,25 @@ class CodingToolExecutor : AbstractToolExecutor() {
             // what the run actually reached, which is what an operator needs to decide whether the
             // scope is too wide. Counts are process-wide, like [PermissionAudit] itself.
             appendLine("Capabilities and observed activity:")
-            appendLine(
-                "  boundary grants   : ${CodingComponents.CAP_FS_BOUNDARY} (canonical, file tools), " +
-                    "${CodingComponents.CAP_SHELL_BOUNDARY} (lexical, shell)"
-            )
-            appendLine("  declared effects  : fs.read, fs.write (both boundary grants)")
-            appendLine(
-                "  budget            : unbounded per call; the boundary Authorizer enforces limits, " +
-                    "preset budget accounting is not wired yet (M2)"
-            )
+            if (policy.unrestricted) {
+                // The boundary Authorizer this task was built with is a pass-through: printing the
+                // capability ids and their limits would describe a gate that is not there.
+                appendLine(
+                    "  boundary grants   : none — the boundary authorizer is a pass-through for this task"
+                )
+                appendLine("  declared effects  : none enforced (no workspace boundary, no capability budget)")
+                appendLine("  budget            : unbounded per call")
+            } else {
+                appendLine(
+                    "  boundary grants   : ${CodingComponents.CAP_FS_BOUNDARY} (canonical, file tools), " +
+                        "${CodingComponents.CAP_SHELL_BOUNDARY} (lexical, shell)"
+                )
+                appendLine("  declared effects  : fs.read, fs.write (both boundary grants)")
+                appendLine(
+                    "  budget            : unbounded per call; the boundary Authorizer enforces limits, " +
+                        "preset budget accounting is not wired yet (M2)"
+                )
+            }
             val events = PermissionAudit.snapshot()
             fun count(tool: String, code: String): Int = events["$tool:$code"] ?: 0
             appendLine(
@@ -2179,9 +2333,20 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "  env passthrough   : ${count("coding.env", PermissionAudit.CODE_ENV_PASSTHROUGH)} " +
                     "(secret-shaped variables explicitly passed to a child process)"
             )
+            // Shapes the decomposer cannot parse are handed to the platform shell, so they produce
+            // no refusal and no counter here: the only refusals this view reports are policy ones.
             appendLine(
-                "  execution sandbox : ${ExecutionSandboxes.current().id} (an unknown or unavailable " +
-                    "sandbox fails hard instead of running unsandboxed)"
+                if (policy.unrestricted) {
+                    // Report the sandbox THIS task's shell runs under, not the process-wide
+                    // configuration: an unrestricted shell is built with the pass-through sandbox,
+                    // so echoing ExecutionSandboxes.current() would describe a stricter environment
+                    // than the one the task actually has.
+                    "  execution sandbox : off (not applied — this task is unrestricted; the OS user's " +
+                        "own permissions are the limit)"
+                } else {
+                    "  execution sandbox : ${ExecutionSandboxes.current().id} (an unknown or unavailable " +
+                        "sandbox fails hard instead of running unsandboxed)"
+                }
             )
             appendLine(
                 "Scope of this policy: the presets bound what the model can *spell* — mutating paths, " +
@@ -2373,6 +2538,63 @@ class CodingToolExecutor : AbstractToolExecutor() {
     }
 
     /**
+     * Read several files in one tool call (plan N1).
+     *
+     * Why this exists: a measured coding round costs ~0.6-0.9 s of fixed latency before any
+     * tool runs, and the efficiency plan's A/B showed a "batch your calls" prompt rule does
+     * **not** reduce rounds — the model still issues one call per file. A single call that
+     * reads N files is the structural way to cut rounds, so it has to behave well under the
+     * tool envelope's 5000-char cap in the native loop:
+     *
+     * - the total is clamped below that cap, so the reply is never silently truncated;
+     * - each file gets a fair share, with its own truncation marker from
+     *   [CodingAgentFileSystem.readFileLines];
+     * - files dropped for budget are **named**, so the model asks for them next instead of
+     *   concluding they were empty.
+     */
+    private suspend fun readFilesBatch(
+        fs: CodingAgentFileSystem,
+        paths: List<String>,
+        startLine: Int,
+        maxLinesPerFile: Int,
+        maxTotalChars: Int,
+    ): String {
+        val requested = paths.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (requested.isEmpty()) {
+            return "No files requested: pass paths=[\"a.kt\", \"b.kt\"] (a comma-separated string is accepted too)."
+        }
+        val totalBudget = maxTotalChars.coerceIn(MinBatchReadChars, MaxBatchReadChars)
+        val endLine = if (maxLinesPerFile <= 0) -1 else startLine + maxLinesPerFile - 1
+        val perFileBudget = (totalBudget / requested.size).coerceAtLeast(MinPerFileChars)
+
+        val sb = StringBuilder()
+        val skipped = mutableListOf<String>()
+        for (path in requested) {
+            val remaining = totalBudget - sb.length
+            // A sliver smaller than one useful excerpt is not worth a call: name the file instead.
+            if (remaining < MinPerFileChars) {
+                skipped += path
+                continue
+            }
+            val body = fs.readFileLines(
+                path = path,
+                startLine = startLine,
+                endLine = endLine,
+                maxChars = minOf(perFileBudget, remaining),
+            )
+            sb.append("### ").append(path)
+            if (startLine > 1) sb.append(" (from line ").append(startLine).append(')')
+            sb.append('\n').append(body).append("\n\n")
+        }
+        if (skipped.isNotEmpty()) {
+            sb.append("… ").append(skipped.size).append(" file(s) not shown (char budget ")
+                .append(totalBudget).append("): ").append(skipped.joinToString(", "))
+            sb.append("\nCall coding.readFiles again for those (fewer paths or a larger maxTotalChars).")
+        }
+        return sb.toString().trimEnd()
+    }
+
+    /**
      * Structured sidecar for `mvnBuild` (plan P0.2). The default tool reply
      * stays human prose; `json=true` returns this object instead so the CLI and
      * CI can consume the build verdict without parsing `✓ Build succeeded`.
@@ -2385,6 +2607,11 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 "exitCode" to result.exitCode,
                 "success" to result.success,
                 "timedOut" to result.timedOut,
+                // P0-1: a machine consumer must be able to tell "compiled now" from
+                // "replayed a compile of the same inputs" without parsing prose.
+                "cached" to result.cached,
+                "fingerprint" to result.fingerprint,
+                "builtAt" to result.builtAt,
                 "diagnostics" to result.diagnostics.map { d ->
                     linkedMapOf(
                         "file" to d.file,
@@ -2518,19 +2745,16 @@ class CodingToolExecutor : AbstractToolExecutor() {
      * browser4-apps/browser4-standalone). Best-effort: returns a module path the
      * agent can pass to `-pl`.
      */
-    private fun inferModule(absolutePath: String): String {
-        val norm = absolutePath.replace('\\', '/')
-        val idx = norm.indexOf("/src/")
-        if (idx <= 0) return norm.substringAfterLast('/')
-        val before = norm.substring(0, idx)
-        val segments = before.split('/').filter { it.isNotEmpty() }
-        // Top-level module dir (browser4-rest) OR nested (browser4-core/browser4-common)
-        return when {
-            segments.size >= 2 && segments[segments.size - 2].startsWith("browser4-") ->
-                segments.takeLast(2).joinToString("/")
-            else -> segments.lastOrNull() ?: ""
-        }
-    }
+    /**
+     * Infer the Maven module that owns a file path, for `coding.mvnBuild`.
+     *
+     * Delegates to [ModuleResolver] so the build tool and the isolation gate
+     * (`IsolationGate`, which decides whether a verify verdict covers the changed
+     * modules) cannot drift apart. The resolver preserves this method's historical
+     * best-effort behaviour for absolute paths outside a known module.
+     */
+    private fun inferModule(absolutePath: String): String =
+        ModuleResolver.moduleOf(absolutePath) ?: absolutePath.replace('\\', '/').substringAfterLast('/')
 
     /** kebab/snake → PascalCase (my-tool → MyTool), for test-class names. */
     private fun toTestClassName(name: String): String =
@@ -2578,6 +2802,7 @@ internal object CodingToolEffects {
             // Read side of the file tools.
             "read" to FS_READ,
             "readLines" to FS_READ,
+            "readFiles" to FS_READ,
             "checksum" to FS_READ,
             "listDir" to FS_READ,
             "glob" to FS_READ,
@@ -2636,3 +2861,36 @@ internal object CodingToolEffects {
             "estimateTokens" to NONE,
         )
 }
+
+/**
+ * Read-batch budget constants (plan N1).
+ *
+ * The native tool loop truncates a rendered result at 5000 chars
+ * (`ToolExecutionCoordinator`), so the batch tool must stay below it: a silently cut reply
+ * loses whole files, which reads to the model as "the file was empty".
+ */
+private const val MaxBatchReadChars = 4_600
+
+/** Smaller than this and a batch reply is not worth a call at all. */
+private const val MinBatchReadChars = 600
+
+/** The smallest share one file may take while the budget lasts. */
+private const val MinPerFileChars = 160
+
+/**
+ * Lock the checkout a dev-task is about to write or merge into, or null when no lock applies.
+ *
+ * A dev-task may create a worktree and merge its change into the checkout. That is the same
+ * resource `RepoLock` protects for `agent run --coding`: a patch applied to the main work tree
+ * while another task merges into it (or while both run Maven against the same `~/.m2`) is the
+ * collision the lock exists to prevent.
+ *
+ * Null means "nothing to lock": the workspace root is not a git work tree, or it is already a
+ * managed worktree — a dev-task nested inside an isolated run is covered by its own task's lock,
+ * and asking for a second one would deadlock against it.
+ *
+ * @throws IllegalStateException when another coding task holds the checkout; the message names
+ *   the holder and the lock file
+ */
+internal fun acquireDevTaskLock(workspaceRoot: java.nio.file.Path, taskId: String): RepoLock? =
+    WorkspaceIsolation.checkoutToLock(workspaceRoot)?.let { RepoLock.acquire(it, taskId) }

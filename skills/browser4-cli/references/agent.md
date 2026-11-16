@@ -74,9 +74,24 @@ browser4-cli agent result <task-id>
 The workspace lives on the backend machine (copy the artifacts when it is remote). Each task gets its **own** directory (`<agent data dir>/workspace.<task-id>`), so another run's file never shows in this run's `filesChanged`; `--resume <task-id>` keeps the interrupted task's workspace, `--shared-workspace` restores the old shared `<agent data dir>/workspace`, and `--fresh-workspace` is the default behaviour already. Input copying, the read rules and the deliverable format are in
 [agent-workspace.md](agent-workspace.md).
 
+**Coding tasks are different in one visible way.** `--coding` runs in an isolated **git
+worktree** of the checkout (`<repo>/.browser4/worktrees/<task-id>`) and merges the
+change into the main repository as a patch only when `coding.verify` passes. So
+`agent result` reports `workspace` = the **main repository** (where the change landed),
+`isolatedWorkspace` = the worktree, and `merge` = `applied` | `refused` | `pending`;
+`refused` means nothing was applied and the run's files exist only in the worktree.
+`--shared-workspace` is refused for `--coding` (a shared directory is not a worktree), and
+`b4w recover` can revert one task's patch without touching anything else.
+
+A worktree that still holds unmerged work is kept: the sweep only reclaims trees whose
+manifest proves the task merged, so a refused/failed/cancelled run is never deleted by
+age (`b4w recover --status` lists them, `b4w recover --prune --force` removes them
+deliberately). `--resume` therefore continues in the interrupted task's own tree, and
+fails with a clear message if that tree is gone — it never silently starts a fresh one.
+
 ### Cost control (`--token-budget`, `--follow` usage lines)
 
-A run is capped at `agent.token.budget.total` (5M tokens by default) and aborts with `TOKEN_BUDGET` before it can burn unbounded provider credits. Two different knobs:
+A run is capped at `agent.token.budget.total` (**5M cache-miss tokens** by default) and aborts with `TOKEN_BUDGET` before it can burn unbounded provider credits. The cap counts **cache-miss prompt tokens + output tokens**: prompt-cache reads cost ~10% of the input price and are *not* charged, so a long loop that re-sends a mostly cached prefix no longer aborts a run that actually costs little. Uncached prompt (Anthropic's cache *writes* included) and output stay charged; a provider that reports no cache details charges its whole prompt — an unknown cache is never treated as a hit. Two different knobs:
 
 | Knob | Scope | Use it when |
 |---|---|---|
@@ -86,21 +101,41 @@ A run is capped at `agent.token.budget.total` (5M tokens by default) and aborts 
 `--token-budget 0` means unlimited (accounting only). `--follow` reports the spend:
 
 ```text
-[04:31] tokens 412.0k / 5.00M (8%) · 37 requests
-[12:02] tokens 4.02M / 5.00M (80%) · 118 requests ⚠ 80% of the token budget used
-[15:24] ✖ token budget exhausted: 5.01M / 5.00M — the run is being aborted
+[04:31] budget 412.0k / 5.00M (8%) · cache 331.8k (81%) · 37 requests
+[12:02] budget 4.02M / 5.00M (80%) · cache 3.62M (90%) · 118 requests ⚠ 80% of the cache-miss budget used
+[15:24] ✖ cache-miss token budget exhausted: 5.01M / 5.00M — the run is being aborted
 ```
 
-The progress line is throttled (every 10 requests or 15s); the 80% warning appears once and the abort line names both numbers. `--ndjson` carries the same information as `effectiveTokenBudget` + `cumulativeTokens` on every `run.usage` line, and `agent result --json` reports the budget as `result.effectiveTokenBudget`.
+The first number is the **charged** amount (cache-miss prompt + output), not the raw token total — that is why the line says `budget`. The progress line is throttled (every 10 requests or 15s); the 80% warning appears once and the abort line names both numbers. The `cache` part is the run's prompt-cache hit ratio (cache-read tokens ÷ prompt tokens) and appears only when the provider reports cache details — a provider that reports none stays silent rather than claiming `0%`. `--ndjson` carries the same information as `effectiveTokenBudget` + `cumulativeTokens` on every `run.usage` line, plus `cachedInputTokens` / `cacheWriteInputTokens` when the provider disclosed them. `cumulativeTokens` is the **charged** amount (cache-miss prompt + output, what the budget enforces); `inputTokens` on the same line stays the raw prompt count, so the two differ exactly by the cache reads. `agent result --json` reports the budget as `result.effectiveTokenBudget`.
+
+**A budget abort is resumable** — the run's workspace, files and progress are already on disk. In `-i` the failure is followed by a numbered choice that resumes the task with a **doubled** cap; typing `1` runs the command on the right, the resume re-uses the interrupted task's workspace and instruction, and the new task shows as `▶ resume <old> → task <new>`:
+
+```text
+✖ failed · 3b27930e · 12.1s — token_budget: Token budget exceeded (cache-miss accounting)…
+likely next steps (type a number, or your own task):
+  1) continue with a 10.00M cache-miss budget
+  2) find out why it failed
+  3) review the 1 changed file(s)
+```
+
+Scripted runs use the one-liner the failure line prints — `browser4-cli agent run --resume <task-id> --token-budget 10000000` — and `/resume [--budget <n>] [task-id]` continues any resumable failure (`NOOP_LIMIT`, a cancellation), not just budget aborts.
+
+**After every task the session predicts what you want next** and prints 2–3 numbered *tasks*, not internal commands — type the number to run one, or type your own task. The offers come from what the run actually produced, most-predictive first: the model's own `nextSuggestions` from its completion report (`system.taskComplete` — it just did the work and knows what is left); an open `problems` entry (`fix what it left open: …`); and deterministic intents derived from the payload — a coding run that changed files offers `review the N changed file(s)`, `run the <module> tests`, `commit the change`, a browsing run offers `dig into: <finding>` and `save the result to a file`, a failure offers `find out why it failed` and (when it cannot be resumed) `try the same task again`, and a resumable one offers `continue with a … budget` first.
+
+The block never spends a slot on `/stats`, `/result` or `/new`: those are in `/help`, and a menu slot spent on the CLI's own bookkeeping is a slot not spent on the work. Piped stdin (no TTY) gets no menu — a numbered choice a script cannot answer would only be noise — and the `resume:` hint line keeps carrying the exact command.
 
 ### Permissions (`--access`)
 
 A task's coding tools run under one access **preset** (`full` / `write` / `read-build` / `read`), and a refused step can be approved out of band through `coding.requestAccess` plus the operator endpoints. The preset table, the `PERMISSION_DENIED | code=...` catalogue, the approval/rail rules, the unattended default and the task-scoped reset are in [agent-access.md](agent-access.md).
 
-**Reads are wider than writes.** Browser4's own data root (`~/.browser4`: logs, task data, per-task workspaces, its `tmp/`), the source checkout, and any folder added with `-Dbrowser4.agent.readPaths=…` are readable from every task — read-only, whatever the preset. `coding.permissions` lists them; see [agent-access.md](agent-access.md#readable-roots--browser4s-own-folders).
+**Reads are wider than writes.** Browser4's own data root (`~/.browser4`: logs, task data, per-task workspaces, its `tmp/`), `~/.browser4` itself even when a managed `--workspace` moved the data root, the CLI workspace owning `<app data>`, the source checkout, and any folder added with `-Dbrowser4.agent.readPaths=…` are readable from every task — read-only, whatever the preset. The one write scope outside the workspace is the checkout a task's workspace **mirrors** (a self-development task edits the code it runs from; the protected rails still apply). `coding.permissions` lists them; see [agent-access.md](agent-access.md#readable-roots--browser4s-own-folders).
 
 **Two layers, one boundary.** The preset and the string checks (`pathGuard`, `workspaceBoundary`, `allowExternalAccess`) decide what the model may *spell* — they are fast-fail and advisory, not enforcement. The boundary is the **execution sandbox**: `coding.shell` and `coding.runCode` run inside it whenever `browser4.agent.sandbox` selects a backend other than `off`. A fresh Windows installation defaults to `windows-acl`; existing installations and Linux/macOS stay `off` until switched. When the
 sandbox is active, an OS denial reaches the model as `PERMISSION_DENIED | code=SANDBOX_DENIED | tool=… | needed=…` (raw evidence stays in the log), and an unavailable sandbox — missing account or credential, failed ACLs, failed write probe, unknown id — **fails the task**; there is no unsandboxed fallback. Switch values, defaults, the ACL matrix, the account property and the `off` rollback are in [config.md](../../../docs/config.md).
+
+### Extra folders (`--add-dir`)
+
+A task's boundary is its own workspace (plus its mirrored module roots and the readable roots). A folder that lives somewhere else is granted per task — repeatable, must already exist, task-scoped, `--access` still bounds it and the OS sandbox agrees; `-i` adds `/add-dir`. See [agent-workspace.md](agent-workspace.md#extra-folders-granted-with---add-dir).
 
 ## Patterns
 
@@ -173,7 +208,7 @@ The payload is the agent's **completion report**, not just a summary:
            "problems":[],"workspace":"…/agent/2026/10/15/<uuid>/workspace"}}
 ```
 
-`result.summary` is what the agent reported; `keyFindings` and `filesChanged` carry the deliverable itself, and `workspace` is the directory its tools wrote into. Human output renders all three as sections (see [Result rendering](#result-rendering)) — a task whose answer is a file is usable without filesystem archaeology; `--json` keeps the envelope above for machines.
+`result.summary` is what the agent reported; `keyFindings` and `filesChanged` carry the deliverable itself, and `workspace` is the directory its tools wrote into. Human output renders all three as sections (see [Result rendering](agent-progress-sessions.md#result-rendering)) — a task whose answer is a file is usable without filesystem archaeology; `--json` keeps the envelope above for machines.
 
 ### 5. Composing with Standard Commands
 
@@ -213,220 +248,12 @@ The new run **reuses the interrupted task's workspace** (so the rows/files it wr
 
 ## Live Progress and the Interactive Session
 
-`agent run` has three levels of visibility. All three submit the SAME async task; they differ only in what the CLI does while it runs.
-
-| Mode | What you see |
-|---|---|
-| `agent run "<task>"` (default) | The task id, immediately. Poll later. |
-| `agent run "<task>" --wait` | A progress line every few seconds, then the result. |
-| `agent run "<task>" --follow` | Every step: tool calls, the model's own text, slow/failed tools, then the result. |
-| `agent run -i` | An interactive session: tasks one after another, steering, `/status`, `/cancel`, … |
-
-### `--follow`: watch the steps
-
-```bash
-browser4-cli agent run "Collect the top 5 products and their prices" --follow
-```
-
-```
-Task submitted: 3b27930e-48bc-4460-aae7-be521f0a9194
-[00:00] ▶ Collect the top 5 products and their prices
-[00:03] #1 b4.run(args="goto https://example.com/products")
-[00:04] #2 browser_snapshot
-[00:09]   ↳ #1 b4.run ok in 6.2s
-[00:12]   ⋯ The grid shows prices in a second column; I will extract both.
-[00:15] #3 htmlsnapshot_query(sql="...")
-✔ Agent completed in 41.3s · 3b27930e-48bc-4460-aae7-be521f0a9194 · 3 round(s) · 39 tool(s) · 54.4k tokens
-
-Summary
-  Top 5 products extracted, with both the name and the price column.
-
-Files written (1) · workspace: ~/.browser4/agent/workspace.3b27…
-  products.csv
-```
-
-- One line per tool **call**; a completion line only for a **slow** (>2 s) or **failed** tool, so a 100-tool run stays readable. Failures always print the first ~240 characters of the tool output.
-- The result line repeats the call's index (`↳ #2 browser_click failed after 120ms: …`), so two calls of the same tool are tellable apart.
-- Arguments are shown as `key="value"` for the keys a reader can act on (`selector`, `ref`, `url`, `path`, `file`, `args`, `text`, `query`, `sql`, `command`) — at most three, then `+N` for the rest. A shape with none of those keys falls back to the compact JSON, so nothing is hidden.
-- Prose lines (the model's own text, steering) are marked `⋯` / `↪` and wrap to `COLUMNS` (clamped 40–400, default 100), the continuation indented under the marker instead of running back to column 0. Structured lines (calls and results) deliberately stay one line — they are what people grep and copy.
-- **Long silences are not a hang.** After 30 s without a step the live view prints `[00:39]   ⋯ still running · 5 step(s) · 30s since the last step`, then at most one more every 30 s. A single slow tool (three minutes inside one `b4.run`) used to print nothing at all in between. Terminal only — a piped log, `--quiet`, `--json` and `--ndjson` carry steps and nothing else. `-i` behaves the same.
-- `--follow` has **no default timeout** (unlike `--wait`); pass `--wait-timeout <secs>` to bound it. On timeout the CLI exits non-zero and the task keeps running server-side.
-- **Ctrl+C cancels the task** (the same thing `agent cancel <task-id>` does) and exits — it no longer leaves an orphan running in the background.
-
-> **A run cannot stop its own backend.** The agent drives the CLI through `b4.run`, which refuses `stop`, `close-all`, `kill-all`, `install`, `uninstall`, `upgrade`, `delete-data` and `doctor --fix` with `PERMISSION_DENIED | code=COMMAND_NOT_ALLOWED`: those commands end or rewrite the process the task is running in. Before this guard existed, a task that could not launch a browser ran `b4.run("stop")` as a "fix", killed its own backend, and was reported as `server restarted`. When the browser is
-> broken, read `b4.run("doctor log …")` / take stock of the real error and report the blocker through `system.taskComplete(problems=[...])`.
-
-`--ndjson` turns the same stream into machine output — one JSON object per stdout line:
-
-```bash
-browser4-cli agent run "Collect the top 5 products" --follow --ndjson | jq -c 'select(.type=="tool.call")'
-```
-
-```json
-{"type":"task.submitted","taskId":"…","task":"Collect the top 5 products"}
-{"taskId":"…","seq":3,"type":"tool.call","epochMillis":1761…,"tool":"b4.run","arguments":"{\"args\":\"goto …\"}","turn":1}
-{"taskId":"…","seq":4,"type":"tool.result","epochMillis":1761…,"tool":"b4.run","ok":true,"durationMs":6200,"text":"…","turn":1}
-{"taskId":"…","seq":5,"type":"run.usage","epochMillis":1761…,"turn":1,"inputTokens":4821,"outputTokens":212,"totalTokens":5033}
-{"taskId":"…","type":"task.result","status":"done","elapsedMs":41300,"result":{"summary":"…"}}
-```
-
-`run.usage` is one line per model request, carrying the provider's token counts (`inputTokens`/`outputTokens`/`totalTokens`, omitted when the provider reports none) — the same numbers `/stats` sums.
-
-The visible detail is deliberately bounded: tool arguments and results are truncated to ~240 characters, and values whose key names a credential (`password`, `token`, `apiKey`, …) are redacted to `***`, as is typed text whose selector names a credential field (`input[type=password]`).
-
-### Result rendering
-
-When a task finishes, the CLI renders the `command_result` payload as sections instead of printing the envelope as one JSON line. One renderer serves every human path — `agent result <id>`, `agent run --wait`, `agent run --follow` and `agent run -i`:
-
-```
-✔ Agent completed in 18.4s · 5b0c3f2a · 3 round(s) · 39 tool(s) · 54.4k tokens
-
-Summary
-  The pricing page lists four plans; enterprise pricing is quote-only, so the
-  three published tiers were collected.
-
-Key findings (2)
-  • Starter is $19/mo, billed yearly
-  • Team is $49/mo per seat, 10-seat minimum
-
-Files written (1) · workspace: ~/.browser4/agent/workspace.5b0c3f2a
-  pricing.csv
-
-Problems (1)
-  ⚠ Enterprise pricing is not published anywhere on the page
-
-Data (3 rows × 3 columns)
-  plan     | price | seats
-  ---------+-------+------
-  Starter  | 19    | 1
-  Team     | 49    | 10
-  Business | 89    | 25
-```
-
-- A section appears only when the payload carries it, and every list states its total (`Key findings (7)`) — a capped list ends with `… and N more`.
-- `fields` and `xsqlResultSet` become aligned tables; a string payload is printed as text, without JSON quotes.
-- The envelope's transport fields (`taskId`, `status`, `statusTool`, `resultTool`, `cancelTool`, `processed`, `statusCode`) are never printed.
-- A payload field this renderer does not know yet stays visible under `Other (N field(s))`, so a backend addition is never silently dropped.
-- Lines wrap to `COLUMNS` (default 100); a payload longer than 40 lines is folded with `… N more line(s) — /result --json prints the whole envelope`. The hint names the command that exists where you are: `/result --json` inside `-i`, `agent result <id> --json` for `agent result`, `--wait` and `--follow`. `--pretty` turns the fold off for the whole payload.
-- Machines are unaffected: `--ndjson` is byte-identical, `-i` ignores `--ndjson` (it says so on stderr), and the raw envelope is available through `agent result <id> --json`, `/result --json`, or the `--json` envelope's `raw` field.
-
-### The completion line
-
-`agent run -i`, `--follow` and `--wait` all end a task with the same line — verdict word, elapsed time, task id, and the run's cost:
-
-```
-✔ Agent completed in 41.3s · 3b27930e-48bc-4460-aae7-be521f0a9194 · 3 round(s) · 39 tool(s) · 54.4k tokens
-✖ failed · 3b27930e-48bc-4460-aae7-be521f0a9194 · 12.1s — the page was blocked by a captcha
-⏹ cancelled · 3b27930e-48bc-4460-aae7-be521f0a9194 · 41.3s · 39 tool(s)
-```
-
-- Each cost part appears only when it is known: a coding task that never called the model prints no `0 round(s)`, and a provider that sends no usage block prints no token count (unknown is not zero).
-- The counters come from the same `GET /api/commands/{id}/stats` that `/stats` reads, with a **2 s budget**. A slow or missing endpoint costs the line nothing — the part is omitted rather than delaying the end of the run — and `--json` / `-q` never ask at all (they do not print the line).
-- Elapsed time is compact and scales: `18.4s`, `3m12s`, `1h04m`.
-
-### `agent run -i`: the interactive session
-
-```bash
-browser4-cli agent run -i
-```
-
-```
-agent> Summarize the pricing page
-[00:02] #1 b4.run(args="goto https://example.com/pricing")
-...
-✔ Agent completed in 18.4s · 5b0c… · 3 round(s) · 39 tool(s) · 54.4k tokens
-
-Summary
-  The pricing page lists four plans; enterprise pricing is quote-only.
-
-Key findings (2)
-  • Starter is $19/mo, billed yearly
-  • Team is $49/mo per seat, 10-seat minimum
-
-Files written (1) · workspace: ~/.browser4/agent/workspace.5b0c…
-  pricing.csv
-
-agent> now compare it with the enterprise page
-```
-
-The payload is rendered as sections (see [Result rendering](#result-rendering)), and `/result` re-prints it at any time without re-running the task — `/result --json` prints the raw `command_result` envelope instead.
-
-What the session's own chrome says:
-
-- **The banner lists only what you changed.** `Browser4 agent · session=abc · engine=cli` plus `· coding=on`, `· access=read-build`, `· budget=5.00M`, `· quiet` when they apply — then `  type a task · /help for commands · Ctrl+C cancels the running task`. A default session prints no knob at all, so the line that does appear is the one that matters.
-- **Each task starts on a blank line**, headed `▶ task 5b0c3f2a — Summarize the pricing page` (the task text is collapsed to one line and capped at 60 characters).
-- **`/status` is one line**: `task 5b0c3f2a · running · 12 step(s) — collecting product details` (no message → no tail, never a trailing space).
-- **A failure names its cause and the way out**: `✖ failed · 5b0c3f2a · 3.2s — page_blocked: the page was blocked` followed, when the backend says the run can continue, by `    resume: agent run --resume 5b0c3f2a · /status for the envelope`.
-- **Quitting does not silently orphan a run.** `/quit` (or stdin EOF) while a task is still running prints `⚠ task 5b0c3f2a keeps running — agent status 5b0c3f2a · agent cancel 5b0c3f2a`.
-- **ANSI follows `NO_COLOR`**: any non-empty value disables colour even on a terminal (`--quiet` and `--json` already do).
-
-`-i --json` keeps the scalars `task_id` / `raw` / `stats` describing the **last** task (unchanged, so existing readers keep working) and adds `tasks[]`, one entry per task of the session in order:
-
-```json
-{"task_id":"…","raw":{…},"stats":{…},
- "tasks":[{"taskId":"5b0c3f2a","status":"done","isDone":true,"elapsedMs":18400,"steps":39},
-          {"taskId":"7f21ab9c","status":"cancelled","isDone":true,"elapsedMs":2100,"steps":4}]}
-```
-
-A line typed while a task is running is **steering**, not a new task: it is sent to the running task and injected into the agent as a user message at its next model round-trip. A backend hiccup does not end the session either — the live view keeps following a task that is still running (see [When the step stream fails](#when-the-step-stream-fails)).
-
-Steering is chosen whenever this session's task is still running — the CLI asks the backend rather than trusting its own bookkeeping, so a line can never be queued as a second task behind a live one (`↪ steering queued` confirms it). If the session had stopped following the task, accepting the line re-attaches the live view (`… following task <id> again`). To start a *different* task, `/cancel` the running one first; after `/new` the previous task belongs to the old agent context, so a later
-line is a new task.
-
-Steering is best-effort by design: it lands at the next model round (immediately for browser tasks that call a tool per round; possibly after a long tool round for coding tasks). If the task finished while you were typing, the CLI says so and keeps the session open.
-
-Session commands:
-
-| Command | Effect |
-|---|---|
-| `/help` | List the commands |
-| `/status` | Status of the running (or last) task |
-| `/stats [task-id]` | Run statistics: LLM rounds and requests, token usage, tool calls |
-| `/result [--json]` | Print the last finished task's result as sections (`--json`: the raw envelope) |
-| `/cancel` | Cancel the running task (same as Ctrl+C) |
-| `/new` | Start a new session — the next task gets a fresh agent context |
-| `/session` | Print the current session id |
-| `/coding [on\|off]` | Treat following tasks as coding tasks |
-| `/quiet [on\|off]` | Silence the session's human lines — the same effect as the global `-q`, for the rest of this session (bare `/quiet` flips it) |
-| `/verbose [on\|off]` | Also print round markers (`· round 2`) and fast successful tools (`↳ #1 b4.run ok in 40ms`) — the troubleshooting view, off by default |
-| `/noop-limit <n>` | Consecutive no-op abort threshold (blank resets) |
-| `/events [n]` | Raw JSON of the last n steps (default 20) |
-| `/quit` | Leave the session |
-
-#### `/stats`: what the run cost
-
-```
-agent> /stats
-5b0c3f2a · running · 3m12s
-  llm     3 round(s) · 11 request(s)
-  tokens  in 48,231 · out 6,120 · total 54,351
-  tools   39 call(s) · 2 failed (b4.run 12, browser_snapshot 8)
-  steps   132 · 1 steering message(s)
-```
-
-- **llm**: outer agent `round`s (each may issue several model requests) and the model `request`s — the honest "how many LLM calls" count.
-- **tokens**: what the provider reported, summed per request. `not reported by the provider` means the calls happened but no usage block arrived (a local model, a gateway that drops it) — it is not a measured zero.
-- **tools**: tool calls, how many failed, and the most-called tools.
-- **steps**: every step the run emitted; `dropped from the buffer` means the bounded step log evicted older steps (the counters still include them).
-
-The numbers come from `GET /api/commands/{id}/stats`, which counts every step as it is appended — exact even for steps the step log no longer retains. `/stats <task-id>` reports another task of this session; against a backend without that endpoint the report is labelled `counted by this session` and can only undercount.
-
-The completion line already carries a compact version of these numbers (`· 3 round(s) · 39 tool(s) · 54.4k tokens`), so `/stats` is for the breakdown — rounds vs individual requests, input/output tokens, failures and the per-tool counts.
-
-An optional task runs immediately: `agent run -i "Summarize this page"`. With piped stdin the banner and prompt are omitted, so a harness can drive the session: `printf 'task one\n/quit\n' | browser4-cli agent run -i`.
-
-### Backend requirements and compatibility
-
-Live steps use `GET /api/commands/{id}/events` (a per-task in-memory step log polled with a sequence cursor) and steering uses `POST /api/commands/{id}/input` — both on a current backend. Against an **older backend** the CLI degrades instead of failing: `--follow` prints one notice and falls back to status polling, and `-i` reports that steering is unavailable and ignores the typed line (the task keeps running). The `queued`/`running`/`done`/`failed`/`cancelled` vocabulary and the result payload
-are identical in every mode.
-
-### When the step stream fails
-
-The live view is a convenience over a task that keeps running server-side, so the CLI never lets a *display* problem end it:
-
-- **A page the CLI cannot parse** (a proxy error page, a truncated response, a preview that is not strict JSON) is not retried unchanged — that could never succeed. The follower narrows the page until the offending step stands alone, steps over it, and prints `… skipped 1 unreadable step (up to seq N)`: one preview line is lost, not the stream.
-- **`-i` keeps following a running task.** If the follower exhausts its window (e.g. the backend restarted), the session warns and keeps following while the backend still reports the task as `running` — the steps resume when it answers. It gives up only when the task finished or the id is unknown; `/status` and `/result` keep answering from what the session already saw.
-- **`--follow` gives up after ~5 min** without a usable response, exits non-zero and names the task id; `agent status <id>` reports the task's real state.
+`agent run` (the task id, poll later), `--wait` (a progress line, then the result),
+`--follow` (every step as it happens) and `agent run -i` (an interactive session) all submit
+the same async task. The step and `--ndjson` shapes, result rendering, the completion line,
+the session's context, steering and slash commands (including `/stats`), backend
+requirements and step-stream failure handling are in
+[agent-progress-sessions.md](agent-progress-sessions.md).
 
 ## Flags
 
@@ -436,9 +263,10 @@ The live view is a convenience over a task that keeps running server-side, so th
 | `--wait-timeout <secs>` | `agent run` | Wait window in seconds (default 600 for `--wait`; no cap for `--follow`) or a cap for `--follow` |
 | `--follow` | `agent run` | Stream the task's steps while waiting, then print the result. Ctrl+C cancels the task |
 | `--ndjson` | `agent run --follow` | Emit one JSON object per line (submission, every step, the final result) instead of human lines |
-| `-i`, `--interactive` | `agent run` | Open an interactive session (see above); an optional task runs immediately |
+| `-i`, `--interactive` | `agent run` | Open an interactive session ([details](agent-progress-sessions.md)); an optional task runs immediately |
 | `--coding` | `agent run` | Explicitly mark the task as a coding task (plain file/build work; no browser page). Omitted (the default) the task is a browser task — task type is never auto-detected |
 | `--access <preset>` | `agent run` | Access preset for this task's coding tools: `full` (default), `write`, `read-build`, `read`. Omitted, the backend's `browser4.agent.access` applies. Scoped to the task and reset when it ends — see [Permissions](#permissions---access) |
+| `--unrestricted` | `agent run` | Run this task with the current OS user's own permissions: `full` preset, external access, network and destructive commands, no protected rails, no OS sandbox, and the shell's command allow-list off too (programs it never knew, a PowerShell cmdlet included, run as written — shapes the shell cannot decompose are handed to the platform shell in every mode). The OS credential stores (`~/.ssh`, `~/.aws`, …) and the commands that would kill or rebuild the backend stay refused. Opt-in per task, audited, inherited by `--resume` and not removable on it — see [agent-access.md](agent-access.md#unrestricted-tasks--agent-run---unrestricted) |
 | `--json` | `agent status`, `agent result`, `agent list` | Emit the envelope as JSON instead of the human rendering |
 | `--all` | `agent list --clear` | Also untrack tasks that are not finished (they keep running server-side) |
 | `--schema <json>` | `extract` | Enforce a JSON output schema for the extraction |

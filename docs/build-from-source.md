@@ -59,6 +59,35 @@ If Chrome is not found, the CLI attempts automatic installation:
    ./mvnw -DskipTests
    ```
 
+## First run and the JVM AOT cache
+
+On JDK 24+ (the bundled runtime ships Temurin 25) the first backend start of a
+runtime bundle **trains a JVM AOT cache** in the background: a stripped Spring
+Boot boot (`-Dbrowser4.aot.training=true`, exits on context refresh) records the
+loaded/linked classes (JEP 483) and hot method profiles (JEP 515), then writes
+`app.aot` (~90 MB). It runs detached at below-normal priority, never blocks the
+command that triggered it, and is non-fatal/self-healing (a dead run is reclaimed
+and retrained on the next start). `install` / `upgrade` start it right after the
+bundle is committed, so the first `open` shortly after an install usually already
+hits the cache.
+
+Every later start of the same bundle attaches the cache (`-XX:AOTCache=…`). On
+our reference machine (Windows, v4.16.7, Temurin 25.0.5, warm disk) that cuts
+backend startup by about 40%:
+
+| Metric | No AOT cache | AOT cache |
+|---|---|---|
+| Spring `Started … in N seconds` | 2.00 s | 1.12 s |
+| CLI "backend usable" (`/actuator/health` UP **and** `/mcp/tools` ready) | 3.59 s (median) | 2.25 s (median) |
+
+The cache is keyed by runtime tag + jar list + JVM flags, so a new version — or a
+source-checkout bundle rebuild that changes the jar list/sizes — trains once
+again. Below JDK 24 the cache is skipped and the backend starts normally (no
+AppCDS fallback is implemented). Turn training and loading off with
+`BROWSER4_CLI_DISABLE_AOT_CACHE=1`; a user-supplied `-XX:AOTCache` in
+`BROWSER4_SERVER_OPTS` is respected (no training, no injected cache). See
+[AOT cache startup benchmark](../docs-dev/copilot/aot-cache-startup-benchmark-2026-11-15.md).
+
 ## Building the CLI
 
 The CLI (`browser4-cli`) is a Rust binary that communicates with the Browser4 backend.

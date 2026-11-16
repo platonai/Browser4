@@ -747,6 +747,29 @@ if ($AdditionalMvnArgs.Count -gt 0) {
 
 # Always clean browser4-bundle and browser4-standalone target dirs —
 # they aggregate other modules and their output becomes stale on every build.
+#
+# Before deleting them, move the assembled runtime bundle OUT of the target dir
+# into `.b4build/runtime-bundle.prev`. A failed build used to leave the checkout
+# with no runnable backend (the last good bundle was deleted first), which made a
+# broken source tree unrecoverable without a network download — see
+# docs-dev/copilot/20261113-self-dev-worktree-isolation-plan.md §D6.
+$BundleTarget = Join-Path $repoRoot 'browser4-apps\browser4-bundle\target'
+$CurrentBundle = Join-Path $BundleTarget 'runtime-bundle'
+$PreviousBundle = Join-Path $repoRoot '.b4build/runtime-bundle.prev'
+if (Test-Path $CurrentBundle) {
+  if (Test-Path $PreviousBundle) {
+    Remove-Item -LiteralPath $PreviousBundle -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  try {
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PreviousBundle) | Out-Null
+    Move-Item -LiteralPath $CurrentBundle -Destination $PreviousBundle -Force
+    Write-Host "Kept previous runtime bundle: $PreviousBundle" -ForegroundColor DarkGray
+  }
+  catch {
+    Write-Host "WARN: could not keep the previous runtime bundle: $($_.Exception.Message)" -ForegroundColor Yellow
+  }
+}
+
 $StaleTargets = @(
   (Join-Path $repoRoot 'browser4-apps\browser4-bundle\target'),
   (Join-Path $repoRoot 'browser4-apps\browser4-standalone\target')
@@ -797,6 +820,10 @@ catch {
   Write-Host "  Logs  : $BuildLogFile" -ForegroundColor DarkGray
   Write-Host "  State : $BuildStateDir\" -ForegroundColor DarkGray
   Write-Host "  Re-run with --resume to continue from the failing module" -ForegroundColor DarkGray
+  if ($PreviousBundle -and (Test-Path $PreviousBundle)) {
+    Write-Host "  Previous runtime bundle kept: $PreviousBundle" -ForegroundColor DarkGray
+    Write-Host "  Start a backend from it: b4w recover --use-last-good" -ForegroundColor DarkGray
+  }
 
   # ── Trigger AI bug-report generation ───────────────────────────────────
   $buildSystem = if ($CurrentBuildSystem) { $CurrentBuildSystem } else { "Unknown" }

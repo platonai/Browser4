@@ -29,10 +29,17 @@ internal object CliAgentPrompt {
     /**
      * Role preamble: who the agent is and what "done" means. [codingMode] selects
      * the coding framing (repository work in a mirrored checkout) instead of the
-     * browsing framing (drive browser4-cli).
+     * browsing framing (drive browser4-cli). [isolated] says the coding run works
+     * in a git worktree whose change the engine merges as a patch
+     * (self-development isolation plan §D10).
      */
-    fun role(codingMode: Boolean, repairMaxRounds: Int, workspaceDir: Path, windows: Boolean = isWindows()): String =
-        if (codingMode) codingRole(repairMaxRounds, workspaceDir, windows) else browsingRole(repairMaxRounds)
+    fun role(
+        codingMode: Boolean,
+        repairMaxRounds: Int,
+        workspaceDir: Path,
+        windows: Boolean = isWindows(),
+        isolated: Boolean = false,
+    ): String = if (codingMode) codingRole(repairMaxRounds, workspaceDir, windows, isolated) else browsingRole(repairMaxRounds)
 
     private fun browsingRole(repairMaxRounds: Int): String = """
         You are a browser automation agent. Drive the browser EXCLUSIVELY through the
@@ -51,7 +58,7 @@ internal object CliAgentPrompt {
         round(s); "the code looks right" is not a passing verdict.
     """.trimIndent()
 
-    private fun codingRole(repairMaxRounds: Int, workspaceDir: Path, windows: Boolean): String {
+    private fun codingRole(repairMaxRounds: Int, workspaceDir: Path, windows: Boolean, isolated: Boolean): String {
         val shell = if (windows) {
             "coding.shell runs through cmd.exe (use `dir`, `type`, `findstr`, `more`; " +
                 "POSIX tools such as `head`, `sed`, `grep` are NOT available) and each call " +
@@ -60,15 +67,35 @@ internal object CliAgentPrompt {
             "coding.shell runs through sh -c and each call starts in a fresh process — " +
                 "pass `workingDir` instead of a `cd … &&` prefix."
         }
-        return """
-            You are a coding agent working on a Browser4 checkout. This run is a repository
-            task (read, refactor, fix, build, test) — not a browsing task.
+        val tree = if (isolated) {
+            """
+            Working tree: $workspaceDir
+            It is an isolated git worktree of the checkout, created from HEAD (or from the
+            user's uncommitted changes). It HAS `.git`, so `git status` / `git diff` work —
+            use them to review your own work. The engine applies your change to the main
+            repository as a patch when the task finishes: if coding.verify did not pass,
+            NOTHING is merged and the worktree is kept. Never edit the main checkout
+            directly, and never run `b4w build`, `b4w stop` or `b4w upgrade` — rebuilding
+            the backend you are running inside is operator work.
 
+            If this run resumed an earlier task, the worktree may predate changes made in
+            the main checkout since then: re-read a file before trusting what you remember
+            of it.
+            """.trimIndent()
+        } else {
+            """
             Working tree: $workspaceDir
             It mirrors the repository for this run. The mirror has NO `.git`:
             `git status` / `git diff` fail there, so review your own work with
             coding.changeSummary (what changed since tracking started) and coding.diff
             (the actual patch). Never assume the real checkout reflects your edits.
+            """.trimIndent()
+        }
+        return """
+            You are a coding agent working on a Browser4 checkout. This run is a repository
+            task (read, refactor, fix, build, test) — not a browsing task.
+
+            $tree
 
             Tool chain: coding.read / coding.readLines / coding.grep / coding.glob to find
             and read code; coding.write / coding.replace to change it; coding.mvnBuild or
@@ -120,6 +147,11 @@ internal object CliAgentPrompt {
         val base = if (codingMode) {
         """
         ### Context hygiene
+        - Output tokens are the expensive part of a coding run (measured: ~4 s of wall clock per
+          1,000 output tokens, while prompt-cache-served input is nearly free). A tool round needs
+          NO prose: call the tool, at most one short line. The final answer is a report, not a
+          transcript — do not restate file contents or repeat the request (unless the task asks
+          for them), and do not narrate between calls.
         - Read with coding.readLines (bounded ranges) instead of dumping whole files;
           grep for a symbol before opening the file that defines it.
         - Keep scratch artifacts in `.b4scratch/`; delete them before finishing.
@@ -128,12 +160,16 @@ internal object CliAgentPrompt {
           memory_read() with no arguments shows this task's events.
         - When the task is finished, call system.taskComplete(
           summary=..., keyFindings=[...], filesChanged=[...], deletedFiles=[...],
-          problems=[...]).
+          problems=[...], nextSuggestions=[...]).
           The report is checked against a trace of what actually happened:
           coding.changeSummary returns exactly the files this run wrote — list
           EVERY one of them in filesChanged and every deletion in deletedFiles;
           an omitted file is rejected (and repeated omissions are amended by the
           engine from that trace).
+          nextSuggestions is up to three concrete follow-up TASKS the user would
+          plausibly want next (e.g. "run the <module> tests", "add a regression
+          test for <case>"), phrased as an instruction — not a status remark. The
+          interactive session shows them as its numbered next-step menu.
           When you ran coding.verify, paste its exact VERDICT_JSON line
           verbatim into the summary; a cited verdict must match the recorded one.
         """.trimIndent()
@@ -196,11 +232,15 @@ internal object CliAgentPrompt {
         - When the task is finished, run coding.changeSummary — it lists exactly the
           files this run wrote — then call system.taskComplete(
           summary=..., keyFindings=[...], filesChanged=[...], deletedFiles=[...],
-          problems=[...]).
+          problems=[...], nextSuggestions=[...]).
           The report is checked against a trace of what actually happened: copy the
           changeSummary files into filesChanged and every deletion into
           deletedFiles. A file the run wrote but the report omits is rejected (and
           repeated omissions are amended by the engine from that trace).
+          nextSuggestions is up to three concrete follow-up TASKS the user would
+          plausibly want next ("save the same table as CSV", "check the other
+          listings for the same field"), phrased as an instruction — not a status
+          remark. The interactive session shows them as its numbered next-step menu.
           When you ran coding.verify, paste its exact VERDICT_JSON line
           verbatim into the summary; a cited verdict must match the recorded one.
         """.trimIndent()
@@ -209,7 +249,8 @@ internal object CliAgentPrompt {
     }
 
     /**
-     * The `### Permissions` block, empty under `full` with external access on.
+     * The `### Permissions` block, empty under `full` with external access on — except for an
+     * unrestricted run, which must be described.
      *
      * A restricted preset changes the *shape* of a run — whole tools disappear and mutating calls
      * are refused — so the agent has to be told before it plans, not after it fails. The key line is
@@ -225,24 +266,41 @@ internal object CliAgentPrompt {
      * problem instead of reading them. A live browsing run retried the same denied repo path four
      * times because the block was suppressed by the preset check while the boundary was still
      * active, so that case keeps its own short block.
+     *
+     * `agent run --unrestricted` is the one `full` policy that still gets the block: the syntax
+     * gate is lifted, and the model must learn that before it plans a multi-step `for` loop — plus
+     * the vetoes that survive the lift. Without `!policy.unrestricted` here the branch below is
+     * unreachable (the flag forces `full` + external access), which would silently drop that text.
      */
     private fun permissionsBlock(policy: AgentAccessPolicy): String {
-        if (policy.preset == AccessPreset.FULL && policy.denyTools.isEmpty()) {
+        val added = addedDirsLine(policy)
+        if (policy.preset == AccessPreset.FULL && policy.denyTools.isEmpty() && !policy.unrestricted) {
             if (policy.allowExternalAccess) return ""
-            return """
-
-        ### Workspace boundary
-        - Writes and shell work stay INSIDE the workspace: absolute paths, `..` traversal and
-          repo-relative paths outside it are refused with
-          `PERMISSION_DENIED | code=PATH_DENIED` (allowExternalAccess=false).
-        - Reading is wider on purpose: Browser4's own data, temp and code folders are readable
-          even outside the workspace, and they are READ-ONLY. Run coding.permissions for the exact
-          roots; the operator adds more with -Dbrowser4.agent.readPaths=…. A write there is refused
-          — do not retry it against a readable root.
-        - A refusal is structural: do NOT retry it with different quoting, a `..` prefix, or an
-          interpreter. Keep task inputs under the workspace; an input that is blocked belongs in
-          `problems` at system.taskComplete.
-            """.trimIndent()
+            val addedSuffix = if (added.isEmpty()) "" else " or an added folder named below"
+            return buildString {
+                appendLine()
+                appendLine()
+                appendLine("### Workspace boundary")
+                appendLine(
+                    "- Writes and shell work stay INSIDE the workspace$addedSuffix: absolute paths, " +
+                        "`..` traversal and repo-relative paths outside it are refused with " +
+                        "`PERMISSION_DENIED | code=PATH_DENIED` (allowExternalAccess=false)."
+                )
+                appendLine(
+                    "- Reading is wider on purpose: Browser4's own data, temp and code folders are " +
+                        "readable even outside the workspace, and they are READ-ONLY. Run " +
+                        "coding.permissions for the exact roots; the operator adds more with " +
+                        "-Dbrowser4.agent.readPaths=…. A write there is refused — do not retry it " +
+                        "against a readable root."
+                )
+                if (added.isNotEmpty()) appendLine(added)
+                appendLine(
+                    "- A refusal is structural: do NOT retry it with different quoting, a `..` prefix, " +
+                        "or an interpreter. Keep task inputs under the workspace" +
+                        (if (added.isEmpty()) "" else " or an added folder") +
+                        "; an input that is blocked belongs in `problems` at system.taskComplete."
+                )
+            }.trimEnd()
         }
         val abilities = buildList {
             add("read the workspace")
@@ -262,20 +320,60 @@ internal object CliAgentPrompt {
                 "absolute paths, `..` traversal and interpreters do not get around it. Browser4's own " +
                 "data/temp/code folders are the exception, and are READ-ONLY — coding.permissions " +
                 "lists them."
-        return """
+        return buildString {
+            appendLine()
+            appendLine()
+            appendLine("### Permissions")
+            appendLine("- This run is under access preset '${policy.preset.id}': you may ${abilities.joinToString(", ")}.")
+            if (boundary.isNotEmpty()) appendLine("- $boundary")
+            appendLine(approval)
+            if (added.isNotEmpty()) appendLine(added)
+            appendLine(
+                "- Tools the preset does not grant are not in your tool list at all, and a call that " +
+                    "slips through anyway is refused with `PERMISSION_DENIED | code=...`. A policy " +
+                    "refusal is structural: do NOT retry it, re-quote it, or reach for an interpreter " +
+                    "to do the same thing — its `hint=` names the route that is still open. " +
+                    (if (policy.unrestricted)
+                        "This run is unrestricted, so the shell's command allow-list no longer applies: " +
+                            "programs the list never knew (a PowerShell cmdlet such as Get-Content, or " +
+                            "`wmic`) run as written — use them when one command per call would take " +
+                            "several steps. Every in-process rail is off as well (workspace boundary, " +
+                            "protected dirs), so the OS user's own permissions are the only limit: be " +
+                            "deliberate about what you delete or overwrite. Two families still refuse, and " +
+                            "both are permanent: the OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, " +
+                            "`~/.config/gcloud`) — never read them into your context — and destroying the " +
+                            "runtime you run inside (`taskkill` on the backend, `b4w build/stop`, " +
+                            "`bin/build.ps1`, `mklink`/`ln`/`mount`)."
+                    else
+                        "A command shape the checker cannot decompose (`for` loops, `else if`, nested blocks, " +
+                            "goto/call payloads) is handed to the platform shell verbatim — the shell's own " +
+                            "parse error is the feedback, so rewrite the step if it fails. The command tier, " +
+                            "blocked patterns, credentials/protected paths and the runtime vetoes still refuse.")
+            )
+            appendLine(
+                "- Run coding.permissions to see exactly what is allowed before planning a step that " +
+                    "might be outside it. Work you cannot do under this preset belongs in `problems` " +
+                    "at system.taskComplete — say what was blocked and how it should be run, rather " +
+                    "than looping."
+            )
+        }.trimEnd()
+    }
 
-        ### Permissions
-        - This run is under access preset '${policy.preset.id}': you may ${abilities.joinToString(", ")}.
-        - $boundary
-        $approval
-        - Tools the preset does not grant are not in your tool list at all, and a call that slips
-          through anyway is refused with `PERMISSION_DENIED | code=...`. A refusal is structural, not
-          a syntax problem: do NOT retry it, re-quote it, or reach for an interpreter to do the same
-          thing. The refusal text carries a `hint=` with the route that is still open.
-        - Run coding.permissions to see exactly what is allowed before planning a step that might be
-          outside it. Work you cannot do under this preset belongs in `problems` at
-          system.taskComplete — say what was blocked and how it should be run, rather than looping.
-        """.trimIndent()
+    /**
+     * The line naming the folders `agent run --add-dir` granted, or "" when none were.
+     *
+     * An added folder is read+write scope, so a model that kept reading "everything outside the
+     * workspace is refused" would never try the folder the operator just granted. The preset still
+     * bounds what may be done there, so the line says that too instead of promising writes.
+     */
+    private fun addedDirsLine(policy: AgentAccessPolicy): String {
+        if (policy.additionalDirs.isEmpty()) return ""
+        val folders = policy.additionalDirs.map { it.toString() }.sorted().joinToString(", ")
+        val write = if (policy.allowsFileMutation()) "you may write there" else "writes there are refused"
+        return "- Extra folders granted for this task (use these ABSOLUTE paths as given): $folders — " +
+            "readable, writable and usable as a shell working directory in addition to the " +
+            "workspace ($write under this preset). They are not copies: the task's own workspace " +
+            "stays the place for deliverables and for `coding.write`."
     }
 }
 

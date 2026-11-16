@@ -3,9 +3,8 @@
 package ai.platon.pulsar.agentic.event
 
 import ai.platon.pulsar.agentic.ActionOptions
-import ai.platon.pulsar.agentic.ObserveOptions
-import ai.platon.pulsar.agentic.model.ExecutionContext
 import ai.platon.pulsar.agentic.model.AgentState
+import ai.platon.pulsar.agentic.model.ExecutionContext
 import ai.platon.pulsar.common.lang.AbstractChainedFunction1
 import ai.platon.pulsar.common.lang.AbstractChainedPDFunction2
 import kotlinx.coroutines.flow.SharedFlow
@@ -13,7 +12,7 @@ import kotlinx.coroutines.flow.SharedFlow
 /**
  * Server-side agent event data structure.
  *
- * @property eventType The type of the event (e.g., "onWillObserve", "onDidAct", "onInferenceComplete").
+ * @property eventType The type of the event (e.g., "onWillAct", "onDidAct", "onInferenceComplete").
  * @property eventPhase The phase of the event (e.g., "agent", "inference", "tool", "mcp", "skill").
  * @property agentId The unique identifier of the agent, if applicable.
  * @property message Optional message or description of the event.
@@ -28,12 +27,6 @@ data class ServerSideAgentEvent(
     val timestamp: java.time.Instant = java.time.Instant.now(),
     val metadata: Map<String, Any?> = emptyMap()
 )
-
-open class ObserveEventHandler : AbstractChainedFunction1<ObserveOptions, Any?>() {
-    override fun invoke(options: ObserveOptions): Any? {
-        return super.invoke(param = options)
-    }
-}
 
 open class ActEventHandler : AbstractChainedFunction1<ActionOptions, Any?>() {
     override fun invoke(options: ActionOptions): Any? {
@@ -50,7 +43,7 @@ open class ExecutionContextAgentStateEventHandler : AbstractChainedPDFunction2<E
 /**
  * Event handlers during the agent flow phase.
  *
- * Agent flow event handlers are triggered during observe and act operations.
+ * Agent flow event handlers are triggered during act operations.
  * They are ideal for:
  * - Monitoring agent behavior
  * - Logging and debugging
@@ -59,8 +52,6 @@ open class ExecutionContextAgentStateEventHandler : AbstractChainedPDFunction2<E
  * @see AgentEventHandlers for the complete event handler hierarchy
  */
 interface AgentFlowEventHandlers {
-    val onWillObserve: ObserveEventHandler
-    val onDidObserve: ObserveEventHandler
 
     val onWillAct: ActEventHandler
     val onDidAct: ActEventHandler
@@ -141,7 +132,7 @@ interface SkillEventHandlers {
  * }
  *
  * // Emit events during agent execution
- * eventHandlers.onAgentEvent("onWillObserve", "agent-123")
+ * eventHandlers.onAgentEvent("onWillAct", "agent-123")
  * eventHandlers.onInferenceEvent("onInferenceComplete", "agent-123")
  * ```
  *
@@ -158,7 +149,7 @@ interface ServerSideAgentEventHandlers {
     /**
      * Emits an agent-phase event.
      *
-     * @param eventType The type of the event (e.g., "onWillObserve", "onDidAct").
+     * @param eventType The type of the event (e.g., "onWillAct", "onDidAct").
      * @param agentId The unique identifier of the agent.
      * @param message Optional message describing the event.
      * @param metadata Additional metadata for the event.
@@ -253,8 +244,8 @@ interface ServerSideAgentEventHandlers {
  *
  * `AgentEventHandlers` organizes events into distinct groups:
  *
- * 1. **[AgentFlowEventHandlers]** - Events during observe and act operations
- *    - Before/after observe, before/after act, inference events
+ * 1. **[AgentFlowEventHandlers]** - Events during act operations
+ *    - Before/after act, inference events
  * 2. **[ToolCallEventHandlers]** - Events during tool call operations
  * 3. **[MCPEventHandlers]** - Events during MCP operations
  * 4. **[SkillEventHandlers]** - Events during skill operations
@@ -265,8 +256,8 @@ interface ServerSideAgentEventHandlers {
  * ### Setting up event handlers
  * ```kotlin
  * val handlers = DefaultAgentEventHandlers()
- * handlers.agentFlowHandlers.onWillObserve.addLast { options ->
- *     println("About to observe with options: $options")
+ * handlers.agentFlowHandlers.onWillAct.addLast { options ->
+ *     println("About to act with options: $options")
  * }
  * handlers.agentFlowHandlers.onDidAct.addLast { options ->
  *     println("Completed action: $options")
@@ -275,7 +266,7 @@ interface ServerSideAgentEventHandlers {
  *
  * ### Using aliases for brevity
  * ```kotlin
- * handlers.af.onWillObserve.addLast { options -> }  // agentFlowHandlers
+ * handlers.af.onWillAct.addLast { options -> }  // agentFlowHandlers
  * handlers.tc.chain(otherHandlers.tc)               // toolCallEventHandlers
  * ```
  *
@@ -290,7 +281,7 @@ interface AgentEventHandlers {
     /**
      * Event handlers during the agent flow stage.
      *
-     * Manages observe and act operations.
+     * Manages act operations.
      *
      * @see AgentFlowEventHandlers for detailed documentation
      */
@@ -331,7 +322,7 @@ interface AgentEventHandlers {
      *
      * ## Example
      * ```kotlin
-     * handlers.af.onWillObserve.addLast { options -> }
+     * handlers.af.onWillAct.addLast { options -> }
      * ```
      */
     var af

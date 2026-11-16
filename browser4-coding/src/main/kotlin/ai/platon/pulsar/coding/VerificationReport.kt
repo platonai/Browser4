@@ -1,9 +1,12 @@
 package ai.platon.pulsar.coding
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Instant
 
 /**
  * One deterministic check inside a [VerificationReport].
@@ -31,6 +34,17 @@ data class VerificationCheck(
     /** Why the check did not run, or the failure reason. */
     val detail: String? = null,
     val diagnostics: List<BuildDiagnostic> = emptyList(),
+    /**
+     * The check was served from [BuildCache] instead of running (plan P0-1).
+     *
+     * Only `compile` can be cached: the verdict still says the sources compiled, and the
+     * fingerprint names exactly which tree that verdict belongs to. Consumers that need
+     * "this run compiled something" must look at this flag — a cached check did not start
+     * a compiler.
+     */
+    val cached: Boolean = false,
+    /** Content fingerprint of the cached compile (`cached@<fingerprint>`); null when not cached. */
+    val fingerprint: String? = null,
 ) {
     /** `✓ compile browser4-coding — exit 0 (8.2s)` style one-liner. */
     fun format(): String {
@@ -58,12 +72,23 @@ data class VerificationCheck(
  * and the eval harness (plan P0.1/P0.2).
  *
  * @param checks every requested check, in evaluation order (including skipped ones)
+ * @param verifiedAt when the checks finished, i.e. the moment the verdict describes the
+ *   tree. The isolation gate refuses a merge when a changed file was written after this
+ *   (with a small tolerance for filesystem timestamp granularity), so "verify passed,
+ *   then keep editing" cannot merge on the old verdict. Null for a verdict parsed from
+ *   a recording made before this field existed, which the gate then judges by
+ *   [contentDigest] only.
+ * @param contentDigest fingerprint of the change set the verdict covers
+ *   ([WorkspaceDigest]); the merge gate recomputes it against the tree it is about to
+ *   apply. Null when the change set was too large or unreadable to fingerprint.
  */
 data class VerificationReport(
     val checks: List<VerificationCheck>,
     val module: String? = null,
     val requested: List<String> = emptyList(),
     val durationMs: Long = 0,
+    val verifiedAt: Instant? = null,
+    val contentDigest: String? = null,
 ) {
     val ran: List<VerificationCheck> get() = checks.filter { it.ran }
     val failed: List<VerificationCheck> get() = checks.filter { it.ran && !it.ok }
@@ -102,6 +127,8 @@ data class VerificationReport(
         "module" to module,
         "requested" to requested,
         "durationMs" to durationMs,
+        "verifiedAt" to verifiedAt?.toString(),
+        "contentDigest" to contentDigest,
         "failureReason" to failureReason(),
         "checks" to checks.map { c ->
             linkedMapOf(
@@ -114,6 +141,8 @@ data class VerificationReport(
                 "durationMs" to c.durationMs,
                 "evidence" to c.evidence,
                 "detail" to c.detail,
+                "cached" to c.cached,
+                "fingerprint" to c.fingerprint,
                 "diagnostics" to c.diagnostics.map { d ->
                     linkedMapOf(
                         "file" to d.file,
@@ -128,6 +157,17 @@ data class VerificationReport(
     )
 
     fun toJson(): String = JSON.writeValueAsString(toJsonMap())
+
+  /**
+   * The machine contract on its own: one `VERDICT_JSON:` line.
+   *
+   * `coding.verify` echoes this instead of [format]. The human summary
+   * repeated per-check lines that the finish card and this very verdict line
+   * already carried, so a passing verify read as a five-line report where one
+   * line is the answer. Everything the summary showed — check status,
+   * evidence, diagnostics, failure reason — is inside the JSON.
+   */
+  fun formatVerdict(): String = VERDICT_PREFIX + toJson()
 
     /**
      * Human summary, followed by the machine-readable verdict line so a
@@ -189,6 +229,7 @@ data class VerificationReport(
             return fromJson(json)
         }
 
+
         /**
          * Rebuild a [VerificationReport] from its JSON form.
          *
@@ -208,6 +249,8 @@ data class VerificationReport(
                     durationMs = node.get("durationMs")?.asLong() ?: 0,
                     evidence = node.get("evidence")?.asText().orEmpty(),
                     detail = node.get("detail")?.asText()?.takeIf { it.isNotEmpty() },
+                    cached = node.get("cached")?.asBoolean() ?: false,
+                    fingerprint = node.get("fingerprint")?.asText()?.takeIf { it.isNotEmpty() && it != "null" },
                     diagnostics = node.get("diagnostics")?.map { d ->
                         BuildDiagnostic(
                             file = d.get("file")?.asText().orEmpty(),
@@ -221,9 +264,14 @@ data class VerificationReport(
             } ?: emptyList()
             VerificationReport(
                 checks = checks,
-                module = root.get("module")?.asText()?.takeIf { it.isNotEmpty() },
+                module = root.get("module")?.asText()?.takeIf { it.isNotEmpty() && it != "null" },
                 requested = root.get("requested")?.map { it.asText() } ?: emptyList(),
                 durationMs = root.get("durationMs")?.asLong() ?: 0,
+                verifiedAt = root.get("verifiedAt")?.asText()
+                    ?.takeIf { it.isNotEmpty() && it != "null" }
+                    ?.let { runCatching { Instant.parse(it) }.getOrNull() },
+                contentDigest = root.get("contentDigest")?.asText()
+                    ?.takeIf { it.isNotEmpty() && it != "null" },
             )
         }.getOrNull()
     }
@@ -306,11 +354,19 @@ class VerificationRunner(
                 )
             }
         }
+        // Bind the verdict to the tree it describes: the merge gate recomputes this
+        // fingerprint (and checks `verifiedAt`) so a run cannot verify, keep editing and
+        // still merge on the old verdict.
+        val digest = withContext(Dispatchers.IO) {
+            WorkspaceDigest.of(fs.workspaceRoot, WorkspaceIsolation.changedFilesOf(fs.workspaceRoot))
+        }
         return VerificationReport(
             checks = results,
             module = module,
             requested = requested,
             durationMs = System.currentTimeMillis() - started,
+            verifiedAt = Instant.now(),
+            contentDigest = digest,
         )
     }
 
@@ -355,11 +411,19 @@ class VerificationRunner(
             ok = result.success,
             exitCode = result.exitCode,
             durationMs = System.currentTimeMillis() - started,
-            evidence = if (result.success) "exit 0" else
-                "${result.diagnostics.size} diagnostic(s), exit ${result.exitCode}",
+            evidence = when {
+                // P0-1: a cached compile names the tree it replayed, so the verdict can be
+                // audited ("this compiled, and nothing changed since").
+                result.cached -> "cached@${result.fingerprint ?: "?"} (no source change since " +
+                    "${BuildResult.stamp(result.builtAt)})"
+                result.success -> "exit 0"
+                else -> "${result.diagnostics.size} diagnostic(s), exit ${result.exitCode}"
+            },
             detail = if (result.success) null else
                 result.diagnosticsSummary(10).ifBlank { lastLines(result.output, 20) },
             diagnostics = result.diagnostics,
+            cached = result.cached,
+            fingerprint = result.fingerprint,
         )
     }
 
@@ -487,7 +551,10 @@ class VerificationRunner(
             )
         }
         val started = System.currentTimeMillis()
-        val hits = mutableListOf<String>()
+        // The advisory text travels with the hit: `coding.verify` echoes the
+        // verdict line only, so this JSON line is the model's copy of the
+        // guidance (no duplicated prose, no lost advisory).
+        val hits = mutableListOf<Pair<CdpTrapCheck.Trap, String>>()
         val unreadable = mutableListOf<String>()
         for (file in targets) {
             val content = fs.readFile(file)
@@ -495,7 +562,7 @@ class VerificationRunner(
                 unreadable += file
                 continue
             }
-            CdpTrapCheck.check(content).forEach { hits += "${it.id}@$file" }
+            CdpTrapCheck.check(content).forEach { hits += it to file }
         }
         val ok = unreadable.isEmpty()
         return VerificationCheck(
@@ -507,7 +574,8 @@ class VerificationRunner(
             evidence = when {
                 !ok -> "unreadable: ${unreadable.joinToString(", ")}"
                 hits.isEmpty() -> "no CDP pitfalls"
-                else -> "${hits.size} advisory: ${hits.joinToString(", ")}"
+                else -> "${hits.size} advisory: " +
+                    hits.joinToString("; ") { (trap, file) -> "${trap.id}@$file: ${trap.advisory}" }
             },
             detail = if (ok) null else "could not read ${unreadable.joinToString(", ")}",
         )

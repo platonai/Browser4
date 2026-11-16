@@ -2,11 +2,6 @@ package ai.platon.pulsar.agentic.inference
 
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.inference.action.ContextToAction
-import ai.platon.pulsar.agentic.model.ActionDescription
-import ai.platon.pulsar.agentic.model.ExecutionContext
-import ai.platon.pulsar.agentic.model.ExtractionSchema
-import ai.platon.pulsar.api.AbstractWebDriver
-import ai.platon.pulsar.api.snapshot.SnapshotService
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -19,65 +14,9 @@ import java.time.Instant
 class InferenceEngine(
     private val agent: BasicBrowserAgent
 ) {
-    private val session = agent.session
     // Reuse the agent's ContextToAction so vision-support discovery is shared
     private val cta = agent.cta
     private val inferenceLogger = InferenceLogger(agent.uuid, agent.startTime)
-
-    val snapshotService: SnapshotService
-        get() = (session.getOrCreateBoundDriver() as? AbstractWebDriver)?.snapshotService
-            ?: throw IllegalStateException("Bound driver is not AbstractWebDriver")
-
-    @Deprecated("Use the CLI tool-loop engine path instead")
-    suspend fun observe(params: ObserveParams, context: ExecutionContext): ActionDescription {
-        val messages = InferencePromptBuilder.buildObserveMessages(params)
-
-        val startTime = Instant.now()
-        val actionType = if (params.fromAct) "act" else "observe"
-        val timestamp = AppPaths.fromNow()
-
-        val llmInputFile = inferenceLogger.log(
-            subdirectory = actionType,
-            filename = "$timestamp.request.json",
-            requestId = context.uuid,
-            messages = messages.messages
-        )
-
-        val actionDescription = cta.generate(messages, context)
-        requireNotNull(context.agentState.actionDescription) {
-            "Field should be set: context.agentState.actionDescription"
-        }
-        val modelResponse = requireNotNull(actionDescription.modelResponse) {
-            "Field should be set: actionDescription.modelResponse"
-        }
-
-        val inferenceTimeMillis = DateTimes.elapsedTime(startTime).toMillis()
-
-        val llmOutputFile = inferenceLogger.log(
-            subdirectory = actionType,
-            filename = "$timestamp.response.json",
-            payload = mapOf(
-                "requestId" to context.uuid,
-                "modelResponse" to modelResponse
-            )
-        )
-
-        inferenceLogger.logSummary(
-            filename = "$actionType.jsonl",
-            payload = mapOf(
-                "${actionType}InferenceType" to actionType,
-                "timestamp" to timestamp,
-                "llmInputFile" to llmInputFile,
-                "llmOutputFile" to llmOutputFile,
-                "inputToken" to modelResponse.tokenUsage.inputTokenCount,
-                "outputToken" to modelResponse.tokenUsage.outputTokenCount,
-                "totalToken" to modelResponse.tokenUsage.totalTokenCount,
-                "inferenceTimeMillis" to DateTimes.elapsedTime(startTime).toMillis()
-            )
-        )
-
-        return actionDescription
-    }
 
     /**
      * Run the two-stage structured extraction pipeline and return an
@@ -142,9 +81,11 @@ class InferenceEngine(
                 "timestamp" to timestamp,
                 "llmInputFile" to llmInputFile,
                 "llmOutputFile" to extractOutputFile,
-                "inputToken" to extractResponse.tokenUsage.inputTokenCount,
+                "inputToken" to extractResponse.tokenUsage.effectiveInputTokenCount,
                 "outputToken" to extractResponse.tokenUsage.outputTokenCount,
-                "totalToken" to extractResponse.tokenUsage.totalTokenCount,
+                "totalToken" to extractResponse.tokenUsage.effectiveTotalTokenCount,
+                "cachedInputToken" to extractResponse.tokenUsage.cachedInputTokenCount,
+                "cacheWriteInputToken" to extractResponse.tokenUsage.cacheWriteInputTokenCount,
                 "inferenceTimeMillis" to DateTimes.elapsedTime(extractStartTime).toMillis()
             )
         )
@@ -175,18 +116,23 @@ class InferenceEngine(
             payload = mapOf(
                 "extractInferenceType" to "metadata",
                 "timestamp" to timestamp,
-                "inputToken" to metadataResponse.tokenUsage.inputTokenCount,
+                "inputToken" to metadataResponse.tokenUsage.effectiveInputTokenCount,
                 "outputToken" to metadataResponse.tokenUsage.outputTokenCount,
-                "totalToken" to metadataResponse.tokenUsage.totalTokenCount,
+                "totalToken" to metadataResponse.tokenUsage.effectiveTotalTokenCount,
+                "cachedInputToken" to metadataResponse.tokenUsage.cachedInputTokenCount,
+                "cacheWriteInputToken" to metadataResponse.tokenUsage.cacheWriteInputTokenCount,
                 "inferenceTimeMillis" to DateTimes.elapsedTime(metadataStartTime).toMillis()
             )
         )
 
         val usage1 = extractResponse.tokenUsage
         val usage2 = metadataResponse.tokenUsage
-        val inputTokenCount = usage1.inputTokenCount + usage2.inputTokenCount
-        val outputTokenCount = usage1.outputTokenCount + usage2.outputTokenCount
-        val totalTokenCount = usage1.totalTokenCount + usage2.totalTokenCount
+        // Both calls may report cache details; normalize their sum so the prompt
+        // count is cache-inclusive exactly once (see TokenUsage.normalized).
+        val summedUsage = (usage1 + usage2).normalized()
+        val inputTokenCount = summedUsage.inputTokenCount
+        val outputTokenCount = summedUsage.outputTokenCount
+        val totalTokenCount = summedUsage.totalTokenCount
 
         val totalInferenceTimeMillis = DateTimes.elapsedTime(extractStartTime).toMillis()
 
@@ -205,7 +151,9 @@ class InferenceEngine(
             totalInferenceTimeMillis = totalInferenceTimeMillis,
             inputTokenCount = inputTokenCount,
             outputTokenCount = outputTokenCount,
-            totalTokenCount = totalTokenCount
+            totalTokenCount = totalTokenCount,
+            cachedInputTokenCount = summedUsage.cachedInputTokenCount,
+            cacheWriteInputTokenCount = summedUsage.cacheWriteInputTokenCount,
         )
         InferenceEventEmitter.onDidExtract(params, inferenceResult)
 
@@ -242,8 +190,13 @@ class InferenceEngine(
          * as if they were extracted fields.
          */
         internal fun stripInferenceBookkeeping(node: ObjectNode) {
-            // Summary keys the engine logs (never schema fields).
-            for (key in listOf("inputToken", "outputToken", "totalToken", "inferenceTimeMillis")) {
+            // Summary keys the engine logs (never schema fields). The cache
+            // breakdown belongs here too: a model that echoes the bookkeeping back
+            // must not inject cache counters into the user payload.
+            for (key in listOf(
+                "inputToken", "outputToken", "totalToken",
+                "cachedInputToken", "cacheWriteInputToken", "inferenceTimeMillis",
+            )) {
                 node.remove(key)
             }
             // Evaluator-shaped metadata echo: an object whose keys are progress /

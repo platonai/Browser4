@@ -1,5 +1,6 @@
 package ai.platon.pulsar.coding
 
+import ai.platon.pulsar.coding.sandbox.ExecutionSandbox
 import ai.platon.pulsar.coding.sandbox.ExecutionSandboxes
 import org.slf4j.LoggerFactory
 import java.nio.file.Path
@@ -74,7 +75,12 @@ object CodingComponents {
     private val boundaryAuthorizerLock = Any()
 
     /** Cache key: the canonical workspace root plus the readable roots it was built with. */
-    private data class BoundaryKey(val root: Path, val readableRoots: List<Path>)
+    private data class BoundaryKey(
+        val root: Path,
+        val readableRoots: List<Path>,
+        /** Folders `agent run --add-dir` granted to the task, normalized and sorted. */
+        val additionalDirs: List<Path>,
+    )
 
     private val boundaryAuthorizers = object : LinkedHashMap<BoundaryKey, Authorizer>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<BoundaryKey, Authorizer>?): Boolean =
@@ -141,18 +147,23 @@ object CodingComponents {
      * The effective boundary scope for [root] as named entries (plan P0-2).
      *
      * The workspace and its mirrored module roots are in both grants (the file system canonicalises
-     * and the shell judges spelling); toolchain roots are shell-only, which is why the two grants
-     * have different scopes at all; the readable roots ([ReadablePaths]) are in both grants for
-     * **reads only**. This is the list observation data attaches to and the list
-     * [ScopeNarrowing] advises on — it is derived, not yet declared, so P0-1 output can turn the
-     * toolchain entries into explicit declared roots without moving anything else.
+     * and the shell judges spelling), as is the checkout those mirrors come from
+     * ([ScopeKind.SOURCE] — the code a self-development task edits); toolchain roots are
+     * shell-only, which is why the two grants have different scopes at all; the readable roots
+     * ([ReadablePaths]) are in both grants for **reads only**. This is the list observation data
+     * attaches to and the list [ScopeNarrowing] advises on — it is derived, not yet declared, so
+     * P0-1 output can turn the toolchain entries into explicit declared roots without moving
+     * anything else.
      *
      * @param root the workspace root
      * @param readableRoots the readable roots in effect; defaults to [ReadablePaths.roots]
+     * @param additionalDirs folders granted to the task besides the workspace
+     *   (`agent run --add-dir`); they are read+write in both boundary grants
      */
     internal fun scopeManifest(
         root: Path,
         readableRoots: List<Path> = ReadablePaths.roots(),
+        additionalDirs: Collection<Path> = emptyList(),
     ): List<ScopeEntry> {
         val realRoot = runCatching { root.toRealPath() }.getOrDefault(root.toAbsolutePath().normalize())
         val boundaryGrants = setOf(CAP_FS_BOUNDARY, CAP_SHELL_BOUNDARY)
@@ -160,11 +171,17 @@ object CodingComponents {
         val mirrors = MirrorRoots.derive(realRoot).sortedBy { it.toString() }.map {
             ScopeEntry("mirror:$it", it, ScopeKind.MIRROR, BOUNDARY_EFFECTS, boundaryGrants)
         }
+        // The checkout the mirror is built from: the code this task develops. Read+write in both
+        // grants, because a self-development task edits the repository it runs from and the mirror
+        // only links the reactor modules — `.git`, `bin/`, `cli/`, `docs/` and the absolute spelling
+        // of a module path exist there only. Null for a workspace that mirrors nothing.
+        val source = MirrorRoots.sourceRoot(realRoot)
+            ?.let { ScopeEntry("source:$it", it, ScopeKind.SOURCE, BOUNDARY_EFFECTS, boundaryGrants) }
         val toolchain = toolchainEntries()
-        // A readable root that is already an exact workspace/mirror/toolchain entry adds nothing;
-        // the entry would only duplicate the id space. Ancestors are kept: the data root that
-        // contains the workspace grants reads *beyond* it, which is the whole point.
-        val known = (listOf(workspace) + mirrors + toolchain)
+        // A readable root that is already an exact workspace/mirror/source/toolchain entry adds
+        // nothing; the entry would only duplicate the id space. Ancestors are kept: the data root
+        // that contains the workspace grants reads *beyond* it, which is the whole point.
+        val known = (listOf(workspace) + mirrors + listOfNotNull(source) + toolchain)
             .map { runCatching { it.path.toRealPath() }.getOrDefault(it.path) }
             .toSet()
         val readable = readableRoots
@@ -181,7 +198,25 @@ object CodingComponents {
                     grants = boundaryGrants,
                 )
             }
-        return listOf(workspace) + mirrors + toolchain + readable
+        // Folders `agent run --add-dir` granted. Read+write like the workspace (the preset still
+        // decides whether anything may be written), so one entry covers "readable, writable and
+        // executable" without a second switch. A folder that is already an exact boundary root is
+        // dropped: the workspace entry already covers it.
+        val added = additionalDirs
+            .map { runCatching { it.toRealPath() }.getOrDefault(it.toAbsolutePath().normalize()) }
+            .distinct()
+            .filterNot { it in known }
+            .sortedBy { it.toString() }
+            .map {
+                ScopeEntry(
+                    id = "added:$it",
+                    path = it,
+                    kind = ScopeKind.ADDED,
+                    effects = BOUNDARY_EFFECTS,
+                    grants = boundaryGrants,
+                )
+            }
+        return listOf(workspace) + mirrors + listOfNotNull(source) + toolchain + readable + added
     }
 
     /**
@@ -203,10 +238,13 @@ object CodingComponents {
      * file-system request.
      *
      * @param root the workspace root
+     * @param additionalDirs folders `agent run --add-dir` granted to this task; they join the
+     *   read **and** write scope of both grants, so the file tools and the shell agree on them
      */
-    fun boundaryAuthorizer(root: Path): Authorizer {
+    fun boundaryAuthorizer(root: Path, additionalDirs: Collection<Path> = emptyList()): Authorizer {
         val realRoot = runCatching { root.toRealPath() }.getOrDefault(root.toAbsolutePath().normalize())
-        val key = BoundaryKey(realRoot, ReadablePaths.roots())
+        val extras = additionalDirs.map { it.toAbsolutePath().normalize() }.distinct().sortedBy { it.toString() }
+        val key = BoundaryKey(realRoot, ReadablePaths.roots(), extras)
         synchronized(boundaryAuthorizerLock) {
             boundaryAuthorizers[key]?.let { return it }
             val built = buildBoundaryAuthorizer(key)
@@ -216,7 +254,7 @@ object CodingComponents {
     }
 
     private fun buildBoundaryAuthorizer(key: BoundaryKey): Authorizer {
-        val manifest = scopeManifest(key.root, key.readableRoots)
+        val manifest = scopeManifest(key.root, key.readableRoots, key.additionalDirs)
         // The manifest is the single source of truth: an entry's `effects` say whether its path is
         // read-only (the readable roots) or read+write (workspace, mirrors, shell toolchain roots).
         fun rootsOf(grant: CapabilityId, effect: Effect): Set<Path> =
@@ -268,9 +306,11 @@ object CodingComponents {
         policy: AgentAccessPolicy = AgentAccessPolicy.serverDefault,
         sessionEnv: Map<String, String> = emptyMap(),
     ): CodingAgentShell {
-        val boundary = boundaryAuthorizer(root)
+        val boundary = policy.boundaryOrUnrestricted(root)
         return CodingAgentShell(
             baseDir = root,
+            sandbox = sandbox(policy),
+            unrestricted = policy.unrestricted,
             allowNetwork = policy.allowNetwork,
             allowNetworkProvider = { policy.allowNetwork || policy.hasActiveNetworkGrant() },
             allowDestructive = policy.allowDestructive,
@@ -279,10 +319,11 @@ object CodingComponents {
             allowExecutionProvider = { policy.allowsExec() },
             commandAllowedProvider = { policy.allowsCommandExecution(it) },
             sensitivePaths = policy.sensitivePaths,
-            protectedDirs = policy.protectedDirs,
+            protectedDirs = policy.effectiveProtectedDirs(),
             boundaryAuthorizer = boundary,
             initialSessionEnv = sessionEnv,
             readableRoots = ReadablePaths.roots().toSet(),
+            additionalDirs = policy.additionalDirs,
         )
     }
 
@@ -314,9 +355,11 @@ object CodingComponents {
         // approves one program; reusing it would make a permitted build fail on `mvn` because a
         // grant for `git` does not cover it.
         if (policy.preset == AccessPreset.FULL) return modelShell ?: shell(root, policy)
-        val boundary = boundaryAuthorizer(root)
+        val boundary = policy.boundaryOrUnrestricted(root)
         return CodingAgentShell(
             baseDir = root,
+            sandbox = sandbox(policy),
+            unrestricted = policy.unrestricted,
             buildOnly = true,
             allowNetwork = policy.allowNetwork,
             allowNetworkProvider = { policy.allowNetwork || policy.hasActiveNetworkGrant() },
@@ -326,6 +369,7 @@ object CodingComponents {
             protectedDirs = policy.protectedDirs,
             boundaryAuthorizer = boundary,
             readableRoots = ReadablePaths.roots().toSet(),
+            additionalDirs = policy.additionalDirs,
         )
     }
 
@@ -349,7 +393,7 @@ object CodingComponents {
         policy: AgentAccessPolicy = AgentAccessPolicy.serverDefault,
         persistSnapshots: Boolean = false,
     ): CodingAgentFileSystem {
-        val boundary = boundaryAuthorizer(root)
+        val boundary = policy.boundaryOrUnrestricted(root)
         return CodingAgentFileSystem(
             workspaceRoot = root,
             allowExternalAccess = policy.allowExternalAccess,
@@ -357,12 +401,35 @@ object CodingComponents {
             readOnly = !policy.allowsFileMutation(),
             readOnlyProvider = { !policy.allowsFileMutation() },
             writeAllowedProvider = { policy.allowsMutationOf(it) },
-            protectedFiles = policy.protectedFiles,
-            protectedDirs = policy.protectedDirs,
+            protectedFiles = policy.effectiveProtectedFiles(),
+            protectedDirs = policy.effectiveProtectedDirs(),
             sensitivePaths = policy.sensitivePaths,
             persistSnapshots = persistSnapshots,
             boundaryAuthorizer = boundary,
             readableRoots = ReadablePaths.roots().toSet(),
+            additionalDirs = policy.additionalDirs,
         )
     }
+
+    /**
+     * The boundary this policy's file system and shell must enforce.
+     *
+     * Under [AgentAccessPolicy.unrestricted] the in-process boundary is a pass-through so the
+     * task runs with the OS user's own permissions; every other policy keeps the workspace
+     * boundary plus its `--add-dir` grants.
+     */
+    private fun AgentAccessPolicy.boundaryOrUnrestricted(root: Path): Authorizer =
+        if (unrestricted) Authorizer.unrestricted() else boundaryAuthorizer(root, additionalDirs)
+
+    /**
+     * The OS sandbox seam a task under [policy] must use, or `null` to keep the process-wide
+     * `browser4.agent.sandbox` choice.
+     *
+     * One helper for every path that spawns a child process on the agent's behalf — `coding.shell`,
+     * the build-only shell and `coding.runCode`: an unrestricted task has to be unsandboxed on all
+     * of them, or "the OS sandbox is not applied" would hold for one path and not for another.
+     */
+    fun sandbox(policy: AgentAccessPolicy): ExecutionSandbox? =
+        if (policy.unrestricted) ExecutionSandboxes.of("off") else null
+
 }

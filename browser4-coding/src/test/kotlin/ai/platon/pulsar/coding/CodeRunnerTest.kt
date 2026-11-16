@@ -1,11 +1,14 @@
 package ai.platon.pulsar.coding
 
 import kotlinx.coroutines.runBlocking
+import ai.platon.pulsar.coding.sandbox.ExecutionSandbox
+import ai.platon.pulsar.coding.sandbox.ProcessSpec
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.EnabledIf
+import java.nio.file.Path
 
 /**
  * Tests for [CodeRunner] — runs real interpreters when available.
@@ -99,6 +102,33 @@ class CodeRunnerTest {
         if (!has("node")) return@runBlocking
         val result = runner.run("js", "while(true){}", timeoutSeconds = 2)
         assertTrue(result.timedOut)
+    }
+
+    @Test
+    @DisplayName("the caller's sandbox seam prepares the launch, so runCode can run unsandboxed")
+    fun sandboxSeamIsHonoured() = runBlocking {
+        // `agent run --unrestricted` builds `coding.shell` with the pass-through sandbox; runCode has
+        // to use the same seam, or one task would be confined in one code path and not in the other.
+        // The prepare call happens before the launch, so the assertion holds even without python.
+        val recorded = mutableListOf<String>()
+        val seam = object : ExecutionSandbox {
+            override val id = "recording"
+
+            override fun prepare(
+                spec: ProcessSpec,
+                workspace: Path,
+                allowNetwork: Boolean,
+                extraWritableRoots: List<Path>,
+            ): ProcessSpec {
+                recorded += "prepare(${spec.directory}, network=$allowNetwork)"
+                return spec
+            }
+        }
+
+        runner.run("python", "print('seam')", networkAllowed = true, sandbox = seam)
+
+        assertEquals(1, recorded.size, "the caller's seam must be the one that prepared the launch: $recorded")
+        assertTrue(recorded.first().contains("network=true"), "the network decision must reach the seam: ${recorded.first()}")
     }
 
     fun hasPython() = has("python")

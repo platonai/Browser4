@@ -24,6 +24,8 @@ import ai.platon.pulsar.agentic.tools.langchain4j.ToolExecutionCoordinator
 import ai.platon.pulsar.agentic.tools.langchain4j.ToolSpecificationConverter
 import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.coding.CodingWorkspace
+import ai.platon.pulsar.coding.GitStatus
+import ai.platon.pulsar.coding.MavenBuildSupport
 import ai.platon.pulsar.coding.SafeText
 import ai.platon.pulsar.coding.VerificationReport
 import ai.platon.pulsar.common.AppPaths
@@ -34,6 +36,7 @@ import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
+import ai.platon.pulsar.external.TokenUsage
 import com.fasterxml.jackson.databind.node.JsonNodeFactory
 import dev.langchain4j.agent.tool.ToolExecutionRequest
 import dev.langchain4j.data.message.*
@@ -111,7 +114,7 @@ private val CLI_CORE_DOMAINS = setOf("b4", "system", "memory")
  */
 private val CLI_CORE_CODING_METHODS = setOf(
     "shell", "shellOutput", "shellStatus",
-    "read", "readLines", "write", "append", "replace", "insertAfter", "editLines", "delete", "mkdir",
+    "read", "readLines", "readFiles", "write", "append", "replace", "insertAfter", "editLines", "delete", "mkdir",
     "listDir", "glob", "grep", "stat", "diff", "changeSummary",
     "validate", "verify", "mvnBuild", "diagnostics", "workspaceRoot", "devTask",
 )
@@ -435,7 +438,7 @@ internal const val CLI_BUDGET_FINAL_PERCENT = 95
  * reported partial result beats an aborted run with no report — the same lesson as
  * [codingProgressNudge], expressed for the budget instead of read-only rounds.
  *
- * @param consumed the run's tokens so far
+ * @param consumed the run's charged (cache-miss) tokens so far
  * @param limit the run's effective budget (`0` or a negative value means unlimited)
  * @param percent threshold the caller wants to announce (80 or 95)
  * @return the directive, or `null` while the run is below [percent]
@@ -445,12 +448,14 @@ internal fun budgetPressureNudge(consumed: Long, limit: Long, percent: Int = CLI
     if (consumed * 100 < limit * percent) return null
     val now = consumed * 100 / limit
     return if (percent >= CLI_BUDGET_FINAL_PERCENT) {
-        "You have used $now% of this task's token budget ($consumed of $limit). This is the last chance to " +
+        "You have used $now% of this task's cache-miss token budget ($consumed of $limit; prompt-cache " +
+            "reads are free, so this counts uncached input plus output). This is the last chance to " +
             "report: do not start another collection or repair step. Make sure the deliverable is in the " +
             "workspace root, list every field the page did not provide in `problems`, and call " +
             "system.taskComplete NOW. An honest partial report is better than an aborted run with no report."
     } else {
-        "You have used $now% of this task's token budget ($consumed of $limit). Stop collecting and " +
+        "You have used $now% of this task's cache-miss token budget ($consumed of $limit; prompt-cache " +
+            "reads are free, so this counts uncached input plus output). Stop collecting and " +
             "re-auditing: write the deliverable to the workspace root now if it is still under .b4scratch, " +
             "list every field the page did not provide in `problems`, and call system.taskComplete. " +
             "An honest partial report is better than an aborted run with no report."
@@ -564,6 +569,17 @@ open class RobustBrowserAgent(
      */
     @Volatile
     var workspaceDirOverride: Path? = null
+
+    /**
+     * The isolated worktree this coding task runs in, if any.
+     *
+     * Set by the task runner together with [workspaceDirOverride]; the loop passes
+     * it to the workspace manifest (isolation/baseline/worktree) and the merge gate
+     * reads it back. Cleared in the runner's `finally` like every other per-task
+     * override — the companion agent is shared by all tasks of a session.
+     */
+    @Volatile
+    var workspaceIsolation: ai.platon.pulsar.coding.WorkspaceIsolation? = null
 
     /**
      * Live step sink of the current run, set by the task runner
@@ -702,6 +718,46 @@ open class RobustBrowserAgent(
     private var lastVerificationVerdict: VerificationReport? = null
 
     /**
+     * Four-bucket attribution of the current run (plan N3): build / tool / callback /
+     * model time plus token counts, accumulated in-process so the answer travels with
+     * the task result instead of having to be re-derived from the memory event log.
+     */
+    private val runTimings = RunTimingsAccumulator()
+
+    /**
+     * Mutation count at the last speculative-build attempt (plan C1).
+     *
+     * The trigger runs before every model request; the fingerprint it needs hashes the whole
+     * source tree, so remembering the last epoch keeps "nothing was written" rounds free.
+     */
+    private var speculativeBuildEpoch = Int.MIN_VALUE
+
+    /**
+     * Start a compile while the model is thinking (plan C1).
+     *
+     * After an edit the agent waits seconds for the provider, and the build it usually asks
+     * for next can run inside that window: a correct guess turns the later
+     * `coding.mvnBuild` into a cache hit, a wrong one costs CPU only (the content-keyed
+     * cache and the write-time cancel make sure a stale answer is never served).
+     *
+     * Best-effort by construction: a miss here is an optimisation that did not happen, so
+     * every failure is swallowed at debug level and the task continues.
+     */
+    private fun maybeScheduleSpeculativeBuild() {
+        if (!codingMode) return
+        runCatching {
+            val epoch = agentToolManager.codingFs.mutationEpoch
+            if (epoch == speculativeBuildEpoch) return
+            speculativeBuildEpoch = epoch
+            MavenBuildSupport().scheduleSpeculativeBuild(agentToolManager.codingShell)
+        }.onFailure { logger.debug("speculative build trigger skipped: {}", it.message) }
+    }
+
+    /** The current run's attribution, or `null` before the first round. */
+    val lastRunTimings: RunTimings?
+        get() = runTimings.snapshot().takeIf { it.rounds > 0 || it.toolMs > 0 || it.buildMs > 0 }
+
+    /**
      * Coding mode override (see [BasicBrowserAgent.codingMode]): set by
      * [ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner] from the
      * task's explicit coding flag (`command.run`'s `coding` argument, the CLI's
@@ -757,8 +813,16 @@ open class RobustBrowserAgent(
      * mutate this result.
      * @throws CancellationException if the agent is closed or the operation is canceled
      */
-    override suspend fun run(action: ActionOptions): AgentHistory {
+    private suspend fun run(action: ActionOptions): AgentHistory {
         _lastRunSessionId = null
+        // A shared agent serves every task of an interactive session, so a fresh
+        // run must not inherit the previous task's LLM spend: a stale budget could
+        // abort it with a spurious TOKEN_BUDGET, and a stale `lastRunTokenBudget`
+        // would report the previous task's limit on a failure that happened
+        // before this run's tool loop started. Both are reset here, before any
+        // auxiliary (legacy/extract) inference call can charge them.
+        val runTokens = cta.beginRun(session.sessionConfig, tokenBudgetOverride)
+        lastRunTokenBudget = runTokens.effectiveMaxTotalTokens
         resetInnerToolExecutions()
         onWillRun(action)
 
@@ -793,46 +857,6 @@ open class RobustBrowserAgent(
     }
 
     /**
-     * Executes a single observe->act cycle for a supplied ActionOptions. Times out after actTimeoutMs
-     * to prevent indefinite hangs. Model may produce multiple candidate tool calls internally; only
-     * one successful execution is recorded in stateHistory.
-     *
-     * @param action The action to execute
-     * @return Result of the action execution
-     */
-    override suspend fun act(action: ActionOptions): ActResult {
-        return try {
-            val ctx = agentScope.coroutineContext.minusKey(Job)
-            withContext(ctx) {
-                super.act(action)
-            }
-        } catch (e: CancellationException) {
-            logger.info("🛑 act.cancelled action={}", action.action.take(50))
-            ActResultHelper.failed(e, action.action)
-        }
-    }
-
-    /**
-     * Executes a tool call derived from a prior observation result. Performs patching (selector/url),
-     * validation, and updates AgentState history on success or failure.
-     *
-     * @param observe The observation result containing the action to execute
-     * @return Result of the action execution
-     */
-    @Deprecated("Use the CLI tool-loop engine path instead")
-    override suspend fun act(observe: ObserveResult): ActResult {
-        return try {
-            val ctx = agentScope.coroutineContext.minusKey(Job)
-            withContext(ctx) {
-                super.act(observe)
-            }
-        } catch (e: CancellationException) {
-            logger.info("🛑 act.cancelled instruction={}", observe.agentState.instruction.take(50))
-            ActResultHelper.failed(e, action = observe.actionDescription?.instruction ?: "")
-        }
-    }
-
-    /**
      * Structured extraction: builds a rich prompt with DOM snapshot & optional JSON schema; performs
      * two-stage LLM calls (extract + metadata) and merges results with token/time metrics.
      *
@@ -855,39 +879,6 @@ open class RobustBrowserAgent(
                 data = JsonNodeFactory.instance.objectNode(),
                 completed = false
             )
-        }
-    }
-
-    /**
-     * Observes the page given an instruction, returning zero or more ObserveResult objects describing
-     * candidate elements and potential actions (if returnAction=true).
-     */
-    @Deprecated("Use the CLI tool-loop engine path instead")
-    override suspend fun observe(options: ObserveOptions): List<ObserveResult> {
-        val context = stateManager.getOrCreateActiveContext(options, "observe")
-
-        val ctx = agentScope.coroutineContext.minusKey(Job)
-
-        if (!options.fromResolve) {
-            return withContext(ctx) {
-                super.observe(options)
-            }
-        }
-
-        try {
-            val result = withContext(ctx) {
-                onWillObserve(options)
-                doObserve(options)
-            }
-
-            circuitBreaker.recordSuccess(CircuitBreaker.FailureType.LLM_FAILURE)
-
-            onDidObserve(options, result)
-
-            return result.observeResults
-        } catch (e: Exception) {
-            handleObserveException(e, context)
-            return emptyList()
         }
     }
 
@@ -1110,8 +1101,21 @@ open class RobustBrowserAgent(
             // tracking (so changeSummary opens at 0), and obtain the inherited
             // workspace-state block to inject into the system prompt. Safe for
             // non-coding runs — it only resets the mutation log.
+            //
+            // The isolation identity travels with the manifest: a worktree has no
+            // manifest of its own before this write point, and the task-end Δgit
+            // computation must look at the MAIN repository, not the isolated tree.
+            val isolation = workspaceIsolation
             val inheritedSection = runCatching {
-                agentToolManager.beginTask(taskId, action.action, codingMode)
+                agentToolManager.beginTask(
+                    taskId,
+                    action.action,
+                    codingMode,
+                    isolation = isolation?.let { "worktree" },
+                    worktree = isolation?.isolatedRoot?.toString(),
+                    baseline = isolation?.baselineCommit,
+                    sourceRepo = isolation?.repoRoot,
+                )
             }.getOrNull().orEmpty()
             var messages: List<ChatMessage> = listOf(
                 SystemMessage.from(cliAgentSystemPrompt() + inheritedSection + memorySection),
@@ -1125,6 +1129,7 @@ open class RobustBrowserAgent(
             val maxTurns = config.maxSteps.coerceAtLeast(1)
             // A new run starts with no verdict and a full repair budget.
             lastVerificationVerdict = null
+            runTimings.reset()
             repairLoop.reset()
             finishReportRepair.reset()
             logger.info("🚀 cli-agent.start sid={} turns={} instr='{}'",
@@ -1151,9 +1156,15 @@ open class RobustBrowserAgent(
             // abort. Charged from the loop's onModelResponse callback; the breach
             // propagates to resolveProblemWithRetry, which treats it as permanent.
             //
-            // The per-task override (`agent run --token-budget`) is resolved here, once
-            // per run, and never written into the process-wide registry.
-            val tokenBudget = AgentTokenBudget.forRun(session.sessionConfig, tokenBudgetOverride)
+            // The run budget - including the per-task override (`agent run
+            // --token-budget`) - was resolved once for the whole run by
+            // `ContextToAction.beginRun` before the first attempt and must NOT be
+            // recreated here: this block runs once per RETRY attempt, so a fresh
+            // instance would (a) let a task that retries N times spend N x the
+            // configured limit and (b) report `cumulativeTokens` from a budget that is
+            // not the one the legacy/extract path charges. `cta.tokenBudget` is the
+            // single per-run budget both engine paths share.
+            val tokenBudget = cta.tokenBudget
             lastRunTokenBudget = tokenBudget.effectiveMaxTotalTokens
             // Coding progress enforcement: rounds without a recorded file
             // mutation. Reset on every round that changes a file (see
@@ -1546,7 +1557,13 @@ open class RobustBrowserAgent(
             // tool execution (see CliLoopTracer). The specs are the ones the
             // model request actually carries (exposed set + meta tools), NOT
             // the full registry — the dump must reconstruct the real prompt.
-            onBeforeGenerate = { msgs, specs -> cliLoopTracer.logPrompt(msgs, specs) },
+            onBeforeGenerate = { msgs, specs ->
+                cliLoopTracer.logPrompt(msgs, specs)
+                // Plan C1: the provider round-trip is the window a build can run in. The
+                // hook is called before EVERY request, so the trigger is guarded by a
+                // mutation counter — it must never hash the source tree for nothing.
+                maybeScheduleSpeculativeBuild()
+            },
             // The provider's usage for this request reaches the run's stats as a
             // `run.usage` step (token accounting for `/stats`): the tracer writes
             // the same numbers to `cli-usage.jsonl`, but only on disk — a client
@@ -1557,12 +1574,20 @@ open class RobustBrowserAgent(
                 // includes this request (a task-level budget that is about to abort
                 // must still be visible), then reported with the effective budget.
                 tokenBudget?.let { budget ->
-                    runCatching { response.tokenUsage() }.getOrNull()?.let { usage ->
+                    runCatching { response.tokenUsage() }.getOrNull()?.let { rawUsage ->
                         // A provider that omits usage contributes nothing; the request
                         // is still counted by the loop's own totals.
+                        //
+                        // Charge the prompt the request actually processed: cache
+                        // reads/writes are real prompt tokens (Anthropic reports them
+                        // OUTSIDE `input_tokens`, OpenAI-style providers inside it), and
+                        // `normalized()` folds them into `inputTokenCount` exactly once —
+                        // never twice, or a cache-heavy run would abort early.
+                        val usage = TokenUsage.from(rawUsage).normalized()
                         budget.charge(
-                            usage.inputTokenCount()?.toLong() ?: 0L,
-                            usage.outputTokenCount()?.toLong() ?: 0L,
+                            usage.inputTokenCount.toLong(),
+                            usage.outputTokenCount.toLong(),
+                            usage.cachedInputTokenCount?.toLong() ?: 0L,
                         )
                     }
                 }
@@ -1582,6 +1607,10 @@ open class RobustBrowserAgent(
                     )
                 )
                 cliLoopTracer.logTool(req, result, durationMs)
+                // N3: per-tool attribution, so the task result can report build vs tool
+                // time without re-reading the event log. Build tools are split out here —
+                // a `coding.mvnBuild` body is the dominant cost of a self-development run.
+                runTimings.onTool(req.name(), durationMs)
                 // P1-2: record executed tools (meta plumbing excluded — it is
                 // neither task progress nor useful context for the model).
                 if (req.name() !in ToolDisclosureTools.META_NAMES) {
@@ -1652,6 +1681,9 @@ open class RobustBrowserAgent(
                                     isDecidedComplete = true,
                                     summary = completion.summary,
                                     keyFindings = completion.keyFindings,
+                                    // The model's own follow-up proposals reach the CLI's
+                                    // "likely next steps" menu through the command result.
+                                    nextSuggestions = completion.nextSuggestions,
                                     filesChanged = completion.filesChanged,
                                     problems = completion.problems,
                                 )
@@ -1659,6 +1691,36 @@ open class RobustBrowserAgent(
                         }
                     }.onFailure { logger.warn("cli-agent taskComplete parse failed: {}", it.message) }
                 }
+            },
+            // P0-0: one attribution event per tool round (model / tools / callbacks).
+            // Without it, "the gap is model inference" and "the gap is per-call
+            // bookkeeping" are indistinguishable, and they have different fixes.
+            onRoundTiming = { timing ->
+                runCatching {
+                    // N3: accumulate the round into the run's four buckets.
+                    runTimings.onRound(timing)
+                    cliLoopTracer.logEvent(
+                        "round_timing",
+                        mapOf(
+                            "round" to timing.round,
+                            "calls" to timing.calls,
+                            "modelMs" to timing.modelMs,
+                            "toolsMs" to timing.toolsMs,
+                            "callbacksMs" to timing.callbacksMs,
+                            "outTokens" to timing.outTokens,
+                            "cachedInTokens" to timing.cachedInTokens,
+                            "inTokens" to timing.inTokens,
+                        ),
+                    )
+                    val memory = agentMemory
+                    if (MemoryConfig.enabled) {
+                        memory.sink.roundTimed(
+                            memory.currentTaskId ?: "unknown", uuid.toString(),
+                            timing.round, timing.calls, timing.modelMs, timing.toolsMs, timing.callbacksMs,
+                            timing.outTokens, timing.cachedInTokens, timing.inTokens,
+                        )
+                    }
+                }.onFailure { logger.warn("round_timing emission failed: {}", it.message) }
             },
             // Steering arrives mid-round for the interactive session: inject it
             // right before the next inference so the model can react within the
@@ -1737,15 +1799,23 @@ open class RobustBrowserAgent(
         category: String? = null,
         budget: AgentTokenBudget? = null,
     ) {
+        // Normalize across protocols: `inputTokens` is the prompt the request
+        // actually processed (prompt-cache reads and writes included), so
+        // `cachedInputTokens / inputTokens` is a hit ratio for OpenAI-compatible
+        // and Anthropic-style providers alike. Cache counters stay null when the
+        // provider reported none — an unknown cache is not a 0% hit rate.
         val usage = runCatching { response.tokenUsage() }.getOrNull()
+            ?.let { TokenUsage.from(it).normalized() }
         emitRunEvent(
             AgentRunEvent(
                 AgentRunEvent.USAGE,
                 text = category,
                 turn = turn,
-                inputTokens = usage?.inputTokenCount(),
-                outputTokens = usage?.outputTokenCount(),
-                totalTokens = usage?.totalTokenCount(),
+                inputTokens = usage?.inputTokenCount,
+                outputTokens = usage?.outputTokenCount,
+                totalTokens = usage?.totalTokenCount,
+                cachedInputTokens = usage?.cachedInputTokenCount,
+                cacheWriteInputTokens = usage?.cacheWriteInputTokenCount,
                 budgetTokens = budget?.effectiveMaxTotalTokens,
                 cumulativeTokens = budget?.consumedTotal,
             )
@@ -1914,17 +1984,24 @@ open class RobustBrowserAgent(
          * Persist the real provider token usage for one model request, paired
          * with its request dump via `requestSeq`. Append-only JSONL so every
          * round's usage survives (the loop sums usage across rounds).
+         *
+         * The prompt-cache breakdown is written alongside the counts (null when
+         * the provider reported none) so a run can be re-analyzed for cache
+         * efficiency without re-calling the provider.
          */
         fun logResponse(requestSeq: Int, response: ChatResponse) {
             if (!enabled) return
             try {
-                val usage = response.tokenUsage()
+                val usage = runCatching { response.tokenUsage() }.getOrNull()
+                    ?.let { TokenUsage.from(it).normalized() }
                 val payload = mapOf(
                     "timestamp" to AppPaths.fromNow(),
                     "requestSeq" to requestSeq,
-                    "inputTokens" to usage?.inputTokenCount(),
-                    "outputTokens" to usage?.outputTokenCount(),
-                    "totalTokens" to usage?.totalTokenCount(),
+                    "inputTokens" to usage?.inputTokenCount,
+                    "outputTokens" to usage?.outputTokenCount,
+                    "totalTokens" to usage?.totalTokenCount,
+                    "cachedInputTokens" to usage?.cachedInputTokenCount,
+                    "cacheWriteInputTokens" to usage?.cacheWriteInputTokenCount,
                     "finishReason" to response.finishReason()?.name,
                 )
                 jsonlWriter.writeTo(payload, runDir.resolve("cli-usage.jsonl"))
@@ -1941,14 +2018,17 @@ open class RobustBrowserAgent(
         fun logCompactionUsage(response: ChatResponse) {
             if (!enabled) return
             try {
-                val usage = response.tokenUsage()
+                val usage = runCatching { response.tokenUsage() }.getOrNull()
+                    ?.let { TokenUsage.from(it).normalized() }
                 val payload = mapOf(
                     "timestamp" to AppPaths.fromNow(),
                     "requestSeq" to 0,
                     "category" to "compaction",
-                    "inputTokens" to usage?.inputTokenCount(),
-                    "outputTokens" to usage?.outputTokenCount(),
-                    "totalTokens" to usage?.totalTokenCount(),
+                    "inputTokens" to usage?.inputTokenCount,
+                    "outputTokens" to usage?.outputTokenCount,
+                    "totalTokens" to usage?.totalTokenCount,
+                    "cachedInputTokens" to usage?.cachedInputTokenCount,
+                    "cacheWriteInputTokens" to usage?.cacheWriteInputTokenCount,
                     "finishReason" to response.finishReason()?.name,
                 )
                 jsonlWriter.writeTo(payload, runDir.resolve("cli-usage.jsonl"))
@@ -2221,7 +2301,26 @@ open class RobustBrowserAgent(
         cliLoopTracer.logCompactionUsage(response)
         // The same call also reaches the run stats: compaction tokens are part of
         // what the run consumed, and hiding them made `/stats` under-report.
-        emitUsageEvent(response, turn = 0, category = AgentRunEvent.USAGE_CATEGORY_COMPACTION)
+        //
+        // They are also CHARGED to the run budget, not merely reported: this request
+        // bypasses `generateResponseRaw` (it calls the chat model directly), so
+        // without the charge a loop that compacts its history many times spends
+        // tokens that count neither toward the budget nor toward `cumulativeTokens`.
+        val compactionUsage = runCatching { response.tokenUsage() }.getOrNull()
+            ?.let { TokenUsage.from(it).normalized() }
+        if (compactionUsage != null) {
+            cta.tokenBudget.charge(
+                compactionUsage.inputTokenCount.toLong(),
+                compactionUsage.outputTokenCount.toLong(),
+                compactionUsage.cachedInputTokenCount?.toLong() ?: 0L,
+            )
+        }
+        emitUsageEvent(
+            response,
+            turn = 0,
+            category = AgentRunEvent.USAGE_CATEGORY_COMPACTION,
+            budget = cta.tokenBudget,
+        )
         return response.aiMessage().text() ?: ""
     }
 
@@ -2271,7 +2370,7 @@ open class RobustBrowserAgent(
 
     /** System prompt for the CLI tool-loop engine: role + resident quick reference + hygiene rules. */
     private fun cliAgentSystemPrompt(): String = buildString {
-        append(CliAgentPrompt.role(codingMode, config.repairMaxRounds, agentWorkspaceDir))
+        append(CliAgentPrompt.role(codingMode, config.repairMaxRounds, agentWorkspaceDir, isolated = workspaceIsolation != null))
         // The resident browsing quick reference is what a browsing run needs every
         // round; a coding run gets its role facts from CliAgentPrompt instead, so it
         // does not start by reading browser CLI docs (observed waste).
@@ -2326,16 +2425,6 @@ open class RobustBrowserAgent(
     }
 
     // ─── Error handling ───────────────────────────────────────────────────────
-
-    private fun handleObserveException(e: Exception, context: ExecutionContext) {
-        val failures = try {
-            circuitBreaker.recordFailure(CircuitBreaker.FailureType.LLM_FAILURE)
-        } catch (cbError: CircuitBreakerTrippedException) {
-            throw PerceptiveAgentError.PermanentError(cbError.message ?: "Circuit breaker tripped", cbError)
-        }
-
-        logger.error("🤖❌ action.gen.fail sid={} failures={} msg={}", context.sid, failures, e.message, e)
-    }
 
     private fun handleResolutionFailure(
         e: Exception, context: ExecutionContext, startTime: Instant
@@ -2598,41 +2687,29 @@ open class RobustBrowserAgent(
         gitStatus(workspace)?.second
 
     /**
-     * `git status --porcelain` split into (changed, deleted).
+     * `git status` split into (changed, deleted), or null when git is unavailable.
+     *
+     * Goes through [GitStatus], the shared parser: the line-based form quotes non-ASCII
+     * paths (so the report's file list and this evidence could never match), and reading
+     * the process only after `waitFor` deadlocks on a wide change set.
+     *
+     * The agent's own bookkeeping is excluded — a scratch script is not a deliverable, and
+     * counting it as one made the "files the run modified" rule nag about files the report
+     * rightly leaves out.
      *
      * Deletions are tracked separately: a deleted file is absent from the
      * changed-file list, so a "deleted X" claim needs its own evidence.
      */
     private fun gitStatus(workspace: Path): Pair<Set<String>, Set<String>>? {
-        return try {
-            val process = ProcessBuilder("git", "-C", workspace.toString(), "status", "--porcelain")
-                .redirectErrorStream(true)
-                .start()
-            if (!process.waitFor(15, TimeUnit.SECONDS)) {
-                process.destroyForcibly()
-                return null
-            }
-            if (process.exitValue() != 0) return null
-            val text = process.inputStream.bufferedReader().use { it.readText() }
-            val changed = linkedSetOf<String>()
-            val deleted = linkedSetOf<String>()
-            text.lineSequence().forEach { line ->
-                if (line.length < 4) return@forEach
-                var path = line.substring(3).trim()
-                // Rename/copy form: "old -> new" — the new path is what exists.
-                if (" -> " in path) path = path.substringAfter(" -> ")
-                val normalized = normalizeRepoPath(path)
-                if (normalized.isEmpty()) return@forEach
-                if (line.startsWith(" D") || line.startsWith("D ") || line.startsWith("DD")) {
-                    deleted += normalized
-                } else {
-                    changed += normalized
-                }
-            }
-            changed to deleted
-        } catch (_: Exception) {
-            null
+        val entries = GitStatus.entries(workspace, excludes = AGENT_BOOKKEEPING_EXCLUDES) ?: return null
+        val changed = linkedSetOf<String>()
+        val deleted = linkedSetOf<String>()
+        entries.forEach { entry ->
+            val normalized = normalizeRepoPath(entry.path)
+            if (normalized.isEmpty()) return@forEach
+            if (entry.deleted) deleted += normalized else changed += normalized
         }
+        return changed to deleted
     }
 
     private fun normalizeRepoPath(raw: String): String =
@@ -2765,3 +2842,13 @@ open class RobustBrowserAgent(
     }
 }
 
+/**
+ * Pathspecs excluded from the finish-report evidence: the agent's own bookkeeping is not a
+ * deliverable, and counting it as one made the "files the run modified" rule nag about files a
+ * completion report rightly leaves out. Mirrors `WorkspaceIsolation`'s merge exclusions.
+ */
+private val AGENT_BOOKKEEPING_EXCLUDES = listOf(
+    ":(exclude).b4scratch/**", ":(exclude)**/.b4scratch/**",
+    ":(exclude).b4inputs/**", ":(exclude)**/.b4inputs/**",
+    ":(exclude).browser4/**", ":(exclude)**/.browser4/**",
+)

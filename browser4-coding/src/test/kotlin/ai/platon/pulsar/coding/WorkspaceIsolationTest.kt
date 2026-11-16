@@ -178,6 +178,206 @@ class WorkspaceIsolationTest {
         assertTrue(Files.exists(tempDir.resolve("second.txt")))
     }
 
+    // ==================== S1: merge protocol ====================
+
+    @Test
+    @DisplayName("agent bookkeeping directories are never part of the change set")
+    fun bookkeepingExcludedFromChanges() = runBlocking {
+        val isolation = WorkspaceIsolation.begin(tempDir, "run-excl")
+        try {
+            Files.writeString(isolation.isolatedRoot.resolve("a.txt"), "changed\n")
+            Files.createDirectories(isolation.isolatedRoot.resolve(".b4scratch"))
+            Files.writeString(isolation.isolatedRoot.resolve(".b4scratch/helper.py"), "print(1)\n")
+            Files.createDirectories(isolation.isolatedRoot.resolve(".b4inputs"))
+            Files.writeString(isolation.isolatedRoot.resolve(".b4inputs/spec.csv"), "a,b\n")
+            Files.createDirectories(isolation.isolatedRoot.resolve(".browser4"))
+            Files.writeString(isolation.isolatedRoot.resolve(".browser4/workspace.json"), "{}\n")
+
+            assertEquals(listOf("a.txt"), isolation.changedFiles())
+        } finally {
+            isolation.rollback()
+        }
+    }
+
+    @Test
+    @DisplayName("a merge succeeds when .gitignore already covers the bookkeeping directories")
+    fun mergeWithIgnoredBookkeepingDirectories() = runBlocking {
+        // The real checkout ignores `.browser4/` and `/.b4scratch/` and both directories exist in
+        // the worktree at merge time (snapshots, helper scripts). Handing the bookkeeping pathspecs
+        // to `git add` made git exit 1 with "The following paths are ignored by one of your
+        // .gitignore files" — a trailing `**` matches the ignored directory itself — so the merge
+        // reported "Changes were NOT applied" for a change set that was correct and already staged.
+        Files.writeString(tempDir.resolve(".gitignore"), ".browser4/\n.b4scratch/\n")
+        git("add", ".gitignore")
+        git("commit", "-m", "ignore the agent bookkeeping directories")
+        val isolation = WorkspaceIsolation.begin(tempDir, "run-ignored")
+        try {
+            Files.writeString(isolation.isolatedRoot.resolve("a.txt"), "changed\n")
+            Files.createDirectories(isolation.isolatedRoot.resolve(".b4scratch"))
+            Files.writeString(isolation.isolatedRoot.resolve(".b4scratch/helper.py"), "print(1)\n")
+            Files.createDirectories(isolation.isolatedRoot.resolve(".browser4"))
+            Files.writeString(isolation.isolatedRoot.resolve(".browser4/workspace.json"), "{}\n")
+
+            val outcome = isolation.applyToMain("task-ignored")
+
+            assertTrue(outcome.ok, "merge failed: ${outcome.message}")
+            assertEquals(listOf("a.txt"), outcome.changedFiles)
+            assertEquals("changed\n", read(tempDir.resolve("a.txt")))
+            val patch = Files.readString(Path.of(outcome.patchPath!!))
+            assertFalse(
+                patch.contains(".b4scratch") || patch.contains(".browser4"),
+                "agent bookkeeping must never reach the patch: ${patch.take(500)}",
+            )
+        } finally {
+            isolation.rollback()
+        }
+    }
+
+    @Test
+    @DisplayName("applyToMain merges, keeps the worktree, keeps the patch and records the pre-merge ref")
+    fun applyToMainKeepsRecoveryHandles() = runBlocking {
+        val isolation = WorkspaceIsolation.begin(tempDir, "run-merge")
+        Files.writeString(isolation.isolatedRoot.resolve("b.txt"), "new file\n")
+
+        val outcome = isolation.applyToMain("task-merge")
+        try {
+            assertTrue(outcome.ok, "merge failed: ${outcome.message}")
+            assertEquals(listOf("b.txt"), outcome.changedFiles)
+            assertEquals("new file\n", read(tempDir.resolve("b.txt")))
+            assertTrue(Files.exists(isolation.isolatedRoot), "the worktree must be kept for review/resume")
+            assertTrue(outcome.worktreeKept)
+            assertNotNull(outcome.patchPath)
+            assertTrue(Files.exists(Path.of(outcome.patchPath!!)), "the patch must be kept for recover")
+            assertEquals("refs/b4/pre/task-merge", outcome.preRef)
+            val r = git("rev-parse", "--verify", outcome.preRef!!)
+            assertEquals(0, r.first, "pre-merge ref must exist: ${r.second}")
+        } finally {
+            isolation.rollback()
+        }
+    }
+
+    @Test
+    @DisplayName("a dirty main tree is captured as the baseline and preserved by the merge")
+    fun dirtyBaselineIsPreserved() = runBlocking {
+        Files.writeString(tempDir.resolve("a.txt"), "user-dirty\n")
+        val isolation = WorkspaceIsolation.begin(tempDir, "run-dirty")
+        try {
+            assertEquals("user-dirty\n", read(isolation.isolatedRoot.resolve("a.txt")), "task must see the user's uncommitted edit")
+
+            Files.writeString(isolation.isolatedRoot.resolve("b.txt"), "agent\n")
+            val outcome = isolation.applyToMain("task-dirty")
+            assertTrue(outcome.ok, "merge failed: ${outcome.message}")
+            assertEquals("user-dirty\n", read(tempDir.resolve("a.txt")), "the user's edit must survive")
+            assertEquals("agent\n", read(tempDir.resolve("b.txt")))
+        } finally {
+            isolation.rollback()
+        }
+    }
+
+    @Test
+    @DisplayName("re-applying an already merged patch is reported as merged, not refused")
+    fun mergeIsIdempotent() {
+        runBlocking {
+            val isolation = WorkspaceIsolation.begin(tempDir, "run-idem")
+            try {
+                Files.writeString(isolation.isolatedRoot.resolve("b.txt"), "agent\n")
+                val first = isolation.applyToMain("task-idem")
+                assertTrue(first.ok, "first merge failed: ${first.message}")
+
+                // A resume can reach the merge point twice (merged, then crashed before
+                // the terminal manifest was written); it must not fail.
+                val second = isolation.applyToMain("task-idem")
+                assertTrue(second.ok, "second merge failed: ${second.message}")
+                assertTrue(second.message.contains("Already merged"), second.message)
+                assertEquals("agent\n", read(tempDir.resolve("b.txt")))
+            } finally {
+                isolation.rollback()
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a merge leaves the change unstaged, exactly like a manual edit")
+    fun mergeLeavesChangeUnstaged() {
+        runBlocking {
+            val isolation = WorkspaceIsolation.begin(tempDir, "run-unstaged")
+            try {
+                Files.writeString(isolation.isolatedRoot.resolve("b.txt"), "agent\n")
+                val outcome = isolation.applyToMain("task-unstaged")
+                assertTrue(outcome.ok, "merge failed: ${outcome.message}")
+                // `git apply --3way` stages what it merges; the merge must not. A staged
+                // file would read "A  b.txt" instead of "?? b.txt".
+                assertEquals("?? b.txt", status(), "the merge must not touch the index")
+            } finally {
+                isolation.rollback()
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("the kept patch reverses exactly one task")
+    fun patchReversesOneTask() {
+        runBlocking {
+            val isolation = WorkspaceIsolation.begin(tempDir, "run-revert")
+            Files.writeString(isolation.isolatedRoot.resolve("b.txt"), "agent\n")
+            val outcome = isolation.applyToMain("task-revert")
+            assertTrue(outcome.ok, "merge failed: ${outcome.message}")
+            assertEquals("agent\n", read(tempDir.resolve("b.txt")))
+
+            val revert = git("apply", "-R", outcome.patchPath!!)
+            assertEquals(0, revert.first, "reverse apply failed: ${revert.second}")
+            assertFalse(Files.exists(tempDir.resolve("b.txt")), "the task's file must be gone after the revert")
+            assertEquals("", status(), "the main tree must be clean again")
+            isolation.rollback()
+        }
+    }
+
+    @Test
+    @DisplayName("begin refuses to nest isolation inside a linked worktree")
+    fun nestedWorktreeRejected() = runBlocking {
+        val isolation = WorkspaceIsolation.begin(tempDir, "run-parent")
+        try {
+            val nested = assertThrows(IllegalStateException::class.java) {
+                runBlocking { WorkspaceIsolation.begin(isolation.isolatedRoot, "run-child") }
+            }
+            assertTrue(nested.message!!.contains("linked worktree"), nested.message!!)
+        } finally {
+            isolation.rollback()
+        }
+    }
+
+    @Test
+    @DisplayName("rebase resets a reused worktree to the checkout's current baseline")
+    fun rebaseResetsReusedWorktree() {
+        runBlocking {
+            val isolation = WorkspaceIsolation.begin(tempDir, "session-x")
+            try {
+                Files.writeString(isolation.isolatedRoot.resolve("a.txt"), "merged change\n")
+                val merged = isolation.applyToMain("task-1")
+                assertTrue(merged.ok, "merge failed: ${merged.message}")
+                assertEquals("merged change\n", read(tempDir.resolve("a.txt")))
+
+                // A previous run may leave untracked helpers behind; reuse must clear them.
+                Files.writeString(isolation.isolatedRoot.resolve("leftover.txt"), "junk\n")
+
+                assertTrue(isolation.rebase(), "rebase must succeed on a clean checkout")
+
+                assertEquals(
+                    "merged change\n",
+                    read(isolation.isolatedRoot.resolve("a.txt")),
+                    "the merged change is part of the new baseline",
+                )
+                assertFalse(
+                    Files.exists(isolation.isolatedRoot.resolve("leftover.txt")),
+                    "untracked leftovers are cleaned by rebase",
+                )
+                assertTrue(isolation.changedFiles().isEmpty(), "a reused tree starts clean: ${isolation.changedFiles()}")
+            } finally {
+                isolation.rollback()
+            }
+        }
+    }
+
     // ==================== helpers ====================
 
     @Test
@@ -189,9 +389,142 @@ class WorkspaceIsolationTest {
     }
 
     @Test
+    @DisplayName("staging batches keep every path and stay under the command-line budget")
+    fun stagingBatchesStayUnderTheCommandLineBudget() {
+        val paths = (1..1_000).map { "browser4-coding/src/main/kotlin/ai/platon/pulsar/coding/File$it.kt" }
+
+        val batches = WorkspaceIsolation.stageBatches(paths, maxChars = 4_096)
+
+        assertEquals(paths, batches.flatten(), "batching must not drop or reorder a path")
+        assertTrue(batches.size > 1, "a change set this wide must be split: ${batches.size}")
+        assertTrue(
+            batches.all { batch -> batch.size == 1 || batch.sumOf { it.length + 12 } <= 4_096 },
+            "every batch must stay under the budget: ${batches.map { it.size }}",
+        )
+        assertTrue(WorkspaceIsolation.stageBatches(emptyList()).isEmpty(), "no paths, no git call")
+        assertEquals(
+            listOf(listOf("x".repeat(200))),
+            WorkspaceIsolation.stageBatches(listOf("x".repeat(200)), maxChars = 64),
+            "an over-long path is still staged exactly once",
+        )
+    }
+
+    @Test
     @DisplayName("isAvailable reflects the presence of a git work tree")
     fun availability() {
         assertTrue(WorkspaceIsolation.isAvailable(tempDir))
         assertNotNull(WorkspaceIsolation.resolveRepoRoot(tempDir))
+    }
+
+    @Test
+    @DisplayName("only paths under the managed worktree directory are recognized as isolated trees")
+    fun managedWorktreeDetection() {
+        // What a `--resume` must reopen: the interrupted task's files exist only there.
+        assertTrue(WorkspaceIsolation.isManagedWorktree(tempDir.resolve(".browser4/worktrees/task-1")))
+
+        // An ordinary per-task workspace and a plain checkout are not isolated trees.
+        assertFalse(WorkspaceIsolation.isManagedWorktree(tempDir.resolve("workspace.task-1")))
+        assertFalse(WorkspaceIsolation.isManagedWorktree(tempDir))
+    }
+
+    @Test
+    @DisplayName("a non-git workspace explains why it cannot be isolated, instead of mirroring silently")
+    fun isolationUnavailableReason() {
+        assertNull(WorkspaceIsolation.isolationUnavailableReason(tempDir), "the fixture repo can be isolated")
+
+        val plain = Files.createTempDirectory("b4-not-a-repo-")
+        try {
+            val reason = WorkspaceIsolation.isolationUnavailableReason(plain)
+            assertNotNull(reason)
+            assertTrue(reason!!.contains("not a git work tree"), reason)
+            assertTrue(reason.contains("isolation=off"), "the message must name the opt-out: $reason")
+        } finally {
+            Files.deleteIfExists(plain)
+        }
+    }
+
+    @Test
+    @DisplayName("a patch larger than the cap is refused and the main tree stays untouched")
+    fun oversizedPatchRefused() = runBlocking {
+        val isolation = WorkspaceIsolation.begin(tempDir, "run-big")
+        try {
+            Files.writeString(isolation.isolatedRoot.resolve("big.txt"), "x".repeat(5_000) + "\n")
+
+            val outcome = isolation.applyToMain("run-big", maxPatchChars = 64)
+
+            assertFalse(outcome.ok, "an oversized patch must not be applied: ${outcome.message}")
+            assertTrue(outcome.message.contains("too large"), outcome.message)
+            assertEquals("original\n", read(tempDir.resolve("a.txt")))
+            assertFalse(Files.exists(tempDir.resolve("big.txt")), "nothing may reach the main tree")
+            assertTrue(status().isEmpty(), "the main tree must stay clean: ${status()}")
+        } finally {
+            isolation.rollback()
+        }
+    }
+
+    @Test
+    @DisplayName("a change whose patch exceeds the OS pipe buffer still merges")
+    fun largePatchMerges() = runBlocking {
+        // Regression: `runGit` used to wait for git before reading its pipes, so any diff
+        // larger than the pipe buffer (4 KiB on Windows) deadlocked until the 120 s timeout
+        // and was reported as "Could not produce the isolated patch" — a real change could
+        // never merge. Draining the pipes first is what makes this pass.
+        val isolation = WorkspaceIsolation.begin(tempDir, "run-large")
+        try {
+            val body = (1..400).joinToString("\n") { "line $it of a change larger than a pipe buffer" }
+            Files.writeString(isolation.isolatedRoot.resolve("large.txt"), body + "\n")
+
+            val outcome = isolation.applyToMain("run-large")
+
+            assertTrue(outcome.ok, outcome.message)
+            assertEquals(body + "\n", read(tempDir.resolve("large.txt")))
+        } finally {
+            isolation.rollback()
+        }
+    }
+
+    @Test
+    @DisplayName("the checkout to lock is the main repository, and a nested worktree locks nothing")
+    fun checkoutToLockIsTheMainRepository() = runBlocking {
+        assertEquals(tempDir.toAbsolutePath().normalize(), WorkspaceIsolation.checkoutToLock(tempDir))
+
+        // A task nested inside an isolated run is covered by its outer task's lock; asking for
+        // a second one would deadlock against it.
+        val isolation = WorkspaceIsolation.begin(tempDir, "run-lock")
+        try {
+            assertNull(WorkspaceIsolation.checkoutToLock(isolation.isolatedRoot))
+        } finally {
+            isolation.rollback()
+        }
+
+        val plain = Files.createTempDirectory("b4-no-repo-")
+        try {
+            assertNull(WorkspaceIsolation.checkoutToLock(plain), "a non-git workspace has no checkout to lock")
+        } finally {
+            Files.deleteIfExists(plain)
+        }
+    }
+
+    // ==================== change-set reporting ====================
+
+    @Test
+    @DisplayName("a non-ASCII file name is reported verbatim, so it can be fingerprinted")
+    fun changedFilesReportsNonAsciiNames() = runBlocking {
+        // The line-based porcelain form quotes such a name (`"na\303\257ve.md"`), and the
+        // reported path then matches no file on disk: no digest, no module, no git pathspec.
+        val isolation = WorkspaceIsolation.begin(tempDir, "run-unicode")
+        try {
+            Files.writeString(isolation.isolatedRoot.resolve("naïve 中文.kt"), "class X\n")
+
+            val changed = WorkspaceIsolation.changedFilesOf(isolation.isolatedRoot)
+
+            assertEquals(listOf("naïve 中文.kt"), changed)
+            assertNotNull(
+                WorkspaceDigest.of(isolation.isolatedRoot, changed),
+                "the reported path must resolve on disk: $changed",
+            )
+        } finally {
+            isolation.rollback()
+        }
     }
 }

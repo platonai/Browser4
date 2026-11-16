@@ -1,0 +1,63 @@
+# E-3 raw output — BEFORE the fix (2026-11-15, debug binary, no backend running)
+
+## 1. wall clock, `--version`
+
+```
+inside checkout:  358, 294, 291, 278, 284
+outside checkout: 62, 25, 14, 14, 13
+```
+
+Environment overrides that skip the development-mode branch:
+
+```
+--server http://127.0.0.1:8282:        98, 15, 15, 14        (first run cold)
+BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1:    15, 13, 13, 15
+```
+
+## 2. startup trace (`BROWSER4_CLI_TRACE_STARTUP=1`, inside the checkout)
+
+```
+[startup] hooks=0ms
+[startup] runtime=0ms
+[startup] flags=20ms
+[startup] invocation=20ms
+[startup] state=21ms
+[startup] persisted-state=21ms
+[startup] dev-mode=21ms
+browser4-cli 4.16.8
+[startup] port-8283-connect=277ms
+[startup] dev-port=277ms
+[timing] startup=278ms http=0ms server=0ms net=0ms calls=0 total=278ms
+```
+
+`dev-mode` → `port-8283-connect` is 256 ms: one `TcpStream::connect_timeout(250 ms)`
+against the recorded development port (8283), which nobody listens on.
+
+## 3. why a *closed* loopback port costs the whole budget
+
+.NET `TcpClient.Connect` to explicit IPv4 endpoints (`127.0.0.1`):
+
+```
+8282: connected in 2ms        (a live backend of another checkout)
+8283: ConnectionRefused in 2084ms
+8284: ConnectionRefused in 2023ms
+18182: ConnectionRefused in 2061ms
+9999: ConnectionRefused in 2057ms
+```
+
+On this host the SYN to a closed loopback port is dropped, not answered with RST,
+so ECONNREFUSED only arrives after ~2 s. Any probe budget below that is spent in
+full — which is exactly what the 250 ms budget did.
+
+## 4. first attempt at a fix made it worse
+
+Ordering the managed-process registry *first* replaced the TCP probe with
+`is_process_running`, which on Windows spawned `tasklist`:
+
+```
+[startup] dev-mode=22ms
+[startup] dev-port=1185ms
+[timing] startup=1186ms http=0ms server=0ms net=0ms calls=0 total=1186ms
+```
+
+The "cheap registry check" was the expensive part.

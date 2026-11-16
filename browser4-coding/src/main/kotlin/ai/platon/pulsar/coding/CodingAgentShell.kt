@@ -1,6 +1,7 @@
 package ai.platon.pulsar.coding
 
 import org.slf4j.LoggerFactory
+import ai.platon.pulsar.coding.sandbox.ExecutionSandbox
 import ai.platon.pulsar.coding.sandbox.ExecutionSandboxes
 import ai.platon.pulsar.coding.sandbox.ProcessLauncher
 import ai.platon.pulsar.coding.sandbox.ProcessSpec
@@ -46,6 +47,14 @@ import kotlin.io.path.isDirectory
  * - **network** — network-accessing tools require explicit opt-in ([allowNetwork])
  * - **destructive** — write/delete operations require explicit opt-in ([allowDestructive])
  *
+ * There is **no syntax gate**. A command line is decomposed into the simple commands it executes
+ * (`&&`, `|`, substitutions, inline scripts) and every one of them is checked; a shape the
+ * decomposer cannot parse (`for` loops, `else if`, nested blocks, `goto`/`call` payloads) is handed
+ * to the platform shell verbatim, and the shell's own parse error is the feedback. The vetoes that
+ * do not need the decomposition — [BLOCKED_PATTERNS], credentials and protected paths, a disabled
+ * network/destructive tier, and the runtime vetoes (do not kill or rebuild the backend that runs
+ * this task, do not re-link the workspace) — still apply to a handed-off line.
+ *
  * Environment variables can be injected per-session or per-command.
  */
 class CodingAgentShell(
@@ -60,6 +69,45 @@ class CodingAgentShell(
      * enforced here.
      */
     private val allowNetworkProvider: (() -> Boolean)? = null,
+    /**
+     * OS sandbox seam for this shell instance (`agent run --unrestricted`).
+     *
+     * `null` — the default — keeps the process-wide [ExecutionSandboxes] choice from
+     * `browser4.agent.sandbox`, so every other task behaves exactly as before. An unrestricted
+     * task passes the pass-through sandbox explicitly: that is what makes its commands run with
+     * the current OS user's own permissions instead of the confined profile.
+     */
+    private val sandbox: ExecutionSandbox? = null,
+
+    /**
+     * Whether this task runs with the caller's own OS permissions (`agent run --unrestricted`).
+     *
+     * The only shell rule this flag lifts is the **tier** allow-list: a program that is neither
+     * [SAFE_COMMANDS] nor [DEV_COMMANDS] nor on `PATH` (a PowerShell cmdlet such as `Get-Content`, or
+     * `wmic`) is handed over like any other. Keeping it refused made the flag's documented promise
+     * false — `powershell -Command "Get-Content x"` failed with `COMMAND_NOT_ALLOWED` while the model
+     * had been told that inline scripts run as written (2026-11-14 supervision run). The list is a
+     * *spelling* rule, not a boundary: the same body already runs unexamined through `powershell -File`.
+     *
+     * Everything else keeps applying, and the order in [validateSimpleCommandTier] is what guarantees
+     * it: hardcoded blocked patterns, explicit deny, deny patterns, credential and protected paths,
+     * [FORBIDDEN_COMMANDS], [processKillViolation] and [bootstrapViolation] are all checked before
+     * the tier verdict, so a lifted line can reach nothing they would not have reached anyway. The
+     * same vetoes are re-checked at program positions for a line the decomposer cannot parse
+     * ([handOffVetoViolation]) — that hand-off happens in every mode, because there is no syntax
+     * gate to lift.
+     *
+     * Defaults to `false`, so every other task keeps exactly the historical tier behaviour.
+     */
+    private val unrestricted: Boolean = false,
+    /**
+     * When false, the destructive command tier (`rm`, `del`, `move`, `taskkill`, …) is refused.
+     *
+     * This is **not** a read-only switch — reads and builds work either way — and it is not the
+     * workspace boundary either: [allowExternalAccess] decides where a command may point, this flag
+     * decides what it may do. `agent run --access write` clears it; `read-build` and `read` refuse
+     * the shell outright rather than reaching this flag.
+     */
     private val allowDestructive: Boolean = true,
     /** v0.3: when false the shell's working directory is constrained to [baseDir]
      *  by lexical prefix matching (junction-aware, so module subdirectories
@@ -108,6 +156,20 @@ class CodingAgentShell(
      */
     private val workspaceBoundaryEnabled: Boolean =
         System.getProperty("browser4.agent.shell.workspaceBoundary", "on").lowercase() != "off",
+
+    /**
+     * Refuse commands that rebuild or restart the backend the task is running inside
+     * (`b4w build|stop|install|upgrade|uninstall|recover`, `bin/build.ps1`,
+     * `build-runtime-bundle.ps1`).
+     *
+     * The self-development isolation plan (§D8) treats the launch path as operator
+     * work: a task that rebuilds its own runtime can leave the checkout with no
+     * runnable backend. Compiling and testing (`coding.mvnBuild`/`coding.verify`)
+     * is unaffected — it writes `target/`, not the runtime bundle.
+     * `-Dbrowser4.agent.shell.forbidBootstrap=off` restores the old behaviour.
+     */
+    private val forbidBootstrap: Boolean =
+        System.getProperty("browser4.agent.shell.forbidBootstrap", "on").lowercase() != "off",
     /**
      * `build-only` profile: development tools are narrowed to [BUILD_COMMANDS].
      *
@@ -162,6 +224,15 @@ class CodingAgentShell(
      * governed by the command tier and `allowDestructive`.
      */
     private val readableRoots: Set<Path> = emptySet(),
+    /**
+     * Folders granted to this task besides the workspace (`agent run --add-dir`).
+     *
+     * They are in the shell scope (the injected [boundaryAuthorizer] already has them) and, more
+     * importantly here, they are handed to the execution sandbox as extra writable roots: with
+     * `-Dbrowser4.agent.sandbox=windows-acl` the low-privilege account must be granted the same
+     * folder, otherwise the string layer would allow a command the OS then denies.
+     */
+    private val additionalDirs: Set<Path> = emptySet(),
 ) {
     /**
      * The workspace this shell is bound to.
@@ -203,6 +274,68 @@ class CodingAgentShell(
 
         /** Prefix of every [protectedPathViolation] message; used to pick the audit code. */
         private const val PROTECTED_PATH_PREFIX = "protected path: "
+
+        /**
+         * Prefix of the marker that says "the decomposer could not parse this shape".
+         *
+         * The marker never reaches the model: [validateCommand] turns it into a hand-off to the
+         * platform shell ([handOffVetoViolation]), because there is no syntax gate. It is a private
+         * signal between [validateSegments], [conditionalViolation] and that hand-off.
+         */
+        private const val UNPARSED_PREFIX = "cannot parse: "
+
+        /**
+         * Prefixes of the remaining decomposer markers.
+         *
+         * They mean "this shape cannot be decomposed", not "the policy said no": [isUnparsed]
+         * collects the whole family so [validateCommand] knows the line has to be handed over.
+         */
+        private const val SUBSTITUTION_PREFIX = "command substitution rejected"
+
+        private const val INLINE_SCRIPT_PREFIX = "inline script via "
+
+        private const val EMPTY_COMMAND_VIOLATION = "empty or invalid command"
+
+        /**
+         * Prefix of the recursion-limit markers (`nested inline shell script …`, `nested command
+         * substitution …`): the decomposer stopped rather than guessing. It belongs to the unparsed
+         * family; the hand-off then refuses if its own scan stops at the same depth.
+         */
+        private const val NESTED_SCRIPT_PREFIX = "nested "
+
+        /** Separates a wrapper reason from the inner one (`inline script via 'sh' rejected — …`). */
+        private const val INNER_REASON_SEPARATOR = " — "
+
+        /**
+         * Fragments of the refusals **no** flag, preset or operator approval can lift.
+         *
+         * [permanentVetoHint] keys the hint on them. Each refusal message is composed from the same
+         * constant the classifier matches, so the text and the classification cannot drift apart —
+         * which is how the model ended up being told to `coding.requestAccess` a veto that never
+         * lifts (2026-11-14 supervision run).
+         */
+        private const val VETO_WORKSPACE_LINK =
+            "workspace links are provisioned by the framework, not by the agent"
+
+        private const val VETO_BACKEND_KILL = "would terminate the Browser4 backend"
+
+        private const val VETO_BOOTSTRAP = "rebuilds or restarts the backend this task runs inside"
+
+        private const val VETO_BOOTSTRAP_SCRIPT = "refusing to run a bootstrap/recovery script"
+
+        private const val VETO_EXPLICIT_DENY = "is explicitly denied"
+
+        private const val VETO_DENY_PATTERN = "matches deny pattern: "
+
+        /**
+         * The two tier *category* vetoes, which [commandRefusal] hints at separately: they are
+         * liftable (a wider preset, or `net.connect` approval), unlike the permanent ones above.
+         */
+        private const val VETO_NETWORK_DISABLED =
+            "requires network access but it is disabled by the access policy"
+
+        private const val VETO_DESTRUCTIVE_DISABLED =
+            "is a destructive command but allowDestructive=false"
 
         /** Redirection introduced by an argument (`>file`, `>>file`, `2>file`, `&>file`). */
         private val REDIRECTION_PREFIX = Regex("""^(?:\d+|&)?>>?""")
@@ -366,6 +499,48 @@ class CodingAgentShell(
             "shutdown", "reboot",
             "systemctl", "service", "sc",
         )
+
+        /**
+         * Commands that create, replace or delete files.
+         *
+         * Used by [protectedPathViolation]: a protected subtree (`.browser4`, `.github/workflows`)
+         * is off limits to **writes**, so the guard only has to recognise write shapes. A command
+         * in this set is treated conservatively — all of its path arguments count as write
+         * positions. [DESTRUCTIVE_COMMANDS] is a different question (a global "may this category
+         * run" veto that includes process killers and mounts), so the two lists are kept apart.
+         */
+        private val MUTATING_COMMANDS = setOf(
+            // cmd.exe / Windows
+            "del", "erase", "rmdir", "rd", "ren", "rename", "move", "copy", "xcopy", "robocopy",
+            "mkdir", "md", "attrib", "icacls", "takeown",
+            // POSIX
+            "rm", "mv", "cp", "tee", "touch", "mkdir", "rmdir", "chmod", "chown", "chgrp",
+            "truncate", "shred", "unlink", "install", "patch", "ln",
+        )
+
+        /**
+         * PowerShell file cmdlets, matched by verb prefix because the tier cannot see cmdlets as
+         * programs at all (`Set-Content`, `Remove-Item`, `Out-File`, `Export-Csv`, …).
+         */
+        private val MUTATING_CMDLET_PREFIXES = listOf(
+            "set-", "set-item", "add-", "remove-", "clear-", "new-", "rename-", "copy-", "move-",
+            "out-file", "export-",
+        )
+
+        /**
+         * Commands that re-base the chain's working directory (`cd .browser4 && …`).
+         *
+         * Kept apart from [MUTATING_COMMANDS] because navigation writes nothing itself: it changes
+         * what every later *relative* write means, so [writeTargets] has to judge the directory.
+         * `Set-Location` is covered by [MUTATING_CMDLET_PREFIXES] too and is listed anyway, because
+         * the reason it is refused here is navigation, not mutation.
+         */
+        private val NAVIGATION_COMMANDS = setOf(
+            "cd", "chdir", "pushd", "set-location", "push-location",
+        )
+
+        /** `>`, `>>`, `2>`, `2>>`, `&>` — a bare redirection operator between two tokens. */
+        private val REDIRECTION_TARGET_OPERATOR = Regex("""^[0-9&]?>>?$""")
 
         /**
          * Commands the coding shell NEVER runs, whatever the flags say.
@@ -714,7 +889,16 @@ class CodingAgentShell(
      */
     fun explain(command: String): String {
         val violation = validateCommand(command)
-        if (violation != null) return "'$command' is DENIED — $violation"
+        if (violation != null) {
+            return "'$command' is DENIED — $violation"
+        }
+        // The decomposer gave up on this shape, so the line is handed to the platform shell. Say so
+        // instead of explaining the first token of a command line that was never decomposed.
+        if (unparsedMarker(command) != null) {
+            return "'$command' is ALLOWED — the shell cannot decompose this shape, so the line is " +
+                "handed to the platform shell verbatim; the runtime vetoes (backend kill, bootstrap, " +
+                "workspace links) and a disabled network/destructive tier still apply"
+        }
 
         val base = extractBaseCommand(command)
         val reason = when {
@@ -726,6 +910,7 @@ class CodingAgentShell(
             networkAllowed() && base in NETWORK_COMMANDS ->
                 "'$base' is a network command (network access enabled)"
             allowDestructive && base in DESTRUCTIVE_COMMANDS -> "'$base' is a destructive command (allowDestructive=true)"
+            unrestricted -> "'$base' is outside the tier allow-list, and this task is unrestricted"
             else -> "every command in the chain is allowed (pattern / path / PATH rule)"
         }
         return "'$command' is ALLOWED — $reason"
@@ -751,8 +936,10 @@ class CodingAgentShell(
      *
      * Rules:
      * - No argument → canonicalBaseDir (always valid, auto-creates).
-     * - Absolute path → must already exist AND must be lexically inside
-     *   canonicalBaseDir (or allowExternalAccess=true).
+     * - Absolute path → must already exist AND must be inside the shell's boundary scope — the
+     *   workspace, a folder granted with `agent run --add-dir`, or the checkout the workspace
+     *   mirrors ([isWorkingDirInScope]; a toolchain location is not a project directory) — or
+     *   anywhere when allowExternalAccess=true.
      * - Relative path → resolved against canonicalBaseDir; the resulting
      *   path must be lexically inside canonicalBaseDir; non-parent directories
      *   are auto-created (agent is expected to want a new subdir); absolute
@@ -769,7 +956,7 @@ class CodingAgentShell(
             raw.isAbsolute -> raw.normalize()
             else -> canonicalBaseDir.resolve(raw).normalize()
         }
-        if (!allowExternalAccess && !candidate.startsWith(canonicalBaseDir)) {
+        if (!allowExternalAccess && !isWorkingDirInScope(candidate)) {
             throw WorkspaceEscapeException(candidate, canonicalBaseDir)
         }
         // A working directory inside a protected subtree would make every relative path in the
@@ -802,35 +989,123 @@ class CodingAgentShell(
      * Structured refusal for a command the tiered allow-list refused.
      *
      * The reason itself is kept verbatim, because tools outside this module match on it (for example
-     * `bin/eval-devtask.ps1` recognises `Command blocked` and `is not allowed (safe=`), but it is now
-     * wrapped in the `PERMISSION_DENIED | code=… | tool=… | detail=… | hint=…` envelope so the model,
-     * the CLI and `FailureCategory` can all tell a policy refusal from a command that simply failed.
+     * `bin/eval-devtask.ps1` recognises `Command blocked` and `is not allowed (safe=`), but it is
+     * wrapped in a structured envelope so the model, the CLI and `FailureCategory` can all tell a
+     * structural refusal from a command that simply failed.
+     *
+     * Only policy verdicts arrive here: a shape the decomposer cannot parse is handed to the
+     * platform shell by [validateCommand], never reported as a refusal.
      */
     private fun commandRefusal(violation: String): String {
+        // A veto that no flag, preset or approval can lift gets its own hint. Sending the model to
+        // `coding.requestAccess` for one of these is a dead end it will retry: the refusal is
+        // permanent by design, so the hint names what is permanent and the route that stays open.
+        permanentVetoHint(violation)?.let { vetoHint ->
+            return PermissionAudit.denied(
+                tool = SHELL_TOOL,
+                code = PermissionAudit.CODE_COMMAND_NOT_ALLOWED,
+                detail = "Command blocked — $violation",
+                hint = vetoHint,
+            )
+        }
         // `contains`, not `startsWith`: a violation can be wrapped by a nested-command layer
         // (`command substitution rejected — path guard: …`) and the specific audit code is still
         // the one the inner guard produced.
-        val (code, hint) = when {
+        val leaf = leafViolation(violation)
+        val (code, hint, needed) = when {
             violation.contains(PATH_GUARD_PREFIX) ->
-                PermissionAudit.CODE_COMMAND_PATH_DENIED to
-                    "pass a path inside the workspace; credential locations are never valid arguments"
+                Triple(
+                    PermissionAudit.CODE_COMMAND_PATH_DENIED,
+                    // Without a workspace boundary (`--access full` with external access, or an
+                    // `--unrestricted` task) telling the model to use a workspace-relative path
+                    // sends it down a wall that is not there: the credential rail is the whole
+                    // reason for this refusal, so name only that.
+                    if (allowExternalAccess) {
+                        "credential locations are never valid arguments — a hard rail even where the " +
+                            "workspace boundary is off; the agent must not read credentials into its context"
+                    } else {
+                        "pass a path inside the workspace; credential locations are never valid arguments"
+                    },
+                    null,
+                )
             violation.contains(PROTECTED_PATH_PREFIX) ->
-                PermissionAudit.CODE_PROTECTED_PATH to
+                Triple(
+                    PermissionAudit.CODE_PROTECTED_PATH,
                     "use the coding.* tools for the agent's own bookkeeping (.browser4) and CI " +
-                        "definitions (.github/workflows); the shell may not touch them"
+                        "definitions (.github/workflows); the shell may not touch them",
+                    null,
+                )
+            leaf.contains(VETO_NETWORK_DISABLED) ->
+                Triple(
+                    PermissionAudit.CODE_COMMAND_NOT_ALLOWED,
+                    "network access is off for this task — ask for it with " +
+                        "coding.requestAccess(effect=\"net.connect\", target=\"<host>\"), or run the " +
+                        "command from outside the task",
+                    Effect.NET_CONNECT.id,
+                )
+            leaf.contains(VETO_DESTRUCTIVE_DISABLED) ->
+                Triple(
+                    PermissionAudit.CODE_COMMAND_NOT_ALLOWED,
+                    "destructive commands are off under this access preset — re-run the task with " +
+                        "`--access write`/`full`, or use a non-destructive command; an approval does " +
+                        "not widen a preset",
+                    null,
+                )
             else ->
-                PermissionAudit.CODE_COMMAND_NOT_ALLOWED to
-                    ("run the build through coding.mvnBuild/coding.verify, or request operator " +
-                        "approval with coding.requestAccess(effect=\"fs.exec\", target=\"<command>\") " +
-                        "if this command is genuinely needed")
+                // The tier refusal. No approval widens it (the allow-list is fixed by the
+                // embedding), so the hint names the routes that exist and never offers
+                // `coding.requestAccess` — the old hint did, and a refusal whose fix does not
+                // exist is a round the model wastes (2026-11-14 run).
+                Triple(
+                    PermissionAudit.CODE_COMMAND_NOT_ALLOWED,
+                    "the shell's allow-list does not cover this command and no approval widens it — " +
+                        "use an allowed equivalent (type/cat/head/dir/grep) or a coding.* tool " +
+                        "(coding.read, coding.stat, coding.glob), run the build through " +
+                        "coding.mvnBuild/coding.verify, or put the step in a script file and run it " +
+                        "by path; a task that genuinely needs arbitrary programs runs with " +
+                        "`--unrestricted`",
+                    null,
+                )
         }
         return PermissionAudit.denied(
             tool = SHELL_TOOL,
             code = code,
             detail = "Command blocked — $violation",
             hint = hint,
-            needed = if (code == PermissionAudit.CODE_COMMAND_NOT_ALLOWED) Effect.FS_EXEC.id else null,
+            needed = needed,
         )
+    }
+
+    /**
+     * The hint for a refusal **no** flag, preset or operator approval can lift.
+     *
+     * These are the promises the access model makes outside its presets: the workspace topology the
+     * framework provisions, the runtime executing the task, and an operator's explicit deny. A hint
+     * that offers `coding.requestAccess` for them is worse than none — the model files a request
+     * that can never be granted and retries the step (observed in the 2026-11-14 supervision run,
+     * where a `COMMAND_NOT_ALLOWED` hint suggested an approval for a permanent veto).
+     *
+     * @param violation the refusal text, possibly wrapped (`inline script via 'sh' rejected — …`)
+     * @return the hint, or null when the refusal is an ordinary policy decision
+     */
+    private fun permanentVetoHint(violation: String): String? {
+        val leaf = leafViolation(violation)
+        return when {
+            leaf.contains(VETO_WORKSPACE_LINK) ->
+                "workspace links are provisioned by the framework — no approval or wider preset " +
+                    "lifts this; use the workspace paths as they are"
+            leaf.contains(VETO_BACKEND_KILL) ->
+                "a task must not terminate the runtime it runs inside — no approval lifts this; " +
+                    "stop the process from outside the task, or name a pid that is not the backend"
+            leaf.contains(VETO_BOOTSTRAP) || leaf.contains(VETO_BOOTSTRAP_SCRIPT) ->
+                "rebuilding or restarting this backend is operator work — no approval lifts it " +
+                    "from a task; run the build outside the task (`b4w build`) or use " +
+                    "coding.mvnBuild/coding.verify"
+            leaf.contains(VETO_EXPLICIT_DENY) || leaf.contains(VETO_DENY_PATTERN) ->
+                "this command is excluded by the task's policy — no approval lifts it; choose a " +
+                    "different route, or report the step in system.taskComplete(problems=…)"
+            else -> null
+        }
     }
 
     /** Whether execution is allowed right now (live when a provider was supplied, plan P4-1). */
@@ -902,6 +1177,15 @@ class CodingAgentShell(
     private val CMD_CONTROL_KEYWORDS = setOf("if", "for")
 
     /**
+     * Tokens after which a program starts inside a body that is handed to the platform shell
+     * verbatim (`for … do <program>`, `( <program> )`, `cmd1 & <program>`, POSIX `then`/`else`).
+     *
+     * Used by [handOffVetoViolation] to keep its scan from reading ordinary arguments as programs.
+     */
+    private val HAND_OFF_PROGRAM_PREFIXES =
+        setOf("do", "then", "else", "(", ")", "&", "&&", "|", "||", ";")
+
+    /**
      * Directory-creation builtins, always allowed (the workspace boundary still applies).
      *
      * `mkdir`/`md` are cmd.exe builtins, so on Windows there is no `mkdir.exe` for the PATH
@@ -926,10 +1210,162 @@ class CodingAgentShell(
      * @return a human-readable violation reason, or null when allowed
      */
     private fun validateCommand(command: String): String? {
+        val violation = validateCommandRaw(command) ?: return null
+        // There is no syntax gate: a shape the decomposer cannot parse is handed to the platform
+        // shell verbatim, in every mode, and the shell reports its own parse error. The vetoes that
+        // protect the runtime this task runs *inside* are not grammar rules and are not dropped
+        // with the gate: a `for` loop's body can still hold `taskkill /PID <backend>`, and the OS
+        // cannot refuse that for us. See [handOffVetoViolation].
+        if (!isUnparsed(violation)) return violation
+        return handOffVetoViolation(command)
+    }
+
+    /**
+     * Whether [violation] is the decomposer's own marker — "this shape cannot be parsed" — rather
+     * than a policy verdict.
+     *
+     * Such a marker never reaches the model: [validateCommand] hands the line to the platform shell
+     * ([handOffVetoViolation]) instead. `empty or invalid command` is deliberately **not** in the
+     * family — there is nothing to hand over, so it stays an ordinary refusal.
+     */
+    private fun isUnparsed(violation: String): Boolean {
+        val leaf = leafViolation(violation)
+        return leaf.startsWith(UNPARSED_PREFIX) ||
+            leaf.startsWith(SUBSTITUTION_PREFIX) ||
+            leaf.startsWith(INLINE_SCRIPT_PREFIX) ||
+            leaf.startsWith(NESTED_SCRIPT_PREFIX)
+    }
+
+    /** The decomposer's marker for [command], or null when the line parsed. */
+    private fun unparsedMarker(command: String): String? =
+        validateCommandRaw(command)?.takeIf { isUnparsed(it) }
+
+    /**
+     * The innermost reason of a wrapped violation (`inline script via 'sh' rejected — …`).
+     *
+     * The wrapper carries the inner reason after an em-dash; classifying *that* one keeps a policy
+     * veto nested inside `$(...)` or `sh -c "..."` from being handed over by accident
+     * (`echo $(rm -rf /)` must stay refused under `--unrestricted`, too). One helper for every
+     * classifier, so the hand-off and the hint family always agree about which rule produced the
+     * refusal.
+     */
+    private fun leafViolation(violation: String): String {
+        var current = violation
+        while (current.startsWith(SUBSTITUTION_PREFIX) || current.startsWith(INLINE_SCRIPT_PREFIX)) {
+            val inner = current.substringAfter(INNER_REASON_SEPARATOR, "")
+            // No separator: the wrapper did not compose an inner reason, so it is the leaf.
+            if (inner.isEmpty()) return current
+            current = inner
+        }
+        return current
+    }
+
+    /**
+     * The vetoes that apply to a line handed to the platform shell undecomposed.
+     *
+     * When the decomposer cannot parse a shape (`for` loops, `else if`, nested blocks, `goto`/`call`
+     * payloads), the line is handed over verbatim and the platform shell reports its own parse
+     * error. The command tier cannot judge such a line — it never names the programs it runs — but
+     * the vetoes that do not need the grammar still apply, and they are checked at every *program
+     * position* (the first token of a segment, or the token after `do`/`then`/`else`/`(`/`&`/`|`/
+     * `;`), plus every inline-script body recursively:
+     *
+     * - [FORBIDDEN_COMMANDS] — link/mount tools rewrite the workspace topology the framework
+     *   provisions (and a normal command never gets them approved away either);
+     * - [processKillViolation] — killing the backend (or a JVM that may be it) ends the very run
+     *   that submitted the loop; `for %f in (1) do taskkill /PID <backend> /F` is exactly the line
+     *   the per-command validator never sees;
+     * - [bootstrapViolation] — `b4w build/stop/...` and `bin/build.ps1` rewrite or restart the
+     *   runtime the task is executing inside;
+     * - the network and destructive tier vetoes, when those tiers are disabled — `curl` or `rm`
+     *   hidden behind `do` is still a network/destructive command;
+     * - the credential/protected-path guards and the workspace boundary, applied to every segment's
+     *   tokens — a `for` body is not a licence to name `~/.ssh` or `.browser4`.
+     *
+     * Block parentheses are stripped from the program token, so a veto cannot hide behind `( … )`.
+     * An ordinary argument is not a program, so `echo b4w build failed` stays allowed. Past
+     * [MAX_INLINE_SCRIPT_DEPTH] the scan can no longer prove the line safe and refuses it.
+     *
+     * @param command the line that is about to be handed to the platform shell
+     * @param depth inline-script recursion depth, capped by [MAX_INLINE_SCRIPT_DEPTH]
+     * @return a violation that must still refuse the line, or null when nothing protected is reachable
+     */
+    internal fun handOffVetoViolation(command: String, depth: Int = 0): String? {
+        if (depth > MAX_INLINE_SCRIPT_DEPTH) {
+            return "nested inline shell script exceeds $MAX_INLINE_SCRIPT_DEPTH levels — " +
+                "refusing to hand over unverified"
+        }
+        // Already applied to the line by [validateCommandRaw]; re-applied here so an inline-script
+        // body — which the hand-off would otherwise pass over unexamined — gets the same vetoes.
+        blockedPatternViolation(command)?.let { return it }
+        for (segment in splitSimpleCommands(command)) {
+            val tokens = tokenize(segment)
+            if (tokens.isEmpty()) continue
+            // The decomposer returned at the offending segment, so anything after it was never
+            // checked by the tier: run the guards that do not need the grammar over every segment.
+            argumentPathViolation(tokens)?.let { return it }
+            protectedPathViolation(tokens)?.let { return it }
+            workspaceBoundaryViolation(tokens)?.let { return it }
+            for (index in tokens.indices) {
+                if (!isHandOffProgramPosition(tokens, index)) continue
+                val programTokens = programTokensAt(tokens, index)
+                val base = normalizeCommandName(programTokens[index])
+                if (base in FORBIDDEN_COMMANDS) return forbiddenCommandViolation(base)
+                inlineScript(programTokens.subList(index, programTokens.size))?.let { inner ->
+                    handOffVetoViolation(inner, depth + 1)?.let { return it }
+                }
+                processKillViolation(command, programTokens.subList(index, programTokens.size))?.let { return it }
+                bootstrapViolation(command, programTokens, index)?.let { return it }
+                if (base in NETWORK_COMMANDS && !networkAllowed()) {
+                    return "'$base' $VETO_NETWORK_DISABLED (inside a shape coding.shell cannot decompose)"
+                }
+                if (base in DESTRUCTIVE_COMMANDS && !allowDestructive) {
+                    return "'$base' $VETO_DESTRUCTIVE_DISABLED (inside a shape coding.shell cannot decompose)"
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * [tokens] with the program token at [index] stripped of block parentheses.
+     *
+     * `for %f in (1) do (mklink …)` tokenizes the program as `(mklink`, and `(taskkill … /F)` as
+     * `(taskkill`: without this, a veto inside a block would be invisible to the guard — the one
+     * place a handed-off line can hide a program. The caller's list is returned unchanged when there
+     * is nothing to strip, so the common path does not copy.
+     */
+    private fun programTokensAt(tokens: List<String>, index: Int): List<String> {
+        val raw = tokens[index]
+        val program = raw.trim('(', ')')
+        if (program == raw || program.isEmpty()) return tokens
+        return tokens.toMutableList().also { it[index] = program }
+    }
+
+    /**
+     * Whether [index] in [tokens] is a place where a program can start.
+     *
+     * The guard must not read an ordinary argument as a program (`echo b4w build failed` is not a
+     * bootstrap step), so only the first token of a segment and the token after a control-flow
+     * keyword or a separator counts.
+     */
+    private fun isHandOffProgramPosition(tokens: List<String>, index: Int): Boolean {
+        if (index == 0) return true
+        val previous = tokens[index - 1].trim('"', '\'').lowercase()
+        return previous in HAND_OFF_PROGRAM_PREFIXES
+    }
+
+    /**
+     * The unfiltered command validator — see [validateCommand] for the hand-off of shapes the
+     * decomposer cannot parse.
+     *
+     * @return a human-readable violation reason, or null when allowed
+     */
+    private fun validateCommandRaw(command: String): String? {
         // Normalize first so a policy query (`isAllowed` / `explain`) agrees with what
         // would actually be executed: `echo.` is cmd's blank-line idiom for `echo`.
         val normalizedCommand = normalizeShellCommand(command)
-        if (normalizedCommand.isBlank()) return "empty or invalid command"
+        if (normalizedCommand.isBlank()) return EMPTY_COMMAND_VIOLATION
 
         // 1. Hardcoded blocked patterns — whole string, cannot be overridden
         blockedPatternViolation(normalizedCommand)?.let { return it }
@@ -937,10 +1373,10 @@ class CodingAgentShell(
         // 2. Explicit deny / deny patterns — whole-string vetoes (they are
         //    authored as full-command regexes), re-checked per segment below
         extractBaseCommand(normalizedCommand).lowercase().let { base ->
-            if (base.isNotEmpty() && base in explicitDeny) return "'$base' is explicitly denied"
+            if (base.isNotEmpty() && base in explicitDeny) return "'$base' $VETO_EXPLICIT_DENY"
         }
         for (pattern in denyPatterns) {
-            if (pattern.containsMatchIn(normalizedCommand)) return "matches deny pattern: ${pattern.pattern}"
+            if (pattern.containsMatchIn(normalizedCommand)) return "$VETO_DENY_PATTERN${pattern.pattern}"
         }
 
         // 3. Explicit allow / allow patterns — whole-string opt-ins bypass the
@@ -964,16 +1400,16 @@ class CodingAgentShell(
     }
 
     /** Recursively validate every simple command inside [command]. */
-    private fun validateSegments(command: String, depth: Int): String? {
+    private fun validateSegments(command: String, depth: Int, inlineBody: Boolean = false): String? {
         if (depth > MAX_INLINE_SCRIPT_DEPTH) {
             return "nested inline shell script exceeds $MAX_INLINE_SCRIPT_DEPTH levels — refusing to guess"
         }
         blockedPatternViolation(command)?.let { return it }
 
         val segments = splitSimpleCommands(command)
-        if (segments.isEmpty()) return "empty or invalid command"
+        if (segments.isEmpty()) return EMPTY_COMMAND_VIOLATION
         for (segment in segments) {
-            validateSimpleCommand(segment, depth)?.let { return it }
+            validateSimpleCommand(segment, depth, inlineBody)?.let { return it }
         }
         return null
     }
@@ -985,6 +1421,61 @@ class CodingAgentShell(
     private val resolvedReadableRoots: List<Path> by lazy {
         readableRoots.map { it.toAbsolutePath().normalize() }
     }
+
+    /** [additionalDirs] as absolute normalised paths; resolved once per instance. */
+    private val resolvedAdditionalDirs: List<Path> by lazy {
+        additionalDirs.map { it.toAbsolutePath().normalize() }
+    }
+
+    /**
+     * Whether [candidate] lies inside a folder granted with `agent run --add-dir`.
+     *
+     * Such a folder is usable as a shell working directory — that is the "executable" part of the
+     * grant: the command's cwd may be there, and the OS sandbox was given the same folder (see
+     * [runCommand]). The workspace boundary check in [workspaceBoundaryViolation] already consults
+     * the shared [boundaryAuthorizer], which has these folders in scope.
+     */
+    private fun isInAddedDir(candidate: Path): Boolean =
+        resolvedAdditionalDirs.any { candidate.startsWith(it) }
+
+    /**
+     * The roots a command may treat as its project directory.
+     *
+     * The workspace, its mirrored module roots ([MirrorRoots]) and the checkout those mirrors come
+     * from ([MirrorRoots.sourceRoot]) — plus every folder granted with `agent run --add-dir`. This
+     * is what makes `cd <checkout> && mvn -pl :browser4-rest test` (or `git status` in the real
+     * repository, where `.git` lives) possible; before, a working directory outside the workspace
+     * was refused with `working directory … is outside the allowed workspace`, while the *same*
+     * directory was readable through the argument guard (2026-11-14 run, two wasted rounds).
+     *
+     * A **toolchain** location ([CodingComponents.toolchainRoots]: the JDK, `~/.m2`, `~/.gradle`,
+     * `~/.cache`, the temp directory, the OS directory) and a **readable** root
+     * ([ReadablePaths]) are deliberately not in it. The boundary grant covers the toolchain roots
+     * for *arguments*, because a build reads the JDK and writes its caches; a command *launched*
+     * there would resolve every relative path into a shared cache (`cd %TEMP% && echo forged > …`),
+     * and no build runs from `C:\Windows`. Keeping the working directory to the project roots also
+     * keeps the `--add-dir` contract honest: a granted folder is "a valid working directory", an
+     * ungranted temp folder stays an escape.
+     *
+     * Resolved once per shell: the mirror scan must not run on every command.
+     */
+    private val workingDirRoots: List<Path> by lazy {
+        (
+            listOf(canonicalBaseDir) + MirrorRoots.derive(baseDir) +
+                listOfNotNull(MirrorRoots.sourceRoot(baseDir)) + resolvedAdditionalDirs
+            ).distinct()
+    }
+
+    /**
+     * Whether [candidate] may be used as the command's working directory.
+     *
+     * A working directory is where a command writes its output, so only a **project** root
+     * ([workingDirRoots]) qualifies; a read-only or shared-toolchain root does not. The sandbox
+     * seam receives the same workspace root, so an enabled OS sandbox can still refuse the launch —
+     * this only stops the *string* layer from refusing a directory the task already owns.
+     */
+    private fun isWorkingDirInScope(candidate: Path): Boolean =
+        workingDirRoots.any { candidate.startsWith(it) }
 
     /** Absolute roots of [protectedDirs] under the workspace base. */
     private val protectedRoots: List<Path> by lazy {
@@ -1165,16 +1656,21 @@ class CodingAgentShell(
 
     /**
      * Fallback boundary [Authorizer] used when none was injected. Holds a single lexical-scope
-     * grant over the workspace, its mirrored module roots ([MirrorRoots]) and the toolchain
-     * locations (B4), with launchers exempt (B3) — plus the readable roots ([ReadablePaths]) for
-     * reads only. The credential and protected-dir rails stay separate
+     * grant over the workspace, its mirrored module roots ([MirrorRoots]), the checkout those
+     * mirrors come from ([MirrorRoots.sourceRoot] — the code a self-development task edits) and the
+     * toolchain locations (B4), with launchers exempt (B3) — plus the readable roots
+     * ([ReadablePaths]) for reads only. The credential and protected-dir rails stay separate
      * ([argumentPathViolation], [protectedPathViolation]) — they are orthogonal guardrails,
      * not capability scope.
      *
      * Built lazily so the mirror scan runs once and only when a command is actually validated.
      */
     private val fallbackBoundaryAuthorizer: Authorizer by lazy {
-        val roots = (listOf(canonicalBaseDir) + CodingComponents.toolchainRoots() + MirrorRoots.derive(baseDir)).toSet()
+        val roots = (
+            listOf(canonicalBaseDir) + CodingComponents.toolchainRoots() + MirrorRoots.derive(baseDir) +
+                listOfNotNull(MirrorRoots.sourceRoot(baseDir)) +
+                additionalDirs.map { it.toAbsolutePath().normalize() }
+            ).toSet()
         Authorizer(
             listOf(
                 Capability(
@@ -1194,27 +1690,92 @@ class CodingAgentShell(
     }
 
     /**
-     * Rejects any argument that names a workspace-protected directory (`.browser4`,
+     * Rejects a command that **writes** inside a workspace-protected directory (`.browser4`,
      * `.github/workflows`).
      *
-     * The file tools already refuse to write there; the shell did not, so
-     * `echo forged > .browser4/data/agent/agent-tasks.jsonl` rewrote the agent's own task ledger
-     * and `cp pom.xml .github/workflows/ci.yml` replaced a CI definition without ever touching a
-     * `coding.*` file tool. Redirection targets are inspected like any other argument, and both
-     * reads and writes are refused: the shell has no business in the bookkeeping tree, and the
-     * read tools are still available for it.
+     * The rail is about mutation, not about knowledge. The file tools refuse writes there and read
+     * freely; the shell used to refuse both, which cost a run its own state: the task could not copy
+     * `<workspace>/.browser4/task-<id>/state-history.jsonl` — the ledger of the task before it —
+     * while `coding.read` returned the same bytes
+     * (`PERMISSION_DENIED | code=PROTECTED_PATH`, 2026-11-14 run). "What did the previous task do?"
+     * is exactly a read of the bookkeeping tree, so only write shapes are refused now:
+     *
+     * - a redirection target (`> .browser4/x`, `2>> …`), which writes whatever the command is;
+     * - any path argument of a mutating command ([isMutatingCommand]), which is conservative on
+     *   purpose: `cp` reads one path and writes the other, and guessing which is which from the
+     *   argument order of every tool is not worth the exposure;
+     * - the target of a navigation command ([isNavigationCommand]): `cd .browser4 && echo forged >
+     *   agent-tasks.jsonl` writes through a *relative* path, so the directory being entered — not
+     *   the file name the shell cannot resolve — is what the rail has to judge.
+     *
+     * No write is widened: `echo forged > .browser4/…` and `cp pom.xml .github/workflows/ci.yml`
+     * stay refused, which is what the M0 decision baseline pins.
      */
     private fun protectedPathViolation(tokens: List<String>): String? {
         if (protectedRoots.isEmpty()) return null
-        for (token in tokens) {
+        val writeTargets = writeTargets(tokens)
+        if (writeTargets.isEmpty()) return null
+        for (token in writeTargets) {
             val candidate = pathLikeValue(token) ?: continue
             val hit = protectedRootOf(candidate) ?: continue
             return PROTECTED_PATH_PREFIX +
                 "'$token' is inside protected directory '${canonicalBaseDir.relativize(hit).toString().replace('\\', '/')}' — " +
-                "the shell may not read or write it; use the coding.* file tools instead"
+                "the shell may not modify it (reads are fine); use the coding.* file tools for the change"
         }
         return null
     }
+
+    /**
+     * The tokens of [tokens] that this segment can **write**, or an empty list when it writes
+     * nothing the protected rail cares about.
+     *
+     * Redirection targets come first: `echo forged > .browser4/x` writes regardless of what `echo`
+     * is. Only when there is no redirection does the command itself decide — a mutating program
+     * writes through its arguments ([MUTATING_COMMANDS]).
+     */
+    private fun writeTargets(tokens: List<String>): List<String> {
+        val redirected = tokens.filterIndexed { index, token ->
+            isRedirectionTarget(tokens, index) && pathLikeValue(token) != null
+        }
+        if (redirected.isNotEmpty()) return redirected
+        val base = tokens.firstOrNull { !ENV_ASSIGNMENT.matches(it) }
+            ?.let { normalizeCommandName(it) }
+            ?: return emptyList()
+        return if (isMutatingCommand(base) || isNavigationCommand(base)) tokens else emptyList()
+    }
+
+    /**
+     * Whether [index] in [tokens] is a redirection **target**: `> file` (two tokens) or `>file` /
+     * `2>>file` (one token). `<` is a read and stays out of it.
+     */
+    private fun isRedirectionTarget(tokens: List<String>, index: Int): Boolean {
+        val token = tokens[index].trim('"', '\'')
+        if (REDIRECTION_PREFIX.find(token)?.range?.first == 0 && token.length > 1) return true
+        val previous = tokens.getOrNull(index - 1)?.trim('"', '\'') ?: return false
+        return REDIRECTION_TARGET_OPERATOR.matches(previous)
+    }
+
+    /**
+     * Whether [base] (a normalized base command) creates, replaces or deletes files.
+     *
+     * Covers the cmd.exe and POSIX file tools plus the PowerShell file cmdlets, which the tier
+     * cannot see as programs at all. Not exhaustive by construction — an interpreter can always
+     * write what its script says — but it covers every shape a model reaches for first
+     * (`del`, `rm`, `cp`, `mv`, `Set-Content`, `Remove-Item`, `Out-File`).
+     */
+    private fun isMutatingCommand(base: String): Boolean =
+        base in MUTATING_COMMANDS || MUTATING_CMDLET_PREFIXES.any { base.startsWith(it) }
+
+    /**
+     * Commands that change the chain's working directory.
+     *
+     * `cd .browser4 && echo forged > agent-tasks.jsonl` writes through a *relative* path: the file
+     * name alone resolves inside the workspace, and only the directory being entered makes it a
+     * protected write. The shell does not track a chain's cwd (the segments are validated
+     * independently and the platform shell performs the `cd`), so navigation into a protected tree
+     * is judged as a write — the absolute spelling of the file is still judged as one too.
+     */
+    private fun isNavigationCommand(base: String): Boolean = base in NAVIGATION_COMMANDS
 
     /**
      * The protected root [candidate] lands in, or null.
@@ -1357,6 +1918,35 @@ class CodingAgentShell(
      * Only runtime targets are refused: an explicit pid that is not the backend, or a
      * non-runtime image, still passes — killing a stray dev server is legitimate.
      */
+    /**
+     * A task must not rebuild or restart the backend it is running inside
+     * (self-development isolation plan §D8): those commands rewrite the runtime
+     * bundle that is executing this very task. `coding.mvnBuild`/`coding.verify`
+     * compile and test in the workspace and stay allowed.
+     *
+     * @return a human-readable refusal, or null when the command is fine
+     */
+    private fun bootstrapViolation(command: String, tokens: List<String>, index: Int): String? {
+        if (!forbidBootstrap) return null
+        val base = normalizeCommandName(tokens[index])
+        if (base == "b4w") {
+            val sub = tokens.getOrNull(index + 1)?.trim('\'', '"')?.lowercase()
+            if (sub in setOf("build", "stop", "install", "uninstall", "upgrade", "recover")) {
+                return "'b4w $sub' $VETO_BOOTSTRAP — " +
+                    "operator work, not a task step"
+            }
+        }
+        val flat = command.replace('\\', '/').lowercase()
+        val scripts = listOf(
+            "bin/build.ps1", "bin/build/build.ps1", "build-runtime-bundle.ps1", "bin/recover.ps1",
+        )
+        if (scripts.any { flat.contains(it) }) {
+            return "$VETO_BOOTSTRAP_SCRIPT from a task — " +
+                "it rewrites the runtime this task is running inside"
+        }
+        return null
+    }
+
     private fun processKillViolation(command: String, tokens: List<String>): String? {
         if (tokens.isEmpty()) return null
         val base = normalizeCommandName(tokens[0])
@@ -1371,13 +1961,22 @@ class CodingAgentShell(
             Regex("""(?<![\w-])java(?:w)?(?:\.exe)?(?![\w-])""").containsMatchIn(lower)
         if (!targetsOwnPid && !targetsRuntimeName) return null
 
-        return "'$base' would terminate the Browser4 backend (pid $ownPid) or a JVM that may be " +
+        return "'$base' $VETO_BACKEND_KILL (pid $ownPid) or a JVM that may be " +
             "it — coding.shell refuses to kill the runtime executing this task. Stop stray " +
             "processes from outside the task, or name an explicit pid that is not the backend."
     }
 
-    private fun validateSimpleCommand(segment: String, depth: Int): String? {
-        val tierViolation = validateSimpleCommandTier(segment, depth)
+    /**
+     * The refusal for a program this shell never runs, whatever the flags say.
+     *
+     * Shared by [validateSimpleCommandTier] and [handOffVetoViolation], so the message a
+     * handed-off line gets is byte-for-byte the one a normal command gets.
+     */
+    private fun forbiddenCommandViolation(baseCommand: String): String =
+        "'$baseCommand' is disabled — $VETO_WORKSPACE_LINK"
+
+    private fun validateSimpleCommand(segment: String, depth: Int, inlineBody: Boolean = false): String? {
+        val tierViolation = validateSimpleCommandTier(segment, depth, inlineBody)
         if (tierViolation != null) return tierViolation
         // The command itself is permitted: the workspace boundary now applies to its
         // arguments. Checking after the tier rules keeps their specific messages
@@ -1385,9 +1984,9 @@ class CodingAgentShell(
         return workspaceBoundaryViolation(tokenize(segment))
     }
 
-    private fun validateSimpleCommandTier(segment: String, depth: Int): String? {
+    private fun validateSimpleCommandTier(segment: String, depth: Int, inlineBody: Boolean = false): String? {
         val tokens = tokenize(segment)
-        if (tokens.isEmpty()) return "empty or invalid command"
+        if (tokens.isEmpty()) return EMPTY_COMMAND_VIOLATION
 
         // Argument-path guard: the working directory is contained, but nothing stopped an
         // argument like `~/.ssh/id_rsa` from naming a credential location (plan P0-3).
@@ -1401,22 +2000,31 @@ class CodingAgentShell(
         // Skip leading env assignments (VAR=value cmd ...).
         var index = 0
         while (index < tokens.size && ENV_ASSIGNMENT.matches(tokens[index])) index++
-        if (index >= tokens.size) return "empty or invalid command"
+        if (index >= tokens.size) return EMPTY_COMMAND_VIOLATION
 
         val rawToken = tokens[index]
         val baseCommand = normalizeCommandName(rawToken)
-        if (baseCommand.isEmpty()) return "empty or invalid command"
+        if (baseCommand.isEmpty()) return EMPTY_COMMAND_VIOLATION
 
         // Inline script (`sh -c "..."`, `pwsh -Command "..."`, `cmd /c ...`):
         // the wrapper and the inner script must both be validated. Checking only the
         // body let `sh -c "mvn ..."` through the build-only profile, where `sh` is
         // precisely the arbitrary-execution surface BUILD_COMMANDS removes.
+        //
+        // The body runs as a program, not as a command line this tier can judge: a shell script
+        // reaches `Get-Content`, `Set-Location`, a `for` loop, whatever the project's own scripts
+        // use, and the same body already runs unexamined through `pwsh script.ps1`. So the body is
+        // validated with the same vetoes a top-level line gets (blocked patterns, credentials,
+        // protected subtrees, the boundary, FORBIDDEN commands, the runtime vetoes, the
+        // network/destructive tiers) but its **tier spelling** verdict is skipped — that verdict is
+        // what refused `powershell -Command "Get-Content x"` while the identical body ran through
+        // `-File` (2026-11-14 run).
         inlineScript(tokens.subList(index, tokens.size))?.let { inner ->
             if (buildOnly && !devToolAllowed(baseCommand)) {
                 return "'$baseCommand' is not allowed in the build-only profile " +
                     "(inline-script hosts are not build tools)"
             }
-            validateSegments(inner, depth + 1)?.let { violation ->
+            validateSegments(inner, depth + 1, inlineBody = true)?.let { violation ->
                 return "inline script via '$baseCommand' rejected — $violation"
             }
             return null
@@ -1424,31 +2032,40 @@ class CodingAgentShell(
 
         // Absolute vetoes that no flag, allow-list entry or PATH lookup can lift.
         if (baseCommand in FORBIDDEN_COMMANDS) {
-            return "'$baseCommand' is disabled — workspace links are provisioned by the framework, " +
-                "not by the agent"
+            return forbiddenCommandViolation(baseCommand)
         }
         // A task must not destroy the runtime that executes it. `b4.run` already refuses the
         // CLI's own lifecycle commands; `coding.shell` was the remaining way in — a live run
         // ended itself with `taskkill /PID <backend> /F /T` (2026-10-29 Gate, F12).
         processKillViolation(segment, tokens.subList(index, tokens.size))?.let { return it }
+        // …and it must not rebuild that runtime either (isolation plan §D8).
+        bootstrapViolation(segment, tokens, index)?.let { return it }
         // Explicit deny — absolute veto
-        if (baseCommand in explicitDeny) return "'$baseCommand' is explicitly denied"
+        if (baseCommand in explicitDeny) return "'$baseCommand' $VETO_EXPLICIT_DENY"
         for (pattern in denyPatterns) {
-            if (pattern.containsMatchIn(segment)) return "matches deny pattern: ${pattern.pattern}"
+            if (pattern.containsMatchIn(segment)) return "$VETO_DENY_PATTERN${pattern.pattern}"
         }
         if (baseCommand in explicitAllow) return null
         for (pattern in allowPatterns) {
             if (pattern.containsMatchIn(segment)) return null
         }
 
-        // cmd.exe flow control: valid inside a script, meaningless as a standalone
-        // command. Rejected with an actionable route instead of the generic
-        // "not allowed": the model can put the block in a .cmd file, and a hint is
-        // what stops it from re-phrasing the same `if exist …` four times.
-        if (isWindowsHost() && baseCommand in CMD_CONTROL_KEYWORDS) {
-            return "'$baseCommand' is a cmd.exe control-flow keyword and coding.shell does not " +
-                "execute blocks. Put the block in a script (write `run.cmd`, then `cmd /c run.cmd`) " +
-                "or use `python -c \"...\"` for the same logic"
+        // cmd.exe flow control. `if` is parsed as a CONDITION PREFIX: the payload behind it is
+        // re-validated by the same tier and boundary rules a top-level command gets, so supporting
+        // the shape does not create a first-token blind spot. Only the shallow forms are parsed
+        // (one command, optionally in parentheses with one `else`) — anything deeper needs a cmd
+        // grammar, and a half-parser that validates the wrong token is worse than handing the line
+        // to the platform shell, which is what [validateCommand] does with these markers.
+        // `for` is not parsed: its body is a loop over a command substitution, which the string
+        // layer cannot judge.
+        if (isWindowsHost()) {
+            if (baseCommand == "if") {
+                return conditionalViolation(tokens.subList(index, tokens.size), depth)
+            }
+            if (baseCommand in CMD_CONTROL_KEYWORDS) {
+                return UNPARSED_PREFIX +
+                    "'$baseCommand' is cmd.exe flow control coding.shell does not parse"
+            }
         }
         // `set` (cmd built-in): allowed without arguments or with NAME=value
         // assignments only — `set /p`, `set /a` and other forms are not.
@@ -1481,10 +2098,10 @@ class CodingAgentShell(
         // Without this, `curl` (installed on almost every host) was allowed even
         // with network access off, which made the whole network tier cosmetic.
         if (baseCommand in NETWORK_COMMANDS) {
-            return "'$baseCommand' requires network access but it is disabled by the access policy"
+            return "'$baseCommand' $VETO_NETWORK_DISABLED"
         }
         if (baseCommand in DESTRUCTIVE_COMMANDS) {
-            return "'$baseCommand' is a destructive command but allowDestructive=false"
+            return "'$baseCommand' $VETO_DESTRUCTIVE_DISABLED"
         }
 
         // Explicit path form (e.g. /usr/bin/git, ./script.sh, C:\repo\mvnw.cmd):
@@ -1497,11 +2114,197 @@ class CodingAgentShell(
         // PATH fallback — command not in any set but found on PATH
         if (allowDevTools && !buildOnly && isCommandOnPath(baseCommand)) return null
 
+        // `agent run --unrestricted`: the tier is the shell's *spelling* rule, not a rail this flag
+        // keeps. A program outside SAFE/DEV that is not an executable on PATH — a PowerShell cmdlet
+        // such as `Get-Content`, or `wmic` — is handed to the platform shell like any other: the
+        // promise is that the task runs with the caller's own OS permissions, and the same body
+        // already runs unexamined through `powershell -File`. Keeping it refused also contradicted
+        // the model-facing prompt, which says inline scripts run as written (2026-11-14 run).
+        //
+        // Nothing is skipped by this: every veto above (blocked patterns, explicit deny, deny
+        // patterns, credential/protected paths, FORBIDDEN commands, the runtime vetoes) already ran,
+        // and [validateSimpleCommand] still applies the workspace boundary afterwards. The
+        // build-only profile is exempt — that shell belongs to `coding.mvnBuild`/`verify`, not to
+        // the model, so unrestricted must not widen it.
+        if (unrestricted && !buildOnly) return null
+
+        // An inline-script body ([inlineBody]) gets the same treatment without the flag: the tier
+        // is the shell's spelling rule for the *command line*, and a script is not one. The body
+        // is what the project's own `.ps1`/`.sh` files contain anyway, and the only extra thing it
+        // can reach here is a program this shell would run from a script file. Every veto above
+        // still applied — the network and destructive tiers included — so the capability decision
+        // is unchanged; what disappears is "a PowerShell cmdlet is not a PATH executable".
+        if (inlineBody && !buildOnly) return null
+
         return "command '$baseCommand' is not allowed (safe=${baseCommand in SAFE_COMMANDS}, " +
             "dev=${devToolAllowed(baseCommand)}, " +
             "network=${baseCommand in NETWORK_COMMANDS && networkAllowed()}, " +
             "destructive=${baseCommand in DESTRUCTIVE_COMMANDS && allowDestructive})"
     }
+
+    // ------------------------------------------------------------------
+    // cmd.exe conditionals (`if ...`)
+    // ------------------------------------------------------------------
+
+    /**
+     * Validate a cmd.exe conditional as a **condition prefix** plus its payload.
+     *
+     * The tier model answers "is the first token an allowed program?", which has no answer for a
+     * control-flow keyword: whitelisting `if` as a *program* would let its payload through
+     * unchecked (`if exist x (del …)` is the classic hole). Parsing it as a prefix keeps the model
+     * intact — the condition's own paths were already checked by the caller's argument and
+     * protected-path guards (they run over every token), and each payload command is re-validated
+     * by the same tier and boundary rules a top-level command gets.
+     *
+     * Supported shapes, one command per group:
+     *
+     * ```
+     * if [not] exist <path> <cmd>
+     * if [/i] [not] defined <var> <cmd>
+     * if [not] errorlevel <n> <cmd>
+     * if [/i] [not] <lhs>==<rhs> <cmd>
+     * if <condition> (<cmd>)
+     * if <condition> (<cmd>) else (<cmd>)
+     * ```
+     *
+     * Everything else — nested blocks, `else if`, `&`/`|` inside a block, `goto`/`call` payloads —
+     * is an [UNPARSED_PREFIX] marker: those are exactly the shapes that would need a cmd grammar,
+     * and guessing at them would validate the wrong token while looking successful. [validateCommand]
+     * hands such a line to the platform shell instead.
+     *
+     * @return null when the statement is supported and every payload passed, else a violation
+     */
+    private fun conditionalViolation(tokens: List<String>, depth: Int): String? {
+        if (depth > MAX_INLINE_SCRIPT_DEPTH) {
+            return UNPARSED_PREFIX + "nested conditionals exceed $MAX_INLINE_SCRIPT_DEPTH levels"
+        }
+
+        var i = 1 // skip `if`
+        if (tokens.getOrNull(i)?.equals("/i", ignoreCase = true) == true) i++
+        if (tokens.getOrNull(i)?.equals("not", ignoreCase = true) == true) i++
+
+        val keyword = tokens.getOrNull(i)?.lowercase()
+        when (keyword) {
+            "exist", "defined", "errorlevel" -> {
+                val operand = tokens.getOrNull(i + 1)
+                    ?: return UNPARSED_PREFIX + "'if $keyword' is missing its operand"
+                if (keyword == "errorlevel" && operand.any { !it.isDigit() }) {
+                    return UNPARSED_PREFIX + "'if errorlevel' expects a number, not '$operand'"
+                }
+                i += 2
+            }
+            else -> {
+                val expr = keyword ?: return UNPARSED_PREFIX + "'if' is missing its condition"
+                // `<a>==<b>` is the remaining supported condition form.
+                if (!expr.contains("==")) {
+                    return UNPARSED_PREFIX + "unsupported 'if' condition '$expr' — supported: exist, " +
+                        "defined, errorlevel and <a>==<b>"
+                }
+                i += 1
+            }
+        }
+
+        val body = tokens.subList(i, tokens.size)
+        if (body.isEmpty()) {
+            return UNPARSED_PREFIX + "'if' needs a command after its condition"
+        }
+        val groups = splitConditionalBody(body) ?: return UNPARSED_PREFIX +
+            "unsupported 'if' body — one command, optionally `<cond> (<cmd>)` with one " +
+            "`else (<cmd>)`; nested blocks, 'else if' and '&'/'|' inside a block are not parsed"
+
+        for (group in groups) {
+            val command = renderCommand(group)
+            val base = extractBaseCommand(command)
+            // A nested conditional re-enters the first-token blind spot one level down, and a label
+            // jump leaves the linear check entirely (`goto` lands on a line this validator never
+            // saw), so both are refused rather than validated half-way.
+            if (base in CMD_CONTROL_KEYWORDS || base == "goto" || base == "call") {
+                return UNPARSED_PREFIX + "'if' body starts with '$base' — control-flow and label-jump " +
+                    "payloads are not parsed; put the block in a script file run by path"
+            }
+            validateSimpleCommand(command, depth + 1)?.let { return it }
+        }
+        return null
+    }
+
+    /**
+     * The commands an `if` body may run, or null when the body is not one of the supported shapes.
+     *
+     * Parentheses are separated from their neighbours first (`(echo x)` tokenizes as `(echo` and
+     * `x)`), and a token with a parenthesis in the middle — a path such as `a(b).txt` — makes the
+     * body unsupported rather than guessed at.
+     */
+    private fun splitConditionalBody(body: List<String>): List<List<String>>? {
+        val expanded = expandParentheses(body) ?: return null
+        if (expanded.none { it == "(" || it == ")" }) {
+            // Bare form: exactly one command. A bare `else` has no block to attach to.
+            if (expanded.any { it.equals("else", ignoreCase = true) }) return null
+            return listOf(expanded)
+        }
+        if (expanded.first() != "(") return null
+        val firstEnd = matchingParenToken(expanded, 0) ?: return null
+        val first = expanded.subList(1, firstEnd)
+        if (first.isEmpty()) return null
+        val rest = expanded.subList(firstEnd + 1, expanded.size)
+        if (rest.isEmpty()) return listOf(first)
+        if (!rest[0].equals("else", ignoreCase = true)) return null
+        // `else if …` has no parenthesis here; a trailing `else (<cmd>)` has one.
+        if (rest.size < 4 || rest[1] != "(") return null
+        val secondEnd = matchingParenToken(rest, 1) ?: return null
+        if (secondEnd != rest.size - 1) return null
+        val second = rest.subList(2, secondEnd)
+        if (second.isEmpty()) return null
+        return listOf(first, second)
+    }
+
+    /**
+     * Split leading `(` and trailing `)` off each token so `(echo x)` and `( echo x )` parse the
+     * same. Returns null when a parenthesis sits in the middle of a token — that is a path or an
+     * expression this parser refuses to guess about.
+     */
+    private fun expandParentheses(tokens: List<String>): List<String>? {
+        val out = mutableListOf<String>()
+        for (token in tokens) {
+            var value = token
+            while (value.startsWith("(")) {
+                out += "("
+                value = value.substring(1)
+            }
+            val closers = value.takeLastWhile { it == ')' }.length
+            if (closers > 0) value = value.dropLast(closers)
+            if (value.contains('(') || value.contains(')')) return null
+            if (value.isNotEmpty()) out += value
+            repeat(closers) { out += ")" }
+        }
+        return out
+    }
+
+    /** Index of the `)` matching the `(` at [openIndex], or null when the group is unbalanced. */
+    private fun matchingParenToken(tokens: List<String>, openIndex: Int): Int? {
+        if (tokens.getOrNull(openIndex) != "(") return null
+        var depth = 0
+        for (index in openIndex until tokens.size) {
+            when (tokens[index]) {
+                "(" -> depth++
+                ")" -> {
+                    depth--
+                    if (depth == 0) return index
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * Rebuild a command line from already-tokenized words so it can go through [validateSimpleCommand].
+     *
+     * A word that held whitespace (a quoted argument) is quoted again — otherwise
+     * `echo "a b"` would replay as three words and a path guard could judge the wrong token.
+     */
+    private fun renderCommand(tokens: List<String>): String =
+        tokens.joinToString(" ") { token ->
+            if (token.any { it.isWhitespace() }) "\"$token\"" else token
+        }
 
     /**
      * Split a command line into the simple commands it executes, in order.
@@ -1758,10 +2561,11 @@ class CodingAgentShell(
         val environment = SandboxEnvironment.build(System.getenv(), sessionEnv + extraEnv)
         val workspace = runCatching { baseDir.toRealPath() }
             .getOrElse { baseDir.toAbsolutePath() }
-        val spec = ExecutionSandboxes.current().prepare(
+        val spec = (sandbox ?: ExecutionSandboxes.current()).prepare(
             ProcessSpec(commandLine, workDir.toPath(), environment),
             workspace,
             networkAllowed(),
+            additionalDirs.map { it.toAbsolutePath().normalize() },
         )
 
         val process = ProcessLauncher.start(spec, redirectErrorStream = false)
@@ -1899,21 +2703,40 @@ class CodingAgentShell(
         return SafeText.take(output, MAX_OUTPUT_CHARS) + "\n... (output truncated at $MAX_OUTPUT_CHARS chars) ..."
     }
 
+    /**
+     * One-line status header, then the captured output.
+     *
+     * This used to be a fixed five/six-line envelope — `Session:`, `Status:`,
+     * `Exit Code:`, `Duration:` plus a `--- stdout ---` banner. A baseline of
+     * five interactive coding sessions measured those lines at 12.7% of all
+     * tool output, and the model re-read them on every call: the session id,
+     * the outcome, the exit code and the duration fit on the header line, and
+     * the body starts on the very next one.
+     *
+     * Stream markers survive only where they carry information: a single
+     * stream prints straight after the header (the header says `stderr` when it
+     * is the only stream), and two streams keep one `--- stderr ---` divider so
+     * the model can still tell them apart.
+     */
     private fun formatResult(result: ShellResult): String {
         val status = if (result.success) "SUCCESS" else "FAILED"
+        val sep = " · "
+        val stdout = result.stdout.trimEnd()
+        val stderr = result.stderr.trimEnd()
         return buildString {
-            appendLine("Session: ${result.sessionId}")
-            appendLine("Status: $status")
-            appendLine("Exit Code: ${result.exitCode}")
-            appendLine("Duration: ${result.durationMs}ms")
-            if (result.timedOut) appendLine("⚠️ Command timed out")
-            if (result.stdout.isNotBlank()) {
-                appendLine("--- stdout ---")
-                appendLine(result.stdout)
-            }
-            if (result.stderr.isNotBlank()) {
-                appendLine("--- stderr ---")
-                appendLine(result.stderr)
+            append(if (result.success) "✓ " else "✗ ")
+            append(result.sessionId).append(sep).append(status)
+            append(sep).append("exit ").append(result.exitCode)
+            append(sep).append(result.durationMs).append("ms")
+            if (result.timedOut) append(sep).append("TIMED OUT")
+            if (stdout.isBlank() && stderr.isNotBlank()) append(sep).append("stderr")
+            when {
+                stdout.isBlank() && stderr.isBlank() -> Unit
+                stdout.isBlank() -> appendLine().append(stderr)
+                stderr.isBlank() -> appendLine().append(stdout)
+                else -> appendLine().append(stdout)
+                    .appendLine().append("--- stderr ---")
+                    .appendLine().append(stderr)
             }
         }.trimEnd()
     }

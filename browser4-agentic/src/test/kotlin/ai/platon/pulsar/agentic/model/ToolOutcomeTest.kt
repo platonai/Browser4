@@ -243,6 +243,20 @@ class ToolOutcomeTest {
     }
 
     @Test
+    @DisplayName("a leftover syntax-shaped message is ordinary output, not a refusal")
+    fun testSyntaxShapedMessageIsNotARefusal() {
+        // There is no syntax gate any more: `coding.shell` hands an undecomposable shape to the
+        // platform shell instead of refusing it. A body that merely contains the old envelope is
+        // data, and must not flip an otherwise successful step to [fail].
+        val text = "UNSUPPORTED_SYNTAX | code=SYNTAX_NOT_SUPPORTED | tool=coding.shell | detail=legacy"
+
+        val outcome = ToolOutcome.from(result(text), domain = "coding", method = "shell")
+
+        assertTrue(outcome.ok, outcome.render())
+        assertFalse(outcome.render().startsWith("coding.shell [fail]"), outcome.render())
+    }
+
+    @Test
     @DisplayName("the refusal marker inside a result body does not fail a successful call")
     fun testRefusalMarkerInBodyStaysOk() {
         val outcome = ToolOutcome.from(result("README.md\nnote: PERMISSION_DENIED | code=PATH_DENIED in a doc"))

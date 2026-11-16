@@ -10,6 +10,11 @@ import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Demonstrates talking to the active webpage.
+ *
+ * Every line of `actions` is one natural-language task executed by the session's
+ * companion agent — the CLI tool loop. The session's one-shot `act(...)` entry
+ * point was removed on 2026-11-12 (`agent.run` is the only engine now), so this
+ * example drives the same steps through `companionAgent.run`.
  * */
 suspend fun main() {
     val session = AgenticContexts.createSession()
@@ -22,8 +27,10 @@ scroll to top
 get the text of the element with id 'productTitle'
         """.trimIndent().split("\n").filter { it.isNotBlank() }
 
+    val agent = session.companionAgent
+
     val eventHandlers = DefaultPageEventHandlers()
-    eventHandlers.browseEventHandlers.onDocumentFullyLoaded.addLast { page, driver ->
+    eventHandlers.browseEventHandlers.onDocumentFullyLoaded.addLast { _, driver ->
         while (true) {
             println("Talk and execute on the active page")
 
@@ -31,22 +38,18 @@ get the text of the element with id 'productTitle'
                 println("\n")
                 println(OffsetDateTime.now())
                 println(">>> $action")
+                // Keep the tool loop on the page this handler fired for.
                 session.bindDriver(driver)
-                val results = session.act(action)
-                println(results.joinToString { it.modelResponse?.toString() ?: "" })
-
-                results.forEach { result ->
-                    val expression = result.expression
-                    val functionResult = result.evaluate
+                val history = agent.run(action)
+                val state = history.finalResult
+                val result = state?.toolCallResult
+                val expression = result?.expression?.takeIf { it.isNotBlank() }
+                    ?: state?.actionDescription?.toString().orEmpty()
+                println("> $expression")
+                val value = result?.evaluate?.value?.toString()
+                if (!value.isNullOrBlank()) {
                     println()
-                    println("> $expression")
-                    if (functionResult != null) {
-                        val s = functionResult.toString()
-                        if (s.isNotBlank()) {
-                            println()
-                            println(Strings.compactInline(s, 500))
-                        }
-                    }
+                    println(Strings.compactInline(value, 500))
                 }
                 delay(1000.milliseconds)
             }

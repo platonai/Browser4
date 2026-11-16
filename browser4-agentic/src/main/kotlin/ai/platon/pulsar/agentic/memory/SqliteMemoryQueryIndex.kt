@@ -344,6 +344,8 @@ class SqliteMemoryQueryIndex(
         is NoteWritten -> listOf(e.key, e.valueBrief).joinToString(" ")
         is Completed -> listOf(e.summary, e.keyFindings?.joinToString(" ")).filterNotNull().joinToString(" ")
         is Failed -> listOf(e.errorBrief, e.failureCategory).filterNotNull().joinToString(" ")
+        is RoundTimed -> "round ${e.round} calls=${e.calls} " +
+            "model=${e.modelMs}ms tools=${e.toolsMs}ms callbacks=${e.callbacksMs}ms"
     }
 
     private fun taskTextOf(events: List<MemoryEvent>): String {

@@ -373,7 +373,7 @@ class CrawlService(
      * [ai.platon.pulsar.protocol.browser.emulator.impl.PrivacyManagedBrowserFetcher]).
      *
      * The hard ceiling is the browser driver pool
-     * (`browser.context.number` x `browser.max.active.tabs`, 2 x 8 by default);
+     * (`browser.context.number` x `browser.max.open.tabs`, 2 x 8 by default);
      * the value is kept small so a bulk download stays polite to the target site
      * and to the rest of the server.  Set it (or `--parallel 1`) for the
      * historical one-unit-at-a-time behavior.
@@ -2124,7 +2124,7 @@ class CrawlService(
          * [CrawlService.defaultParallelTabs].
          *
          * Kept well below the browser driver pool's ceiling
-         * (`browser.context.number` x `browser.max.active.tabs`, 2 x 8 by
+         * (`browser.context.number` x `browser.max.open.tabs`, 2 x 8 by
          * default) so one bulk crawl cannot monopolize every tab on the server.
          * */
         const val DEFAULT_PARALLEL_TABS = 4
@@ -2133,7 +2133,7 @@ class CrawlService(
          * Hard ceiling on a requested parallelism budget.
          *
          * The driver pool refuses to hand out more than
-         * `browser.context.number` x `browser.max.active.tabs` tabs (16 by
+         * `browser.context.number` x `browser.max.open.tabs` tabs (16 by
          * default), and each open tab is a real browser target; the ceiling
          * stops a typo in `--parallel` from asking the server to open hundreds
          * of them.

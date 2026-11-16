@@ -28,6 +28,10 @@ data class CommandAgentState(
     // completion report (system.taskComplete). They are carried through to
     // CommandResult so `agent result` returns the deliverable, not just a summary.
     var keyFindings: List<String>? = null,
+    // AI: the follow-up tasks the agent proposed in its completion report
+    // (`system.taskComplete(nextSuggestions=…)`). The interactive CLI turns them into
+    // its numbered "likely next steps" menu.
+    var nextSuggestions: List<String>? = null,
     var filesChanged: List<String>? = null,
     var problems: List<String>? = null,
     // When the step state was created
@@ -90,6 +94,7 @@ internal fun AgentState.toCommandAgentState(): CommandAgentState {
         summary = summary,
         isComplete = isComplete,
         keyFindings = keyFindings,
+        nextSuggestions = nextSuggestions,
         filesChanged = filesChanged,
         problems = problems,
         timestamp = timestamp.toString(),

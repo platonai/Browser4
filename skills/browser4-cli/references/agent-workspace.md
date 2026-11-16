@@ -45,7 +45,7 @@ backend `<agent data>` is `~/.browser4/workspaces/<workspace-id>/app-data`.
 | Command | Root |
 |---|---|
 | `agent run "<task>"` | `…/<agent-uuid>/workspace.<task-id>` — this task only |
-| `agent run "<task>" --coding` | the same per-task directory, provisioned as a **mirror** of the checkout (source files; `.git` is absent) |
+| `agent run "<task>" --coding` | an isolated **git worktree** of the checkout: `<repo>/.browser4/worktrees/<task-id>` (it has `.git`; the change is merged back as a patch) |
 | `agent run --resume <task-id>` | the **interrupted** task's workspace, so the rows/files it already wrote are what the new run continues from |
 | `agent run --shared-workspace` | the old shared `…/<agent-uuid>/workspace`, which holds earlier tasks' files |
 | `--fresh-workspace` | accepted for compatibility; a per-task workspace is now the default |
@@ -53,7 +53,34 @@ backend `<agent data>` is `~/.browser4/workspaces/<workspace-id>/app-data`.
 Why isolation is the default: files from an earlier run must never appear in this run's
 `filesChanged` (a 2026-10-28 run reported a CSV written 36 minutes earlier and another
 agent's report as its own deliverables), and a task that lists its workspace must not
-wade through a previous task's hundreds of helper scripts.
+wade through a previous task's hundreds of helper scripts. For `--coding` the same
+requirement is met with a git worktree instead of a copy: every write is disposable,
+`git status`/`git diff` work, and a change that does not pass `coding.verify` is never
+merged into the checkout.
+
+**A workspace that is not a git work tree cannot run isolated at all.** The coding task
+fails and says so: install git, or set `-Dbrowser4.agent.workspace.isolation=off`. It
+does not fall back to the mirror, because mirroring links the checkout's modules into the
+scratch workspace — every write would land in your tree with no merge step and no
+`merge`/`isolatedWorkspace` in the result.
+
+**Where a coding task's change lands.** `agent result` reports `workspace` = the
+**main repository** (the checkout the patch was applied to), `isolatedWorkspace` = the
+worktree, and `merge` = `applied` | `refused` | `pending`. `refused` means nothing was
+applied — the run's files exist only in `isolatedWorkspace` — so a client must not read
+`workspace` as containing the work. A refused merge also fails the task, with the reason
+in `problems`/the failure message. The verdict must still describe the tree: a file
+written **after** `coding.verify` refuses the merge ("re-run verify for the final change
+set"), and a change spanning two ecosystems needs one passing verdict per module.
+
+**Unmerged work is never swept away.** The backend keeps the newest
+`browser4.agent.isolation.keep` worktrees and anything younger than
+`browser4.agent.isolation.maxAgeDays`, and reclaims the rest — but only those whose
+manifest proves the task merged. A tree whose change never reached the checkout (refused,
+failed, cancelled, crashed, still running) is retained, and so is one with no manifest to
+prove otherwise: a refused run has no patch until a merge is attempted, so that tree is
+the only copy of the work. `b4w recover --status` lists what is retained;
+`b4w recover --prune --force` deletes it deliberately.
 
 `agent result <task-id>` names the directory (`workspace`) and lists the files **this
 run** reported (`filesChanged`); a run that aborted without reporting them still lists
@@ -75,7 +102,10 @@ locations is still refused).
 
 Readable but never writable by the model (`code=PROTECTED_PATH`): `VERSION`, `AGENTS.md`,
 `CLAUDE.md`, the root `pom.xml`, `browser4-dependencies/pom.xml`,
-`.github/workflows/ci.yml`, and the `.browser4/`, `.github/workflows/` subtrees.
+`.github/workflows/ci.yml`, and the `.browser4/`, `.github/workflows/` subtrees. The shell applies
+the same split — it refuses the **write** shapes there (a redirection target, a mutating command's
+path argument, `cd` into the subtree) and allows reads, so `type .browser4/…` and `coding.read` both
+reach the previous task's ledger.
 
 Binary files (`.xlsx`, `.pdf`, `.zip`, images) are not read as text by `coding.read`.
 
@@ -160,6 +190,47 @@ the operator's explicit opt-in, not something a task can grant itself, and it is
 (`browser4.agent.sandbox`). The `code` / `tool call` / `plugin` rule is driven by the
 preset instead: only `access=full` allows them.
 
+### Extra folders granted with `--add-dir`
+
+A task's boundary is its own workspace (plus its mirrored module roots, the checkout those mirrors come from — writable, so a self-development task edits the code it runs from — and the readable roots). To let a run work on a folder that lives somewhere else, grant it explicitly:
+
+```bash
+browser4-cli agent run "Port the helpers in ../shared-libs into this repo" --coding --add-dir ../shared-libs
+browser4-cli agent run "Summarize every file in the corpus" --coding --add-dir D:/corpus --add-dir D:/archive
+```
+
+- **Repeatable** — one `--add-dir` per folder. A relative path resolves against the directory you typed the command in, and a leading `~` is your home directory.
+- **It must already exist on the backend machine.** The grant is never created implicitly, and a missing path (or a file) fails the submission with the reason instead of starting a task whose grant means nothing.
+- **Scope, not power.** The agent may read, write and use it as a `coding.shell` working directory exactly like its workspace, but `--access` still decides what is allowed — `--access read` keeps an added folder read-only — and the OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) stay refused.
+- **Task-scoped.** The grant is reset when the task ends and `--resume <id>` inherits it. `coding.permissions` lists the folders and the task prompt names them (absolute paths, as given), so the model does not have to guess.
+- **Available mid-session too.** In `agent run -i`, `/add-dir <dir>` grants the following tasks a folder without restarting the session (`/dirs` lists the grants, `/dirs clear` drops them). The session banner shows the grants it started with.
+- **The sandbox agrees.** With `-Dbrowser4.agent.sandbox=windows-acl` the sandbox account is granted the same folders, so an OS denial cannot contradict a step the boundary allowed.
+
+### `--unrestricted` — no boundary at all
+
+A task started with `--unrestricted` runs with the current OS user's own permissions:
+
+```bash
+browser4-cli agent run "Move the cache into D:/corpus and fix the symlinks" --coding --unrestricted
+```
+
+The boundary described above is replaced with a pass-through one (no workspace scope, no
+readable-root list, no need for `--add-dir`), the protected rails are dropped, and
+the OS sandbox (`browser4.agent.sandbox`) is **not** applied — child processes inherit the
+backend's own token, so a command reaches exactly what you could reach from the same terminal.
+The shell's command allow-list goes too, so programs it never knew — a PowerShell cmdlet included —
+run as written (the list is not a boundary: the same body already ran unexamined through
+`powershell -File`). An inline-script body (`powershell -Command …`, `bash -c …`) is not judged by
+that list in **any** mode, and a shape the checker cannot decompose, `for` loops included, is handed
+to the platform shell in every mode.
+The OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) are the exception:
+they stay refused, because "my permissions" must not become "my secrets" in a model's context.
+The OS is then the only limit: on Windows with `windows-acl` configured, that confinement is what
+you are switching off, so prefer an added folder when the task only needs one more directory.
+The flag is scoped to the task (the backend default is restored afterwards) and inherited by
+`agent run --resume <id>`; [agent-access.md](agent-access.md#unrestricted-tasks--agent-run---unrestricted)
+covers the capability side.
+
 ### Deliverable format
 
 There is **no spreadsheet writer**, and `.xlsx` output is out of scope by decision. A
@@ -217,11 +288,12 @@ Credential locations stay refused. `--access` never widens paths.
 
 | Flag / property | Applies to | Effect |
 |---|---|---|
-| `--coding` | `agent run` | mirror the checkout into the per-task workspace (repo-relative paths become readable) |
+| `--coding` | `agent run` | run in an isolated **git worktree** of the checkout (has `.git`); the change is merged into the main repository as a patch only when `coding.verify` passes |
 | `--shared-workspace` | `agent run` | use the shared `<agent data>/workspace` (earlier tasks' files are visible) instead of this task's own directory |
 | `--resume <task-id>` | `agent run` | reuse the interrupted task's workspace (its files are what the new run continues from) |
 | `--fresh-workspace` | `agent run` | accepted for compatibility; per-task isolation is the default now |
 | `--access <preset>` | `agent run` | which *tools* run (`full`/`write`/`read-build`/`read`); never widens paths |
+| `--add-dir <dir>` | `agent run` | grant an **existing** folder outside the workspace: readable, writable and usable as a shell working directory for this task (repeatable; scope only — the preset still bounds what may be done there, and `--resume` inherits it) |
 | `browser4.agent.copyTaskInputs` | backend | copy instruction-referenced external files into `.b4inputs/` (default `true`) |
 | `browser4.agent.allowExternalAccess` | backend | deprecated; advisory string-layer widening for absolute paths outside the workspace (default `false`) |
 | `browser4.agent.workspace` | backend | the checkout a `--coding` task mirrors (default: auto-detected) |
@@ -230,7 +302,7 @@ Credential locations stay refused. `--access` never widens paths.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `PERMISSION_DENIED \| code=PATH_DENIED` | the path is outside the workspace | name the file in the task (it is copied in), or use `--coding`, or enable external access |
+| `PERMISSION_DENIED \| code=PATH_DENIED` | the path is outside the workspace | name the file in the task (it is copied in), use `--add-dir <folder>` for a folder the task must work in, use `--coding`, or enable external access |
 | `code=PROTECTED_PATH` | governance file or protected subtree | copy what you need elsewhere; these stay unwritable by design |
 | `code=SENSITIVE_PATH` | credential location | never copied or read; move the data out of `~/.ssh`/`~/.aws`/`~/.browser4` |
 | The agent reports a blocked input in `problems` | the file could not be resolved at all | check the path exists in the checkout, then re-run |

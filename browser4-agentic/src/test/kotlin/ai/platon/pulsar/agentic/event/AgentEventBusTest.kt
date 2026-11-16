@@ -1,7 +1,6 @@
 package ai.platon.pulsar.agentic.event
 
 import ai.platon.pulsar.agentic.ActionOptions
-import ai.platon.pulsar.agentic.ObserveOptions
 import ai.platon.pulsar.agentic.event.detail.DefaultAgentEventHandlers
 import ai.platon.pulsar.agentic.event.detail.DefaultAgentFlowEventHandlers
 import ai.platon.pulsar.agentic.event.detail.DefaultServerSideAgentEventHandlers
@@ -84,18 +83,18 @@ class AgentEventBusTest {
 
         // Emit an event
         AgentEventBus.emitAgentEvent(
-            eventType = "onWillObserve",
+            eventType = "onWillAct",
             agentId = "test-agent-123",
-            message = "Starting observation"
+            message = "Starting action"
         )
 
         // Wait for the event to be received
         val event = withTimeout(1000.milliseconds) { eventDeferred.await() }
 
-        assertEquals("onWillObserve", event.eventType)
+        assertEquals("onWillAct", event.eventType)
         assertEquals("agent", event.eventPhase)
         assertEquals("test-agent-123", event.agentId)
-        assertEquals("Starting observation", event.message)
+        assertEquals("Starting action", event.message)
     }
 
     @Test
@@ -212,7 +211,7 @@ class AgentEventBusTest {
         AgentEventBus.serverSideAgentEventHandlers = null
 
         // This should not throw an exception
-        AgentEventBus.emitAgentEvent("onWillObserve", "agent-123")
+        AgentEventBus.emitAgentEvent("onWillAct", "agent-123")
 
         // Nothing to verify, just ensure no exception is thrown
     }
@@ -295,12 +294,12 @@ class DefaultAgentEventHandlersTest {
         var handler1Called = false
         var handler2Called = false
 
-        handlers1.onWillObserve.addLast { _ ->
+        handlers1.onWillAct.addLast { _ ->
             handler1Called = true
             null
         }
 
-        handlers2.onWillObserve.addLast { _ ->
+        handlers2.onWillAct.addLast { _ ->
             handler2Called = true
             null
         }
@@ -309,7 +308,7 @@ class DefaultAgentEventHandlersTest {
         handlers1.chain(handlers2)
 
         // Invoke should call both handlers
-        handlers1.onWillObserve.invoke(ObserveOptions())
+        handlers1.onWillAct.invoke(ActionOptions(action = "test"))
 
         assertTrue(handler1Called)
         assertTrue(handler2Called)

@@ -34,6 +34,13 @@ enum class TaskStatus {
  * [filesChanged] is the deliverable set — the union of (Δgit from baseline) and
  * the mutation log's deliverable paths (see `WorkspaceTaskLifecycle`). It is
  * bounded to 200 entries; the archive step only takes the first 50.
+ *
+ * Isolation bookkeeping (plan S1): [isolation] says how the workspace was
+ * provided (`worktree` / `mirror` / `none`), [worktree] is the isolated tree the
+ * tools wrote into, [baseline] the commit it started from, [preRef] the main-tree
+ * `HEAD` captured before the merge, [patch] the applied patch and [merge] whether
+ * it reached the main work tree (`applied` / `refused` / `pending`). All are
+ * null for non-coding tasks and for runs without isolation.
  */
 data class TaskSnapshot(
     val taskId: String,
@@ -45,6 +52,12 @@ data class TaskSnapshot(
     val filesChanged: List<String> = emptyList(),
     val mutations: Int = 0,
     val baselineCaptured: Boolean = false,
+    val isolation: String? = null,
+    val worktree: String? = null,
+    val baseline: String? = null,
+    val preRef: String? = null,
+    val patch: String? = null,
+    val merge: String? = null,
 ) {
     /** A compact one-liner for the inherited-workspace-state prompt block. */
     fun summaryLine(): String {

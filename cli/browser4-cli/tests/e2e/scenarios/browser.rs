@@ -114,8 +114,18 @@ pub(super) fn test_open_recovery_after_browser_kill(ctx: &mut E2ECtx) {
     let title = eval_text(ctx, "document.title");
     assert_eq!(title.trim(), INTERACTIVE_TITLE);
 
-    // 2. Kill browser processes (not the server).
-    let kill_result = browser4_cli::managed_processes::kill_all_browsers();
+    // 2. Kill browser processes (not the server).  Scoped to this checkout's
+    // backends: the machine-wide sweep this used to call also closed a
+    // neighbouring checkout's browser windows (issue #640).
+    let kill_result = browser4_cli::managed_processes::kill_browsers_of_owned_servers();
+    if !ctx.external_service {
+        assert!(
+            !kill_result.killed_pids.is_empty(),
+            "expected the browser launched by this checkout's backend to be attributed \
+             and killed; nothing matched (owned backend lookup must find the JVM whose \
+             command line carries this checkout's root)"
+        );
+    }
     if !kill_result.killed_pids.is_empty() {
         eprintln!(
             "[test_open_recovery_after_browser_kill] killed browser PIDs: {:?}",

@@ -27,6 +27,10 @@ they keep port `18182` and the flat `~/.browser4` layout.
 | AOT cache | shared | per checkout — no cross-checkout invalidation |
 | `stop` | every managed backend + its browsers | **only this checkout's** backends, plus the browsers **they** launched |
 
+The AOT cache lives in the checkout's state dir, so a development rebuild whose
+jar list/sizes change yields a new cache key: the next backend start retrains in
+the background (~1–3 min, non-blocking) and the start after that is the fast one.
+
 ## Quick Index
 
 | Topic | Where |
@@ -40,12 +44,16 @@ they keep port `18182` and the flat `~/.browser4` layout.
 
 ## Port Allocation
 
-A fresh checkout takes the first free port at or above `8282` (32-port scan,
-each candidate probed on loopback for 250 ms). The chosen URL is remembered in
-that checkout's state file, so later commands reuse the same port — while it is
-free, or still held by this checkout's own backend. If another workspace takes
-the port over in the meantime, the next command transparently re-allocates
-(from `8282` upward) instead of talking to the neighbour's backend.
+A fresh checkout takes the first free port at or above `8282` (32-port scan). Each
+candidate is decided in this order: a **live managed backend registered for that port**
+(this checkout's own — the registry entry plus a live PID) makes the port ours without
+any network probe; otherwise one loopback TCP connect with a **30 ms** budget decides it
+(a listening socket answers the handshake in kernel time, and a host that filters
+loopback SYNs spends the budget on a closed port — that is the whole cost of the scan).
+The chosen URL is remembered in that checkout's state file, so later commands reuse the
+same port — while it is free, or still held by this checkout's own backend. If another
+workspace takes the port over in the meantime, the next command transparently
+re-allocates (from `8282` upward) instead of talking to the neighbour's backend.
 
 With 4.13 already serving on `8282`, the first command in 4.14 uses `8283`.
 Ports outside the development range, and URLs that resolve to a real host, are
@@ -120,6 +128,17 @@ every managed backend and browser, across workspaces.
 | Target a specific backend | `--server <url>` / `config set server <url>` / `BROWSER4_CLI_SERVER` |
 | Disable development mode entirely | `BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1` (production ports and flat `~/.browser4` state) |
 | Share one state directory across checkouts | `BROWSER4_CLI_STATE_DIR=<dir>` |
+| See where a command's wall clock went | `BROWSER4_CLI_TIMING=1` (one `[timing]` line on stderr) |
+| See the startup phases behind that number | `BROWSER4_CLI_TRACE_STARTUP=1` (adds one `[startup]` line per phase) |
+
+`BROWSER4_CLI_TIMING=1` prints
+`[timing] startup=…ms http=…ms server=…ms net=…ms calls=… total=…ms` **on stderr**, so
+`--json` output on stdout stays parseable. `startup` is everything from process start to
+the first backend request (including the port decision above), `http` is the tool-call
+round trip, `server` is the part of it the backend reports for the tool itself
+(`X-Browser4-Duration-Ms`), and `net = http − server`. The line never reaches an agent's
+`b4.run` output: the backend parses it out of stderr and records it as metrics
+(`browser4.cli.{launch,startup,http,server}`).
 
 Server-URL precedence is unchanged:
 `--server` / `BROWSER4_CLI_SERVER` > `config set server` > this checkout's

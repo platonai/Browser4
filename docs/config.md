@@ -158,7 +158,7 @@ volcengine.base.url=https://ark.cn-beijing.volces.com/api/v3  # optional
 
 Windows (PowerShell)
 ```powershell
-$env:BROWSER_CONTEXT_MODE = "SYSTEM_DEFAULT"
+$env:BROWSER_PROFILE_MODE = "SYSTEM_DEFAULT"
 ```
 
 For high-performance parallel crawling:
@@ -166,7 +166,7 @@ For high-performance parallel crawling:
 Linux/MacOS
 ```bash
 export PROXY_ROTATION_URL=https://your-proxy-provider.com/rotation-endpoint
-export BROWSER_CONTEXT_MODE=SEQUENTIAL
+export BROWSER_PROFILE_MODE=SEQUENTIAL
 export BROWSER_CONTEXT_NUMBER=2
 export BROWSER_MAX_OPEN_TABS=8
 export BROWSER_DISPLAY_MODE=HEADLESS
@@ -175,7 +175,7 @@ export BROWSER_DISPLAY_MODE=HEADLESS
 Windows (PowerShell)
 ```powershell
 $env:PROXY_ROTATION_URL = "https://your-proxy-provider.com/rotation-endpoint"
-$env:BROWSER_CONTEXT_MODE = "SEQUENTIAL"
+$env:BROWSER_PROFILE_MODE = "SEQUENTIAL"
 $env:BROWSER_CONTEXT_NUMBER = 2
 $env:BROWSER_MAX_OPEN_TABS = 8
 $env:BROWSER_DISPLAY_MODE = "HEADLESS"
@@ -344,7 +344,7 @@ For Docker deployments, use environment variables in the `docker run` command.
 docker run -d -p 18182:18182 \
   -e OPENROUTER_API_KEY=${OPENROUTER_API_KEY} \
   -e PROXY_ROTATION_URL=https://your-proxy-provider.com/rotation-endpoint \
-  -e BROWSER_CONTEXT_MODE=SEQUENTIAL \
+  -e BROWSER_PROFILE_MODE=SEQUENTIAL \
   -e BROWSER_CONTEXT_NUMBER=2 \
   -e BROWSER_MAX_OPEN_TABS=8 \
   -e BROWSER_DISPLAY_MODE=HEADLESS \
@@ -357,7 +357,7 @@ docker run -d -p 18182:18182 \
 docker run -d -p 18182:18182 `
   -e OPENROUTER_API_KEY=$env:OPENROUTER_API_KEY `
   -e PROXY_ROTATION_URL=https://your-proxy-provider.com/rotation-endpoint `
-  -e BROWSER_CONTEXT_MODE=SEQUENTIAL `
+  -e BROWSER_PROFILE_MODE=SEQUENTIAL `
   -e BROWSER_CONTEXT_NUMBER=2 `
   -e BROWSER_MAX_OPEN_TABS=8 `
   -e BROWSER_DISPLAY_MODE=HEADLESS `
@@ -391,6 +391,7 @@ docker run -d -p 18182:18182 `
   Defines the URL provided by your proxy service.
   Each time the rotation URL is accessed, it should return a response containing one or more fresh proxy IPs.
   Ask your proxy provider for such a URL.
+  For a single fixed proxy, proxy authentication, the response formats and the verification steps, see **[ip-proxy.md](ip-proxy.md)** ([中文](ip-proxy.zh.md)).
 
 * **`browser.context.number`** *(default: 2)*
   [**Advanced**] Only for `SEQUENTIAL` and `TEMPORARY` modes.
@@ -399,7 +400,7 @@ docker run -d -p 18182:18182 `
 
   > For `DEFAULT`, `SYSTEM_DEFAULT`, and `PROTOTYPE` browser contexts, this value is **1**.
 
-* **`browser.max.active.tabs`** *(default: 8)*
+* **`browser.max.open.tabs`** *(default: 8; env var `BROWSER_MAX_OPEN_TABS`)*
   Maximum number of tabs per browser instance.
 
   > For `DEFAULT`, `SYSTEM_DEFAULT`, and `PROTOTYPE` browser contexts, there is **no limit**.
@@ -625,7 +626,9 @@ docker run -d -p 18182:18182 `
     on a TTY keeps `browser4.agent.access`. Widening a refused effect is the operator's call, not
     an automatic ceiling: the agent files `coding.requestAccess` and an operator approves it
     (see [agent-access.md](../skills/browser4-cli/references/agent-access.md)). An unknown value is
-    logged (once) and leaves the derived default at `full`.
+    logged (once) and leaves the derived default at `full`. How the presets are enforced internally —
+    the five enforcement layers, the rails, the approval capabilities and the OS sandbox — is
+    described in [agent-permissions.md](agent-permissions.md).
   - `browser4.agent.allowExternalAccess` *(default: `false`)* — **deprecated**, prefer `access`.
     Whether file tools may resolve paths outside the workspace; projected into every preset.
     Advisory only: it relaxes a string-layer check, so it does not widen what the OS sandbox
@@ -638,21 +641,30 @@ docker run -d -p 18182:18182 `
     (`~/.ssh`, `~/.aws`, `~/.browser4`, …). This check is a fast-fail UX, not a security
     boundary: prompt-injected scripts can spell a path it never sees, so enforcement comes from
     the OS sandbox (`browser4.agent.sandbox`). It does **not** relax the protected subtrees:
-    `.browser4` and `.github/workflows` are refused as shell arguments, redirection targets and
-    working directories whatever this property says. Only for local debugging; leave it on.
+    `.browser4` and `.github/workflows` are refused as shell **writes** — a redirection target, a
+    path argument of a mutating command (`del`, `cp`, `Set-Content`, `Remove-Item`, …) and a `cd`
+    into them — whatever this property says. Reading there is allowed: the ledger of the previous
+    task is a read, and `type .browser4/…` / `coding.read` must both work. Only for local
+    debugging; leave it on.
 
   ```bash
   BROWSER4_SERVER_OPTS="-Dbrowser4.agent.access=read-build" browser4-cli open
   ```
 
-* **`browser4.agent.readPaths`** *(JVM system property; default: the Browser4 data root + the
-  source checkout)*
+* **`browser4.agent.readPaths`** *(JVM system property; default: the Browser4 data root,
+  `~/.browser4`, the CLI workspace owning the data root + the source checkout)*
   Folders the coding tools may **read** although they are outside the task workspace. The built-in
   roots already cover Browser4's own folders, which is what makes "read the previous task's log" or
   "inspect the runtime temp files" work at all:
 
   - the data root — `app.data.dir` when set, else `~/.browser4` (`logs/`, `data/`, `memory/`, the
     per-task `agent/…/workspace.<id>` trees and Browser4's own `tmp/`);
+  - `~/.browser4` itself, always: a managed (`--workspace`) backend puts its data root under
+    `<home>/workspaces/<checkout>/app-data`, while the task ledger (`async-tasks.json`) and the
+    other runs' workspaces stay under the home — without this root a task could not answer "what
+    happened to the previous task?";
+  - the CLI workspace that owns `<app data>` (accepted only when it holds `async-tasks.json` /
+    `cli-state.json`), so a task asked to report its own status can read the ledger;
   - the source checkout the backend was started from, when there is one (a packaged runtime has
     none; a task workspace mirrors the checkout, but the real tree also has `.git` and untracked
     fixtures).
@@ -665,9 +677,13 @@ docker run -d -p 18182:18182 `
   ```
 
   The roots are **read-only**: `write`/`append`/`replace`/`delete`/`copy`/`move` stay confined to
-  the workspace and its mirrored module roots, and a write into a readable root is refused (the
-  audit counts it as `READ_ONLY`; the model gets `PERMISSION_DENIED | code=PATH_DENIED` with the
-  hint). Use `browser4.agent.allowExternalAccess=true` for a deliberate, audited write escape
+  the workspace, its mirrored module roots and the **checkout those mirrors come from** (a task that
+  mirrors a repository may edit the repository it is developing — a boundary grant, not a readable
+  root), and a write into a readable root is refused (the audit counts it as `READ_ONLY`; the model
+  gets `PERMISSION_DENIED | code=PATH_DENIED` with the hint). The shell's *working directory* is
+  restricted to those project roots too: the checkout is a valid `workingDir`, a toolchain cache
+  (`%TEMP%`, `~/.m2`, the JDK, `C:\Windows`) is not. Use
+  `browser4.agent.allowExternalAccess=true` for a deliberate, audited write escape
   hatch. Reading is independent of the preset — `--access read` narrows workspace *power*, not the
   readable roots — and `coding.permissions` prints the roots in effect. The OS credential stores
   (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) stay refused even when a readable root
@@ -679,12 +695,83 @@ docker run -d -p 18182:18182 `
   working directory. The CLI injects the repository root when it starts the backend from a source
   tree, so `coding.*` operates on your checkout rather than the runtime bundle.
 
-  A coding `agent run` mirrors the checkout into its per-task workspace; modules are linked as
-  directory junctions, so **module writes land in the real checkout** — the workspace isolates
-  task artifacts, not the module sources. `coding.permissions` prints the resolved root.
+  A coding `agent run` now executes in an isolated **git worktree** of the checkout
+  (`<repo>/.browser4/worktrees/<task-id>`) and merges the change back as a patch, so the
+  main checkout is never edited during the run. `coding.permissions` prints the resolved
+  root and the isolation facts (`merge` = `applied` | `refused` | `pending`).
 
-  Related: `browser4.agent.workspace.isolation=worktree` runs `coding.devTask(execute=true)` inside
-  a `git worktree` under `.browser4/worktrees/` and merges back only on success (default `off`).
+  Related: `browser4.agent.workspace.isolation` (default `worktree`; `off` restores the
+  pre-2026-11 in-place/mirror behaviour). The older `coding.devTask` path uses the same
+  switch and merges only on success.
+
+* **`browser4.agent.isolation.requireVerify`** *(default: `true`)*
+  A coding run that changed code is merged back only when `coding.verify` produced a
+  **passing** verdict covering the changed modules. Documentation-only changes need no
+  build. A refused merge fails the task and keeps the worktree; nothing is applied.
+
+* **`browser4.agent.lock.staleHours`** *(default: `12`)*
+  One coding task per checkout at a time (`.git/b4-coding.lock`). A lock whose process is
+  gone, or older than this, is taken over with a warning; a live lock makes the second
+  task fail immediately, naming the holder.
+
+* **`browser4.agent.protected.extra`** *(default: empty)*
+  Comma-separated, workspace-relative paths merged into the protected set. The launch
+  path is protected by default (`b4w.*`, `bin/build.ps1`, `bin/recover.ps1`,
+  `build-runtime-bundle.ps1`, `mvnw*`, `.mvn/`): a task must not edit how the backend
+  starts or how it is repaired.
+
+* **`browser4.agent.shell.forbidBootstrap`** *(default: `on`)*
+  `coding.shell` refuses `b4w build|stop|install|upgrade|uninstall|recover` and the
+  bootstrap build/recovery scripts — rebuilding the runtime that executes the task is
+  operator work. `coding.mvnBuild` / `coding.verify` are unaffected.
+
+* **`browser4.agent.session.contextEnabled`** *(default: `true`)* and
+  **`browser4.agent.session.contextTokens`** *(default: `1200`)*
+  Tasks of one agent session are separate runs, so each new task receives a compacted
+  `## Session context` block: what the earlier tasks of that session asked, how they ended
+  (`done` / `failed` / `cancelled`), the files they changed and the problems they left open.
+  That is what makes `agent run -i` — and any client that submits several tasks under one
+  `sessionId` — build on what it already did instead of restarting from zero.
+
+  The block is **compressed automatically**, because it is part of every prompt of the next run:
+  the newest 3 tasks keep their details, older ones collapse into one summary line, the whole
+  block stays under `contextTokens` (estimated at 4 characters per token), and over budget it
+  compacts further — oldest first — instead of growing.
+
+  **Compaction never loses the thread.** A recency-biased summary is exactly how a long session
+  forgets what it set out to do: the first record *is* the founding task, so it is the first thing
+  folded and the first evicted. Four guarantees prevent that:
+
+  - **The session goal is anchored** — the instruction of the session's first task is rendered
+    verbatim (`Session goal …`) in every block once that task stops being detailed, and it is never
+    rolled up or evicted. Later tasks are steps toward it, not new goals.
+  - **The goal can be revised, and the revision wins** — a user who changes direction mid-session is
+    recorded as a *correction*, not mistaken for another sub-step: a later task instruction that
+    reads like a redirection ("actually…", "instead…", "改用…", "不要…") and any line typed into a
+    running task (`POST /api/commands/{id}/input`, i.e. `-i` steering) are kept (newest 3, 160
+    chars each) and rendered **above** the goal as superseding it. The block also says the
+    instruction at the top of the message wins over everything below, and the goal line no longer
+    claims to be current — an anchor that insisted on the abandoned direction would fight the
+    instruction the user just typed. Steering text used to die with the run it steered; it now
+    survives the session.
+  - **Unresolved problems survive the fold** — `problems` reported by an older (undetailed) task are
+    re-listed in their own section, so "the CI gate was not run" is still actionable several tasks
+    later. Problems belonging to a task that is still detailed are left in its bullet (no
+    duplication).
+  - **The newest task is never dropped** — the degradation chain ends at *newest direction +
+    newest task* (bounded per field), never at a top-down truncation that would keep stale titles
+    while cutting the bullet the next instruction refers to. A budget below ~150 tokens is raised to
+    that floor rather than silently producing a block that says nothing.
+
+  What is deliberately **not** carried: the details of tasks older than the 12-record window (only
+  their goal/status line survives through the goal anchor), and corrections beyond the newest 3.
+  Set `contextTokens` to `0` (or `contextEnabled=false`) to disable the injection; a one-shot
+  `agent run` is unaffected either way, because the first task of a session has nothing to
+  remember. `agent run -i`'s `/new` starts a fresh context on purpose.
+
+  ```bash
+  BROWSER4_SERVER_OPTS="-Dbrowser4.agent.session.contextTokens=3000" browser4-cli open
+  ```
 
 * **`browser4.agent.copyTaskInputs`** *(default: `true`)*
   Before a task runs, copy the files its instruction references but that live outside the agent
@@ -722,10 +809,23 @@ All are JVM system properties (set with `BROWSER4_SERVER_OPTS` or `-D…` when y
 |---|---|---|
 | `browser4.agent.sandbox` | Windows fresh install `windows-acl`; otherwise `off` | OS enforcement for `coding.shell`/`coding.runCode`. Unavailable backend, unknown id or unimplemented id → task fails (`SandboxUnavailableException`); never falls back. A denial becomes `code=SANDBOX_DENIED`. |
 | `browser4.agent.sandbox.account` | `browser4-agent` | Windows sandbox account. Missing account/credential or failed ACLs → hard failure at task start. |
+| `browser4.agent.workspace.isolation` | `worktree` | Coding tasks run in an isolated git worktree and merge back as a patch; `off` restores in-place execution. A coding task whose workspace is **not** a git work tree fails with instructions (installing git, or setting this to `off`) instead of degrading to the mirror, whose writes reach the checkout with no merge step. A patch larger than 32 MiB is refused too: keep build output and binary assets out of the change set. |
+| `browser4.agent.isolation.requireVerify` | `true` | A code change is merged only with passing `coding.verify` verdicts covering **every** changed module (one verdict covers several via `-am`; a Rust + Kotlin change needs one per ecosystem) **that still describe the tree being merged**: `coding.verify` records `verifiedAt` + a content digest, and a file written after the verdict refuses the merge with "re-run verify for the final change set". |
+| `browser4.agent.lock.staleHours` | `12` | One coding task per checkout — `agent run --coding` **and** `coding.devTask(execute=true)` both take `<repo>/.git/b4-coding.lock`, because both can merge into that checkout. A lock older than this is taken over, as is one whose pid is gone **on this host**. A lock written by another host (a checkout reached over a share) is judged by age only — a same-numbered pid here says nothing about the other machine's holder. |
+| `browser4.agent.protected.extra` | empty | Extra workspace-relative paths a task may not modify (defaults already cover `b4w.*`, `bin/build.ps1`, `bin/recover.ps1`, `build-runtime-bundle.ps1`, `mvnw*`, `.mvn/`). |
+| `browser4.agent.isolation.keep` | `3` | Isolated worktrees always retained (newest by task activity — the ledger's end/start time, falling back to the directory mtime — first). Older ones are reclaimed with `git worktree remove` once they also exceed `isolation.maxAgeDays` **and** their manifest proves the task merged — a tree whose change never reached the checkout (refused, failed, cancelled, crashed, still running) is never reclaimed, and neither is one with no manifest. |
+| `browser4.agent.isolation.maxAgeDays` | `7` | Worktrees younger than this are never reclaimed, whatever `keep` says. |
+| `browser4.agent.isolation.gc` | `on` | Reclaim stale worktrees at the start of a coding task, while the checkout lock is held. `off` disables. Patches and `refs/b4/*` stay as revert handles. A refused/failed run has **no** patch until a merge is attempted, so its worktree is the only copy of that work — reclaim it deliberately (`b4w recover --prune --force`), never by age. |
+| `browser4.agent.isolation.gc.dryRun` | `false` | Log what the worktree sweep would remove without removing it. |
+| `browser4.agent.isolation.reuse` | `task` | `session` makes the tasks of one agent session share `<repo>/.browser4/worktrees/session-<id>`, reset to the current baseline between tasks. Reuse is taken only when the previous task **merged**; a refused/interrupted task keeps its tree and the next task gets a fresh one. |
+| `browser4.agent.isolation.shadowBoot` | `off` | Boot probe before merge: compile the worktree, start it on a spare port and require `/health`. `auto` = boot-chain modules only, `always` = any code change. Costs a Maven compile plus a JVM start per probe; `off` until measured on your machine. |
+| `browser4.agent.isolation.shadowBootTimeoutSeconds` | `120` | How long the probe waits for `/health`. |
+| `browser4.agent.isolation.shadowBootBuildTimeoutSeconds` | `600` | Compile budget for the probe (the worktree's changed modules with `-am`). |
 | `browser4.agent.access` | `full` | Access preset (`full` / `write` / `read-build` / `read`). Unknown backend value is logged and falls back to `full`; an unknown `--access` flag is rejected. |
 | `browser4.agent.readPaths` | data root + source checkout | Folders the coding tools may read outside the workspace, read-only (`;`-separated, `~` expanded). Credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) stay refused whatever the list says. |
 | `browser4.agent.access.unattended` | unset (`full` + network) | Preset derived for a task with no TTY. `deny` removes workspace power entirely; explicit `--access` wins; the derivation is audited `ACCESS_APPROVED(source=default)`. Unknown value warns once and stays `full`. |
 | `browser4.agent.shell.workspaceBoundary` | `on` | Advisory fast-fail: refuses literal absolute paths outside the workspace. Not an enforcement layer; the sandbox is. |
+| `browser4.agent.shell.forbidBootstrap` | `on` | Refuses `b4w build\|stop\|install\|upgrade\|uninstall\|recover` and the bootstrap build/recovery scripts: a task must not rebuild the runtime executing it. Builds via `coding.mvnBuild`/`coding.verify` stay allowed. |
 | `browser4.agent.shell.pathGuard` | `on` | **Deprecated**, advisory: refuses command arguments naming credential locations. Does not relax protected subtrees; sandbox still enforces. |
 | `browser4.agent.allowExternalAccess` | `false` | **Deprecated**, advisory: relaxes the string-layer path checks only; does not widen what the sandbox lets a process reach. |
 | `browser4.agent.allowDestructive` | `true` | **Deprecated**: `false` refuses delete/copy/move but still allows write/append/replace — use `access=read` for a true read-only task. |
@@ -739,6 +839,11 @@ All are JVM system properties (set with `BROWSER4_SERVER_OPTS` or `-D…` when y
 | `PROTOTYPE` ⚠️ | **[Advanced]** Uses a predefined prototype profile.                         | Acts as the base for `SEQUENTIAL` and `TEMPORARY`.        | Controlled state inheritance |
 | `SEQUENTIAL` ⚠️ | **[Advanced]** Picks a profile from a pool sequentially.                   | Rotates through a pool of pre-initialized directories.     | Avoid session reuse in batch runs |
 | `TEMPORARY` ⚠️  | **[Advanced]** Creates a new, isolated profile for each browser instance. | Discarded after session ends.                             | Maximum isolation / stateless crawling |
+
+Set it as the property `browser.profile.mode` (properties file), as the environment variable
+`BROWSER_PROFILE_MODE`, or per session (`open --profile-mode <mode>`,
+`swarm create --profile-mode SEQUENTIAL|TEMPORARY`). The per-session capability wins over the
+server default.
 
 ---
 

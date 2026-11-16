@@ -15,6 +15,8 @@
 
 [English](README.md) | 简体中文 | [中国镜像](https://gitee.com/platonai_galaxyeye/Browser4)
 
+> ⭐ **Browser4 对你有帮助？** 运行 `browser4-cli star` —— 已登录 GitHub CLI（`gh`）时，确认一次即由它代你加星（`--gh` 跳过确认）；否则它会用你已登录的浏览器打开本仓库，Star 由你自己点。
+
 <!-- TOC -->
 **目录**
 - [🤖 Browser4](#-browser4)
@@ -526,7 +528,7 @@ browser4-cli htmlsnapshot readability --text-only --all
 | `summarize [instruction]` | 总结当前页面内容。支持 `--selector`、`--filename`、`--raw`、`--stdout`。 |
 | `chat <message>` | 发送纯 AI chat 请求，不自动追加浏览器上下文。 |
 | `chat-result <id>` | 获取异步 chat 任务结果。 |
-| `agent run <task>` | 提交一个自主浏览器任务，并立即获得任务 ID。支持 `--wait`（阻塞等待结果）和 `--wait-timeout <秒>`（默认 600）。`--follow` 实时输出每一步（工具调用、模型发言、慢/失败工具）并以结果收尾——Ctrl+C 会取消任务；`--ndjson` 把同一流输出为每行一个 JSON 对象。`-i` 进入交互会话，任务运行中键入的内容会注入该任务（steering，绝不会被排成第二个任务）；`/stats` 报告本次运行的 LLM 轮次/请求数、token 消耗与工具调用，`/help` 列出会话命令。后端抖动或某个步骤无法解析都不会中断实时输出：`-i` 会继续跟随仍在运行的任务，并跳过那一条无法解析的步骤。任务类型默认为浏览器任务；`--coding` 显式标记纯编码任务（不做自动判定）。`--access <预设>`（`full`/`write`/`read-build`/`read`）可收窄该任务的编码工具权限，任务结束后复位；被拒的步骤不是死路——`coding.requestAccess` 会登记一个 pending 请求且不阻塞任务，操作员通过 `POST /api/agent/<taskId>/access/<requestId>/approve` 批准，而 `denyTools`、受保护路径与敏感路径永不批准；无 TTY 的任务（脚本、CI、提交式任务）默认派生 `full` 并允许出站网络，而非沿用服务端预设（`browser4.agent.access.unattended` 可收窄） |
+| `agent run <task>` | 提交一个自主浏览器任务，并立即获得任务 ID。支持 `--wait`（阻塞等待结果）和 `--wait-timeout <秒>`（默认 600）。`--follow` 实时输出每一步（工具调用、模型发言、慢/失败工具）并以结果收尾——Ctrl+C 会取消任务；`--ndjson` 把同一流输出为每行一个 JSON 对象。`-i` 进入交互会话，任务运行中键入的内容会注入该任务（steering，绝不会被排成第二个任务）；`/stats` 报告本次运行的 LLM 轮次/请求数、token 消耗（provider 上报时含 prompt cache 读取/写入量与命中率）与工具调用；每任务预算按**缓存未命中** token 计（默认 5M，prompt cache 读取不计费），预算耗尽时可直接选择“继续”（预算翻倍），每个任务结束 `-i` 会预测 2~3 条编号的后续**任务**（优先模型自己给出的后续建议，其次从结果里推导：未解决的问题、待评审/测试/提交的文件、可深挖的发现），而不是内部命令；同一 session 内任务互相继承上下文——每个任务都带上前序任务的压缩 `## Session context` 以及你中途的修正（修正后的目标覆盖原目标，当前指令优先级最高；`browser4.agent.session.contextTokens` 控制预算，`/new` 重新开始上下文）；`/result [--json] [--full]` 可重新打印上次结果（`--json` 美化 JSON，`--full` 不再折叠）。后端抖动或某个步骤无法解析都不会中断实时输出：`-i` 会继续跟随仍在运行的任务，并跳过那一条无法解析的步骤。任务类型默认为浏览器任务；`--coding` 显式标记纯编码任务（不做自动判定）。`--access <预设>`（`full`/`write`/`read-build`/`read`）可收窄该任务的编码工具权限，任务结束后复位；`--unrestricted` 则以**你自己的 OS 权限**运行该任务（full 预设、无工作区/受保护路径护栏、不施加 OS 沙箱，shell 自身的规则也一并放开：命令白名单（`for` 循环、内联脚本在任何模式下都原样交给平台 shell 执行；该开关额外放开 PowerShell cmdlet 这类白名单外程序）），按任务审计、`--resume` 会继承；但 OS 凭据目录（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.config/gcloud`）以及会杀死或重建后端的命令仍然拒绝；`--add-dir <目录>` 为该任务额外授权一个**已存在**的目录（可重复；可读、可写、可作为 shell 工作目录——`--access` 仍限制能否写入，凭据目录始终拒绝，`--resume` 会继承该授权；`-i` 会话内可用 `/add-dir <目录>` 随时追加、`/dirs [clear]` 列出或清空）；被拒的步骤不是死路——`coding.requestAccess` 会登记一个 pending 请求且不阻塞任务，操作员通过 `POST /api/agent/<taskId>/access/<requestId>/approve` 批准，而 `denyTools`、受保护路径与敏感路径永不批准；无 TTY 的任务（脚本、CI、提交式任务）默认派生 `full` 并允许出站网络，而非沿用服务端预设（`browser4.agent.access.unattended` 可收窄） |
 | `agent status <id>` | 查询任务状态——共享状态信封（`status`：queued/running/done/failed/cancelled，另有 `statusCode`、`message` 与 agent 步数）。 |
 | `agent result <id>` | 获取已完成任务的结果：摘要、`keyFindings`、`filesChanged`，以及产物所在的 workspace 目录。人类可读输出按段落渲染（`--json` 打印原始信封）。 |
 | `agent list` | 列出已跟踪的 agent 任务（状态与 `agent status` 一致，每次调用都会向服务端刷新）；`--clear` 可移除已结束的任务。 |
@@ -678,7 +680,7 @@ Browser4 中有两套不同的 “skill” 表面：
 | `experience save <url> <trace>` | 保存任务执行轨迹。支持 `--outcome`、`--intent`、`--task-type`（规范任务类型，含 `publish_post`），以及 `--facts <inline JSON \| @file.json>`——把复盘式知识（`selectors` / `interaction_hints` / `known_blockers` / `anti_patterns`，camelCase 或 snake_case 键均可）合并进 (domain, intent) 的 facts 条目；当该条目为 VERIFIED（不可变）时合并会被拒绝。 |
 | `experience query <url>` | 查询某个 URL / 域名已知的选择器、阻塞因素和提示。支持 `--intent`。 |
 | `experience list` | 列出已存储的经验条目。支持 `--filter`、`--intent-filter`、`--page`、`--page-size`。 |
-| `experience deep-learn <url> <intent>` | 对已存储轨迹做更深入分析。支持 `--force`。 |
+| `experience deep-learn <url> <intent>` | 基于已存储轨迹重建 (domain, intent) 知识并尝试晋升（不访问页面）。支持 `--force`。 |
 
 #### 插件
 
@@ -705,13 +707,11 @@ browser4-cli stop    # 下一条命令会自动重启开发后端
 | `plugin remove <name>` | 删除插件。支持 `-y`、`--yes`。 |
 | `tool list [--filter <substr>]` | 列出后端公布的全部 MCP 工具名（含插件工具）；`tool call <name> --json '{…}'` 调用其中之一。 |
 
-#### 高级 / 当前隐藏命令
+#### 已移除命令
 
-这些命令实际存在于 CLI 中，但默认 public help 不会展示。
-
-| 命令 | 说明 |
+| 命令 | 替代 |
 |---|---|
-| `act <description>` | 实验性自然语言动作翻译器：把自然语言转换成浏览器命令并立即执行。 |
+| `act <description>` | 4.16 移除：服务端 `/api/act` 的一次性文本→工具调用翻译链路已删除（它会把失败的工具调用报成成功）。改用 `agent run "<task>" --wait`——CLI tool loop 是唯一的 agent 引擎。 |
 
 ### 超时环境变量
 
@@ -899,6 +899,10 @@ export PROXY_ROTATION_URL=https://your-proxy-provider.com/rotation-endpoint
 
 每次访问这个轮换 URL 时，它都应返回一个或多个新的代理 IP。
 如果你需要这种 URL，请联系你的代理服务商。
+
+单条固定代理（`--proxy-server`）、代理认证、轮换端点必须返回的格式、以及出口 IP 的验证方法，
+见 **[docs/ip-proxy.zh.md](docs/ip-proxy.zh.md)**（[English](docs/ip-proxy.md)）。
+注意 `browser4-cli --proxy` 是**下载**代理，不会让页面流量走代理。
 
 </details>
 

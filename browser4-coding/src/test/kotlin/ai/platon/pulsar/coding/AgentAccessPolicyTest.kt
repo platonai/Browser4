@@ -5,9 +5,11 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import java.nio.file.Path
 
 /**
  * Tests for [AgentAccessPolicy]: the preset matrix, the deny list, and the server-wide resolution.
@@ -23,6 +25,30 @@ class AgentAccessPolicyTest {
     }
 
     private fun policy(preset: AccessPreset) = AgentAccessPolicy(preset = preset)
+
+    @DisplayName("withAdditionalDirs widens scope only: preset, rails and task overrides are kept")
+    @Test
+    fun additionalDirsAreScopeOnly() {
+        val dir = Path.of("/corpus").toAbsolutePath().normalize()
+        val policy = AgentAccessPolicy(preset = AccessPreset.READ).withAdditionalDirs(listOf(dir))
+
+        assertEquals(AccessPreset.READ, policy.preset)
+        assertEquals(setOf(dir), policy.additionalDirs)
+        assertFalse(policy.allowsFileMutation(), "an added folder does not turn a read preset into a writer")
+
+        // Grants accumulate, and an explicit task preset keeps the folders: the preset bounds what
+        // may be done, the folders bound where.
+        val more = policy.withTaskOverrides(AccessPreset.FULL).withAdditionalDirs(listOf(Path.of("/corpus2")))
+        assertEquals(AccessPreset.FULL, more.preset)
+        assertTrue(more.additionalDirs.contains(dir), "the first grant must survive: ${more.additionalDirs}")
+        assertEquals(
+            Path.of("/corpus2").toAbsolutePath().normalize(),
+            more.additionalDirs.first { it != dir },
+        )
+
+        // No folders is the default policy: nothing to change.
+        assertSame(policy, policy.withAdditionalDirs(emptyList()))
+    }
 
     @Test
     @DisplayName("full allows every tool family")
@@ -367,5 +393,55 @@ class AgentAccessPolicyTest {
             assertFalse(message.contains("re-run"), "no re-run suggestion: $message")
             assertFalse(message.contains("-Dbrowser4"), "no JVM switch suggestion: $message")
         }
+    }
+
+    @DisplayName("withUnrestricted runs with the current OS user's own permissions: no gate, no rails")
+    @Test
+    fun unrestrictedIsPassThrough() {
+        val p = AgentAccessPolicy.serverDefault.withUnrestricted()
+
+        assertTrue(p.unrestricted)
+        assertEquals(AccessPreset.FULL, p.preset)
+        assertTrue(p.allowExternalAccess, "what the OS user may reach is decided by the OS")
+        assertTrue(p.allowNetwork)
+        assertTrue(p.allowDestructive)
+        assertTrue(p.denyTools.isEmpty())
+        assertTrue(p.effectiveProtectedDirs().isEmpty())
+        assertTrue(p.effectiveProtectedFiles().isEmpty())
+        assertTrue(p.sensitivePaths.isEmpty())
+        // Every gate is open, including the ones the narrow presets refuse.
+        assertTrue(p.allowsTool("coding", "shell"))
+        assertTrue(p.allowsTool("coding", "write"))
+        assertTrue(p.allowsFileMutation())
+        assertTrue(p.allowsExec())
+        assertTrue(p.allowsCommandExecution("rm -rf build"))
+    }
+
+    @DisplayName("an unrestricted policy drops the operator protected extras from files and dirs alike")
+    @Test
+    fun unrestrictedDropsOperatorProtectedExtrasFromBothLists() {
+        // `-Dbrowser4.agent.protected.extra` feeds both protected lists, so a flag that documents
+        // both rails as gone must clear both: the file entry used to survive while the directory
+        // entry was released.
+        System.setProperty("browser4.agent.protected.extra", "bin/build.ps1,target")
+        try {
+            val restricted = policy(AccessPreset.FULL)
+            assertTrue(restricted.effectiveProtectedFiles().contains("bin/build.ps1"))
+            assertTrue(restricted.effectiveProtectedDirs().contains("target"))
+
+            val unrestricted = restricted.withUnrestricted()
+            assertTrue(unrestricted.effectiveProtectedFiles().isEmpty())
+            assertTrue(unrestricted.effectiveProtectedDirs().isEmpty())
+        } finally {
+            System.clearProperty("browser4.agent.protected.extra")
+        }
+    }
+
+    @DisplayName("withUnrestricted(false) keeps the policy byte for byte")
+    @Test
+    fun unrestrictedCanBeTurnedOff() {
+        val base = policy(AccessPreset.READ)
+
+        assertSame(base, base.withUnrestricted(false))
     }
 }

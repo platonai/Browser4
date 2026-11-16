@@ -48,6 +48,83 @@ const EVENTS_PAGE_LIMIT: usize = 200;
 /// terminating a genuinely dead backend.
 const TRANSIENT_FAILURE_WINDOW: Duration = Duration::from_secs(300);
 
+/// Timeout of the one liveness probe taken when that window expires.
+const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// What a health probe says about a backend the follower can no longer poll.
+///
+/// The give-up message used to claim "the task itself may still be running" no matter
+/// why polling failed — which is exactly wrong when the backend process is gone (the
+/// task died with it) and only half right when the server is fine and the task is stuck.
+/// One cheap probe of `/actuator/health` at the moment of giving up separates the two.
+/// [Unknown] exists for the residual case — an error that is neither a refused connection
+/// nor a timeout proves nothing, and guessing there would be worse than the generic wording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackendLiveness {
+    /// The port answered HTTP: the server is up, so the task (or the endpoint) is the problem.
+    Up,
+    /// Nothing served the request: the process exited, is restarting, or is wedged.
+    Down,
+    /// The probe failed in a way that proves nothing about the server — do not claim a cause.
+    Unknown,
+}
+
+/// Ask `/actuator/health` whether anything is still serving.
+///
+/// Called only when the transient-failure window is about to expire, so it costs one
+/// request per give-up rather than one per failed poll. Any HTTP answer counts as [Up]:
+/// a 503 from a starting Spring context still proves a process owns the port, which is
+/// the distinction that matters here (a task cannot outlive its backend).
+///
+/// A timeout counts as [Down], not as "unknown": a healthy backend answers this endpoint
+/// in milliseconds, so a 2 s timeout after five minutes of failed polling means it is not
+/// serving — exited, restarting, or wedged. Windows reserves ranges of ephemeral ports and
+/// silently drops SYNs to them, so "connection refused" cannot be relied on to mean "dead".
+async fn probe_backend_liveness(client: &Client, base_url: &str) -> BackendLiveness {
+    let url = format!("{}/actuator/health", base_url.trim_end_matches('/'));
+    match client.get(&url).timeout(HEALTH_PROBE_TIMEOUT).send().await {
+        Ok(_) => BackendLiveness::Up,
+        // A connect failure or a timeout both mean nothing served the request. Only an
+        // error that is neither (a TLS/handshake/proxy failure) leaves the cause unknown.
+        Err(error) if error.is_connect() || error.is_timeout() => BackendLiveness::Down,
+        Err(_) => BackendLiveness::Unknown,
+    }
+}
+
+/// The message a follower reports when its failure window expires.
+///
+/// The reason is appended instead of replacing the original error: an operator needs
+/// both "what failed" and "whether the backend is gone".
+fn give_up_message(
+    task_id: &str,
+    failing_for: Duration,
+    error: &str,
+    liveness: BackendLiveness,
+) -> String {
+    let cause = match liveness {
+        BackendLiveness::Up => format!(
+            " (the backend still answers /actuator/health, so the server is up and the task or \
+             this endpoint is the problem — 'agent status {}' reports it)",
+            task_id
+        ),
+        BackendLiveness::Down => " (the backend is not serving any more: it exited, is restarting, \
+                                  or is wedged, and a task cannot outlive it — run \
+                                  'browser4-cli status' and read the backend log before retrying)"
+            .to_string(),
+        BackendLiveness::Unknown => format!(
+            " (the task itself may still be running — 'agent status {}' reports it)",
+            task_id
+        ),
+    };
+    format!(
+        "giving up on task {} after {}s without a usable response: {}{}",
+        task_id,
+        failing_for.as_secs(),
+        error,
+        cause
+    )
+}
+
 /// Upper bound on a rendered tool-call argument preview.
 const TOOL_ARGS_PREVIEW: usize = 120;
 
@@ -92,6 +169,12 @@ struct TaskEvent {
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     total_tokens: Option<u64>,
+    /// Prompt tokens the provider served from its prompt cache, when it reported
+    /// cache details (`None` = unknown, which is not the same as 0).
+    cached_input_tokens: Option<u64>,
+    /// Prompt tokens the request wrote into the provider prompt cache
+    /// (Anthropic-style APIs; `None` = unreported).
+    cache_write_input_tokens: Option<u64>,
     /// The run's effective token budget (`run.usage` steps; 0 = unlimited).
     budget_tokens: Option<u64>,
     /// Tokens consumed by the run so far, this request included.
@@ -138,6 +221,14 @@ impl TaskEvent {
         }
         if let Some(tokens) = self.total_tokens {
             obj["totalTokens"] = json!(tokens);
+        }
+        // Prompt-cache breakdown: machine consumers get "how much of this prompt
+        // was served from cache" without re-deriving it from provider logs.
+        if let Some(tokens) = self.cached_input_tokens {
+            obj["cachedInputTokens"] = json!(tokens);
+        }
+        if let Some(tokens) = self.cache_write_input_tokens {
+            obj["cacheWriteInputTokens"] = json!(tokens);
         }
         // Budget visibility for machine consumers: `--ndjson` must answer "how
         // close to the abort are we" without a second call.
@@ -213,6 +304,10 @@ fn parse_events_page(body: &str) -> Result<EventsPage, String> {
             input_tokens: item.get("inputTokens").and_then(|v| v.as_u64()),
             output_tokens: item.get("outputTokens").and_then(|v| v.as_u64()),
             total_tokens: item.get("totalTokens").and_then(|v| v.as_u64()),
+            cached_input_tokens: item.get("cachedInputTokens").and_then(|v| v.as_u64()),
+            cache_write_input_tokens: item
+                .get("cacheWriteInputTokens")
+                .and_then(|v| v.as_u64()),
             budget_tokens: item
                 .get("effectiveTokenBudget")
                 .and_then(|v| v.as_u64())
@@ -273,6 +368,10 @@ struct StatusProgress {
     error_code: Option<String>,
     /// Whether `agent run --resume <id>` can continue the task.
     resumable: Option<bool>,
+    /// The cache-miss token budget this run enforced (`effectiveTokenBudget`;
+    /// `0` = unlimited), when the envelope reports one. Used to offer a
+    /// "continue" with a doubled budget after a budget abort.
+    effective_budget: Option<u64>,
 }
 
 fn parse_status_progress(body: &str) -> StatusProgress {
@@ -285,6 +384,7 @@ fn parse_status_progress(body: &str) -> StatusProgress {
             tools: 0,
             error_code: None,
             resumable: None,
+            effective_budget: None,
         };
     };
 
@@ -335,6 +435,18 @@ fn parse_status_progress(body: &str) -> StatusProgress {
         .map(str::to_string);
     let resumable = value.get("resumable").and_then(|v| v.as_bool());
 
+    // The run's effective cache-miss budget. It rides the status envelope (and
+    // `agent result --json`); a nested `details` object is the legacy shape.
+    let effective_budget = value
+        .get("effectiveTokenBudget")
+        .and_then(|v| v.as_u64())
+        .or_else(|| {
+            value
+                .get("details")
+                .and_then(|details| details.get("effectiveTokenBudget"))
+                .and_then(|v| v.as_u64())
+        });
+
     // The backend answers an unknown id with `statusCode: 404` and a message
     // naming the id; a missing ROUTE (an older backend) has no such envelope.
     let status_code = value.get("statusCode").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -352,6 +464,7 @@ fn parse_status_progress(body: &str) -> StatusProgress {
         tools,
         error_code,
         resumable,
+        effective_budget,
     }
 }
 
@@ -379,6 +492,13 @@ struct RunStats {
     input_tokens: u64,
     output_tokens: u64,
     total_tokens: u64,
+    /// Prompt tokens served from the provider prompt cache, when reported.
+    cached_input_tokens: u64,
+    /// Prompt tokens written into the provider prompt cache, when reported.
+    cache_write_input_tokens: u64,
+    /// True when at least one model request reported cache details; `false`
+    /// means the cache counters are unknown, not 0.
+    cache_reported: bool,
     /// Every step the run emitted (retained plus evicted).
     events: u64,
     /// Steps evicted from the backend's bounded buffer.
@@ -419,6 +539,16 @@ impl RunStats {
                 self.input_tokens += input;
                 self.output_tokens += output;
                 self.total_tokens += event.total_tokens.unwrap_or(input + output);
+                // Cache counters stay "unknown" unless a request reported them;
+                // counting a missing value as zero would fake a 0% hit rate.
+                if let Some(cached) = event.cached_input_tokens {
+                    self.cached_input_tokens += cached;
+                    self.cache_reported = true;
+                }
+                if let Some(written) = event.cache_write_input_tokens {
+                    self.cache_write_input_tokens += written;
+                    self.cache_reported = true;
+                }
             }
             _ => {}
         }
@@ -430,6 +560,18 @@ impl RunStats {
     /// token numbers are *unknown* — a report must not claim "0 tokens".
     fn tokens_reported(&self) -> bool {
         self.input_tokens > 0 || self.output_tokens > 0 || self.total_tokens > 0
+    }
+
+    /// Share of the prompt served from the provider's prompt cache, `0.0..=1.0`.
+    ///
+    /// `None` when no model request reported cache details (an unknown cache is
+    /// not a 0% hit rate) or when the run counted no prompt tokens.
+    fn cache_hit_ratio(&self) -> Option<f64> {
+        if self.cache_reported && self.input_tokens > 0 {
+            Some(self.cached_input_tokens as f64 / self.input_tokens as f64)
+        } else {
+            None
+        }
     }
 
     /// The most-called tools, highest count first (at most [TOP_TOOLS]).
@@ -457,6 +599,10 @@ impl RunStats {
             "inputTokens": self.input_tokens,
             "outputTokens": self.output_tokens,
             "totalTokens": self.total_tokens,
+            "cachedInputTokens": self.cached_input_tokens,
+            "cacheWriteInputTokens": self.cache_write_input_tokens,
+            "cacheReported": self.cache_reported,
+            "cacheHitRatio": self.cache_hit_ratio(),
             "tokensReported": self.tokens_reported(),
             "events": self.events,
             "droppedEvents": self.dropped_events,
@@ -519,6 +665,17 @@ fn parse_task_stats(body: &str) -> Result<TaskStatsReport, String> {
             input_tokens: u64_field(stats, "inputTokens"),
             output_tokens: u64_field(stats, "outputTokens"),
             total_tokens: u64_field(stats, "totalTokens"),
+            cached_input_tokens: u64_field(stats, "cachedInputTokens"),
+            cache_write_input_tokens: u64_field(stats, "cacheWriteInputTokens"),
+            // An older backend sends neither the flag nor the counters: "unknown"
+            // is the honest default, and a positive counter still proves a report.
+            cache_reported: stats
+                .get("cacheReported")
+                .and_then(|v| v.as_bool())
+                .unwrap_or_else(|| {
+                    u64_field(stats, "cachedInputTokens") > 0
+                        || u64_field(stats, "cacheWriteInputTokens") > 0
+                }),
             events: u64_field(stats, "events"),
             dropped_events: u64_field(stats, "droppedEvents"),
             tool_counts,
@@ -556,6 +713,13 @@ struct Renderer {
     pending_calls: Vec<(String, u64)>,
     /// Successful model requests seen (`run.usage` steps), for the usage cadence.
     usage_requests: u64,
+    /// Run-level prompt tokens seen so far (`run.usage` steps), for the cache-hit
+    /// ratio: a per-request ratio would jump around and hide the run's trend.
+    usage_input_tokens: u64,
+    /// Run-level prompt tokens served from the provider cache, when reported.
+    usage_cached_tokens: u64,
+    /// Whether any usage step reported cache details (unknown ≠ 0%).
+    usage_cache_reported: bool,
     /// When the last usage line was printed (time-based cadence).
     last_usage_at: Option<Instant>,
     /// Whether the one-shot 80% warning has been printed.
@@ -586,6 +750,9 @@ impl Renderer {
             tool_index: 0,
             pending_calls: Vec::new(),
             usage_requests: 0,
+            usage_input_tokens: 0,
+            usage_cached_tokens: 0,
+            usage_cache_reported: false,
             last_usage_at: None,
             warned_80: false,
             exhausted_printed: false,
@@ -747,6 +914,19 @@ impl Renderer {
     /// so it stays readable, but the 80% warning and the exhaustion line always print.
     fn format_usage(&mut self, event: &TaskEvent) -> Option<String> {
         self.usage_requests += 1;
+        // Accumulate the run-level prompt/cache counters before any early return:
+        // the cadence check below intentionally skips lines, and skipped steps
+        // must still count toward the run's hit ratio.
+        if let Some(input) = event.input_tokens {
+            self.usage_input_tokens += input;
+        }
+        if let Some(cached) = event.cached_input_tokens {
+            self.usage_cached_tokens += cached;
+            self.usage_cache_reported = true;
+        }
+        if event.cache_write_input_tokens.is_some() {
+            self.usage_cache_reported = true;
+        }
         let cumulative = event.cumulative_tokens?;
         let budget = event.budget_tokens.unwrap_or(0);
         let now = Instant::now();
@@ -759,7 +939,7 @@ impl Renderer {
         if budget > 0 && fraction >= 1.0 && !self.exhausted_printed {
             self.exhausted_printed = true;
             return Some(format!(
-                "{} {} token budget exhausted: {} / {} — the run is being aborted",
+                "{} {} cache-miss token budget exhausted: {} / {} — the run is being aborted",
                 self.time_prefix(),
                 self.paint("✖", Style::Error),
                 format_token_amount(cumulative),
@@ -784,17 +964,36 @@ impl Renderer {
             String::new()
         };
         let mut line = format!(
-            "{} tokens {}{} · {} requests",
+            "{} budget {}{}{} · {} requests",
             self.time_prefix(),
             format_token_amount(cumulative),
             ratio,
+            self.format_usage_cache(),
             self.usage_requests
         );
         if warn_now {
             self.warned_80 = true;
-            line = format!("{} {} 80% of the token budget used", line, self.paint("⚠", Style::Error));
+            line = format!(
+                "{} {} 80% of the cache-miss budget used",
+                line,
+                self.paint("⚠", Style::Error)
+            );
         }
         Some(line)
+    }
+
+    /// ` · cache 18.0k (75%)` for the run so far, or `""` when the provider
+    /// reported no cache details — an unknown cache must not read as 0%.
+    fn format_usage_cache(&self) -> String {
+        if !self.usage_cache_reported || self.usage_input_tokens == 0 {
+            return String::new();
+        }
+        let ratio = self.usage_cached_tokens as f64 / self.usage_input_tokens as f64;
+        format!(
+            " · cache {} ({:.0}%)",
+            format_token_amount(self.usage_cached_tokens),
+            ratio * 100.0
+        )
     }
 
     /// Print a human-readable line.
@@ -1008,15 +1207,409 @@ fn failure_detail(progress: Option<&StatusProgress>) -> Option<String> {
     }
 }
 
+/// The machine-readable failure code of an exhausted (cache-miss) token budget.
+const ERROR_TOKEN_BUDGET: &str = "TOKEN_BUDGET";
+
 /// `    resume: agent run --resume <id> · /status for the envelope`, or `None`
 /// when the backend does not say the task can be continued.
+///
+/// A budget abort adds the doubled `--token-budget`, because resuming the same
+/// task under the same exhausted cap would abort again immediately: the point of
+/// the hint is the command that actually continues the work.
 fn resume_hint_line(task_id: &str, progress: Option<&StatusProgress>) -> Option<String> {
     if !progress.and_then(|progress| progress.resumable).unwrap_or(false) {
         return None;
     }
+    let budget_abort = progress
+        .and_then(|progress| progress.error_code.as_deref())
+        .is_some_and(|code| code == ERROR_TOKEN_BUDGET);
+    let budget = if budget_abort {
+        budget_abort_continue(progress)
+            .map(|budget| format!(" --token-budget {budget}"))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
     Some(format!(
-        "    resume: agent run --resume {task_id} · /status for the envelope"
+        "    resume: agent run --resume {task_id}{budget} · /status for the envelope"
     ))
+}
+
+/// The budget to request when continuing after a budget abort: double the cap the
+/// run enforced, or `None` when that cap is unknown/unlimited.
+fn budget_abort_continue(progress: Option<&StatusProgress>) -> Option<u64> {
+    continued_budget(progress?.effective_budget)
+}
+
+/// Double an exhausted budget so one "continue" buys another full window.
+///
+/// `None` (unknown budget) and `0` (unlimited) have nothing to double; the
+/// continue command then simply omits `--token-budget`.
+fn continued_budget(budget: Option<u64>) -> Option<u64> {
+    budget.filter(|budget| *budget > 0).map(|budget| budget.saturating_mul(2))
+}
+
+/// One suggested follow-up, offered as a numbered choice after a task ends.
+///
+/// The `command` is what selecting it runs: either a REPL command (`/resume
+/// --budget N` — the one "continue" that is not a new task) or the **task text**
+/// of a predicted follow-up, which goes through exactly the path a typed task
+/// takes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NextAction {
+    /// Short intent shown to the user ("review the 2 changed file(s)").
+    label: String,
+    /// What selecting it runs.
+    command: String,
+}
+
+/// What the interactive session knows about a finished task when it decides what
+/// to offer next.
+///
+/// The follow-ups are built from what the run actually produced — the files it
+/// changed, the problems it left open, and the next steps the model proposed in
+/// its own completion report — not from the CLI's command list. That is the whole
+/// difference between "here are three commands you could type" (which the user
+/// already had to know) and "here is what you probably want to do next".
+#[derive(Debug, Clone, Default)]
+struct TaskOutcome {
+    /// `done`, `failed`, `cancelled` (the terminal status word).
+    status: String,
+    /// Machine failure code (`TOKEN_BUDGET`, `NOOP_LIMIT`, …).
+    error_code: Option<String>,
+    /// Whether `agent run --resume <id>` can continue it.
+    resumable: bool,
+    /// The cache-miss budget the run enforced (`None` = unknown, `0` = unlimited).
+    budget: Option<u64>,
+    /// The task text the user typed.
+    task: Option<String>,
+    /// Whether this task ran as a coding task.
+    coding: bool,
+    /// The payload facts (files, findings, problems, the model's suggestions).
+    digest: crate::agent_result::ResultDigest,
+}
+
+impl TaskOutcome {
+    fn can_continue(&self) -> bool {
+        self.resumable || self.error_code.as_deref() == Some(ERROR_TOKEN_BUDGET)
+    }
+
+    /// The failure line's reason, for a "diagnose it" follow-up.
+    fn reason(&self) -> Option<&str> {
+        self.digest
+            .summary
+            .as_deref()
+            .map(str::trim)
+            .filter(|reason| !reason.is_empty())
+    }
+}
+
+/// How many follow-ups the block offers.
+const NEXT_ACTIONS: usize = 3;
+
+/// Upper bound on a rendered follow-up label.
+const NEXT_LABEL_MAX: usize = 72;
+
+/// The follow-ups worth offering after a task ends: **tasks the user is likely to
+/// want next**, in priority order.
+///
+/// Three sources, most-predictive first:
+/// 1. the model's own `nextSuggestions` from its completion report (it just did the
+///    work, so it knows what is left);
+/// 2. an open `problems` entry — the most actionable thing a run can leave behind;
+/// 3. deterministic intents derived from the outcome: review the diff, run the
+///    tests, commit, dig into a finding, diagnose a failure.
+///
+/// The list never falls back to `/stats` / `/new`: the user can type either, and a
+/// menu slot spent on the CLI's own bookkeeping is a slot not spent on the work.
+fn next_actions(outcome: &TaskOutcome) -> Vec<NextAction> {
+    let mut actions: Vec<NextAction> = Vec::new();
+
+    // The one action that is not a new task: continuing an interrupted run is what
+    // a resumable failure (a budget abort, a cancel) is FOR.
+    if outcome.can_continue() {
+        let budget = continued_budget(outcome.budget);
+        let label = match budget {
+            Some(budget) => format!(
+                "continue with a {} cache-miss budget",
+                format_token_amount(budget)
+            ),
+            None => "continue this task".to_string(),
+        };
+        let command = match budget {
+            Some(budget) => format!("/resume --budget {budget}"),
+            None => "/resume".to_string(),
+        };
+        actions.push(NextAction { label, command });
+    }
+
+    for (label, task) in predicted_tasks(outcome) {
+        if actions.len() >= NEXT_ACTIONS {
+            break;
+        }
+        push_task(&mut actions, &label, &task);
+    }
+
+    actions
+}
+
+/// Add a task-shaped follow-up unless it duplicates one already offered.
+///
+/// Deduplication is on the task text, not the label: the model's suggestions and
+/// the deterministic ones routinely say the same thing in different words ("run
+/// the tests" vs "run the tests for browser4-rest"), and two menu entries that
+/// start the same task are worse than one.
+fn push_task(actions: &mut Vec<NextAction>, label: &str, task: &str) {
+    let task = task.trim();
+    let label = one_line(label);
+    if task.is_empty() || label.is_empty() {
+        return;
+    }
+    let normalized = |text: &str| one_line(text).to_lowercase();
+    let candidate = normalized(task);
+    if actions
+        .iter()
+        .any(|action| normalized(&action.command) == candidate)
+    {
+        return;
+    }
+    actions.push(NextAction {
+        label: truncate(&label, NEXT_LABEL_MAX),
+        command: task.to_string(),
+    });
+}
+
+/// The task-shaped follow-ups of [outcome], most useful first.
+fn predicted_tasks(outcome: &TaskOutcome) -> Vec<(String, String)> {
+    let mut tasks: Vec<(String, String)> = Vec::new();
+    let files = &outcome.digest.files;
+    let findings = &outcome.digest.findings;
+    let problems = &outcome.digest.problems;
+    let listing = summary_of(files, 6);
+
+    // The model's own proposal is the best predictor there is: it just did the
+    // work and its completion report says what it could not finish.
+    for suggestion in &outcome.digest.next_suggestions {
+        let suggestion = one_line(suggestion);
+        if suggestion.is_empty() {
+            continue;
+        }
+        tasks.push((suggestion.clone(), suggestion));
+    }
+
+    if let Some(problem) = problems.first() {
+        let problem = one_line(problem);
+        tasks.push((
+            format!("fix what it left open: {problem}"),
+            format!("Fix the problem the previous task left open: {problem}"),
+        ));
+    }
+
+    if outcome.status == "failed" {
+        let reason = outcome
+            .reason()
+            .map(one_line)
+            .unwrap_or_else(|| "the run failed without a recorded reason".to_string());
+        tasks.push((
+            "find out why it failed".to_string(),
+            format!(
+                "Investigate why the previous task failed and report the root cause with \
+                 evidence: {reason}"
+            ),
+        ));
+        // A failure that cannot be resumed is still worth another attempt: the common
+        // causes (a flaky browser, a provider hiccup) are not the instruction's fault.
+        if !outcome.can_continue() {
+            if let Some(task) = outcome.task.as_deref().map(one_line).filter(|t| !t.is_empty()) {
+                tasks.push(("try the same task again".to_string(), task));
+            }
+        }
+    }
+
+    if outcome.coding {
+        if !files.is_empty() {
+            tasks.push((
+                format!("review the {} changed file(s)", files.len()),
+                format!(
+                    "Review the changes the previous task made ({listing}) and flag risky, \
+                     incomplete or inconsistent edits."
+                ),
+            ));
+            if let Some(module) = files.first().and_then(|file| module_of(file)) {
+                tasks.push((
+                    format!("run the {module} tests"),
+                    format!("Run the tests covering {module} and fix anything that fails."),
+                ));
+            }
+            tasks.push((
+                "commit the change".to_string(),
+                format!(
+                    "Commit the changes from the previous task ({listing}) with a descriptive \
+                     message."
+                ),
+            ));
+        } else {
+            tasks.push((
+                "check the build and tests".to_string(),
+                "Run the project build and its tests, and report exactly what fails.".to_string(),
+            ));
+            tasks.push((
+                "add tests for the change".to_string(),
+                "Add tests covering the change the previous task made, then run them.".to_string(),
+            ));
+        }
+    } else if let Some(finding) = findings.first() {
+        let finding = one_line(finding);
+        tasks.push((
+            format!("dig into: {finding}"),
+            format!(
+                "Go deeper on this finding from the previous task and report the underlying \
+                 details with sources: {finding}"
+            ),
+        ));
+    }
+
+    if outcome.status == "cancelled" && !files.is_empty() {
+        tasks.push((
+            format!("review what it produced ({} file(s))", files.len()),
+            format!(
+                "Review what the interrupted task already produced ({listing}) and say what is \
+                 still missing."
+            ),
+        ));
+    }
+
+    // A browser run's deliverable is data, so the useful next step is turning the
+    // conversation into a file (or confirming the other findings hold). A FAILED run
+    // has no result to save — offering it there would point at nothing.
+    if !outcome.coding && outcome.status != "failed" {
+        tasks.push((
+            "save the result to a file".to_string(),
+            "Write the previous task's result to a Markdown file in the workspace, with the \
+             sources it came from."
+                .to_string(),
+        ));
+        if findings.len() > 1 {
+            tasks.push((
+                format!("check the other {} finding(s)", findings.len() - 1),
+                format!(
+                    "Verify the remaining findings of the previous task and report which ones no \
+                     longer hold: {}",
+                    summary_of(&findings[1..], 4)
+                ),
+            ));
+        }
+    }
+
+    tasks
+}
+
+/// At most [max] entries, joined for a prompt line.
+fn summary_of(items: &[String], max: usize) -> String {
+    let shown: Vec<&str> = items.iter().take(max).map(String::as_str).collect();
+    let mut text = shown.join(", ");
+    if items.len() > max {
+        text.push_str(&format!(", … ({} more)", items.len() - max));
+    }
+    text
+}
+
+/// The module a changed file belongs to: the segment before `/src/`
+/// (`browser4-rest/src/main/...` → `browser4-rest`), else the first segment.
+fn module_of(file: &str) -> Option<String> {
+    let normalized = file.replace('\\', "/");
+    let parts: Vec<&str> = normalized
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect();
+    let candidate = match parts.iter().position(|part| *part == "src") {
+        Some(index) if index > 0 => parts[index - 1],
+        _ if parts.len() >= 2 => parts[0],
+        _ => return None,
+    };
+    let looks_like_a_name = !candidate.is_empty()
+        && !candidate.contains('.')
+        && !candidate.contains(':')
+        && candidate
+            .chars()
+            .all(|ch| ch.is_alphanumeric() || ch == '-' || ch == '_');
+    looks_like_a_name.then(|| candidate.to_string())
+}
+
+/// One line, whitespace collapsed and length bounded — the shape every label and
+/// task text in the block takes.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The numbered choice block: one header plus one line per predicted next step.
+///
+/// The block shows the **intent**, never the command behind it: `▸ 1) run the
+/// browser4-rest tests` is what the user is choosing between, and the exact task
+/// text appears as `▶ task <id> — …` when it starts.
+fn format_next_actions(actions: &[NextAction]) -> Vec<String> {
+    if actions.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec!["likely next steps (type a number, or your own task):".to_string()];
+    for (index, action) in actions.iter().enumerate() {
+        lines.push(format!("  {}) {}", index + 1, action.label));
+    }
+    lines
+}
+
+/// The action index a typed line selects, when it is a bare number in range.
+///
+/// Numbers are only a selection while a suggestion block is on screen; any other
+/// input (a task, a `/command`) supersedes the block.
+fn action_selection(line: &str, count: usize) -> Option<usize> {
+    let selected: usize = line.trim().parse().ok()?;
+    // `then` (not `then_some`): the subtraction must not run for "0".
+    (1..=count).contains(&selected).then(|| selected - 1)
+}
+
+/// `/resume [--budget <tokens>] [task-id]` → `(task-id, budget)`.
+///
+/// Deliberately tiny: the command owns no state, and an unknown flag or a
+/// non-numeric budget is reported instead of silently resuming under the old cap
+/// (the exact failure mode `--token-budget` exists to prevent).
+fn parse_resume_args(argument: &str) -> Result<(Option<String>, Option<i64>), String> {
+    let mut task_id = None;
+    let mut budget = None;
+    let mut tokens = argument.split_whitespace();
+    while let Some(token) = tokens.next() {
+        match token {
+            "--budget" => {
+                let Some(raw) = tokens.next() else {
+                    return Err(
+                        "--budget expects a non-negative integer (0 = unlimited)".to_string(),
+                    );
+                };
+                budget = Some(parse_budget_value(raw)?);
+            }
+            flag if flag.starts_with("--") => {
+                return Err(format!(
+                    "unknown option '{flag}' — usage: /resume [--budget <tokens>] [task-id]"
+                ));
+            }
+            id => task_id = Some(id.to_string()),
+        }
+    }
+    Ok((task_id, budget))
+}
+
+/// A `--budget` value: a non-negative integer, or `unlimited` (0).
+fn parse_budget_value(raw: &str) -> Result<i64, String> {
+    let text = raw.trim();
+    if text.eq_ignore_ascii_case("unlimited") {
+        return Ok(0);
+    }
+    match text.parse::<i64>() {
+        Ok(value) if value >= 0 => Ok(value),
+        _ => Err(format!(
+            "--budget expects a non-negative integer (0 = unlimited), got '{raw}'"
+        )),
+    }
 }
 
 /// The `/status` line: `task <id> · <status> · N step(s) — <message>`.
@@ -1076,6 +1669,11 @@ fn format_run_cost(stats: &RunStats) -> String {
     }
     if stats.tokens_reported() {
         parts.push(format!("{} tokens", format_token_amount(stats.total_tokens)));
+        // One extra token for the cache ratio: it is the part of the bill a
+        // prompt-caching regression shows up in first.
+        if let Some(ratio) = stats.cache_hit_ratio() {
+            parts.push(format!("cache {:.0}%", ratio * 100.0));
+        }
     }
     parts.join(" · ")
 }
@@ -1139,6 +1737,23 @@ fn format_stats_report(report: &TaskStatsReport) -> Vec<String> {
             format_thousands(stats.output_tokens),
             format_thousands(stats.total_tokens)
         ));
+        // Prompt-cache efficiency, printed only when the provider reported it:
+        // an unreported cache is unknown, not a 0% hit rate. `in` above is
+        // cache-inclusive, so the ratio is `cached / in`.
+        if let Some(ratio) = stats.cache_hit_ratio() {
+            let mut cache = format!(
+                "  cache   {} read",
+                format_thousands(stats.cached_input_tokens)
+            );
+            if stats.cache_write_input_tokens > 0 {
+                cache.push_str(&format!(
+                    " · {} written",
+                    format_thousands(stats.cache_write_input_tokens)
+                ));
+            }
+            cache.push_str(&format!(" ({:.1}% hit)", ratio * 100.0));
+            lines.push(cache);
+        }
     } else if stats.model_requests > 0 {
         // The provider sends no usage block (a local model, a gateway that drops
         // it): the calls happened, the token numbers are unknown, not zero.
@@ -1433,7 +2048,7 @@ impl TaskFollower {
         .await
         {
             Ok(response) => response,
-            Err(error) => return self.tolerate_transient(error),
+            Err(error) => return self.tolerate_transient(client, base_url, error).await,
         };
 
         if response.is_missing_endpoint() {
@@ -1444,11 +2059,17 @@ impl TaskFollower {
             return self.poll_status(client, base_url).await;
         }
         if !response.is_success() {
-            return self.tolerate_transient(format!(
-                "the events endpoint answered HTTP {}: {}",
-                response.status,
-                truncate(response.body.trim(), 200)
-            ));
+            return self
+                .tolerate_transient(
+                    client,
+                    base_url,
+                    format!(
+                        "the events endpoint answered HTTP {}: {}",
+                        response.status,
+                        truncate(response.body.trim(), 200)
+                    ),
+                )
+                .await;
         }
 
         let page = match parse_events_page(&response.body) {
@@ -1456,7 +2077,7 @@ impl TaskFollower {
             // A 200 the parser rejects is not a transport problem: the page is
             // deterministic, so retrying it unchanged never helps. Recover from
             // it instead of blocking the live view for the whole retry window.
-            Err(error) => return self.recover_unparseable_page(&response.body, error),
+            Err(error) => return self.recover_unparseable_page(client, base_url, &response.body, error).await,
         };
         self.first_failure = None;
         // Back off the narrowing now that pages parse again: a long coding run
@@ -1490,8 +2111,10 @@ impl TaskFollower {
     /// step stands alone, then step over that single step using the `nextSeq`
     /// the body still carries — losing one preview line instead of the live view
     /// of a task that keeps running for another hour.
-    fn recover_unparseable_page(
+    async fn recover_unparseable_page(
         &mut self,
+        client: &Client,
+        base_url: &str,
         body: &str,
         error: String,
     ) -> Result<PollOutcome, String> {
@@ -1514,7 +2137,7 @@ impl TaskFollower {
         let Some(next) = parse_next_seq(body).filter(|next| *next > self.after) else {
             // No usable cursor either (a proxy error page, a truncated body):
             // that IS an outage, so fall back to the transient-failure window.
-            return self.tolerate_transient(error);
+            return self.tolerate_transient(client, base_url, error).await;
         };
         self.after = next;
         self.page_limit = EVENTS_PAGE_LIMIT;
@@ -1537,7 +2160,7 @@ impl TaskFollower {
     ) -> Result<PollOutcome, String> {
         let body = match get_command_status(client, base_url, &self.task_id).await {
             Ok(body) => body,
-            Err(error) => return self.tolerate_transient(error),
+            Err(error) => return self.tolerate_transient(client, base_url, error).await,
         };
         let progress = parse_status_progress(&body);
         self.first_failure = None;
@@ -1649,20 +2272,22 @@ impl TaskFollower {
         ));
     }
 
-    fn tolerate_transient(&mut self, error: String) -> Result<PollOutcome, String> {
+    async fn tolerate_transient(
+        &mut self,
+        client: &Client,
+        base_url: &str,
+        error: String,
+    ) -> Result<PollOutcome, String> {
         let now = Instant::now();
         let first_failure = self.first_failure.is_none();
         let since = *self.first_failure.get_or_insert(now);
         let failing_for = now.duration_since(since);
         if failing_for >= TRANSIENT_FAILURE_WINDOW {
-            return Err(format!(
-                "giving up on task {} after {}s without a usable response: {} \
-                 (the task itself may still be running — 'agent status {}' reports it)",
-                self.task_id,
-                failing_for.as_secs(),
-                error,
-                self.task_id
-            ));
+            // One probe, exactly when the cause is about to be reported: telling a user
+            // "the task may still be running" when the backend process is gone is the
+            // wrong instruction, and it is the case that wastes a whole sample.
+            let liveness = probe_backend_liveness(client, base_url).await;
+            return Err(give_up_message(&self.task_id, failing_for, &error, liveness));
         }
         // One notice per outage, and only on a human-facing stream: NDJSON must
         // stay parseable line by line.
@@ -2044,6 +2669,13 @@ struct Repl {
     /// Access preset for this REPL's tasks (`--access`); `None` keeps the
     /// server-wide `browser4.agent.access` default.
     access: Option<String>,
+    /// Extra folders granted to every task of this session (`--add-dir`,
+    /// repeatable); empty keeps the workspace-only boundary. Each value is the
+    /// absolute path the command definition resolved.
+    add_dirs: Vec<String>,
+    /// `--unrestricted`: every task this session submits runs with the current
+    /// OS user's own permissions. Opt-in per session, never defaulted.
+    unrestricted: bool,
     tty: bool,
     quiet: bool,
     /// `/verbose on`: the step renderer also shows round markers and fast
@@ -2069,6 +2701,18 @@ struct Repl {
     /// describing only the last task, as they always did (format plan P0-5).
     tasks_json: Vec<Value>,
     prompt_pending: bool,
+    /// Suggested follow-ups of the last task, shown as a numbered block. A bare
+    /// number typed at the prompt selects one; any other input clears the block.
+    next_actions: Vec<NextAction>,
+    /// The task text the last task was started with, so a predicted follow-up can
+    /// refer to the work the user actually asked for.
+    last_task_text: Option<String>,
+    /// Whether the last task ran as a coding task (decides which follow-ups fit: a
+    /// browsing run leaves findings, a coding run leaves files).
+    last_task_coding: bool,
+    /// What the last task's payload said (files, findings, problems, the model's own
+    /// suggested next steps) — the evidence the follow-up block is predicted from.
+    last_digest: crate::agent_result::ResultDigest,
 }
 
 impl Repl {
@@ -2101,6 +2745,11 @@ impl Repl {
             .and_then(|v| v.as_str())
             .map(str::to_string);
         let token_budget = params.get("tokenBudget").and_then(|v| v.as_i64());
+        let add_dirs = crate::add_dirs_of(params.get("addDirs"));
+        let unrestricted = params
+            .get("unrestricted")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         Self {
             client: client.clone(),
@@ -2115,6 +2764,8 @@ impl Repl {
             shared_workspace,
             token_budget,
             access,
+            add_dirs,
+            unrestricted,
             tty: io::stdin().is_terminal(),
             quiet: quiet_enabled(),
             verbose: false,
@@ -2125,6 +2776,10 @@ impl Repl {
             last_local_stats: None,
             tasks_json: Vec::new(),
             prompt_pending: true,
+            next_actions: Vec::new(),
+            last_task_text: None,
+            last_task_coding: false,
+            last_digest: crate::agent_result::ResultDigest::default(),
         }
     }
 
@@ -2153,8 +2808,8 @@ impl Repl {
         }
     }
 
-    /// The opening banner: the session, the engine, and only the knobs this
-    /// session actually changed.
+    /// The opening banner: the session and only the knobs this session actually
+    /// changed.
     ///
     /// It used to list one fixed sentence, so a session started with `--coding`,
     /// `--access read-build` or a token budget looked exactly like a default one —
@@ -2172,12 +2827,23 @@ impl Repl {
     /// The banner's two lines, pure so the knobs can be tested without a terminal.
     fn banner_lines(&self) -> Vec<String> {
         let session = self.session_id().unwrap_or_else(|| "default".to_string());
-        let mut line = format!("Browser4 agent · session={session} · engine={}", self.engine);
+        // No engine field: the CLI tool loop is the only engine left, so naming it
+        // on every banner would be noise.
+        let mut line = format!("Browser4 agent · session={session}");
         if self.coding {
             line.push_str(" · coding=on");
         }
         if let Some(access) = self.access.as_deref().filter(|access| !access.is_empty()) {
             line.push_str(&format!(" · access={access}"));
+        }
+        if !self.add_dirs.is_empty() {
+            // The folders are long absolute paths, so the banner says how many and
+            // names them after the other knobs instead of hiding the grant.
+            line.push_str(&format!(" · add-dir={}", self.add_dirs.join(",")));
+        }
+        if self.unrestricted {
+            // A session-wide power grant must never be silent.
+            line.push_str(" · unrestricted");
         }
         if let Some(budget) = self.token_budget.filter(|budget| *budget > 0) {
             line.push_str(&format!(" · budget={}", format_token_amount(budget as u64)));
@@ -2251,10 +2917,18 @@ impl Repl {
                 _ = ctrl_c.as_mut() => {
                     match self.current.take() {
                         Some(follower) => {
-                            let outcome = cancel_task(&self.client, &self.base_url, &follower.task_id).await;
+                            let task_id = follower.task_id.clone();
+                            let outcome = cancel_task(&self.client, &self.base_url, &task_id).await;
                             self.out(&format!("⏹ {outcome}"));
                             self.release_current(follower, "cancelled", true);
                             self.prompt_pending = true;
+                            // A cancelled run is resumable: offer the continue
+                            // choice instead of leaving the user to reconstruct
+                            // the resume command.
+                            self.last_digest = self.fetch_digest(&task_id).await;
+                            let progress =
+                                status_failure_progress(&self.client, &self.base_url, &task_id).await;
+                            self.offer_next_after("cancelled", progress.as_ref());
                         }
                         None => break,
                     }
@@ -2288,8 +2962,20 @@ impl Repl {
         }
 
         if let Some(command) = line.strip_prefix('/') {
+            // A typed command supersedes the suggestions of the previous task.
+            self.next_actions.clear();
             return self.handle_slash_command(command).await;
         }
+
+        // A bare number picks a suggested follow-up while the block is on screen.
+        // Only while idle: a number typed mid-run is steering text, not a choice.
+        if self.current.is_none() {
+            if let Some(index) = action_selection(&line, self.next_actions.len()) {
+                return self.run_next_action(index).await;
+            }
+        }
+        // Any other input is a task (or steering) and supersedes the block.
+        self.next_actions.clear();
 
         match self.current.as_ref().map(|follower| follower.task_id.clone()) {
             Some(task_id) => {
@@ -2322,7 +3008,87 @@ impl Repl {
         Ok(true)
     }
 
-    /// The task this session started that the backend still reports as live.
+    /// Run one suggested follow-up and report what it is about to do.
+    ///
+    /// A suggestion is a REPL command string, so selecting it takes exactly the
+    /// path a typed command takes (`/result --json`, `/stats`, `/resume …`, `/new`).
+    async fn run_next_action(&mut self, index: usize) -> Result<bool, String> {
+        let Some(action) = self.next_actions.get(index).cloned() else {
+            return Ok(true);
+        };
+        self.next_actions.clear();
+        self.out(&format!("▸ {}", action.label));
+        match action.command.strip_prefix('/') {
+            Some(command) => self.handle_slash_command(command).await,
+            None => {
+                if let Err(error) = self.start_task(action.command.clone()).await {
+                    self.out(&format!("✖ {error}"));
+                    self.prompt_pending = true;
+                }
+                Ok(true)
+            }
+        }
+    }
+
+    /// Show the follow-ups worth choosing after a task ended, when a human is at
+    /// the prompt.
+    ///
+    /// Piped stdin gets nothing: a numbered menu a script cannot answer would only
+    /// add noise, and a bare `1` must keep meaning "a task called 1".
+    fn offer_next(&mut self, outcome: TaskOutcome) {
+        self.next_actions.clear();
+        if !self.tty || !human_output_enabled(self.quiet) {
+            return;
+        }
+        let actions = next_actions(&outcome);
+        if actions.is_empty() {
+            return;
+        }
+        self.out("");
+        for line in format_next_actions(&actions) {
+            self.out(&line);
+        }
+        self.next_actions = actions;
+    }
+
+    /// Offer the follow-ups of a task that just ended, filling the failure
+    /// semantics from [progress] (and the session's budget when the envelope has
+    /// none) and the predicted work from the payload digest.
+    fn offer_next_after(&mut self, status: &str, progress: Option<&StatusProgress>) {
+        let budget = progress
+            .and_then(|progress| progress.effective_budget)
+            .or_else(|| self.token_budget.map(|budget| budget.max(0) as u64));
+        let outcome = TaskOutcome {
+            status: status.to_string(),
+            error_code: progress.and_then(|progress| progress.error_code.clone()),
+            resumable: progress
+                .and_then(|progress| progress.resumable)
+                .unwrap_or(status == "cancelled"),
+            budget,
+            task: self.last_task_text.clone(),
+            coding: self.last_task_coding,
+            digest: self.last_digest.clone(),
+        };
+        self.offer_next(outcome);
+    }
+
+    /// What a finished task's payload says about the work, for the follow-up menu.
+    ///
+    /// The status envelope carries counters, not the payload: `filesChanged`,
+    /// `problems` and the model's `nextSuggestions` only exist on
+    /// `command_result`. Asking for it is therefore only worth doing when the menu
+    /// will actually be shown — piped stdin and `/quiet` never make the request.
+    async fn fetch_digest(&self, task_id: &str) -> crate::agent_result::ResultDigest {
+        if !self.tty || !human_output_enabled(self.quiet) {
+            return crate::agent_result::ResultDigest::default();
+        }
+        match get_command_result(&self.client, &self.base_url, task_id).await {
+            Ok(body) => crate::agent_result::digest(&body),
+            // The menu is a convenience: an unreachable result endpoint must not
+            // turn a finished task into an error.
+            Err(_) => crate::agent_result::ResultDigest::default(),
+        }
+    }
     ///
     /// The follower is the normal source of that knowledge, but it must not be
     /// the only one: a session that lost it — a backend hiccup, a task submitted
@@ -2416,8 +3182,19 @@ impl Repl {
     }
 
     async fn start_task(&mut self, task: String) -> Result<(), String> {
+        self.next_actions.clear();
+        // A new task starts from a clean slate: the previous task's evidence must not
+        // shape the follow-ups offered after THIS one. (Set only once the task is
+        // accepted: a rejected submission must not clobber the previous task's.)
+        self.last_digest = crate::agent_result::ResultDigest::default();
         let extra = self.payload();
         let task_id = crate::submit_agent_task(&self.client, &self.base_url, &task, extra).await?;
+        // The follow-up menu describes THIS task, so its text and coding flag have
+        // to travel with the submission: left at their defaults, a `--coding`
+        // session offered browse-shaped follow-ups and a non-resumable failure
+        // lost its "try the same task again" entry.
+        self.last_task_text = Some(task.clone());
+        self.last_task_coding = self.coding;
         // A blank line separates two tasks, and the line names the task: a session
         // that runs several tasks used to be one undifferentiated stream of steps
         // (format plan P1-6). `▶ task <id>` stays as the leading substring.
@@ -2458,7 +3235,13 @@ impl Repl {
     /// applies; without a TTY nobody can answer an approval, so the backend's
     /// unattended default takes over (see plan P4-1).
     fn payload(&self) -> Value {
-        crate::build_agent_run_extra(
+        self.payload_with(self.token_budget)
+    }
+
+    /// [`Self::payload`] with an explicit token budget, so `/resume --budget N`
+    /// can continue one task under a larger cap without changing the session's.
+    fn payload_with(&self, token_budget: Option<i64>) -> Value {
+        let mut extra = crate::build_agent_run_extra(
             &self.engine,
             self.noop_limit,
             self.coding,
@@ -2467,8 +3250,84 @@ impl Repl {
             self.access.as_deref(),
             Some(!self.tty),
             self.session_id().as_deref(),
-            self.token_budget,
-        )
+            token_budget,
+        );
+        // Extra folders granted with `--add-dir`: every task of this session keeps
+        // the grant, exactly like `--access` does. The list is already absolute.
+        crate::apply_add_dirs(&mut extra, &self.add_dirs);
+        // `--unrestricted` is a session-wide grant, exactly like `--add-dir`: every
+        // task this REPL submits carries it until `-i` exits.
+        crate::apply_unrestricted(&mut extra, self.unrestricted);
+        extra
+    }
+
+    /// `/resume [--budget <tokens>] [task-id]`: continue the last (or named) task
+    /// with the workspace and files the interrupted run already produced.
+    async fn resume_command(&mut self, argument: &str) {
+        let (task_id, budget) = match parse_resume_args(argument) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                self.out(&format!("✖ {error}"));
+                return;
+            }
+        };
+        let Some(task_id) = task_id.or_else(|| self.last_task.clone()) else {
+            self.out("no task to resume — type a task first, or /resume <task-id>");
+            return;
+        };
+        self.resume_task(&task_id, budget).await;
+    }
+
+    /// Submit a backend-side resume of [resume_id] and follow the new task.
+    ///
+    /// The task text is empty on purpose: the checkpoint's instruction is the
+    /// base, and the CLI cannot invent it. `token_budget` overrides the session's
+    /// `--token-budget` for this run only — a "continue" after a budget abort is
+    /// meaningless under the same exhausted cap.
+    async fn resume_task(&mut self, resume_id: &str, token_budget: Option<i64>) {
+        let extra = self.resume_payload(resume_id, token_budget);
+        match crate::submit_agent_task(&self.client, &self.base_url, "", extra).await {
+            Ok(task_id) => {
+                self.next_actions.clear();
+                // A resume is a new task too: the follow-up evidence starts over, and
+                // the predictions describe the continued work, not the old task.
+                self.last_digest = crate::agent_result::ResultDigest::default();
+                self.last_task_text = Some(format!("resume {resume_id}"));
+                self.last_task_coding = self.coding;
+                self.out("");
+                self.out(&format!("▶ resume {resume_id} → task {task_id}"));
+                crate::json_field("task_id", json!(&task_id));
+                let _ = crate::state::track_async_task(
+                    &task_id,
+                    "agent",
+                    &format!("resume {resume_id}"),
+                    None,
+                );
+                self.current = Some(TaskFollower::new(
+                    &task_id,
+                    false,
+                    color_enabled(),
+                    self.quiet,
+                ));
+                if let Some(follower) = self.current.as_mut() {
+                    follower.renderer.verbose = self.verbose;
+                }
+                self.prompt_pending = false;
+                self.poll_and_recover().await;
+            }
+            Err(error) => {
+                self.out(&format!("✖ {error}"));
+                self.prompt_pending = true;
+            }
+        }
+    }
+
+    /// The `command_run` payload of a resume: the session's knobs, the chosen
+    /// budget, and the checkpoint id.
+    fn resume_payload(&self, resume_id: &str, token_budget: Option<i64>) -> Value {
+        let mut extra = self.payload_with(token_budget.or(self.token_budget));
+        crate::apply_resume_task_id(&mut extra, Some(resume_id));
+        extra
     }
 
     async fn poll_current(&mut self) -> Result<(), String> {
@@ -2603,9 +3462,13 @@ impl Repl {
                     &cost,
                     None,
                 ));
-                self.print_payload(&task_id, &result);
+                self.print_payload(&task_id, &result, crate::pretty_active());
                 crate::json_field("raw", crate::json_text_or_value(&result));
                 let _ = crate::state::update_async_task_status(&task_id, "completed", None);
+                // The payload is already here: read the follow-up evidence out of it
+                // instead of asking the backend a second time.
+                self.last_digest = crate::agent_result::digest(&result);
+                self.offer_next_after("done", None);
             }
             "cancelled" => {
                 let suffix = if tool_calls > 0 {
@@ -2621,8 +3484,14 @@ impl Repl {
                     None,
                 ));
                 let _ = crate::state::update_async_task_status(&task_id, "cancelled", None);
+                // The envelope still knows the budget and the resume flag; ask it
+                // instead of guessing from the session's `--token-budget`.
+                self.last_digest = self.fetch_digest(&task_id).await;
+                let progress = status_failure_progress(&self.client, &self.base_url, &task_id).await;
+                self.offer_next_after("cancelled", progress.as_ref());
             }
             _ => {
+                self.last_digest = self.fetch_digest(&task_id).await;
                 let progress = status_failure_progress(&self.client, &self.base_url, &task_id).await;
                 let detail = failure_detail(progress.as_ref())
                     .unwrap_or_else(|| "the task reported failure".to_string());
@@ -2637,6 +3506,7 @@ impl Repl {
                     self.out(&hint);
                 }
                 let _ = crate::state::update_async_task_status(&task_id, "failed", None);
+                self.offer_next_after("failed", progress.as_ref());
             }
         }
 
@@ -2662,8 +3532,13 @@ impl Repl {
             "status" => self.print_status().await,
             "result" => self.print_result(argument).await,
             "cancel" | "stop" => self.cancel_current().await,
+            // `/resume [--budget <tokens>] [task-id]`: continue an interrupted
+            // (or budget-aborted) task with its workspace and files.
+            "resume" => self.resume_command(argument).await,
             "new" => self.new_session(),
             "coding" => self.set_coding(argument),
+            "add-dir" => self.add_dir(argument),
+            "dirs" => self.print_dirs(argument),
             "quiet" => self.set_quiet(argument),
             "verbose" => self.set_verbose(argument),
             "noop-limit" => self.set_noop_limit(argument),
@@ -2861,11 +3736,16 @@ impl Repl {
         self.out("Commands:");
         self.out("  /help              this list");
         self.out("  /status            status of the running (or last) task");
-        self.out("  /result [--json]   print the last finished task's result (--json: raw envelope)");
+        self.out("  /result [--json] [--full]");
+        self.out("                     re-print the last finished task's result (--json: pretty envelope, --full: everything)");
+        self.out("  /resume [--budget <n>] [task-id]");
+        self.out("                     continue an interrupted/stalled task (a budget abort needs a bigger --budget)");
         self.out("  /cancel            cancel the running task (same as Ctrl+C)");
         self.out("  /new               start a new session (fresh agent context)");
         self.out("  /session           print the current session id");
         self.out("  /coding [on|off]   treat following tasks as coding tasks");
+        self.out("  /add-dir <dir>     grant the following tasks an extra folder (no argument: list)");
+        self.out("  /dirs [clear]      list the folders granted in this session, or drop them all");
         self.out("  /quiet [on|off]    silence the session's human lines (like -q)");
         self.out("  /verbose [on|off]  also print round markers and fast successful tools");
         self.out("  /noop-limit <n>    consecutive no-op abort threshold (blank resets)");
@@ -2878,6 +3758,7 @@ impl Repl {
         self.out("");
         self.out("Anything else is a task. While a task runs, a typed line steers it at its");
         self.out("next model round — /cancel the running task first to start a different one.");
+        self.out("After a task ends, type 1–3 to pick a suggested next step.");
     }
 
     async fn print_status(&mut self) {
@@ -2990,27 +3871,42 @@ impl Repl {
         crate::json_field("stats", payload);
     }
 
-    /// `/result [--json]`: the last finished task's payload.
+    /// `/result [--json] [--full]`: the last finished task's payload.
     ///
-    /// Human sections by default (`agent_result`), or the raw `command_result`
-    /// envelope with `--json` — the escape hatch for a consumer that wants the
-    /// machine form without re-running the task.
+    /// Human sections by default (`agent_result`), or the `command_result`
+    /// envelope as pretty-printed JSON with `--json` — the escape hatch for a
+    /// consumer that wants the machine form without re-running the task.
+    ///
+    /// `--full` keeps the human layout but stops hiding content: no fold line and no
+    /// per-section cap (`/result` printed 10 of 25 findings and said "and 15 more",
+    /// which is a dead end for the one command that exists to re-read the result).
     async fn print_result(&mut self, argument: &str) {
-        let raw = match argument.trim() {
-            "" => false,
-            "--json" => true,
-            other => {
-                self.out(&format!("usage: /result [--json] (got '{other}')"));
-                return;
+        let mut raw = false;
+        let mut full = crate::pretty_active();
+        for token in argument.split_whitespace() {
+            match token {
+                "--json" | "-j" => raw = true,
+                "--full" | "-f" => full = true,
+                other => {
+                    self.out(&format!("usage: /result [--json] [--full] (got '{other}')"));
+                    return;
+                }
             }
-        };
+        }
         let Some(task_id) = self.last_task.clone() else {
             self.out("no finished task yet");
             return;
         };
         match get_command_result(&self.client, &self.base_url, &task_id).await {
-            Ok(result) if raw => self.out(&result),
-            Ok(result) => self.print_payload(&task_id, &result),
+            Ok(result) if raw => {
+                // Pretty-printed, not one 5 KB line: a human reads this too, and the
+                // text stays valid JSON for the script that pipes it onward.
+                self.out("");
+                for line in crate::agent_result::pretty_json(&result).lines() {
+                    self.out(line);
+                }
+            }
+            Ok(result) => self.print_payload(&task_id, &result, full),
             Err(error) => self.out(&format!("could not read result of {task_id}: {error}")),
         }
     }
@@ -3021,14 +3917,18 @@ impl Repl {
     /// printed verbatim it is one multi-KB line of JSON. [`crate::agent_result`]
     /// renders the same data as Summary / Key findings / Files / Data sections,
     /// keeping the envelope's plumbing out of the human path. `/result --json`
-    /// still hands a caller the raw text.
-    fn print_payload(&self, task_id: &str, body: &str) {
+    /// still hands a caller the machine form (pretty-printed).
+    ///
+    /// The model's own `nextSuggestions` are suppressed here: the session prints
+    /// them as its numbered follow-up menu right after the payload.
+    fn print_payload(&self, task_id: &str, body: &str, full: bool) {
         let lines = crate::agent_result::render_result_text(
             task_id,
             body,
             &crate::agent_result::RenderOptions::default()
                 .with_color(color_enabled())
-                .with_full(crate::pretty_active()),
+                .with_full(full)
+                .with_suggestions(false),
         );
         if lines.is_empty() {
             return;
@@ -3044,16 +3944,21 @@ impl Repl {
             self.out("no task is running");
             return;
         };
-        let outcome = cancel_task(&self.client, &self.base_url, &follower.task_id).await;
+        let task_id = follower.task_id.clone();
+        let outcome = cancel_task(&self.client, &self.base_url, &task_id).await;
         self.out(&format!("⏹ {outcome}"));
         // Keep the tally: `/stats` on a cancelled task still answers (from the
         // backend when it has counters, from this session otherwise).
         self.release_current(follower, "cancelled", true);
         self.prompt_pending = true;
+        self.last_digest = self.fetch_digest(&task_id).await;
+        let progress = status_failure_progress(&self.client, &self.base_url, &task_id).await;
+        self.offer_next_after("cancelled", progress.as_ref());
     }
 
     fn new_session(&mut self) {
         self.generation += 1;
+        self.next_actions.clear();
         let session = self.session_id().unwrap_or_else(|| "default".to_string());
         self.out(&format!(
             "new session: {session} (the next task starts a fresh agent context)"
@@ -3073,6 +3978,65 @@ impl Repl {
             "coding mode {}",
             if self.coding { "on" } else { "off" }
         ));
+    }
+
+    /// `/add-dir <dir>`: grant the following tasks an extra folder besides their
+    /// workspace, exactly like `--add-dir` on the command line.
+    ///
+    /// A long session often discovers mid-way that the work lives in another
+    /// checkout or corpus. Restarting the session (and losing the agent context the
+    /// user is steering) to add one folder is the wrong trade, so the grant is a
+    /// live knob like `/coding` and `/noop-limit`. Without an argument it lists
+    /// what is in effect instead of guessing.
+    ///
+    /// The folder is resolved here (relative to this shell's directory, `~`
+    /// expanded) and validated by the backend when the next task starts — the
+    /// backend is the only side that knows whether it exists, which matters when
+    /// it runs on another machine.
+    fn add_dir(&mut self, argument: &str) {
+        let argument = argument.trim();
+        if argument.is_empty() {
+            self.print_dirs("");
+            return;
+        }
+        let resolved = crate::commands::resolve_add_dir(argument);
+        if self.add_dirs.iter().any(|dir| dir == &resolved) {
+            self.out(&format!("already granted: {resolved}"));
+            return;
+        }
+        self.add_dirs.push(resolved.clone());
+        self.out(&format!(
+            "added: {resolved} — readable, writable and usable as a shell working directory for the next tasks"
+        ));
+        self.out("  (the backend checks it exists when they start; /dirs lists the grants)");
+    }
+
+    /// `/dirs [clear]`: the folders granted in this session, or drop all of them.
+    fn print_dirs(&mut self, argument: &str) {
+        if argument.trim() == "clear" {
+            let count = self.add_dirs.len();
+            self.add_dirs.clear();
+            self.out(&format!(
+                "cleared {count} granted folder(s) — the next tasks run in their workspace only"
+            ));
+            return;
+        }
+        if !argument.trim().is_empty() {
+            self.out(&format!(
+                "usage: /dirs [clear] — list the granted folders, or drop them all (got '{}')",
+                argument.trim()
+            ));
+            return;
+        }
+        if self.add_dirs.is_empty() {
+            self.out("no extra folders granted — add one with /add-dir <dir> (workspace only)");
+            return;
+        }
+        self.out(&format!("granted folders ({}, this session):", self.add_dirs.len()));
+        for dir in &self.add_dirs {
+            self.out(&format!("  {dir}"));
+        }
+        self.out("  the access preset still decides whether anything may be written there");
     }
 
     /// `/quiet [on|off]`: silence the session's human lines without restarting it.
@@ -3752,6 +4716,9 @@ mod tests {
                 input_tokens: 48_231,
                 output_tokens: 6_120,
                 total_tokens: 54_351,
+                cached_input_tokens: 38_585,
+                cache_write_input_tokens: 120,
+                cache_reported: true,
                 events: 132,
                 dropped_events: 0,
                 tool_counts: vec![
@@ -3792,7 +4759,7 @@ mod tests {
     #[test]
     fn the_terminal_line_carries_the_cost_chain_when_it_is_known() {
         let cost = format_run_cost(&a_served_stats_report().stats);
-        assert_eq!(cost, "3 round(s) · 39 tool(s) · 54.4k tokens");
+        assert_eq!(cost, "3 round(s) · 39 tool(s) · 54.4k tokens · cache 80%");
 
         // Long runs read as `3m12s`, not `192.0s`.
         assert_eq!(
@@ -3803,7 +4770,7 @@ mod tests {
                 &cost,
                 None
             ),
-            "✔ Agent completed in 3m12s · task-1 · 3 round(s) · 39 tool(s) · 54.4k tokens"
+            "✔ Agent completed in 3m12s · task-1 · 3 round(s) · 39 tool(s) · 54.4k tokens · cache 80%"
         );
     }
 
@@ -3830,6 +4797,18 @@ mod tests {
                 ..Default::default()
             }),
             "1 tool(s)"
+        );
+
+        // A known token count with an unreported cache prints no cache part: an
+        // unknown cache must not read as 0%.
+        assert_eq!(
+            format_run_cost(&RunStats {
+                input_tokens: 1_000,
+                output_tokens: 100,
+                total_tokens: 1_100,
+                ..Default::default()
+            }),
+            "1,100 tokens"
         );
 
         let bare = terminal_status_line(
@@ -3976,6 +4955,348 @@ mod tests {
     }
 
     #[test]
+    fn resume_hint_adds_a_doubled_budget_for_a_budget_abort() {
+        let budget_abort = StatusProgress {
+            word: "failed".to_string(),
+            error_code: Some("TOKEN_BUDGET".to_string()),
+            resumable: Some(true),
+            effective_budget: Some(5_000_000),
+            ..Default::default()
+        };
+        assert_eq!(
+            resume_hint_line("5b0c3f2a", Some(&budget_abort)).as_deref(),
+            Some(
+                "    resume: agent run --resume 5b0c3f2a --token-budget 10000000 · /status for the envelope"
+            )
+        );
+
+        // Doubling a cap that was not the failure reason would only confuse.
+        let noop_abort = StatusProgress {
+            word: "failed".to_string(),
+            error_code: Some("NOOP_LIMIT".to_string()),
+            resumable: Some(true),
+            effective_budget: Some(5_000_000),
+            ..Default::default()
+        };
+        assert_eq!(
+            resume_hint_line("5b0c3f2a", Some(&noop_abort)).as_deref(),
+            Some("    resume: agent run --resume 5b0c3f2a · /status for the envelope")
+        );
+    }
+
+    #[test]
+    fn parse_status_progress_reads_the_effective_budget() {
+        let progress = parse_status_progress(
+            r#"{"status":"failed","errorCode":"TOKEN_BUDGET","resumable":true,"effectiveTokenBudget":5000000}"#,
+        );
+        assert_eq!(progress.effective_budget, Some(5_000_000));
+
+        // The legacy nested shape still counts.
+        let nested = parse_status_progress(
+            r#"{"status":"failed","details":{"effectiveTokenBudget":2000000}}"#,
+        );
+        assert_eq!(nested.effective_budget, Some(2_000_000));
+        assert_eq!(
+            parse_status_progress(r#"{"status":"running"}"#).effective_budget,
+            None
+        );
+    }
+
+    // ---- next actions after a task ends -------------------------------------
+
+    fn outcome(status: &str) -> TaskOutcome {
+        TaskOutcome {
+            status: status.to_string(),
+            ..TaskOutcome::default()
+        }
+    }
+
+    #[test]
+    fn a_budget_abort_offers_continue_with_a_doubled_budget() {
+        let mut outcome = outcome("failed");
+        outcome.error_code = Some("TOKEN_BUDGET".to_string());
+        outcome.resumable = true;
+        outcome.budget = Some(5_000_000);
+        outcome.digest.summary = Some("Token budget exceeded".to_string());
+
+        let actions = next_actions(&outcome);
+
+        assert_eq!(actions[0].command, "/resume --budget 10000000");
+        assert!(actions[0].label.contains("10.00M"), "{:?}", actions[0]);
+        // The second slot is the human question the abort raises, not a command.
+        assert_eq!(actions[1].label, "find out why it failed");
+        assert!(
+            actions[1].command.starts_with("Investigate why the previous task failed"),
+            "{:?}",
+            actions[1]
+        );
+        assert!(actions.iter().all(|action| action.command != "/stats"));
+    }
+
+    #[test]
+    fn a_budget_abort_without_a_known_cap_still_offers_continue() {
+        let mut outcome = outcome("failed");
+        outcome.error_code = Some("TOKEN_BUDGET".to_string());
+        outcome.resumable = false;
+
+        let actions = next_actions(&outcome);
+
+        assert_eq!(actions[0].command, "/resume");
+        assert_eq!(actions[0].label, "continue this task");
+    }
+
+    /// The whole point of the block: after a coding task that changed files, the
+    /// three offers are the next *tasks*, not the CLI's own commands.
+    #[test]
+    fn a_finished_coding_task_predicts_review_tests_and_commit() {
+        let mut outcome = outcome("done");
+        outcome.coding = true;
+        outcome.task = Some("fix the failing build".to_string());
+        outcome.digest.files = vec![
+            "browser4-rest/src/main/kotlin/A.kt".to_string(),
+            "browser4-rest/src/test/kotlin/B.kt".to_string(),
+        ];
+
+        let actions = next_actions(&outcome);
+        let labels: Vec<&str> = actions.iter().map(|a| a.label.as_str()).collect();
+
+        assert_eq!(actions.len(), 3, "{actions:?}");
+        assert_eq!(labels[0], "review the 2 changed file(s)");
+        assert_eq!(labels[1], "run the browser4-rest tests");
+        assert_eq!(labels[2], "commit the change");
+        // Every offer is a task the REPL can start, and each one names the work.
+        for action in &actions {
+            assert!(!action.command.starts_with('/'), "{action:?}");
+        }
+        assert!(
+            actions[0].command.contains("browser4-rest/src/main/kotlin/A.kt"),
+            "{:?}",
+            actions[0]
+        );
+        assert!(
+            actions[1].command.contains("browser4-rest"),
+            "{:?}",
+            actions[1]
+        );
+    }
+
+    /// The model's own completion report is the best predictor: it just did the
+    /// work. Its suggestions lead, and a deterministic one that says the same
+    /// thing is dropped instead of filling a second slot.
+    #[test]
+    fn the_models_own_suggestions_lead_and_duplicates_are_dropped() {
+        let mut outcome = outcome("done");
+        outcome.coding = true;
+        outcome.digest.files = vec!["browser4-rest/src/main/kotlin/A.kt".to_string()];
+        outcome.digest.next_suggestions = vec![
+            "Add a regression test for the budget accounting".to_string(),
+            "commit the change".to_string(),
+        ];
+
+        let actions = next_actions(&outcome);
+
+        assert_eq!(
+            actions[0].command,
+            "Add a regression test for the budget accounting"
+        );
+        assert_eq!(actions[1].command, "commit the change");
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|action| action.command.eq_ignore_ascii_case("commit the change"))
+                .count(),
+            1,
+            "the deterministic commit offer must not repeat the model's: {actions:?}"
+        );
+        assert_eq!(actions.len(), 3, "{actions:?}");
+    }
+
+    #[test]
+    fn an_open_problem_is_offered_before_the_generic_review() {
+        let mut outcome = outcome("done");
+        outcome.coding = true;
+        outcome.digest.problems = vec!["the CI gate was not run".to_string()];
+        outcome.digest.files = vec!["browser4-rest/src/main/kotlin/A.kt".to_string()];
+
+        let actions = next_actions(&outcome);
+
+        assert_eq!(actions[0].label, "fix what it left open: the CI gate was not run");
+        assert!(
+            actions[0].command.contains("the CI gate was not run"),
+            "{:?}",
+            actions[0]
+        );
+    }
+
+    #[test]
+    fn a_browsing_task_offers_to_dig_into_its_findings() {
+        let mut outcome = outcome("done");
+        outcome.digest.findings = vec![
+            "Born 31 January 1956 in The Hague".to_string(),
+            "Wrote the Python language".to_string(),
+        ];
+
+        let actions = next_actions(&outcome);
+
+        assert_eq!(actions[0].label, "dig into: Born 31 January 1956 in The Hague");
+        assert!(
+            actions[0].command.contains("Born 31 January 1956 in The Hague"),
+            "{:?}",
+            actions[0]
+        );
+        assert_eq!(actions[1].label, "save the result to a file");
+        assert_eq!(actions[2].label, "check the other 1 finding(s)");
+    }
+
+    #[test]
+    fn a_non_resumable_failure_offers_no_continue_but_does_offer_a_retry() {
+        let mut outcome = outcome("failed");
+        outcome.error_code = Some("INFRASTRUCTURE".to_string());
+        outcome.task = Some("extract the pricing table".to_string());
+
+        let actions = next_actions(&outcome);
+        let labels: Vec<&str> = actions.iter().map(|a| a.label.as_str()).collect();
+
+        assert!(
+            actions.iter().all(|action| !action.command.starts_with("/resume")),
+            "a non-resumable failure must not offer continue: {actions:?}"
+        );
+        assert_eq!(labels, vec!["find out why it failed", "try the same task again"]);
+        assert_eq!(actions[1].command, "extract the pricing table");
+    }
+
+    /// A resumed/cancelled run can still have produced files: offering "continue"
+    /// alone would hide the artifacts the user already paid for.
+    #[test]
+    fn a_cancelled_run_offers_continue_and_a_review_of_what_it_produced() {
+        let mut outcome = outcome("cancelled");
+        outcome.resumable = true;
+        outcome.budget = Some(5_000_000);
+        outcome.coding = true;
+        outcome.digest.files = vec!["browser4-rest/src/main/kotlin/A.kt".to_string()];
+
+        let actions = next_actions(&outcome);
+
+        assert_eq!(actions[0].command, "/resume --budget 10000000");
+        assert_eq!(actions[1].label, "review the 1 changed file(s)");
+        assert_eq!(actions[2].label, "run the browser4-rest tests");
+    }
+
+    /// A failed browsing run has no result to save: the "save it to a file" offer
+    /// must not appear where it would point at nothing.
+    #[test]
+    fn a_failed_run_is_not_offered_a_result_to_save() {
+        let mut outcome = outcome("failed");
+        outcome.error_code = Some("NOOP_LIMIT".to_string());
+        outcome.resumable = true;
+
+        let actions = next_actions(&outcome);
+
+        assert!(
+            !actions
+                .iter()
+                .any(|action| action.label.contains("save the result")),
+            "{actions:?}"
+        );
+    }
+
+    /// The block shows intents only: the commands behind them are the CLI's
+    /// business, and printing them was exactly the "three internal commands"
+    /// problem this replaced.
+    #[test]
+    fn the_block_shows_intents_not_commands() {
+        let mut outcome = outcome("failed");
+        outcome.error_code = Some("TOKEN_BUDGET".to_string());
+        outcome.resumable = true;
+        outcome.budget = Some(5_000_000);
+        outcome.coding = true;
+        outcome.digest.files = vec!["browser4-rest/src/main/kotlin/A.kt".to_string()];
+
+        let lines = format_next_actions(&next_actions(&outcome));
+
+        assert_eq!(
+            lines[0],
+            "likely next steps (type a number, or your own task):"
+        );
+        assert!(lines[1].starts_with("  1) continue with a 10.00M cache-miss budget"), "{lines:?}");
+        for line in &lines[1..] {
+            for command in ["/resume", "/result", "/stats", "/new"] {
+                assert!(!line.contains(command), "{command} leaked into {line:?}");
+            }
+        }
+        assert_eq!(lines.len(), 4, "header + at most three offers: {lines:?}");
+        assert!(format_next_actions(&[]).is_empty());
+    }
+
+    #[test]
+    fn never_more_than_three_offers() {
+        let mut outcome = outcome("failed");
+        outcome.error_code = Some("TOKEN_BUDGET".to_string());
+        outcome.resumable = true;
+        outcome.coding = true;
+        outcome.digest.problems = vec!["p".to_string()];
+        outcome.digest.files = vec!["browser4-rest/src/main/kotlin/A.kt".to_string()];
+        outcome.digest.next_suggestions = vec!["s1".to_string(), "s2".to_string()];
+
+        assert_eq!(next_actions(&outcome).len(), NEXT_ACTIONS);
+    }
+
+    #[test]
+    fn module_of_reads_the_segment_before_src() {
+        assert_eq!(
+            module_of("browser4-rest/src/main/kotlin/A.kt").as_deref(),
+            Some("browser4-rest")
+        );
+        assert_eq!(
+            module_of("cli/browser4-cli/src/main.rs").as_deref(),
+            Some("browser4-cli")
+        );
+        assert_eq!(module_of("docs/agent.md").as_deref(), Some("docs"));
+        // A bare file name has no module, and a Windows drive letter is not one.
+        assert_eq!(module_of("build.gradle.kts"), None);
+        assert_eq!(module_of("C:/x/src/y.kt").as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn action_selection_accepts_only_numbers_in_range() {
+        assert_eq!(action_selection(" 2 ", 3), Some(1));
+        assert_eq!(action_selection("3", 3), Some(2));
+        assert_eq!(action_selection("0", 3), None);
+        assert_eq!(action_selection("4", 3), None);
+        assert_eq!(action_selection("two", 3), None);
+        assert_eq!(action_selection("1", 0), None);
+    }
+
+    #[test]
+    fn parse_resume_args_reads_a_budget_and_an_id() {
+        assert_eq!(parse_resume_args("").unwrap(), (None, None));
+        assert_eq!(
+            parse_resume_args("--budget 10000000").unwrap(),
+            (None, Some(10_000_000))
+        );
+        assert_eq!(
+            parse_resume_args("abc --budget 0").unwrap(),
+            (Some("abc".to_string()), Some(0))
+        );
+        assert_eq!(
+            parse_resume_args("--budget unlimited").unwrap(),
+            (None, Some(0))
+        );
+        assert!(parse_resume_args("--budget lots").is_err());
+        assert!(parse_resume_args("--budget -5").is_err());
+        assert!(parse_resume_args("--budget").is_err());
+        assert!(parse_resume_args("--wat").is_err());
+    }
+
+    #[test]
+    fn continued_budget_doubles_only_a_real_cap() {
+        assert_eq!(continued_budget(Some(5_000_000)), Some(10_000_000));
+        assert_eq!(continued_budget(Some(0)), None, "unlimited has nothing to double");
+        assert_eq!(continued_budget(None), None);
+        assert_eq!(continued_budget(Some(u64::MAX)), Some(u64::MAX), "saturating");
+    }
+
+    #[test]
     fn the_status_line_has_no_trailing_space_and_tails_the_message() {
         let running = StatusProgress {
             word: "running".to_string(),
@@ -4016,7 +5337,9 @@ mod tests {
         let lines = default_repl.banner_lines();
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(lines[0].contains("session=default"), "{lines:?}");
-        for knob in ["coding=", "access=", "budget=", "quiet"] {
+        // `engine=` is gone from the banner entirely: the CLI tool loop is the only
+        // engine left, so there is nothing for the reader to choose or compare.
+        for knob in ["engine=", "coding=", "access=", "budget=", "quiet"] {
             assert!(!lines[0].contains(knob), "default shows no {knob}: {lines:?}");
         }
         assert!(
@@ -4034,6 +5357,153 @@ mod tests {
         assert!(first.contains("coding=on"), "{first}");
         assert!(first.contains("access=read-build"), "{first}");
         assert!(first.contains("budget=5.00M"), "{first}");
+    }
+
+    /// `--add-dir` is a session-wide grant in `-i` mode: every task of the session
+    /// carries it, and the banner names the folders so a long session's grants are
+    /// visible without re-reading the command line.
+    #[test]
+    fn the_repl_forwards_added_dirs_and_names_them_in_the_banner() {
+        let client = Client::builder().build().expect("client");
+        let repl = Repl::new(
+            &client,
+            "http://localhost:1",
+            &json!({"addDirs": ["/corpus/a", "/corpus/b"]}),
+            None,
+        );
+
+        assert_eq!(
+            repl.payload()["addDirs"],
+            json!(["/corpus/a", "/corpus/b"]),
+            "every task of the session keeps the grant"
+        );
+        let first = &repl.banner_lines()[0];
+        assert!(first.contains("add-dir=/corpus/a,/corpus/b"), "{first}");
+
+        // No flag: the payload must not carry the key at all (workspace-only boundary).
+        let plain = Repl::new(&client, "http://localhost:1", &json!({}), None);
+        assert!(plain.payload().get("addDirs").is_none(), "{:?}", plain.payload());
+        assert!(!plain.banner_lines()[0].contains("add-dir="), "{:?}", plain.banner_lines());
+    }
+
+    /// `--unrestricted` is a session-wide power grant in `-i` mode, exactly like
+    /// `--add-dir`: every task the session submits carries it, the banner names it
+    /// (a grant that removes every rail must never be silent), and a session that
+    /// did not ask for it never sends the key at all.
+    #[test]
+    fn the_repl_forwards_unrestricted_and_names_it_in_the_banner() {
+        let client = Client::builder().build().expect("client");
+        let repl = Repl::new(
+            &client,
+            "http://localhost:1",
+            &json!({"unrestricted": true}),
+            None,
+        );
+
+        assert!(repl.unrestricted);
+        assert_eq!(
+            repl.payload()["unrestricted"],
+            json!(true),
+            "every task of the session keeps the grant: {:?}",
+            repl.payload()
+        );
+        let first = &repl.banner_lines()[0];
+        assert!(first.contains("unrestricted"), "{first}");
+
+        let plain = Repl::new(&client, "http://localhost:1", &json!({}), None);
+        assert!(!plain.unrestricted);
+        assert!(
+            plain.payload().get("unrestricted").is_none(),
+            "an absent flag must not look like a decision: {:?}",
+            plain.payload()
+        );
+        assert!(
+            !plain.banner_lines()[0].contains("unrestricted"),
+            "{:?}",
+            plain.banner_lines()
+        );
+    }
+
+    /// `/add-dir` is the live counterpart of `--add-dir`: a long session discovers
+    /// mid-way that the work lives in another folder, and restarting it to add one
+    /// directory would throw away the context the user is steering.
+    #[test]
+    fn the_session_grants_a_folder_mid_way_with_add_dir() {
+        let client = Client::builder().build().expect("client");
+        let mut repl = Repl::new(&client, "http://localhost:1", &json!({}), None);
+        // The commands print their confirmation; the assertions are about state.
+        repl.quiet = true;
+
+        let first = std::env::temp_dir().join(format!("b4-repl-add-dir-{}", std::process::id()));
+        let second = std::env::temp_dir().join(format!("b4-repl-add-dir-2-{}", std::process::id()));
+        repl.add_dir(first.to_string_lossy().as_ref());
+        repl.add_dir(second.to_string_lossy().as_ref());
+        // The same folder twice is one grant, not a duplicate entry.
+        repl.add_dir(first.to_string_lossy().as_ref());
+
+        let granted = repl
+            .payload()
+            .get("addDirs")
+            .and_then(|value| value.as_array())
+            .cloned()
+            .expect("the grant must reach the task payload");
+        assert_eq!(granted.len(), 2, "{granted:?}");
+        assert_eq!(granted[0], json!(first.to_string_lossy()), "{granted:?}");
+        assert_eq!(granted[1], json!(second.to_string_lossy()), "{granted:?}");
+
+        // `/dirs clear` drops the session's grants.
+        repl.print_dirs("clear");
+        assert!(repl.add_dirs.is_empty());
+        assert!(
+            repl.payload().get("addDirs").is_none(),
+            "a cleared session must submit no grant: {:?}",
+            repl.payload()
+        );
+    }
+
+    /// A relative `/add-dir` is resolved against this shell's directory, the same
+    /// way the launch flag resolves it — the backend's CWD is the runtime bundle.
+    #[test]
+    fn the_session_resolves_a_relative_add_dir() {
+        let client = Client::builder().build().expect("client");
+        let mut repl = Repl::new(&client, "http://localhost:1", &json!({}), None);
+        repl.quiet = true;
+
+        repl.add_dir("corpus-relative");
+
+        let granted = repl.add_dirs.first().cloned().expect("one grant");
+        assert!(
+            std::path::Path::new(&granted).is_absolute(),
+            "a relative folder must be resolved before it is sent: {granted}"
+        );
+        assert!(granted.ends_with("corpus-relative"), "{granted}");
+    }
+
+    /// The dispatch table must route `/add-dir` and `/dirs`: a slash command that
+    /// silently fell through to "unknown command" would make a live grant look
+    /// supported while doing nothing.
+    #[tokio::test]
+    async fn slash_commands_route_add_dir_and_dirs() {
+        let client = Client::builder().build().expect("client");
+        let mut repl = Repl::new(&client, "http://localhost:1", &json!({}), None);
+        repl.quiet = true;
+
+        let dir = std::env::temp_dir().join(format!("b4-slash-add-dir-{}", std::process::id()));
+        let dir_arg = dir.to_string_lossy().to_string();
+        // The command arrives without the leading slash (see `handle_line`).
+        assert!(
+            repl.handle_slash_command(&format!("add-dir {dir_arg}"))
+                .await
+                .expect("slash commands cannot fail the session")
+        );
+        assert_eq!(repl.add_dirs, vec![dir_arg]);
+
+        // A typo is an unknown command and must not add a folder.
+        assert!(repl.handle_slash_command("add-dirr /tmp/nope").await.unwrap());
+        assert_eq!(repl.add_dirs.len(), 1, "{:?}", repl.add_dirs);
+
+        assert!(repl.handle_slash_command("dirs clear").await.unwrap());
+        assert!(repl.add_dirs.is_empty());
     }
 
     #[test]
@@ -4200,6 +5670,8 @@ mod tests {
         assert_eq!(stats.input_tokens, 48_231);
         assert_eq!(stats.output_tokens, 6_120);
         assert_eq!(stats.total_tokens, 54_351);
+        assert_eq!(stats.cached_input_tokens, 0, "an older backend reports no cache counters");
+        assert!(!stats.cache_reported);
         assert_eq!(stats.events, 132);
         assert_eq!(stats.dropped_events, 4);
         assert!(stats.tokens_reported());
@@ -4255,6 +5727,41 @@ mod tests {
     }
 
     #[test]
+    fn run_stats_observe_accumulates_the_prompt_cache_breakdown() {
+        let mut stats = RunStats::default();
+        let mut first = stats_event("run.usage", None, None);
+        first.input_tokens = Some(1_000);
+        first.cached_input_tokens = Some(800);
+        stats.observe(&first);
+        let mut second = stats_event("run.usage", None, None);
+        second.input_tokens = Some(500);
+        second.cached_input_tokens = Some(450);
+        second.cache_write_input_tokens = Some(20);
+        stats.observe(&second);
+        // A request whose provider disclosed nothing must not reset the counters.
+        let mut third = stats_event("run.usage", None, None);
+        third.input_tokens = Some(100);
+        stats.observe(&third);
+
+        assert_eq!(stats.input_tokens, 1_600);
+        assert_eq!(stats.cached_input_tokens, 1_250);
+        assert_eq!(stats.cache_write_input_tokens, 20);
+        assert!(stats.cache_reported);
+        assert!((stats.cache_hit_ratio().unwrap() - 1_250.0 / 1_600.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn an_unreported_prompt_cache_is_unknown_not_zero_percent() {
+        let mut stats = RunStats::default();
+        let mut usage = stats_event("run.usage", None, None);
+        usage.input_tokens = Some(700);
+        stats.observe(&usage);
+
+        assert!(!stats.cache_reported);
+        assert_eq!(stats.cache_hit_ratio(), None);
+    }
+
+    #[test]
     fn format_stats_report_lists_llm_tokens_and_tools() {
         let lines = format_stats_report(&a_served_stats_report()).join("\n");
 
@@ -4271,9 +5778,112 @@ mod tests {
         assert!(lines.contains("132"), "{lines}");
         assert!(lines.contains("1 steering message(s)"), "{lines}");
         assert!(
+            lines.contains("cache   38,585 read · 120 written (80.0% hit)"),
+            "the cache line reports reads, writes and the run's hit ratio:\n{lines}"
+        );
+        assert!(
             !lines.contains('⚠'),
             "a served report must never be labelled local:\n{lines}"
         );
+    }
+
+    #[test]
+    fn parse_task_stats_reads_the_prompt_cache_breakdown() {
+        let body = r#"{
+            "taskId": "t3",
+            "status": "done",
+            "isDone": true,
+            "stats": {
+                "modelRequests": 2, "inputTokens": 2000, "outputTokens": 100,
+                "totalTokens": 2100, "cachedInputTokens": 1500,
+                "cacheWriteInputTokens": 88, "cacheReported": true
+            }
+        }"#;
+
+        let stats = parse_task_stats(body).expect("stats must parse").stats;
+
+        assert_eq!(stats.cached_input_tokens, 1_500);
+        assert_eq!(stats.cache_write_input_tokens, 88);
+        assert!(stats.cache_reported);
+        assert_eq!(stats.cache_hit_ratio(), Some(0.75));
+    }
+
+    #[test]
+    fn parse_task_stats_infers_cache_report_from_positive_counters() {
+        // A backend that predates `cacheReported` still reports the counters; a
+        // positive one proves the provider disclosed the cache.
+        let inferred = parse_task_stats(
+            r#"{"taskId":"t4","stats":{"inputTokens":1000,"cachedInputTokens":700,
+                "cacheWriteInputTokens":0,"totalTokens":1000}}"#,
+        )
+        .expect("stats must parse")
+        .stats;
+        assert!(inferred.cache_reported);
+        assert_eq!(inferred.cache_hit_ratio(), Some(0.7));
+
+        let unknown = parse_task_stats(
+            r#"{"taskId":"t5","stats":{"inputTokens":700,"totalTokens":700}}"#,
+        )
+        .expect("stats must parse")
+        .stats;
+        assert!(!unknown.cache_reported, "no counters and no flag is 'unknown'");
+        assert_eq!(unknown.cache_hit_ratio(), None);
+    }
+
+    #[test]
+    fn format_stats_report_omits_the_cache_line_when_unreported() {
+        let mut report = a_served_stats_report();
+        report.stats.cached_input_tokens = 0;
+        report.stats.cache_write_input_tokens = 0;
+        report.stats.cache_reported = false;
+
+        let lines = format_stats_report(&report).join("\n");
+
+        assert!(lines.contains("in 48,231"), "{lines}");
+        assert!(!lines.contains("cache   "), "unknown cache must not print as 0%:\n{lines}");
+    }
+
+    #[test]
+    fn usage_line_shows_the_run_cache_hit_ratio() {
+        let mut renderer = Renderer::new(Instant::now(), false, false);
+        let mut usage = event("run.usage");
+        usage.input_tokens = Some(1_000);
+        usage.cached_input_tokens = Some(750);
+        usage.cumulative_tokens = Some(1_000);
+        usage.budget_tokens = Some(0);
+
+        let line = renderer.format_usage(&usage).expect("the first usage line is due");
+
+        // The number is the charged (cache-miss) amount, so it is labelled as the
+        // budget rather than as total tokens.
+        assert!(line.contains("budget 1,000"), "{line}");
+        assert!(line.contains("cache 750 (75%)"), "{line}");
+    }
+
+    #[test]
+    fn the_exhausted_line_names_the_cache_miss_budget() {
+        let mut renderer = Renderer::new(Instant::now(), false, false);
+        let mut usage = event("run.usage");
+        usage.input_tokens = Some(5_000_000);
+        usage.cumulative_tokens = Some(5_000_100);
+        usage.budget_tokens = Some(5_000_000);
+
+        let line = renderer.format_usage(&usage).expect("the exhaustion line is due");
+
+        assert!(line.contains("cache-miss token budget exhausted"), "{line}");
+    }
+
+    #[test]
+    fn usage_line_omits_the_cache_part_when_unreported() {
+        let mut renderer = Renderer::new(Instant::now(), false, false);
+        let mut usage = event("run.usage");
+        usage.input_tokens = Some(1_000);
+        usage.cumulative_tokens = Some(1_000);
+        usage.budget_tokens = Some(0);
+
+        let line = renderer.format_usage(&usage).expect("the first usage line is due");
+
+        assert!(!line.contains("cache"), "unknown cache must stay silent: {line}");
     }
 
     #[test]
@@ -4331,6 +5941,24 @@ mod tests {
         assert_eq!(json["inputTokens"], 120);
         assert_eq!(json["totalTokens"], 150);
         assert!(json.get("outputTokens").is_none());
+    }
+
+    #[test]
+    fn task_event_to_json_carries_the_prompt_cache_breakdown() {
+        let mut usage = event("run.usage");
+        usage.input_tokens = Some(1_000);
+        usage.cached_input_tokens = Some(900);
+        usage.cache_write_input_tokens = Some(88);
+
+        let json = usage.to_json("t1");
+
+        assert_eq!(json["cachedInputTokens"], 900);
+        assert_eq!(json["cacheWriteInputTokens"], 88);
+        // `null` (provider disclosed nothing) stays absent rather than 0.
+        let mut plain = event("run.usage");
+        plain.input_tokens = Some(10);
+        let json = plain.to_json("t1");
+        assert!(json.get("cachedInputTokens").is_none());
     }
 
     // ---- follower resilience and output modes ------------------------------
@@ -4508,6 +6136,93 @@ mod tests {
         assert_eq!(parse_next_seq("<html>proxy error</html>"), None);
         assert_eq!(parse_next_seq(r#"{"events":[]}"#), None);
         assert_eq!(parse_next_seq(r#"{"nextSeq":"nope"}"#), None);
+    }
+
+    /// A port nobody is listening on: bind to reserve one, then release it.
+    fn dead_base_url() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind for a dead port");
+        let port = listener.local_addr().expect("addr").port();
+        drop(listener);
+        format!("http://127.0.0.1:{port}")
+    }
+
+    #[test]
+    fn the_give_up_message_names_the_cause_instead_of_guessing() {
+        let error = "error sending request";
+
+        let up = give_up_message("t1", Duration::from_secs(300), error, BackendLiveness::Up);
+        assert!(up.contains("still answers /actuator/health"), "{up}");
+        assert!(up.contains("'agent status t1'"), "{up}");
+
+        // The case that matters: a dead backend must never be described as "may still be
+        // running" — that is the instruction that wasted a whole sample.
+        let down = give_up_message("t1", Duration::from_secs(300), error, BackendLiveness::Down);
+        assert!(down.contains("not serving any more"), "{down}");
+        assert!(down.contains("cannot outlive it"), "{down}");
+        assert!(!down.contains("may still be running"), "{down}");
+
+        // A probe that proved nothing keeps the old, careful wording.
+        let unknown = give_up_message("t1", Duration::from_secs(300), error, BackendLiveness::Unknown);
+        assert!(unknown.contains("may still be running"), "{unknown}");
+        assert!(unknown.contains("300s"), "{unknown}");
+        assert!(unknown.contains(error), "the original error must survive: {unknown}");
+    }
+
+    #[tokio::test]
+    async fn the_liveness_probe_separates_a_live_server_from_a_dead_one() {
+        let client = Client::builder().build().expect("client");
+
+        let up = HttpStub::start(vec![("/actuator/health", 200, r#"{"status":"UP"}"#)]);
+        assert_eq!(
+            probe_backend_liveness(&client, &up.base_url).await,
+            BackendLiveness::Up
+        );
+
+        // A starting Spring context answers 503 — still proves a process owns the port.
+        let starting = HttpStub::start(vec![("/actuator/health", 503, r#"{"status":"DOWN"}"#)]);
+        assert_eq!(
+            probe_backend_liveness(&client, &starting.base_url).await,
+            BackendLiveness::Up,
+            "an HTTP answer of any status means something is listening"
+        );
+
+        assert_eq!(
+            probe_backend_liveness(&client, &dead_base_url()).await,
+            BackendLiveness::Down
+        );
+    }
+
+    #[tokio::test]
+    async fn an_expired_window_reports_a_live_backend_as_live() {
+        let stub = HttpStub::start(vec![("/api/commands/t1/events", 500, "boom")]);
+        let client = Client::builder().build().expect("client");
+        let mut follower = TaskFollower::new("t1", false, false, true);
+        follower.first_failure = Some(Instant::now() - TRANSIENT_FAILURE_WINDOW);
+
+        let error = match follower.poll(&client, &stub.base_url).await {
+            Err(error) => error,
+            Ok(_) => panic!("an expired window must surface the failure"),
+        };
+        // /actuator/health is unscripted, so it answers 404 — still a live port.
+        assert!(error.contains("still answers /actuator/health"), "{error}");
+        assert!(!error.contains("not serving any more"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn an_expired_window_reports_a_dead_backend_as_dead() {
+        let client = Client::builder().build().expect("client");
+        let mut follower = TaskFollower::new("t1", false, false, true);
+        follower.first_failure = Some(Instant::now() - TRANSIENT_FAILURE_WINDOW);
+
+        let error = match follower.poll(&client, &dead_base_url()).await {
+            Err(error) => error,
+            Ok(_) => panic!("an expired window must surface the failure"),
+        };
+        assert!(error.contains("not serving any more"), "{error}");
+        assert!(
+            !error.contains("may still be running"),
+            "a dead backend must not be reported as alive: {error}"
+        );
     }
 
     #[tokio::test]
@@ -4871,5 +6586,86 @@ mod tests {
             Some("t1"),
             "the follower of a task being followed is never replaced"
         );
+    }
+
+    #[tokio::test]
+    async fn a_number_picks_a_suggested_next_action() {
+        let client = Client::builder().build().expect("client");
+        let mut repl = Repl::new(&client, "http://127.0.0.1:1", &json!({}), None);
+        // Three offers, the last one a command that needs no backend: the point here
+        // is the selection path, not what the prediction chose.
+        repl.next_actions = vec![
+            NextAction {
+                label: "review the change".to_string(),
+                command: "Review the change".to_string(),
+            },
+            NextAction {
+                label: "run the tests".to_string(),
+                command: "Run the tests".to_string(),
+            },
+            NextAction {
+                label: "start a fresh session".to_string(),
+                command: "/new".to_string(),
+            },
+        ];
+
+        repl.handle_line("3".to_string())
+            .await
+            .expect("a choice never aborts the session");
+
+        assert_eq!(repl.generation, 1, "choice 3 runs /new");
+        assert!(
+            repl.next_actions.is_empty(),
+            "an executed choice clears the block"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_number_outside_the_menu_is_not_a_choice() {
+        let client = Client::builder().build().expect("client");
+        // Nothing listens: the submission fails, which the session reports and
+        // survives. The menu must be gone either way, and the generation unchanged.
+        let mut repl = Repl::new(&client, "http://127.0.0.1:1", &json!({}), None);
+        repl.next_actions = vec![
+            NextAction {
+                label: "review the change".to_string(),
+                command: "Review the change".to_string(),
+            },
+            NextAction {
+                label: "run the tests".to_string(),
+                command: "Run the tests".to_string(),
+            },
+        ];
+
+        repl.handle_line("9".to_string())
+            .await
+            .expect("a failed submission never aborts the session");
+
+        assert_eq!(repl.generation, 0, "'9' is a task, not a choice");
+        assert!(
+            repl.next_actions.is_empty(),
+            "typed input supersedes the suggestions"
+        );
+    }
+
+    #[test]
+    fn a_resume_payload_carries_the_checkpoint_and_the_chosen_budget() {
+        let client = Client::builder().build().expect("client");
+        let repl = Repl::new(
+            &client,
+            "http://localhost:1",
+            &json!({ "tokenBudget": 2_000_000 }),
+            None,
+        );
+
+        let payload = repl.resume_payload("task-1", Some(10_000_000));
+        assert_eq!(payload["resumeTaskId"], "task-1");
+        assert_eq!(payload["tokenBudget"], 10_000_000);
+        assert_eq!(payload["engine"], "cli");
+
+        // No explicit budget keeps the session's `--token-budget`.
+        let payload = repl.resume_payload("task-1", None);
+        assert_eq!(payload["resumeTaskId"], "task-1");
+        assert_eq!(payload["tokenBudget"], 2_000_000);
     }
 }

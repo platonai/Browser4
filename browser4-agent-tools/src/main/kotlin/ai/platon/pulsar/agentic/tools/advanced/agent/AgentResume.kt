@@ -1,5 +1,7 @@
 package ai.platon.pulsar.agentic.tools.advanced.agent
 
+import ai.platon.pulsar.coding.CodingWorkspace
+import ai.platon.pulsar.coding.WorkspaceIsolation
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
@@ -14,6 +16,8 @@ import java.time.Instant
  * @property toolExecutions how many tool calls it had executed
  * @property codingMode whether it was a coding task
  * @property accessPreset the access preset it ran under
+ * @property unrestricted whether it ran with the current OS user's own permissions
+ * @property additionalDirs extra folders it was granted besides its workspace
  * @property files a bounded listing of the files already in the workspace
  */
 internal data class ResumeCheckpoint(
@@ -24,6 +28,8 @@ internal data class ResumeCheckpoint(
     val toolExecutions: Int,
     val codingMode: Boolean?,
     val accessPreset: String?,
+    val unrestricted: Boolean? = null,
+    val additionalDirs: List<String> = emptyList(),
     val files: List<String>,
 )
 
@@ -65,6 +71,10 @@ internal fun resumeCheckpointOf(status: AgentTaskStatus, maxFiles: Int = RESUME_
         toolExecutions = status.toolExecutions,
         codingMode = status.codingMode,
         accessPreset = status.accessPreset,
+        unrestricted = status.unrestricted,
+        // `--add-dir` grants are inherited like the preset: the continued instruction refers to
+        // the same folders, and a resume that lost them would fail on paths it could previously use.
+        additionalDirs = status.addedDirs.orEmpty(),
         files = workspace?.let { listWorkspaceFiles(it, maxFiles) }.orEmpty(),
     )
 }
@@ -112,6 +122,38 @@ internal fun taskWorkspaceFor(
     resumeWorkspace != null -> resumeWorkspace
     sharedWorkspace == true -> null
     else -> baseDir.resolve("workspace.$taskId")
+}
+
+/**
+ * The managed worktree a resumed coding task must continue in, or `null` when the
+ * interrupted task did not run in one.
+ *
+ * A run that ended in a worktree has its files **only** there (the main checkout
+ * was never written). Resuming it is therefore only meaningful inside that same
+ * tree, and the caller reopens it; everything else would report success while the
+ * change sits in a directory nothing merges, or worse, start from the current
+ * checkout and silently drop the interrupted task's files.
+ *
+ * @throws IllegalArgumentException when the resume points into a worktree but
+ *   isolation is switched off (`-Dbrowser4.agent.workspace.isolation=off`): that run
+ *   would edit the isolated tree and never merge it
+ */
+internal fun resumeWorktreeOf(
+    taskId: String,
+    resumeWorkspace: Path?,
+    isolationEnabled: Boolean,
+): Path? {
+    val managed = resumeWorkspace?.takeIf { WorkspaceIsolation.isManagedWorktree(it) } ?: return null
+    if (!isolationEnabled) {
+        throw IllegalArgumentException(
+            "task $taskId: the interrupted task ran in the isolated worktree $managed, but workspace " +
+                "isolation is off (${CodingWorkspace.isolationMode}). Continuing there would edit a tree " +
+                "nothing merges, so the run would end with the change still outside the checkout. " +
+                "Re-enable it (-Dbrowser4.agent.workspace.isolation=worktree) and resume again with " +
+                "--resume, or start a new task instead of resuming this one."
+        )
+    }
+    return managed
 }
 
 /**

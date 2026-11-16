@@ -184,7 +184,7 @@ open class StreamingTaskLoop(
      * Concurrent fetches then queue behind a single tab instead of leasing one
      * tab each, and used to corrupt each other's captures before the lease
      * existed (issue #592). The pool can serve
-     * `browser.context.number` x `browser.max.active.tabs` fetches in parallel
+     * `browser.context.number` x `browser.max.open.tabs` fetches in parallel
      * (2 x 8 by default), which is the throughput a bulk crawl expects.
      *
      * The shared swarm session is such a tab-free session by design, so it is

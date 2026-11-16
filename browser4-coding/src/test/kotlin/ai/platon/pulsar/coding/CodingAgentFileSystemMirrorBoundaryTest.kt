@@ -52,6 +52,36 @@ class CodingAgentFileSystemMirrorBoundaryTest {
     }
 
     @Test
+    @DisplayName("MirrorRoots.derive finds a nested reactor module link")
+    fun derivesGroupedModuleRoot() {
+        val real = Files.createDirectories(tempDir.resolve("real-module"))
+        val workspace = Files.createDirectories(tempDir.resolve("workspace"))
+        val group = Files.createDirectories(workspace.resolve("browser4-plugins"))
+        link(group.resolve("browser4-testprobe"), real)
+
+        val roots = MirrorRoots.derive(workspace)
+
+        val realNormalized = real.toRealPath().normalize()
+        assertTrue(roots.any { it == realNormalized }, "expected the grouped module in $roots")
+    }
+
+    @Test
+    @DisplayName("MirrorRoots.derive does not walk deeper than a mirror can live")
+    fun deriveStopsAtTheMirrorDepth() {
+        // Unbounded walking is what made the first tool call of a big workspace take minutes; a
+        // link below the mirror depth is outside the contract (`WorkspaceMirror` links modules).
+        val real = Files.createDirectories(tempDir.resolve("real-module"))
+        val workspace = Files.createDirectories(tempDir.resolve("workspace"))
+        val deep = Files.createDirectories(workspace.resolve("a/b/c/d/e"))
+        link(deep.resolve("mod"), real)
+
+        val roots = MirrorRoots.derive(workspace)
+
+        val realNormalized = real.toRealPath().normalize()
+        assertFalse(roots.any { it == realNormalized }, "a link past the depth limit is ignored: $roots")
+    }
+
+    @Test
     @DisplayName("a write through a mirrored module junction is allowed")
     fun writeThroughJunctionAllowed() = runBlocking {
         val real = Files.createDirectories(tempDir.resolve("real-module"))
@@ -79,6 +109,52 @@ class CodingAgentFileSystemMirrorBoundaryTest {
 
         assertFalse(result.startsWith("Error:"), "read should succeed: $result")
         assertTrue(result.contains("mirror-content"))
+    }
+
+    @Test
+    @DisplayName("MirrorRoots.sourceRoot walks a nested module up to the checkout it belongs to")
+    fun derivesSourceRoot() {
+        // A reactor layout: checkout → browser4-tests → pulsar-tests-common, every level a project.
+        val checkout = Files.createDirectories(tempDir.resolve("checkout"))
+        Files.writeString(checkout.resolve("pom.xml"), "<project/>")
+        val aggregate = Files.createDirectories(checkout.resolve("browser4-tests"))
+        Files.writeString(aggregate.resolve("pom.xml"), "<project/>")
+        val module = Files.createDirectories(aggregate.resolve("pulsar-tests-common"))
+        Files.writeString(module.resolve("pom.xml"), "<project/>")
+        val workspace = Files.createDirectories(tempDir.resolve("workspace"))
+        link(workspace.resolve("pulsar-tests-common"), module)
+
+        assertEquals(checkout.toRealPath(), MirrorRoots.sourceRoot(workspace))
+    }
+
+    @Test
+    @DisplayName("a module with no checkout above it yields no source root")
+    fun noSourceRootWithoutACheckout() {
+        val real = Files.createDirectories(tempDir.resolve("plain-module"))
+        val workspace = Files.createDirectories(tempDir.resolve("workspace"))
+        link(workspace.resolve("plain-module"), real)
+
+        assertNull(MirrorRoots.sourceRoot(workspace))
+    }
+
+    @Test
+    @DisplayName("the checkout the workspace mirrors is writable, so a self-development task edits itself")
+    fun writeIntoSourceCheckoutAllowed() = runBlocking {
+        val checkout = Files.createDirectories(tempDir.resolve("checkout"))
+        Files.writeString(checkout.resolve("pom.xml"), "<project/>")
+        val module = Files.createDirectories(checkout.resolve("browser4-coding"))
+        Files.writeString(module.resolve("pom.xml"), "<project/>")
+        val workspace = Files.createDirectories(tempDir.resolve("workspace"))
+        link(workspace.resolve("browser4-coding"), module)
+
+        val fs = CodingAgentFileSystem(workspace)
+        // The absolute spelling of a checkout path: the mirror only links the module, and `.git`,
+        // `bin/`, `cli/` and `docs/` exist at the root only (2026-11-14 run: PATH_DENIED).
+        val target = checkout.resolve("NOTES.md")
+        val result = fs.writeFile(target.toString(), "self")
+
+        assertFalse(result.startsWith("Error:"), "write should succeed: $result")
+        assertEquals("self", Files.readString(target))
     }
 
     @Test

@@ -21,7 +21,7 @@ The `config` command family manages two kinds of settings: persistent CLI defaul
 | `proxy` | CLI default | Default download proxy URL (overridden by `--proxy`) |
 | `session` | CLI default | Default session name (overridden by `-s` / `--session`) |
 | `agent.llm.maxRequestTokens` | server-side | Per-request LLM token limit (default 500,000) |
-| `agent.token.budget.total` | server-side | Cumulative token budget per agent run (default 5,000,000). Enforced on every engine: the legacy observe-act loop and the default CLI tool loop both charge each model request, and a breach stops the run with `Token budget exceeded` (the 80% mark is logged once). `0` / `unlimited` keeps accounting only. For ONE task use `agent run --token-budget <n>` instead (per-run, cleared when the task ends) |
+| `agent.token.budget.total` | server-side | Cumulative token budget per agent run (default 5,000,000). Enforced on every model request of the CLI tool loop (the only engine left), and a breach stops the run with `Token budget exceeded` (the 80% mark is logged once). `0` / `unlimited` keeps accounting only. For ONE task use `agent run --token-budget <n>` instead (per-run, cleared when the task ends) |
 
 ## CLI Defaults (config.json)
 
@@ -75,8 +75,10 @@ Notes:
 ### Task budget vs. global `config set`
 
 `agent.token.budget.total` is a **process-wide** default: every task the backend runs
-afterwards is capped at it. When only ONE task needs a different cap, do not change the
-global default — pass the per-run override:
+afterwards is capped at it. The cap counts **cache-miss tokens** — uncached prompt plus
+output; prompt-cache reads cost ~10% of the input price and do not count — so the default
+5M allows far more work than a raw "input + output" cap did. When only ONE task needs a
+different cap, do not change the global default — pass the per-run override:
 
 ```bash
 browser4-cli agent run "<long task>" --token-budget 20000000   # this task only
@@ -91,5 +93,7 @@ registry, so two concurrent sessions cannot change each other's budget.
 `agent result --json` reports the budget that was actually enforced
 (`result.effectiveTokenBudget`, `0` = unlimited), and a budget abort carries
 `errorCode: "TOKEN_BUDGET"` plus `resumable: true`. `agent run --follow` prints a
-throttled `tokens <used> / <budget> (<pct>)` line (every 10 requests or 15s), a
-one-time warning at 80%, and an abort line at 100%.
+throttled `budget <charged> / <limit> (<pct>) · cache <read> (<pct>)` line (every 10
+requests or 15s), a one-time warning at 80%, and an abort line at 100%. An abort is
+resumable with a bigger cap (`agent run --resume <id> --token-budget <n>`), and `-i`
+offers that as a numbered "continue" choice with the cap doubled.

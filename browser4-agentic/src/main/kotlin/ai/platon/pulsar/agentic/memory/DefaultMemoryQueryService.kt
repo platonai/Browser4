@@ -218,6 +218,8 @@ class DefaultMemoryQueryService(
         is NoteWritten -> listOf(event.key, event.valueBrief).joinToString(" ")
         is Completed -> listOf(event.summary, event.keyFindings?.joinToString(" ")).filterNotNull().joinToString(" ")
         is Failed -> listOf(event.errorBrief, event.failureCategory).filterNotNull().joinToString(" ")
+        is RoundTimed -> "round ${event.round} calls=${event.calls} " +
+            "model=${event.modelMs}ms tools=${event.toolsMs}ms callbacks=${event.callbacksMs}ms"
     }
 
     private fun taskText(taskId: String, events: List<MemoryEvent>): String {

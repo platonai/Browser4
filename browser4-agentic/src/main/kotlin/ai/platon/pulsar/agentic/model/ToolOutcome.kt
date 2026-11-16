@@ -16,7 +16,8 @@ import ai.platon.pulsar.common.Strings
  *
  * A `PERMISSION_DENIED | code=…` refusal counts as a failure ([ok] is false) even
  * though the tool call itself did not throw: a refusal the model reads as success
- * is a refusal the model retries.
+ * is a refusal the model retries. The command did not run, so reporting the step
+ * as `[ok]` would hide it from `--follow` and from the model.
  */
 data class ToolOutcome(
     val domain: String,
@@ -82,7 +83,10 @@ data class ToolOutcome(
             "shell" to 3_000,
             "shellOutput" to 3_000,
             "read" to 1_600,
-            "grep" to 1_600,
+            // Each line is dense (`path:line: text`), so a grep result carries more usable
+            // signal per character than a file body. 1,600 chars showed ~6 matches out of the
+            // up-to-500 the scan used to collect — the rest of the work was discarded here.
+            "grep" to 4_000,
             "diagnostics" to 2_000,
             "ktSymbols" to 1_600,
             "ktReferences" to 1_600,
@@ -132,7 +136,7 @@ data class ToolOutcome(
             // every refusal from `--follow` (which prints `[fail]` results only)
             // and from the model, which re-phrased the same denied path four
             // times in a live run because nothing said the call was refused.
-            val refused = isPermissionRefusal(raw)
+            val refused = isRefusal(raw)
             val ok = evaluate.success && exception == null && !refused
             val summary = if (refused) buildRefusalSummary(raw) else buildSummary(ok, raw, exception)
             val budget = BODY_BUDGETS[resolvedMethod] ?: DEFAULT_BODY_LEN
@@ -162,8 +166,11 @@ data class ToolOutcome(
         }
 
         /**
-         * True when [raw] **starts** with a `PERMISSION_DENIED | code=…` refusal
-         * envelope (see [PermissionAudit]).
+         * True when [raw] **starts** with the policy refusal envelope — `PERMISSION_DENIED | code=…`
+         * ([PermissionAudit]).
+         *
+         * A refusal means the call did not take effect: a step rendered `[ok]` would be invisible to
+         * `--follow` and to the model's own history.
          *
          * The envelope must lead the text: `memory.read` returns JSON that *contains*
          * earlier refusal events, and matching anywhere in the first line marked a
@@ -171,10 +178,10 @@ data class ToolOutcome(
          * the envelope either directly (`coding.shell`) or with `Error: `
          * (`coding.fs`), so only that tolerates a prefix; the rest of a body is data.
          */
-        private fun isPermissionRefusal(raw: String): Boolean {
+        private fun isRefusal(raw: String): Boolean {
             val firstLine = raw.lineSequence().firstOrNull { it.isNotBlank() }?.trimStart() ?: return false
             val candidate = firstLine.removePrefix("Error: ").trimStart()
-            return candidate.startsWith(PermissionAudit.DENIED) && candidate.contains("| code=")
+            return candidate.contains("| code=") && candidate.startsWith(PermissionAudit.DENIED)
         }
 
         /**

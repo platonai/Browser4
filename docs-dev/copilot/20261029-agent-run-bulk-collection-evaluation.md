@@ -275,5 +275,5 @@ browser4-cli crawl --seed-file urls.txt -d 0 --sql @q2.sql --expires 1h --format
 按“crawl 只在一个 browser context 内工作，需要更高并发用 swarm”的口径复核：
 
 - 实现上 crawl 借用调用方会话的**一个** browser（`--session` / 默认 DEFAULT），每个并行单元在自己的标签页上加载：借用来的标签页只使用不关闭，单元自己打开的标签页在内容捕获后立即关闭。
-- 同一 context 内的标签并行生效但有限：本地 1s 延迟 fixture 实测 **6 页 `--parallel 6` = 25.5s vs `--parallel 1` = 32.1s**（并行确实重叠，但整页管线有固定成本）。`--parallel` 应作为“重叠上限 / 对站点施压的闸门”，不是吞吐倍数；标签上限由 `browser.max.active.tabs`（默认 8）约束。
+- 同一 context 内的标签并行生效但有限：本地 1s 延迟 fixture 实测 **6 页 `--parallel 6` = 25.5s vs `--parallel 1` = 32.1s**（并行确实重叠，但整页管线有固定成本）。`--parallel` 应作为“重叠上限 / 对站点施压的闸门”，不是吞吐倍数；标签上限由 `browser.max.open.tabs`（默认 8）约束。
 - 更高并发不再从 crawl 借道：`swarm`（多 context × 各自 profile/tabs）才是那条轴。文档 `crawl.md` 已新增 “One browser context, tabs inside it” 小节，并给出 crawl vs swarm 的选择表。

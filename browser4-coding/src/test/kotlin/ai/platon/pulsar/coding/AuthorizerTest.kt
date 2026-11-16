@@ -22,7 +22,7 @@ class AuthorizerTest {
     private val now: Instant = Instant.parse("2026-10-31T00:00:00Z")
 
     private fun authorizer(vararg caps: Capability, at: Instant = now): Authorizer =
-        Authorizer(caps.toList()) { at }
+        Authorizer(caps.toList(), clock = { at })
 
     private fun readCapability(): Capability = Capability(
         id = CapabilityId("cap-ws-read"),
@@ -233,5 +233,28 @@ class AuthorizerTest {
         )
         assertEquals(PermissionAudit.CODE_TOOL_DENIED, decision.code)
         assertEquals(Effect.FS_READ, decision.effect)
+    }
+    @Test
+    @DisplayName("the explicit unrestricted boundary is a pass-through with no grant at all")
+    fun testUnrestrictedBoundaryIsPassThrough() {
+        val passThrough = Authorizer.unrestricted(clock = { now })
+        val outside = Target.PathTarget(workspace.resolveSibling("outside-the-workspace").normalize())
+
+        assertEquals(
+            Decision.Allow,
+            passThrough.decide(Request("coding.write", setOf(Effect.FS_WRITE), listOf(outside))),
+        )
+        assertEquals(
+            Decision.Allow,
+            passThrough.decide(
+                Request("coding.shell", setOf(Effect.PROC_SPAWN), listOf(Target.CommandTarget("rm"))),
+            ),
+        )
+        // The same request without the opt-in is refused, so the pass-through is never implicit.
+        assertTrue(
+            authorizer(readCapability()).decide(
+                Request("coding.write", setOf(Effect.FS_WRITE), listOf(outside)),
+            ) is Decision.Deny,
+        )
     }
 }
