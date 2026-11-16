@@ -6868,6 +6868,25 @@ fn collect_jvm_opts_and_program_args() -> (Vec<String>, Vec<String>) {
         ));
     }
 
+    // The agent's progressive experience memory (`knowledge.dir`) defaults to a
+    // *cwd-relative* `./knowledge`, and the backend's cwd is the runtime bundle.
+    // Two consequences, both observed: in development mode a `-Rebuild`
+    // assembled a fresh bundle over the store and silently deleted everything
+    // the agent had learned, and an installed backend wrote user data inside the
+    // installed bundle (gone on the next upgrade).  Pin the store under the app
+    // data root instead — the same root that holds `memory/`, `logs/` and the
+    // browser profiles, and that no rebuild touches.  Workspace-scoped in
+    // development (one store per checkout, so two backends never write the same
+    // domain file), user-global otherwise.  Placed before BROWSER4_SERVER_OPTS
+    // so an explicit -Dknowledge.dir from the user still wins.
+    let knowledge_parent = workspace_app_data
+        .clone()
+        .unwrap_or_else(production_app_data_dir);
+    jvm_opts.push(format!(
+        "-Dknowledge.dir={}",
+        normalize_jvm_windows_path_text(&knowledge_parent.join("knowledge").to_string_lossy())
+    ));
+
     // Limit JIT compilation to C1 (client) tier for faster startup.
     // Placed before BROWSER4_SERVER_OPTS so users can override with
     // -XX:TieredStopAtLevel=4 in the env var for peak throughput.
@@ -11736,6 +11755,59 @@ mod tests {
         assert!(
             auto < user_override,
             "injected app.tmp.base.dir must precede the user override: {jvm_opts:?}"
+        );
+    }
+
+    #[test]
+    fn test_collect_jvm_opts_pins_the_knowledge_store_outside_the_runtime_bundle() {
+        let _env_guard = lock_env_mutex();
+        let prev_server_opts = env::var(BROWSER4_SERVER_OPTS_ENV).ok();
+        unsafe {
+            env::set_var(BROWSER4_SERVER_OPTS_ENV, "-Dknowledge.dir=/custom/knowledge");
+        }
+        let (jvm_opts, _) = collect_jvm_opts_and_program_args();
+        unsafe {
+            match prev_server_opts {
+                Some(v) => env::set_var(BROWSER4_SERVER_OPTS_ENV, v),
+                None => env::remove_var(BROWSER4_SERVER_OPTS_ENV),
+            }
+        }
+
+        // Development mode scopes the store to the workspace app data root; a
+        // production backend keeps the user-global `~/.browser4` one.
+        let app_data = workspace_app_data_dir().unwrap_or_else(production_app_data_dir);
+        let expected = format!(
+            "-Dknowledge.dir={}",
+            normalize_jvm_windows_path_text(&app_data.join("knowledge").to_string_lossy())
+        );
+        let injected = jvm_opts
+            .iter()
+            .position(|o| *o == expected)
+            .unwrap_or_else(|| {
+                panic!("expected {expected} in jvm opts: {jvm_opts:?}");
+            });
+
+        // The value must be absolute and outside the bundle. A relative default
+        // resolves against the server's cwd — the runtime bundle — which is the
+        // directory a rebuild replaces, taking the accumulated experience with it.
+        let value = expected.trim_start_matches("-Dknowledge.dir=");
+        assert!(
+            Path::new(value).is_absolute(),
+            "knowledge.dir must be absolute: {value}"
+        );
+        assert!(
+            !value.contains("runtime-bundle"),
+            "the store must not live inside the rebuildable runtime bundle: {value}"
+        );
+
+        // Java keeps the last -D for a key, so the user's override must come last.
+        let user_override = jvm_opts
+            .iter()
+            .position(|o| o == "-Dknowledge.dir=/custom/knowledge")
+            .expect("user -Dknowledge.dir must be present");
+        assert!(
+            injected < user_override,
+            "injected knowledge.dir must precede the user override: {jvm_opts:?}"
         );
     }
 
