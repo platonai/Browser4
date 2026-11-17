@@ -5,7 +5,7 @@
 本篇是执行侧的快照：做了什么、怎么验证、还剩什么、怎么开关。
 
 仓库：`Browser4` 分支 `4.16.x`；工作区 `D:\workspace\Browser4\Browser4-4.16`。
-测试最近一次结果：`browser4-coding` 全量 **882 例全绿**（其中 `sandbox` 包 **97 例**，明细见 §6），`browser4-agentic` 权限/CLI 定向 **469 例全绿**，全 reactor `compile`（29 模块）通过。
+测试最近一次结果：`browser4-coding` 全量 **889 例全绿**（其中 `sandbox` 包 101 例，明细见 §6），`browser4-agentic` 权限/CLI 定向 **469 例全绿**，全 reactor `compile`（29 模块）通过。
 
 ---
 
@@ -119,12 +119,13 @@
 
 ## 6. 测试
 
-`browser4-coding` 全量 **882 例全绿**（其中 `sandbox` 包 **97 例**）：
+`browser4-coding` 全量 **889 例全绿**（其中 `sandbox` 包 101 例）：
 
 | 类 | 例数 | 关键断言 |
 |---|---|---|
 | `WindowsLowIntegritySandboxTest` | 6 | 真实子进程区内写成功、区外写被拒、注入的凭据目录列不出、Medium 进程可读、子进程杀不掉 Medium 进程、探针失败硬失败 |
-| `WindowsAppContainerSandboxTest` | 7 | 容器内命令可跑、写仅在授权树、`%SystemRoot%\Temp` 写被拒、`.ssh` 列不出、无能力=无网络、opt-in 语义、**容器内 `powershell.exe` 能起并执行文件写（P3-6）** |
+| `WindowsAppContainerSandboxTest` | 8 | 容器内命令可跑、写仅在授权树、`%SystemRoot%\Temp` 写被拒、`.ssh` 列不出、无能力=无网络、opt-in 语义、**容器内 `powershell.exe` 能起并执行文件写（P3-6）**、**容器够不到宿主机 loopback/出网（curl exit 6/7/28），工作区暂存的 exe 能跑** |
+| `ProductCommandBoundaryTest` | 4 | `executesProductCommands` 按后端声明（容器 false，其余 true）；容器不会被交给它跑不了的 `b4.run` 启动；`--unrestricted` 不包装；不可用后端仍抛异常（决策不是回退） |
 | `SandboxFileOpsTest` | 7 | 7 个变更方法各命中边界一次；拒绝→工具错误且不落盘；provider 失败→报错不透支；快照簿记留进程内；能力矩阵；真实 Low-IL 区内全通/区外拒绝；生产接线（`CodingComponents.fs` + 真实后端）端到端 |
 | `WindowsJobTest` | 3 | 关 job 成员死亡、close 幂等、attach 已退出 pid 返回 false |
 | `ExecutionSandboxesModeTest` | 10 | coding→low-il、browse 不落到 coding 后端、跳过未实现/不可自动选择、显式覆盖优先、`isolationSummary` 文案 |
@@ -189,13 +190,55 @@ BROWSER4_SERVER_OPTS="-Dbrowser4.agent.sandbox=off"                browser4-cli 
 | # | 项 | 方案 |
 |---|---|---|
 | ~~1~~ | ~~`coding.write/read/glob`（后端自身）~~ | ✅ **写操作已下沉**（P3-6，见设计 §16）；`coding.read/glob/grep` 按设计留在后端 |
-| 2 | 容器内跑 `browser4-cli` | 三选一：容器外 loopback 代理转发 `b4.run`（推荐）；CLI+runtime 复制进工作区；管理员预置 traverse ACE |
-| 3 | coding 的网络 `net=off` | 与 #2 同一套代理，或 WFP 规则 |
+| 2 | 容器内跑 `browser4-cli` | **实测已排除三种"轻方案"**（见 §9.1）；剩下的是产品决定，不是实现细节 |
+| 3 | coding 的网络 `net=off` | 与 #2 同一套代理，或 WFP 规则（需管理员，本机无法验证） |
 | 4 | git/worktree/merge、LSP、ripgrep | 产品流程本身；linked-worktree 的 git 元数据在工作区外 |
-| 5 | browse 默认启用容器 | 依赖 #2 |
+| 5 | browse 默认启用容器 | 依赖 #2 **且**容器内要能跑脚本解释器（见 §9.1） |
 | 6 | `--unrestricted` 下的护栏 | 凭据与生命周期两条仍在；其余按设计放开 |
 | 7 | `windows-acl` 也支持文件下沉 | 它的账户 provisioning 还没按这条通道验证过；先保持策略层并在 `coding.permissions` 标注 |
 | 8 | 每次变更一次 `powershell` 启动（0.3–0.5s） | 若实测主导任务时长，换成常驻助手/批量协议；`SandboxFileOps` 接口不变 |
+
+### 9.1 #2/#5 的新实测（2026-11-17 21:50，`realContainerNetworkAndStagedBinary`）
+
+探针（`WindowsAppContainerSandboxTest`，8 例全绿）测到的事实：
+
+| 探测 | 结果 | 含义 |
+|---|---|---|
+| JVM 在 `127.0.0.1:<port>` 起 HTTP 服务，宿主 `curl` 取到 `ok` | ✅ | 探针本身可信（否则"拒绝"可能是探针坏了） |
+| 容器内 `curl.exe --version` | ✅ exit 0 | 探针工具真能跑（`C:\Windows\System32` 对容器可读） |
+| 容器内 `curl` 访问宿主机 loopback | ❌ exit 7/28（连不上/超时） | **容器里的 `browser4-cli` 够不到后端**——就算把 CLI 复制进工作区也一样 |
+| 容器内 `curl` 访问 `example.com` | ❌ exit 6（DNS 都不通） | "无能力=无出网"成立 |
+| 工作区内暂存的 `staged-curl.exe` | ✅ exit 0 | 暂存的可执行文件**能跑**（"复制进工作区"只解决可执行性，不解决连通性） |
+| 容器内 `if exist D:\` | ❌ 看不到 | **整个 D: 卷对容器不可达**（卷根没有容器/`ALL APPLICATION PACKAGES` 的 traverse） |
+| 容器内 `python` / `node` / `java` | ❌ 不在 PATH 上可执行 | 本机 Python/JDK 在 `D:` 上 → 容器里等于没有解释器；`git`（`C:\Program Files`）与 System32 工具可用 |
+
+结论：`b4.run` 的三条"轻方案"都不成立。CLI 复制进工作区只换来"能执行但连不上后端"；
+loopback 代理同样要先让容器连得上 loopback（需要 `privateNetworkClientServer` 能力，而这会把
+"主机本地任何服务"一起放开，等于削弱围栏，且 loopback 豁免通常还要管理员）。
+browse 默认化还有第二个独立障碍：**容器里没有脚本解释器/构建工具链**（真实安装多在 profile 或非系统卷）。
+
+**已拍板（2026-11-17 22:10）：`b4.run` 在 browse 模式下算产品通道。** 它是 `browser4-cli`——
+装在 profile、走 `127.0.0.1` 访问后端，与 git/worktree/LSP 同类。实现是一个声明式能力而不是静默回退：
+
+- `ExecutionSandbox.executesProductCommands`：能否在本边界内执行*产品子进程*。容器 `false`，其余 `true`；
+- `CodingComponents.b4RunSandbox(policy)` → `productCommandSandbox(...)`：`--unrestricted` 或后端声明不能托管
+  CLI → `null`（保留后端进程启动），否则照旧入界；
+- `coding.permissions` 的 covered / NOT covered 由这些能力**生成**，所以容器模式下会写出
+  `b4.run (this backend cannot host browser4-cli)`；
+- 不给容器 `privateNetworkClientServer`、不做 loopback 豁免、不复制 CLI（前两个削弱围栏且要管理员，
+  后一个只解决可执行性）。
+
+测试：`ProductCommandBoundaryTest`（4 例：能力声明、容器不被交给它跑不了的启动、`--unrestricted` 不包装、
+不可用后端仍然抛异常）+ `realContainerNetworkAndStagedBinary`（8 例里的网络/暂存二进制部分）。
+`browser4-agentic` 定向 469 例仍全绿。
+
+#5（browse 默认启用容器）**仍未解锁**，且与 `b4.run` 无关：容器里没有解释器（实测 `python`/`node`/`java`
+都不可执行，本机 Python/JDK 在 `D:` 卷，容器连 `D:\` 都看不到）。那是部署层决定，不是沙箱代码问题。
+
+所以 #2 不再是"实现一个代理"，而是一个需要拍板的产品决定：
+`b4.run` 在 browse 模式下算"产品通道"（在后端执行、`coding.permissions` 明说它不在边界内，与 git/LSP 同类），
+还是必须入界（那就要能力+豁免，且要管理员）。
+
 
 ## 10. 相关文档
 
@@ -203,3 +246,4 @@ BROWSER4_SERVER_OPTS="-Dbrowser4.agent.sandbox=off"                browser4-cli 
 - [`docs/agent-permissions.md`](../../docs/agent-permissions.md) — 面向使用者的权限模型说明
 - [`docs/config.md`](../../docs/config.md) — `browser4.agent.sandbox*` 开关、默认值、失败语义
 - [`docs-dev/copilot/20261116-agent-permission-bypass-review.md`](20261116-agent-permission-bypass-review.md) — 起点：run `966a5f2e` 的 11 次拒绝复盘
+- [`docs-dev/copilot/20261117-sandbox-runtime-adoption-evaluation.md`](20261117-sandbox-runtime-adoption-evaluation.md) — 引入 Anthropic sandbox-runtime 的可行性评估（Linux/macOS 后端、`net=off`、Windows 的 env/JVM 代理/Schannel 三处硬约束、分期建议）
