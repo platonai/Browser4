@@ -5,6 +5,8 @@
 [`20261117-agent-run-permissions-report.md`](20261117-agent-run-permissions-report.md) §13 的那张表，逐条展开成
 "是什么 / 为什么 / 危害 / 现在怎么披露 / 怎么复测 / 怎么收口 / 该不该现在做"。
 
+跟踪入口：[#647](https://github.com/platonai/Browser4/issues/647)（登记册的排期/讨论 issue，与本文件同口径同步）。
+
 维护约定：ID（`G1`…）**稳定不复用**；关闭一条就把状态改成 `CLOSED (日期, 提交)` 并补上守护它的测试；
 新增缺口用 §7 的模板。缺口不是 bug 列表——**B 类是决定**，它们出现在这里是因为"未强制"这件事必须可查。
 
