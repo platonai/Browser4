@@ -96,6 +96,22 @@ interface ExecutionSandbox {
     val executesFileOps: Boolean get() = false
 
     /**
+     * Whether a **product** child — the `browser4-cli` behind `b4.run` — can execute inside this
+     * boundary.
+     *
+     * The CLI is not an arbitrary agent program: it is installed under the operator profile and
+     * talks to *this backend* over `127.0.0.1`. A backend that cannot read the profile or reach the
+     * host's loopback therefore cannot host it at all, and pretending otherwise made `b4.run` fail
+     * with a confusing "CLI not found" instead of working (measured 2026-11-17: an AppContainer is
+     * refused both the profile and loopback, so the CLI has nowhere to run and no one to talk to).
+     *
+     * `false` means the channel keeps its historical launch in the backend process and
+     * `coding.permissions` states that it is outside the boundary — the same honest treatment
+     * git/worktree/LSP get, rather than weakening the fence to fit one program.
+     */
+    val executesProductCommands: Boolean get() = true
+
+    /**
      * Prepares [spec] for launch inside the boundary of [workspace].
      *
      * @param extraWritableRoots folders granted for this task besides the workspace

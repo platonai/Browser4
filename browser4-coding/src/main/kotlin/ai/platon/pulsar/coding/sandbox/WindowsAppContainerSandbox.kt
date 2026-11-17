@@ -76,6 +76,18 @@ class WindowsAppContainerSandbox(
     override val executesFileOps: Boolean = true
 
     /**
+     * `b4.run` cannot run here, by construction: `browser4-cli` lives under the operator profile (not in
+     * the container's access set) and would have to reach this backend over `127.0.0.1`, which a
+     * capability-less container is refused (measured 2026-11-17, `realContainerNetworkAndStagedBinary`).
+     *
+     * Copying the CLI into the workspace fixes only the first half (a staged binary does run), and
+     * granting `privateNetworkClientServer` to fix the second would open every host-local service —
+     * so the channel keeps its historical launch in the backend process and `coding.permissions` says
+     * it is outside the boundary (decision 2026-11-17, design §14.2.1).
+     */
+    override val executesProductCommands: Boolean = false
+
+    /**
      * Opt-in only for now (2026-11-17).
      *
      * The confinement itself is proven (workspace-only writes, profile unreachable, no egress), but

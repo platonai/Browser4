@@ -2230,30 +2230,42 @@ class CodingToolExecutor : AbstractToolExecutor() {
             // Which channels the OS boundary covers. `coding.shell` / `runCode` / the build shell go
             // through the sandbox seam; since P3-6 the **file mutations** do too (a sandboxed child
             // performs the change, so the kernel judges it), while reads stay in the backend by design
-            // (coding reads inherit the user; browse reads are workspace-scoped). `b4.run`, skill
-            // scripts, git/worktree work and the language servers are named as they stand, because a
-            // refusal is only actionable when the model can tell which layer spoke (2026-11-16).
+            // (coding reads inherit the user; browse reads are workspace-scoped). The report is built
+            // from the backend's declared capabilities, so a channel that genuinely cannot run inside
+            // the boundary (b4.run in the AppContainer, §14.2.1) is named as uncovered instead of
+            // being counted — a refusal is only actionable when the model can tell which layer spoke.
             val sandbox = runCatching { CodingComponents.sandbox(policy) }.getOrNull()
             val sandboxId = sandbox?.id ?: "off"
             val fileMutationsInBoundary = sandbox != null && sandbox.executesFileOps
+            val b4RunInBoundary = sandbox != null && sandbox.executesProductCommands
             if (sandboxId == "off") {
                 appendLine(
                     "OS boundary: none — every channel (shell, code, file tools, b4.run, skill scripts) " +
                         "is governed by the policy layer only."
                 )
-            } else if (fileMutationsInBoundary) {
-                appendLine(
-                    "OS boundary ($sandboxId) covers: coding.shell, coding.runCode, coding.mvnBuild/verify, " +
-                        "skill scripts, b4.run, and every file mutation (coding.write/append/replace/" +
-                        "editLines/delete/mkdir/copy/move/revert is executed by a child inside the " +
-                        "boundary). NOT covered (backend process, policy layer only): coding.read/glob/grep, " +
-                        "git/worktree/merge, LSP/ripgrep."
-                )
             } else {
+                val covered = buildList {
+                    add("coding.shell")
+                    add("coding.runCode")
+                    add("coding.mvnBuild/verify")
+                    add("skill scripts")
+                    if (b4RunInBoundary) add("b4.run")
+                    if (fileMutationsInBoundary) {
+                        add(
+                            "every file mutation (coding.write/append/replace/editLines/delete/mkdir/" +
+                                "copy/move/revert is executed by a child inside the boundary)"
+                        )
+                    }
+                }
+                val outside = buildList {
+                    add("coding.read/glob/grep")
+                    if (!b4RunInBoundary) add("b4.run (this backend cannot host browser4-cli)")
+                    add("git/worktree/merge")
+                    add("LSP/ripgrep")
+                }
                 appendLine(
-                    "OS boundary ($sandboxId) covers: coding.shell, coding.runCode, coding.mvnBuild/verify, " +
-                        "skill scripts, b4.run. NOT covered (backend process, policy layer only): " +
-                        "coding.write/read/glob, git/worktree/merge, LSP/ripgrep."
+                    "OS boundary ($sandboxId) covers: ${covered.joinToString(", ")}. " +
+                        "NOT covered (backend process, policy layer only): ${outside.joinToString(", ")}."
                 )
             }
             // Reads are not limited by the preset: the readable roots are where Browser4's own

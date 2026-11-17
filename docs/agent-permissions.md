@@ -160,6 +160,13 @@ Authorizer 按 `(root, 可读根, add-dir)` 缓存，LRU 上限 64（每个任�
 读仍然在后端进程里，这是设计而非缺口：coding 的读目标就是"继承当前用户"，而 browse 的读范围就是工作区
 （容器读得到的正是后端读得到的）。`coding.permissions` 按后端把这些"在/不在边界内"的通道写清楚。
 
+**`b4.run` 是产品通道，按后端能力决定是否入界**（2026-11-17 拍板）：`browser4-cli` 装在操作者 profile 里、
+通过 `127.0.0.1` 访问后端，与 git/worktree/LSP 同类。`ExecutionSandbox.executesProductCommands` 声明
+本后端能否托管它——容器为 `false`（profile 不可达，且无能力容器连 loopback 都被拒；实测连 DNS 都不通），
+所以 browse+容器模式下 `b4.run` 保留历史的后端进程启动，`coding.permissions` 把它列进 NOT covered
+（`b4.run (this backend cannot host browser4-cli)`）。这不是静默回退：能力是声明式的，报告由它生成；
+也没为了它给容器开 `privateNetworkClientServer`（那会放开主机本地所有服务）。
+
 沙箱为 `off` 时，字符串层的拒绝文案会明确写出「没有 OS 沙箱在运行」，不再暗示身后存在强制层
 （2026-11-16：`ADVISORY_NOTE` 从常量改成按 `ExecutionSandboxes.configuredId()` 生成的动态文案）。
 

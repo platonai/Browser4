@@ -569,11 +569,15 @@ docker run -d -p 18182:18182 `
   integrity level confines writes but not reads — so they keep the installation default until the
   AppContainer backend lands. An explicit `-Dbrowser4.agent.sandbox` still beats both.
   `coding.permissions` prints the backend, the mode's goals, whether the network is refused, and
-  which channels the OS boundary actually covers (`coding.shell`/`runCode`/`mvnBuild`, skill scripts
-  and `b4.run` are inside it; the file mutations join them on `windows-low-il` and
-  `windows-appcontainer`; the read/search tools and the language servers never do, because reads are
-  the operator's own rights by design in coding mode). A sandboxed `b4.run` keeps the CLI state
-  inside the workspace (`BROWSER4_CLI_STATE_DIR`).
+  which channels the OS boundary actually covers. The covered/uncovered lists are generated from the
+  backend's declared capabilities, not written by hand: `coding.shell`/`runCode`/`mvnBuild`, skill
+  scripts and `b4.run` are inside it, the file mutations join them on `windows-low-il` and
+  `windows-appcontainer`, and the read/search tools plus the language servers never do (reads are the
+  operator's own rights by design in coding mode). On `windows-appcontainer`, `b4.run` is reported as
+  **not** covered: `browser4-cli` lives under the user profile and talks to the backend over
+  `127.0.0.1`, neither of which a capability-less container can reach, so that channel keeps its
+  historical launch in the backend process instead of failing inside the container. A sandboxed
+  `b4.run` keeps the CLI state inside the workspace (`BROWSER4_CLI_STATE_DIR`).
   Sandboxed children join a job object, so they are terminated with the backend instead of leaking.
   A file mutation that the boundary cannot start is a refused tool call
   (`Error: Failed to write …`), never an in-process write: the seam has no unconfined fallback.

@@ -437,6 +437,28 @@ object CodingComponents {
     }
 
     /**
+     * The boundary a `b4.run` (`browser4-cli`) launch must use, or `null` to keep it in the backend.
+     *
+     * `b4.run` is a *product* channel: the CLI is installed under the operator profile and talks to
+     * this backend over `127.0.0.1`. A backend that cannot host that (the AppContainer: profile
+     * unreachable, loopback refused — measured 2026-11-17) would make `b4.run` fail outright, so the
+     * channel keeps the historical launch and `coding.permissions` names it as outside the boundary.
+     * That is deliberately **not** a silent fallback: the resolve is a declared backend capability
+     * ([ExecutionSandbox.executesProductCommands]) and the report follows it (design §14.2.1).
+     */
+    fun b4RunSandbox(policy: AgentAccessPolicy): ExecutionSandbox? =
+        productCommandSandbox(policy, sandbox(policy))
+
+    /**
+     * The decision behind [b4RunSandbox], split out so it can be pinned without resolving a real
+     * backend: unrestricted, and a backend that cannot host the CLI, both mean `null`.
+     */
+    internal fun productCommandSandbox(
+        policy: AgentAccessPolicy,
+        sandbox: ExecutionSandbox,
+    ): ExecutionSandbox? = if (policy.unrestricted || !sandbox.executesProductCommands) null else sandbox
+
+    /**
      * The boundary this policy's file system and shell must enforce.
      *
      * Under [AgentAccessPolicy.unrestricted] the in-process boundary is a pass-through so the

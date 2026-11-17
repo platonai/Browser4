@@ -365,6 +365,43 @@ Integrity level 只收紧**写**，而 browse 模式要的是"工作目录之外
 
 在那之前，browse 的 AppContainer 仍保持 opt-in（`-Dbrowser4.agent.sandbox.browse=on`），默认不启用以免打断 `b4.run`。
 
+#### 14.2.1 三条轻方案被实测排除（2026-11-17 21:50）
+
+`WindowsAppContainerSandboxTest.realContainerNetworkAndStagedBinary` 把上面的推断变成了测量（探针自证：宿主能连上同一个 URL；容器内 `curl.exe --version` 先跑通，避免"命令没找到"冒充"连接被拒"）：
+
+| 探测 | 实测 | 后果 |
+|---|---|---|
+| 容器访问宿主机 `127.0.0.1:<port>` | 连不上/超时（exit 7/28） | **容器里的 CLI 够不到后端**，所以方案 2 只解决"能执行"，不解决"能通信" |
+| 容器访问 `example.com` | DNS 都不通（exit 6） | "无能力=无出网"成立 |
+| 工作区内暂存的 exe | exit 0，能跑 | 方案 2 的可执行性前提成立（但见上一条） |
+| 容器内 `if exist D:\` | 看不到 | **整个 D: 卷对容器不可达**（卷根没有容器 traverse） |
+| 容器内 `python` / `node` / `java` | PATH 上有目录但不可执行 | 容器里等于没有解释器/构建工具链（真实安装多在 profile 或非系统卷） |
+
+结论：方案 1 需要 `privateNetworkClientServer` 能力才可能通，而那会把"主机本地任何服务"一起放开，
+等于用围栏换 CLI；loopback 豁免通常还要管理员。方案 3 要管理员。方案 2 单独不成立。
+此外 browse 默认化还多一道坎：**容器里没有解释器**，而 browse 的目标包含"允许写脚本"。
+
+#### 14.2.2 已拍板：`b4.run` 在 browse 模式下是产品通道（2026-11-17）
+
+决定：**承认 `b4.run` 是产品通道**。依据是它的形态——`browser4-cli` 装在操作者 profile 里、通过
+`127.0.0.1` 访问后端，与 git/worktree/LSP 同类（产品自己的控制面），不是"agent 任意程序"。
+
+实现（不是静默回退）：
+
+| 环节 | 做法 |
+|---|---|
+| 能力声明 | `ExecutionSandbox.executesProductCommands`：能否在本边界内执行 *产品子进程*（CLI）。`windows-appcontainer` = `false`（profile 不可达 + loopback 被拒，实测），其余后端 = `true` |
+| 决策 | `CodingComponents.b4RunSandbox(policy)` → `productCommandSandbox(policy, sandbox)`：`--unrestricted` 或后端声明不能托管 CLI → `null`（保留历史的后端进程启动）；否则照旧入界 |
+| 接线 | `AgentToolManager.buildB4CliExecutor()` 用 `b4RunSandbox`；`coding.permissions` 的 covered/outside 由能力**生成**，因此容器模式下 `b4.run (this backend cannot host browser4-cli)` 出现在 NOT covered 里 |
+| 不做的 | 不给容器 `privateNetworkClientServer`（会放开主机本地所有服务）、不做 loopback 豁免（要管理员）、不复制 CLI 进工作区（只解决可执行性，不解决连通性） |
+
+代价：browse+容器模式下 `b4.run` 回到策略层（与 git/LSP 一样被点名）。收益：容器的"无网络"保持绝对，
+且 `b4.run` 从"在容器里必然失败"变成"可用且被如实标注"。
+
+**browse 默认化（#5）仍未解锁**，且与 `b4.run` 无关：容器里没有解释器/工具链（实测 `python`/`node`/`java`
+在容器内都不可执行，Python/JDK 在 `D:` 卷，容器连 `D:\` 都看不到）。这需要部署层的决定
+（把工具链装到容器可读的位置、或给 profile/卷根预置 ACE——都超出"免管理员"的范围）。
+
 ### 14.3 探针经验
 
 Low-IL 的探针用**工作区内的 PowerShell 脚本**（`-File <script> -Mode write -Path <path>`），路径作为普通 argv 传递；`cmd /c "echo x> y"` 这种带重定向的载荷在 Low 令牌下曾整片失败（当时 ACL 已被 14.1 的授权污染，未单独证伪），因此保留已验证的脚本方案，并在 KDoc 里写明两种引号规则叠加的问题。

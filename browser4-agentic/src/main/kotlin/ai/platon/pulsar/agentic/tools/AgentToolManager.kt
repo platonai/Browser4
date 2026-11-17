@@ -459,9 +459,12 @@ class AgentToolManager constructor(
         // boundary as the coding tools (read lazily — the policy changes per task).
         accessPolicy = { accessPolicy },
         // `b4.run` runs the CLI on the same OS boundary as `coding.shell`: it was the widest
-        // remaining agent channel (it spawned the CLI at the backend's integrity level).
+        // remaining agent channel (it spawned the CLI at the backend's integrity level). A backend
+        // that cannot host the CLI at all (the browse container: profile unreachable, no loopback)
+        // answers `null` here and keeps the historical launch — declared as a backend capability, not
+        // a silent fallback, and reported by `coding.permissions` as outside the boundary.
         cliProcessManager = ai.platon.pulsar.agentic.cli.CliProcessManager(
-            sandbox = { runCatching { ai.platon.pulsar.coding.CodingComponents.sandbox(accessPolicy) }.getOrNull() },
+            sandbox = { runCatching { ai.platon.pulsar.coding.CodingComponents.b4RunSandbox(accessPolicy) }.getOrNull() },
             workspace = { workspaceRoot },
         ),
     )

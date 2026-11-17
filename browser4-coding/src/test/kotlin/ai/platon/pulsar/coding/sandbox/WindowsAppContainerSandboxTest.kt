@@ -9,7 +9,10 @@ import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import com.sun.net.httpserver.HttpServer
 import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.URL
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -220,5 +223,78 @@ class WindowsAppContainerSandboxTest {
         } finally {
             runCatching { root.toFile().deleteRecursively() }
         }
+    }
+
+    /**
+     * The two facts the `b4.run`-inside-the-container decision (design §16.5 item 2, §14.2) rests on.
+     *
+     * **No loopback.** A container without capabilities is network-isolated from the host's
+     * `127.0.0.1` as well as from the internet, so a `browser4-cli` running *inside* the container
+     * cannot reach the backend that drives the browser — no matter how the binary gets there. Three
+     * things keep this from passing for the wrong reason: the JVM's own server answers the host
+     * first, `curl` is proven to run **inside** the container before it is used as the probe, and the
+     * exit code has to be curl's "could not connect"/"timed out", not "command not found".
+     *
+     * **A staged binary runs.** The other half of every option is "can the container execute a copy
+     * staged in the granted workspace?" — it must, or none of the three options in §14.2 can work.
+     */
+    @Test
+    @DisplayName("a container has no egress and no host loopback, but runs a binary staged in the workspace")
+    fun realContainerNetworkAndStagedBinary() {
+        assumeTrue(isWindows, "appcontainers only exist on Windows")
+        val root = Path.of(System.getProperty("user.home"), ".browser4", "tmp", "appcontainer-net-${System.nanoTime()}")
+        val workspace = Files.createDirectories(root.resolve("ws"))
+        val sandbox = WindowsAppContainerSandbox(markerDir = null)
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/reach") { exchange ->
+            val body = "ok".toByteArray()
+            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+        }
+        server.start()
+        try {
+            // prepare() grants the workspace and runs the three-part probe.
+            sandbox.prepare(spec(workspace), workspace, allowNetwork = false)
+            val url = "http://127.0.0.1:${server.address.port}/reach"
+            // Sanity: the host reaches it, so "refused" below is isolation, not a broken probe.
+            assertEquals("ok", URL(url).readText(), "the probe server must answer the host")
+
+            // `C:\Windows\System32` is readable to the container, so the probe tool itself must work —
+            // otherwise a "not recognized" exit code would look exactly like a refused connection.
+            val available = sandbox.runInContainer(workspace, "curl.exe --version")
+            assertEquals(0, available.first, "curl must run inside the container: ${available.second}")
+            assertTrue(available.second.contains("curl"), available.second)
+
+            val loopback = sandbox.runInContainer(workspace, "curl.exe -s -m 5 -o NUL $url")
+            assertTrue(
+                loopback.first in CURL_NO_EGRESS,
+                "the container must be refused the host loopback (6=could not resolve, 7=could not connect, 28=timed out): " +
+                    "exit=${loopback.first} out=${loopback.second}",
+            )
+
+            val internet = sandbox.runInContainer(workspace, "curl.exe -s -m 5 -o NUL http://example.com/")
+            assertTrue(
+                internet.first in CURL_NO_EGRESS,
+                "the container must be refused the internet: exit=${internet.first} out=${internet.second}",
+            )
+
+            // A candidate executable staged into the granted tree: the container has to be able to
+            // run it for any "copy the CLI into the workspace" option to be viable at all.
+            val staged = Path.of(System.getenv("SystemRoot") ?: "C:\\Windows", "System32", "curl.exe")
+            if (Files.isRegularFile(staged)) {
+                Files.copy(staged, workspace.resolve("staged-curl.exe"))
+                val run = sandbox.runInContainer(workspace, "staged-curl.exe --version")
+                assertEquals(0, run.first, "a workspace-staged binary must run in the container: ${run.second}")
+                assertTrue(run.second.contains("curl"), "it must be the staged binary: ${run.second}")
+            }
+        } finally {
+            server.stop(0)
+            runCatching { root.toFile().deleteRecursively() }
+        }
+    }
+
+    private companion object {
+        /** curl could not resolve, connect or get an answer: it tried, and the network refused it. */
+        private val CURL_NO_EGRESS = setOf(6, 7, 28)
     }
 }
