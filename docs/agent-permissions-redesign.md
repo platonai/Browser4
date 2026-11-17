@@ -412,6 +412,8 @@ Low-IL 的探针用**工作区内的 PowerShell 脚本**（`-File <script> -Mode
 
 做了什么、代码清单、测试明细、机器状态、开关与回滚、未收口清单，见
 [`docs-dev/copilot/20261117-agent-sandbox-progress.md`](../docs-dev/copilot/20261117-agent-sandbox-progress.md)。
+**整体 as-built 总览**（模式 × 四轴 × 五层决策 × 四后端、通道覆盖矩阵、任务生命周期、已知缺口）见
+[`docs-dev/copilot/20261117-agent-run-permissions-report.md`](../docs-dev/copilot/20261117-agent-run-permissions-report.md)。
 起点是 run `966a5f2e` 的复盘：[`docs-dev/copilot/20261116-agent-permission-bypass-review.md`](../docs-dev/copilot/20261116-agent-permission-bypass-review.md)。
 
 ---

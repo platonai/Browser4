@@ -6,7 +6,11 @@
 > [skills/browser4-cli/references/agent-access.md](../skills/browser4-cli/references/agent-access.md)；
 > 历史设计与 M0–M7 的实现记录见
 > [docs-dev/copilot/agent-run-permission-hardening-plan.md](../docs-dev/copilot/agent-run-permission-hardening-plan.md)。
-> 最后核对：2026-11-15（4.16-feat 分支）。符号名稳定，行号会漂移，定位请以类/方法名为准。
+> **当前 as-built 总览**（模式 × 四轴 × 五层 × 四后端、通道覆盖矩阵、已知缺口）见
+> [docs-dev/copilot/20261117-agent-run-permissions-report.md](../docs-dev/copilot/20261117-agent-run-permissions-report.md)；
+> 沙箱后端的设计与实验见
+> [docs/agent-permissions-redesign.md](agent-permissions-redesign.md)。
+> 最后核对：2026-11-17（`windows-low-il` / `windows-appcontainer`、文件写下沉、`b4.run` 产品通道）。符号名稳定，行号会漂移，定位请以类/方法名为准。
 
 ---
 

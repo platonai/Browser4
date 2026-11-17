@@ -243,6 +243,7 @@ browse 默认化还有第二个独立障碍：**容器里没有脚本解释器/�
 ## 10. 相关文档
 
 - [`docs/agent-permissions-redesign.md`](../../docs/agent-permissions-redesign.md) — 设计正文（矩阵、OS 映射、分期、§14 容器实验结论、§16 文件写下沉）
+- [`20261117-agent-run-permissions-report.md`](20261117-agent-run-permissions-report.md) — **as-built 总览**：模式 × 四轴 × 五层决策 × 四后端、通道覆盖矩阵、任务生命周期、已知缺口
 - [`docs/agent-permissions.md`](../../docs/agent-permissions.md) — 面向使用者的权限模型说明
 - [`docs/config.md`](../../docs/config.md) — `browser4.agent.sandbox*` 开关、默认值、失败语义
 - [`docs-dev/copilot/20261116-agent-permission-bypass-review.md`](20261116-agent-permission-bypass-review.md) — 起点：run `966a5f2e` 的 11 次拒绝复盘
