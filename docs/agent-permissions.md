@@ -8,6 +8,8 @@
 > [docs-dev/copilot/agent-run-permission-hardening-plan.md](../docs-dev/copilot/agent-run-permission-hardening-plan.md)。
 > **当前 as-built 总览**（模式 × 四轴 × 五层 × 四后端、通道覆盖矩阵、已知缺口）见
 > [docs-dev/copilot/20261117-agent-run-permissions-report.md](../docs-dev/copilot/20261117-agent-run-permissions-report.md)；
+> 未强制/未接线/已拍板"不强制"的逐条登记（G1–G8，含根因、危害、复测与收口代价）见
+> [docs-dev/copilot/20261117-agent-permission-known-gaps.md](../docs-dev/copilot/20261117-agent-permission-known-gaps.md)；
 > 沙箱后端的设计与实验见
 > [docs/agent-permissions-redesign.md](agent-permissions-redesign.md)。
 > 最后核对：2026-11-17（`windows-low-il` / `windows-appcontainer`、文件写下沉、`b4.run` 产品通道）。符号名稳定，行号会漂移，定位请以类/方法名为准。

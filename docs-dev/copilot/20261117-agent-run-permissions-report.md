@@ -194,21 +194,26 @@ Linux → `landlock`/`bwrap`，macOS → `seatbelt`（**均未实现**，选到�
 
 ## 13. 已知缺口
 
+逐条的根因、危害、披露方式、可复测证据与收口代价见 **缺口登记册**
+[`20261117-agent-permission-known-gaps.md`](20261117-agent-permission-known-gaps.md)（ID 稳定：G1–G8）。
+速查：
+
 | 缺口 | 现状 | 下一步 |
 |---|---|---|
-| coding 网络 `net=off` | **未强制**，报告写明 "NOT enforced by this backend" | WFP（需管理员）或代理；本机不可验证 |
-| browse 默认启用容器 | 未默认（`-Dbrowser4.agent.sandbox.browse=on` 才选） | 容器里**没有解释器/工具链**（Python/JDK 在 `D:` 卷，容器连 `D:\` 都看不到）——部署层决定 |
-| 容器内 `b4.run` | 不在边界内（**已拍板**：产品通道，报告点名） | 不开 `privateNetworkClientServer`（会放开主机本地所有服务） |
-| `coding.read/glob/grep` | 策略层 | 设计如此（coding 读=继承用户；browse 读=工作区） |
-| git/worktree、LSP、ripgrep | 策略层 | 产品流程本身；linked-worktree 的 git 元数据在工作区外 |
-| `windows-acl` 的文件写下沉 | 未接 | 需按其账户 provisioning 重新验证 |
-| 每次文件变更 ~0.4s | 一进程一次操作（`powershell -File`） | 若主导任务时长，换常驻/批量协议；`SandboxFileOps` 接口不变 |
+| G1 coding 网络 `net=off` | **未强制**，报告写明 "NOT enforced by this backend" | WFP（需管理员）或代理；本机不可验证 |
+| G2 非 Windows 无内核边界 | `landlock`/`bwrap`/`seatbelt` 均未实现 → 实际是 `off` | landlock 后端（无特权，CI 可测） |
+| G3 容器内 `b4.run` | 不在边界内（**已拍板**：产品通道，报告点名） | 不开 `privateNetworkClientServer`（会放开主机本地所有服务） |
+| G4 `coding.read/glob/grep` | 策略层 | 设计如此；browse+容器下可读根与容器读不到不一致，可在报告里标注 |
+| G5 git/worktree、LSP、ripgrep | 策略层；沙箱内 `git add`/`commit` 被拒（`index.lock`），已由 `WorktreeGitBoundaryTest` 钉住 | 产品级 git 通道 + 可读提示，**不要**放宽 ACL（hook 提权） |
+| G6 `windows-acl` 的文件写下沉 | 未接 | 需一台已 provisioning 的机器验证 |
+| G7 每次文件变更 ~0.4s | 一进程一次操作 | 若主导任务时长，换常驻/批量协议；接口不变 |
+| G8 browse 默认启用容器 | 未默认 | 容器内**没有解释器/工具链**（部署层决定） |
 
 ---
 
 ## 14. 证据（2026-11-17 跑过的）
 
-- `browser4-coding` 全量 **889 例全绿**（`sandbox` 包 101 例），含**真实** Low-IL 子进程与**真实** AppContainer：
+- `browser4-coding` 全量 **891 例全绿**（`sandbox` 包 103 例），含**真实** Low-IL 子进程与**真实** AppContainer：
   区内写成功、区外写被 OS 拒、凭据目录列不出、容器够不到 profile/loopback/外网、容器内 `powershell` 能起
 - `browser4-agentic` 权限/CLI 定向 **469 例全绿**（`coding.permissions` 一致性、提示词文案、`b4.run` 沙箱化）
 - `PermissionDecisionBaselineTest`：shell/fs/policy 判定冻结成 JSON golden baseline（allow↔deny 或 code 变化即失败）

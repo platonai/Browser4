@@ -5,7 +5,7 @@
 本篇是执行侧的快照：做了什么、怎么验证、还剩什么、怎么开关。
 
 仓库：`Browser4` 分支 `4.16.x`；工作区 `D:\workspace\Browser4\Browser4-4.16`。
-测试最近一次结果：`browser4-coding` 全量 **889 例全绿**（其中 `sandbox` 包 101 例，明细见 §6），`browser4-agentic` 权限/CLI 定向 **469 例全绿**，全 reactor `compile`（29 模块）通过。
+测试最近一次结果：`browser4-coding` 全量 **891 例全绿**（其中 `sandbox` 包 103 例，明细见 §6），`browser4-agentic` 权限/CLI 定向 **469 例全绿**，全 reactor `compile`（29 模块）通过。
 
 ---
 
@@ -119,13 +119,14 @@
 
 ## 6. 测试
 
-`browser4-coding` 全量 **889 例全绿**（其中 `sandbox` 包 101 例）：
+`browser4-coding` 全量 **891 例全绿**（其中 `sandbox` 包 103 例）：
 
 | 类 | 例数 | 关键断言 |
 |---|---|---|
 | `WindowsLowIntegritySandboxTest` | 6 | 真实子进程区内写成功、区外写被拒、注入的凭据目录列不出、Medium 进程可读、子进程杀不掉 Medium 进程、探针失败硬失败 |
 | `WindowsAppContainerSandboxTest` | 8 | 容器内命令可跑、写仅在授权树、`%SystemRoot%\Temp` 写被拒、`.ssh` 列不出、无能力=无网络、opt-in 语义、**容器内 `powershell.exe` 能起并执行文件写（P3-6）**、**容器够不到宿主机 loopback/出网（curl exit 6/7/28），工作区暂存的 exe 能跑** |
 | `ProductCommandBoundaryTest` | 4 | `executesProductCommands` 按后端声明（容器 false，其余 true）；容器不会被交给它跑不了的 `b4.run` 启动；`--unrestricted` 不包装；不可用后端仍抛异常（决策不是回退） |
+| `WorktreeGitBoundaryTest` | 1 | 隔离 worktree 的 `.git` 是指针文件、元数据在工作区外；沙箱内 `git status` 成功而 `git add` 被拒（`index.lock`），操作者侧 `add` 仍成功——把缺口 G5 的**安全那一半**钉住（不钉住，放宽 `.git` 就会变成 hook 提权） |
 | `SandboxFileOpsTest` | 7 | 7 个变更方法各命中边界一次；拒绝→工具错误且不落盘；provider 失败→报错不透支；快照簿记留进程内；能力矩阵；真实 Low-IL 区内全通/区外拒绝；生产接线（`CodingComponents.fs` + 真实后端）端到端 |
 | `WindowsJobTest` | 3 | 关 job 成员死亡、close 幂等、attach 已退出 pid 返回 false |
 | `ExecutionSandboxesModeTest` | 10 | coding→low-il、browse 不落到 coding 后端、跳过未实现/不可自动选择、显式覆盖优先、`isolationSummary` 文案 |
@@ -244,6 +245,7 @@ browse 默认化还有第二个独立障碍：**容器里没有脚本解释器/�
 
 - [`docs/agent-permissions-redesign.md`](../../docs/agent-permissions-redesign.md) — 设计正文（矩阵、OS 映射、分期、§14 容器实验结论、§16 文件写下沉）
 - [`20261117-agent-run-permissions-report.md`](20261117-agent-run-permissions-report.md) — **as-built 总览**：模式 × 四轴 × 五层决策 × 四后端、通道覆盖矩阵、任务生命周期、已知缺口
+- [`20261117-agent-permission-known-gaps.md`](20261117-agent-permission-known-gaps.md) — **缺口登记册** G1–G8：根因、危害、披露方式、可复测证据、收口代价与建议顺序
 - [`docs/agent-permissions.md`](../../docs/agent-permissions.md) — 面向使用者的权限模型说明
 - [`docs/config.md`](../../docs/config.md) — `browser4.agent.sandbox*` 开关、默认值、失败语义
 - [`docs-dev/copilot/20261116-agent-permission-bypass-review.md`](20261116-agent-permission-bypass-review.md) — 起点：run `966a5f2e` 的 11 次拒绝复盘
