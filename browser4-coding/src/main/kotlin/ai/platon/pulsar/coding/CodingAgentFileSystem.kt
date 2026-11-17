@@ -1,5 +1,6 @@
 package ai.platon.pulsar.coding
 
+import ai.platon.pulsar.coding.sandbox.SandboxFileOps
 import org.slf4j.LoggerFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -125,6 +126,19 @@ class CodingAgentFileSystem(
      * and the credential guard below still refuses the sensitive locations.
      */
     private val additionalDirs: Set<Path> = emptySet(),
+    /**
+     * Plan P3-6 — the **write-side OS boundary** for this file system. When the provider returns a
+     * [SandboxFileOps], every mutating operation ([writeFile]/[appendFile]/[replaceInFile]/[delete]/
+     * [mkdir]/[copy]/[move]/[revert]/…) hands the actual filesystem change to a helper that runs
+     * *inside* the task's sandbox, so the boundary is the kernel's decision and not this class's path
+     * guard. `null` keeps the historical in-process path.
+     *
+     * It is a provider rather than an instance because the backend is resolved per task and the
+     * ambient `browser4.agent.sandbox` may change between tasks. A provider that *can* return a
+     * boundary but fails to start it throws: the tool call is then refused, never performed
+     * unconfined (see [SandboxFileOps]).
+     */
+    private val mutationOpsProvider: (() -> SandboxFileOps?)? = null,
 ) {
     /**
      * The boundary [Authorizer] actually in effect — the injected shared instance, or the
@@ -939,7 +953,10 @@ class CodingAgentFileSystem(
                     // Snapshot existed but content was null (binary or unreadable) — leave untouched
                     return@withContext
                 } else {
-                    Files.deleteIfExists(resolved)
+                    // A file that did not exist before this task must be gone again: a delete is a
+                    // write like any other, so it goes through the boundary when there is one.
+                    val ops = mutationOps()
+                    if (ops != null) ops.delete(resolved, recursive = false) else Files.deleteIfExists(resolved)
                 }
             }
             changeCounter.incrementAndGet()
@@ -1050,7 +1067,12 @@ class CodingAgentFileSystem(
         return try {
             snapshotFile(resolved)
             withContext(Dispatchers.IO) {
-                if (resolved.isDirectory() && recursive) {
+                // Through the boundary when there is one: a delete is a write the OS must judge, and
+                // the string layer above is a fast-fail check in front of it, not a substitute.
+                val ops = mutationOps()
+                if (ops != null) {
+                    ops.delete(resolved, resolved.isDirectory() && recursive)
+                } else if (resolved.isDirectory() && recursive) {
                     resolved.toFile().deleteRecursively()
                 } else {
                     Files.delete(resolved)
@@ -1105,7 +1127,8 @@ class CodingAgentFileSystem(
 
         return try {
             withContext(Dispatchers.IO) {
-                Files.createDirectories(resolved)
+                val ops = mutationOps()
+                if (ops != null) ops.mkdirs(resolved) else Files.createDirectories(resolved)
             }
             "✓ Created directory: $path"
         } catch (e: IOException) {
@@ -1128,7 +1151,10 @@ class CodingAgentFileSystem(
 
         return try {
             withContext(Dispatchers.IO) {
-                if (src.isDirectory()) {
+                val ops = mutationOps()
+                if (ops != null) {
+                    ops.copy(src, dst, src.isDirectory())
+                } else if (src.isDirectory()) {
                     src.toFile().copyRecursively(dst.toFile(), overwrite = true)
                 } else {
                     Files.createDirectories(dst.parent)
@@ -1162,8 +1188,13 @@ class CodingAgentFileSystem(
         return try {
             snapshotFile(src)
             withContext(Dispatchers.IO) {
-                Files.createDirectories(dst.parent)
-                Files.move(src, dst, StandardCopyOption.REPLACE_EXISTING)
+                val ops = mutationOps()
+                if (ops != null) {
+                    ops.move(src, dst)
+                } else {
+                    Files.createDirectories(dst.parent)
+                    Files.move(src, dst, StandardCopyOption.REPLACE_EXISTING)
+                }
             }
             changeCounter.incrementAndGet()
             recordMutation("move", dst, true)
@@ -2339,7 +2370,9 @@ class CodingAgentFileSystem(
             node.put("checksum", snapshot.checksum)
             node.put("trackedAtMillis", snapshot.trackedAtMillis)
             snapshot.content?.let { node.put("content", it) }
-            writeAtomic(snapshotDir.resolve(snapshotFileName(snapshot.path)), node.toString())
+            // Bookkeeping, not a deliverable: the store lives inside the workspace and its path is
+            // chosen here, so it stays on the in-process path even when the task has a boundary.
+            writeBookkeepingAtomic(snapshotDir.resolve(snapshotFileName(snapshot.path)), node.toString())
         }
     }
 
@@ -2370,17 +2403,35 @@ class CodingAgentFileSystem(
     }
 
     /**
-     * Atomically replace [target] with [content].
+     * Atomically replace [target] with [content] — **inside the OS boundary** when the task has one.
      *
-     * Writes a sibling temp file and moves it into place: `ATOMIC_MOVE` on the
-     * same filesystem is a rename, so readers see either the old or the new
-     * file — never a truncated one. Falls back to a plain replace move where the
-     * filesystem cannot do atomic moves (some container/FUSE mounts).
+     * Every agent-facing content mutation funnels through here (write/append/replace/edit/insert/
+     * revert), so routing this one method is what turns `coding.write` from a policy-layer promise
+     * into a kernel decision. Bookkeeping writes use [writeBookkeepingAtomic] instead: their paths are
+     * chosen by this class, not by the model, and paying a sandboxed launch per snapshot would tax
+     * every edit for no boundary gain.
      *
-     * The temp file is always cleaned up, including when the move throws — a
-     * crashed write must not leave `.b4-*.tmp` litter in the repository.
+     * @throws IOException when the boundary refuses or cannot start; the callers already turn that
+     *   into the structured tool error, so a refused write can never look like a successful one.
      */
     private fun writeAtomic(
+        target: Path,
+        content: String,
+        encoding: Charset = StandardCharsets.UTF_8,
+    ) {
+        val ops = mutationOps()
+        if (ops != null) {
+            ops.write(target, content.toByteArray(encoding))
+            return
+        }
+        writeBookkeepingAtomic(target, content, encoding)
+    }
+
+    /**
+     * The in-process atomic write, used for the two cases that must not pay a sandboxed launch: no
+     * boundary at all, and this class's own bookkeeping (`<workspace>/.browser4/coding-snapshots/`).
+     */
+    private fun writeBookkeepingAtomic(
         target: Path,
         content: String,
         encoding: Charset = StandardCharsets.UTF_8,
@@ -2403,6 +2454,20 @@ class CodingAgentFileSystem(
         } finally {
             runCatching { Files.deleteIfExists(tmp) }
         }
+    }
+
+    /**
+     * The sandboxed write path in force for this task, or `null` when the historical in-process path
+     * applies (no backend, or one that cannot execute file operations inside its boundary).
+     *
+     * A provider failure is deliberately **not** swallowed: it is turned into an [IOException] (the
+     * shape every caller already reports) naming the real cause. Treating "the sandbox could not
+     * start" as "write it myself" is the one behaviour this seam must never have.
+     */
+    private fun mutationOps(): SandboxFileOps? = try {
+        mutationOpsProvider?.invoke()
+    } catch (e: RuntimeException) {
+        throw IOException("the OS boundary for file operations could not be resolved: ${e.message}", e)
     }
 
     /**
@@ -2520,8 +2585,8 @@ class CodingAgentFileSystem(
         hint = "writes go under the workspace or under a folder granted with `agent run --add-dir` " +
             "(coding.permissions lists them); reading is allowed for the readable roots listed by " +
             "coding.permissions (add your own with -Dbrowser4.agent.readPaths=...), and the " +
-            "deprecated allowExternalAccess opt-in still relaxes the boundary check only — the OS " +
-            "sandbox still enforces the boundary, and credential locations stay refused either way",
+            "deprecated allowExternalAccess opt-in still relaxes the boundary check only — " +
+            SandboxStatus.boundaryClause() + ", and credential locations stay refused either way",
     )
 
     /**

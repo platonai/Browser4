@@ -31,8 +31,19 @@ class SkillToolExecutor(
     private val registry: SkillRegistry = SkillRegistry.instance,
     /** Read lazily so a per-task policy applies without rebuilding the executor. */
     private val accessPolicy: () -> AgentAccessPolicy = { AgentAccessPolicy.serverDefault },
+    /** Workspace of the running task, so a skill script can run inside the task's OS boundary. */
+    private val workspace: () -> java.nio.file.Path? = { null },
+    /** The task's OS boundary (`null` keeps the historical unsandboxed launch). */
+    private val sandbox: () -> ai.platon.pulsar.coding.sandbox.ExecutionSandbox? = { null },
+    /** Variables the CLI needs (session pinning), passed to the sandboxed child only. */
+    private val sessionEnv: () -> Map<String, String> = { emptyMap() },
 ) : AbstractToolExecutor(), ToolCallSpecificationProvider {
-    private val scriptTools = SkillScriptToolExecutor(registry)
+    private val scriptTools = SkillScriptToolExecutor(
+        registry = registry,
+        workspace = workspace,
+        sandbox = sandbox,
+        sessionEnv = sessionEnv,
+    )
 
     override val domain: String = "skill"
 

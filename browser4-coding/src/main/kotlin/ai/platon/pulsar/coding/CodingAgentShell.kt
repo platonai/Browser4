@@ -268,9 +268,22 @@ class CodingAgentShell(
          * The text used to advertise `-Dbrowser4.agent.shell.pathGuard=off`, which read as an
          * official bypass and implied the switch was a boundary. The guard is advisory, so the
          * refusal now says so and points at the workspace instead.
+         *
+         * 2026-11-16 (review of agent run `966a5f2e`): the old wording promised "the OS sandbox
+         * enforces the boundary when enabled" — and on an installation whose
+         * `browser4.agent.sandbox` is `off` nothing enforces it. That run left the workspace through
+         * `python -c`, a `powershell -File` script and `%VAR%` expansions while every refusal still
+         * read as if an OS boundary were behind it. The note now follows the **effective**
+         * enforcement, so a model reading it cannot over-trust the check.
          */
-        private const val ADVISORY_NOTE =
-            "the path check is advisory — the OS sandbox enforces the boundary when enabled; "
+        private fun advisoryNote(): String =
+            if (SandboxStatus.osBoundaryActive) {
+                "the path check is advisory — the OS sandbox enforces the boundary; "
+            } else {
+                "the path check is advisory and no OS sandbox is active " +
+                    "(${ExecutionSandboxes.PROP_SANDBOX}=off), so a command that runs its own code can " +
+                    "leave the workspace; "
+            }
 
         /** Prefix of every [protectedPathViolation] message; used to pick the audit code. */
         private const val PROTECTED_PATH_PREFIX = "protected path: "
@@ -1519,13 +1532,13 @@ class CodingAgentShell(
                     SensitivePaths.isRefused(resolved, sensitiveRoots, resolvedReadableRoots)
                 ) {
                     return PATH_GUARD_PREFIX + "'$token' links to a credential location ($resolved); " +
-                        ADVISORY_NOTE + "pass a workspace-relative path instead"
+                        advisoryNote() + "pass a workspace-relative path instead"
                 }
                 continue
             }
             if (SensitivePaths.isRefused(resolved, sensitiveRoots, resolvedReadableRoots)) {
                 return PATH_GUARD_PREFIX + "'$token' resolves to a credential location ($resolved); " +
-                    ADVISORY_NOTE + "pass a workspace-relative path instead"
+                    advisoryNote() + "pass a workspace-relative path instead"
             }
         }
         return null
@@ -1606,7 +1619,7 @@ class CodingAgentShell(
                     return null
                 }
                 return PATH_GUARD_PREFIX + "'$token' resolves outside the workspace ($resolved); " +
-                    ADVISORY_NOTE + "use a workspace-relative path or copy the input into the workspace"
+                    advisoryNote() + "use a workspace-relative path or copy the input into the workspace"
             }
         }
         return null

@@ -177,6 +177,33 @@ class CliAgentPromptTest {
     }
 
     @Test
+    @DisplayName("the boundary section states the effective enforcement layer, not a promise")
+    fun boundaryNamesTheEffectiveLayer() {
+        // 2026-11-16 (run 966a5f2e): the prompt claimed "interpreters do not get around it" on an
+        // installation whose sandbox was `off`; a `python -c` read `D:\` and the model had been told
+        // the opposite. The section must name what actually confines a process.
+        val previous = System.getProperty("browser4.agent.sandbox")
+        try {
+            System.clearProperty("browser4.agent.sandbox")
+            val off = CliAgentPrompt.hygiene(true, workspace, AgentAccessPolicy())
+
+            assertTrue(off.contains("No OS sandbox is active"), off)
+            assertFalse(off.contains("interpreters do not get around it"), "a false promise: $off")
+            assertTrue(off.contains("never reach around a refusal"), off)
+
+            System.setProperty("browser4.agent.sandbox", "windows-acl")
+            val on = CliAgentPrompt.hygiene(true, workspace, AgentAccessPolicy())
+
+            assertTrue(on.contains("windows-acl"), on)
+            assertTrue(on.contains("cannot cross"), on)
+            assertFalse(on.contains("No OS sandbox is active"), on)
+        } finally {
+            if (previous == null) System.clearProperty("browser4.agent.sandbox")
+            else System.setProperty("browser4.agent.sandbox", previous)
+        }
+    }
+
+    @Test
     @DisplayName("a restricted preset adds the permissions block; full adds only the workspace boundary")
     fun permissionsBlockFollowsThePolicy() {
         // FULL with external access OFF still has a boundary: the coding file tools refuse every

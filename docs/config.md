@@ -522,29 +522,77 @@ docker run -d -p 18182:18182 `
   ```
 
 * **`browser4.agent.sandbox`** *(JVM system property; default: platform-dependent, see below)*
-  OS-level sandbox for `coding.shell` and `coding.runCode`. This is the enforcement boundary; the
-  access preset and the string checks above decide what the model may *spell*, the sandbox decides
-  what a process may actually *reach*.
+  OS-level sandbox for `coding.shell`, `coding.runCode` and — on the backends that can execute them
+  (see the table) — the **file mutations** (`coding.write`/`append`/`replace`/`editLines`/`delete`/
+  `mkdir`/`copy`/`move`/`revert`, each performed by a child inside the boundary). This is the
+  enforcement boundary; the access preset and the string checks above decide what the model may
+  *spell*, the sandbox decides what a process may actually *reach*.
 
   | Value | Meaning |
   |---|---|
   | `off` | no OS sandbox; the preset and string checks alone apply |
-  | `windows-acl` | Windows: runs commands as the low-privilege sandbox account with an ACL matrix (workspace and mirrors `M`, toolchain roots `RX`, the user profile denied folder-only) |
+  | `windows-low-il` | Windows, **no account and no administrator**: commands and file mutations run with a restricted, Low-integrity token. Writes are confined to the workspace and the build caches (their labels are lowered to Low); reads keep the user's rights, and the credential stores are labelled Medium + `NO_READ_UP` so the child cannot read them. Does **not** restrict the network. |
+  | `windows-acl` | Windows: runs commands as the low-privilege sandbox account with an ACL matrix (workspace and mirrors `M`, toolchain roots `RX`, the user profile denied folder-only). The strongest option, but the account and its credential must be provisioned by an administrator out of band. File mutations stay in the backend process (policy layer only). |
+  | `windows-appcontainer` | Windows, **no account and no administrator** (a per-user container profile): commands and file mutations run inside an AppContainer with the workspace as its only granted tree, the user profile unreachable, and **no network** (no `internetClient` capability). Opt-in for the browse chain with `-Dbrowser4.agent.sandbox.browse=on`, or select it outright — `browser4-cli` lives under the user profile, which a container cannot read |
   | `bwrap` / `container` / `nsjail` / `sandbox-exec` | accepted ids whose backends arrive with P2 — selecting one now is a hard failure, not a silent fallback |
 
-  Defaults: a **fresh** Windows installation starts with `windows-acl`; an **existing** installation
-  keeps `off` until you switch. Linux/macOS stay `off` until P2. The first start records the
-  decision in `<browser4.data.dir or ~>/.browser4/sandbox-default`, so later starts replay it
-  instead of re-deriving it. An explicit `-Dbrowser4.agent.sandbox=<id>` always wins, is not
-  persisted, and blanks count as unset. `off` is also the one-command rollback.
+  Defaults: a **fresh** Windows installation starts with `windows-acl` (the shipped default), and an
+  **existing** installation is **upgraded once** to the platform backend. Its historical `off` was the automatic default for
+  installations that predate the boundary, not a decision — and with `off` the string layer is the
+  only boundary (2026-11-16 review of agent run `966a5f2e`: `python -c`, `powershell -File` and
+  `%VAR%` expansions left the workspace while every refusal still claimed "the OS sandbox enforces
+  the boundary").
 
-  Failure semantics: a missing account or credential, a failed ACL application, a failed write
-  probe, an unknown id, or a known-but-unimplemented id **stops the task** with
+  `windows-low-il` is the recommended backend for **coding-only** installations: it needs no
+  account, no credential and no administrator, and it confines writes plus credential reads. It is
+  not the global default yet because it is a per-mode backend — before the `AgentMode` wiring lands,
+  it would also confine browse tasks, whose `b4` CLI legitimately writes `~/.browser4` state. Set it
+  explicitly with `-Dbrowser4.agent.sandbox=windows-low-il`.
+
+  The upgrade is **gated on the backend being ready** (for `windows-acl`: the account and its
+  credential must already be provisioned; for `windows-low-il`: a restricted Low-integrity token can
+  be built). A backend that cannot provision stays `off` — switching it on would fail every command
+  instead of protecting it — and the start logs `sandbox boundary NOT enforced: …` naming the missing
+  piece. Nothing is pinned in that case, so the next start re-probes and upgrades as soon as the
+  machine can support it.
+
+  The first successful start records the decision in
+  `<browser4.data.dir or ~>/.browser4/sandbox-default` as `v2:<id>`, so later starts replay it
+  instead of re-deriving it; `v2:off` is therefore an operator decision and is never upgraded again.
+  An explicit `-Dbrowser4.agent.sandbox=<id>` always wins, is not persisted, and blanks count as
+  unset. `off` is also the one-command rollback — pass it explicitly, or persist `v2:off` in the
+  marker. Linux/macOS stay `off` until P2 ships a backend.
+
+  Per-mode selection: `agent run --coding` picks its backend from the coding chain
+  (`windows-low-il` → `windows-acl`), so a coding task gets real write confinement even when the
+  installation default is `off`. Browse tasks never fall through to the coding backend — an
+  integrity level confines writes but not reads — so they keep the installation default until the
+  AppContainer backend lands. An explicit `-Dbrowser4.agent.sandbox` still beats both.
+  `coding.permissions` prints the backend, the mode's goals, whether the network is refused, and
+  which channels the OS boundary actually covers (`coding.shell`/`runCode`/`mvnBuild`, skill scripts
+  and `b4.run` are inside it; the file mutations join them on `windows-low-il` and
+  `windows-appcontainer`; the read/search tools and the language servers never do, because reads are
+  the operator's own rights by design in coding mode). A sandboxed `b4.run` keeps the CLI state
+  inside the workspace (`BROWSER4_CLI_STATE_DIR`).
+  Sandboxed children join a job object, so they are terminated with the backend instead of leaking.
+  A file mutation that the boundary cannot start is a refused tool call
+  (`Error: Failed to write …`), never an in-process write: the seam has no unconfined fallback.
+
+  Failure semantics: a missing account or credential, a failed ACL application, a failed label or
+  write probe, a workspace without `WRITE_OWNER` (an integrity label cannot be lowered there), an
+  unknown id, or a known-but-unimplemented id **stops the task** with
   `SandboxUnavailableException` — the sandbox never falls back to an unwrapped launch. A denial
   inside a working sandbox is translated for the model as
   `PERMISSION_DENIED | code=SANDBOX_DENIED | tool=… | detail=… | hint=… | needed=…`; the raw OS
   evidence goes to the log only. When the sandbox is `off`, a plain `Access is denied` stays an
   ordinary OS error.
+
+  The same holds for the file writes the boundary executes (`windows-low-il`,
+  `windows-appcontainer`): if the child that performs them cannot start — a policy that disables
+  `powershell.exe`, a workspace the label cannot be lowered on — the file tool returns
+  `Error: Failed to write …: the OS sandbox '<id>' could not start …` instead of writing from the
+  backend process. Fix the cause, choose a backend that can run the writes (`windows-acl`, whose file
+  tools stay in-process), or roll the boundary back to `off` explicitly.
 
   ```bash
   # First start on Windows (fresh install): defaults to windows-acl.
@@ -770,7 +818,7 @@ All are JVM system properties (set with `BROWSER4_SERVER_OPTS` or `-D…` when y
 
 | Switch | Default | Effect / failure semantics |
 |---|---|---|
-| `browser4.agent.sandbox` | Windows fresh install `windows-acl`; otherwise `off` | OS enforcement for `coding.shell`/`coding.runCode`. Unavailable backend, unknown id or unimplemented id → task fails (`SandboxUnavailableException`); never falls back. A denial becomes `code=SANDBOX_DENIED`. |
+| `browser4.agent.sandbox` | Windows: `windows-acl` (fresh install, and a one-time upgrade of an existing one); `windows-low-il` is the recommended opt-in for coding-only work; `off` elsewhere until P2 | OS enforcement for `coding.shell`/`coding.runCode`, and for the file mutations on `windows-low-il`/`windows-appcontainer`. Unavailable backend, unknown id or unimplemented id → task fails (`SandboxUnavailableException`); never falls back. A denial becomes `code=SANDBOX_DENIED`. A persisted `v2:off`, or `-Dbrowser4.agent.sandbox=off`, keeps the historical unsandboxed behaviour. `windows-low-il` confines writes and credential reads but **not** the network. |
 | `browser4.agent.sandbox.account` | `browser4-agent` | Windows sandbox account. Missing account/credential or failed ACLs → hard failure at task start. |
 | `browser4.agent.workspace.isolation` | `worktree` | Coding tasks run in an isolated git worktree and merge back as a patch; `off` restores in-place execution. A coding task whose workspace is **not** a git work tree fails with instructions (installing git, or setting this to `off`) instead of degrading to the mirror, whose writes reach the checkout with no merge step. A patch larger than 32 MiB is refused too: keep build output and binary assets out of the change set. |
 | `browser4.agent.isolation.requireVerify` | `true` | A code change is merged only with passing `coding.verify` verdicts covering **every** changed module (one verdict covers several via `-am`; a Rust + Kotlin change needs one per ecosystem) **that still describe the tree being merged**: `coding.verify` records `verifiedAt` + a content digest, and a file written after the verdict refuses the merge with "re-run verify for the final change set". |

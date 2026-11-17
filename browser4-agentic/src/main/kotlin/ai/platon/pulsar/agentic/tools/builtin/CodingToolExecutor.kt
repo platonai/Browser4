@@ -2224,6 +2224,38 @@ class CodingToolExecutor : AbstractToolExecutor() {
                         (WorkspaceMirror.defaultSourceRepo()?.let { "(mirror of $it)" } ?: "(no source checkout detected)")
             }
             appendLine("Isolation: $isolationLine")
+            // Goals vs enforcement: the mode's profile and the backend that actually exists for it.
+            // A refusal is only actionable when the model can tell which layer spoke.
+            appendLine(CodingComponents.isolationSummary(policy))
+            // Which channels the OS boundary covers. `coding.shell` / `runCode` / the build shell go
+            // through the sandbox seam; since P3-6 the **file mutations** do too (a sandboxed child
+            // performs the change, so the kernel judges it), while reads stay in the backend by design
+            // (coding reads inherit the user; browse reads are workspace-scoped). `b4.run`, skill
+            // scripts, git/worktree work and the language servers are named as they stand, because a
+            // refusal is only actionable when the model can tell which layer spoke (2026-11-16).
+            val sandbox = runCatching { CodingComponents.sandbox(policy) }.getOrNull()
+            val sandboxId = sandbox?.id ?: "off"
+            val fileMutationsInBoundary = sandbox != null && sandbox.executesFileOps
+            if (sandboxId == "off") {
+                appendLine(
+                    "OS boundary: none — every channel (shell, code, file tools, b4.run, skill scripts) " +
+                        "is governed by the policy layer only."
+                )
+            } else if (fileMutationsInBoundary) {
+                appendLine(
+                    "OS boundary ($sandboxId) covers: coding.shell, coding.runCode, coding.mvnBuild/verify, " +
+                        "skill scripts, b4.run, and every file mutation (coding.write/append/replace/" +
+                        "editLines/delete/mkdir/copy/move/revert is executed by a child inside the " +
+                        "boundary). NOT covered (backend process, policy layer only): coding.read/glob/grep, " +
+                        "git/worktree/merge, LSP/ripgrep."
+                )
+            } else {
+                appendLine(
+                    "OS boundary ($sandboxId) covers: coding.shell, coding.runCode, coding.mvnBuild/verify, " +
+                        "skill scripts, b4.run. NOT covered (backend process, policy layer only): " +
+                        "coding.write/read/glob, git/worktree/merge, LSP/ripgrep."
+                )
+            }
             // Reads are not limited by the preset: the readable roots are where Browser4's own
             // data/temp/checkout live, and a model that was refused a workspace write needs to
             // know it can still read them (and where the list comes from).

@@ -1,6 +1,8 @@
 package ai.platon.pulsar.coding.sandbox
 
+import ai.platon.pulsar.coding.AgentMode
 import ai.platon.pulsar.coding.CodingComponents
+import ai.platon.pulsar.coding.IsolationProfile
 import ai.platon.pulsar.coding.MirrorRoots
 import ai.platon.pulsar.coding.PermissionAudit
 import org.slf4j.LoggerFactory
@@ -17,13 +19,30 @@ import java.util.concurrent.ConcurrentHashMap
  * [sandboxAccount] is set by the sandbox during [ExecutionSandbox.prepare] and read by
  * [ProcessLauncher]: the account is what selects the Windows token launch, so the decision stays
  * in one place (the sandbox) and the launcher stays a pure executor.
+ *
+ * [sandboxLauncher] is the same seam for a backend that has no account to hand over — a
+ * Low-integrity or AppContainer token is a live handle, not an identity. It wins over
+ * [sandboxAccount] when both are present.
  */
 data class ProcessSpec(
     val command: List<String>,
     val directory: Path,
     val environment: Map<String, String>,
     val sandboxAccount: SandboxAccount? = null,
+    val sandboxLauncher: SandboxLauncher? = null,
 )
+
+/**
+ * How a token-based sandbox starts the prepared process.
+ *
+ * Implementations are closures over a token they own ([WindowsLowIntegritySandbox]); the launcher
+ * interface exists so [ProcessLauncher] keeps a single decision point and the sandbox contract
+ * ("an unavailable backend never degrades to an unwrapped launch") is not duplicated per backend.
+ */
+fun interface SandboxLauncher {
+    fun start(spec: ProcessSpec, redirectErrorStream: Boolean): Process
+}
+
 
 /**
  * Enforcement seam for the execution tier (plan C1).
@@ -35,6 +54,46 @@ data class ProcessSpec(
  */
 interface ExecutionSandbox {
     val id: String
+
+    /**
+     * Whether this backend can refuse a *network* connection.
+     *
+     * File ACLs and integrity levels say nothing about sockets, so most backends answer `false`;
+     * only a capability/inspection-based one (AppContainer, a filter, a proxy) can answer `true`.
+     * Callers must report a `net=off` request as unenforced when this is `false` instead of
+     * implying an egress boundary that does not exist.
+     */
+    val enforcesNetwork: Boolean get() = false
+
+    /**
+     * Whether this backend can actually be used on this machine right now.
+     *
+     * Consulted by [ExecutionSandboxes.resolveForMode] and by `SandboxDefaults`: an installation must
+     * never be switched to a backend that cannot start, because the contract below is fail-closed.
+     */
+    fun isReady(): Boolean = true
+
+    /**
+     * Whether a **mode's chain** may select this backend without an explicit operator choice.
+     *
+     * `isReady()` answers "can this run here"; this answers "should a task get it by default". A
+     * backend whose enforcement works but whose fit with the rest of the product is unproven (the
+     * AppContainer cannot read the user profile, where `browser4-cli` lives) declares `false` and
+     * stays reachable through `-Dbrowser4.agent.sandbox=<id>` until it is ready to be a default.
+     */
+    val autoSelectable: Boolean get() = true
+
+    /**
+     * Whether this backend can also execute the **backend's own file mutations** inside the boundary
+     * (plan P3-6, [SandboxFileOps]).
+     *
+     * Only meaningful for a backend that confines a *process*: the mutation is handed to a sandboxed
+     * child, so the backend process itself is not weakened. A backend that provisions rights for an
+     * operator account but was never designed around this channel answers `false` and the file tools
+     * keep their historical in-process path — reported as "policy layer only" instead of being
+     * counted as covered.
+     */
+    val executesFileOps: Boolean get() = false
 
     /**
      * Prepares [spec] for launch inside the boundary of [workspace].
@@ -104,6 +163,9 @@ class WindowsAclSandbox(
     private val logger = LoggerFactory.getLogger(WindowsAclSandbox::class.java)
 
     override val id: String = WindowsSandboxBootstrap.SANDBOX_ID
+
+    /** The account and its credential are provisioned; nothing is applied by this check. */
+    override fun isReady(): Boolean = runCatching { WindowsSandboxBootstrap().isReady() }.getOrDefault(false)
 
     private val cacheLimit: Int = cacheLimit.also { require(it > 0) { "cacheLimit must be positive: $it" } }
 
@@ -228,7 +290,12 @@ object ExecutionSandboxes {
 
     /** Backend ids the switch accepts (plan P3-1); implementations arrive with P1/P2. */
     val KNOWN_IDS: Set<String> = setOf(
-        "off", "windows-acl", "bwrap", "container", "nsjail", "sandbox-exec",
+        "off",
+        "windows-acl",
+        WindowsLowIntegritySandbox.SANDBOX_ID,
+        WindowsAppContainerSandbox.SANDBOX_ID,
+        "windows-restricted-token",
+        "bwrap", "container", "nsjail", "sandbox-exec",
     )
 
     /**
@@ -257,14 +324,48 @@ object ExecutionSandboxes {
     fun current(): ExecutionSandbox =
         instances.computeIfAbsent(configuredId()) { of(it) }
 
+    /**
+     * The backend a task of [AgentMode] should use.
+     *
+     * Order: an operator''s explicit `-Dbrowser4.agent.sandbox` wins; otherwise the mode''s chain
+     * ([IsolationProfile.backendChain]) is walked and the first *ready* backend is used; when the
+     * chain offers nothing usable the installation default ([current]) applies — including `off`,
+     * which is reported by `SandboxStatus` instead of being papered over.
+     *
+     * Readiness is what keeps this honest: `windows-appcontainer` is listed for browse but not
+     * implemented, and `windows-acl` needs administrator provisioning, so neither is selected just
+     * because it appears in the chain.
+     */
+    fun resolveForMode(
+        mode: AgentMode,
+        ready: (String) -> Boolean = { id -> runCatching { of(id).isReady() }.getOrDefault(false) },
+        instantiate: (String) -> ExecutionSandbox = { id -> of(id) },
+    ): ExecutionSandbox {
+        SandboxDefaults.operatorConfiguredId()?.let { explicit ->
+            return instantiate(explicit)
+        }
+        for (id in IsolationProfile.backendChain(mode)) {
+            if (!ready(id)) continue
+            val sandbox = instantiate(id)
+            // A backend that must not be a default (see [autoSelectable]) is skipped rather than
+            // handed to a task that never asked for it.
+            if (!sandbox.autoSelectable) continue
+            return sandbox
+        }
+        return runCatching { current() }.getOrDefault(OffSandbox)
+    }
+
     fun of(id: String): ExecutionSandbox = when (val normalized = id.trim().lowercase()) {
         "", "off" -> OffSandbox
         WindowsSandboxBootstrap.SANDBOX_ID -> WindowsAclSandbox()
+        WindowsLowIntegritySandbox.SANDBOX_ID -> WindowsLowIntegritySandbox()
+        WindowsAppContainerSandbox.SANDBOX_ID -> WindowsAppContainerSandbox()
         in KNOWN_IDS -> throw SandboxUnavailableException(
             normalized,
             "Sandbox '$normalized' is known but not implemented in this build " +
-                "(the Linux/macOS backends arrive with P2). Use 'off' or 'windows-acl'; " +
-                "the sandbox never falls back to an unwrapped launch.",
+                "(browse-mode isolation is the AppContainer backend, still to come). " +
+                "Use 'off', '${WindowsLowIntegritySandbox.SANDBOX_ID}' or " +
+                "'${WindowsSandboxBootstrap.SANDBOX_ID}'; the sandbox never falls back to an unwrapped launch.",
         )
         else -> throw SandboxUnavailableException(
             normalized,
@@ -354,6 +455,11 @@ object SandboxEnvironment {
 /** Single process-launch point for both execution paths, so the sandbox spec is actually applied. */
 object ProcessLauncher {
     fun start(spec: ProcessSpec, redirectErrorStream: Boolean = false): Process {
+        // A token-based backend owns the launch (it holds a live handle, not an identity) and wins
+        // over the account path. An unavailable backend throws instead of degrading.
+        spec.sandboxLauncher?.let { launcher ->
+            return launcher.start(spec, redirectErrorStream)
+        }
         spec.sandboxAccount?.let { account ->
             return WindowsTokenLauncher.start(spec, account, redirectErrorStream)
         }

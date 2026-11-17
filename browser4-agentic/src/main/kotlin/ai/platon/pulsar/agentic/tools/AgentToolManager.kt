@@ -132,7 +132,14 @@ class AgentToolManager constructor(
         )
     }
     val skillTarget: SkillToolTarget by lazy { SkillToolTarget(skillContext, SkillRegistry.instance) }
-    val skills: SkillToolExecutor = SkillToolExecutor(accessPolicy = { accessPolicy })
+    val skills: SkillToolExecutor = SkillToolExecutor(
+        accessPolicy = { accessPolicy },
+        workspace = { workspaceRoot },
+        // Same resolution the coding shell uses: an operator's explicit backend wins, otherwise the
+        // mode's chain. `null`/off keeps the historical launch for skill scripts.
+        sandbox = { runCatching { ai.platon.pulsar.coding.CodingComponents.sandbox(accessPolicy) }.getOrNull() },
+        sessionEnv = { cliSessionEnv() },
+    )
 
     /**
      * Domain alias are mainly used for backward capability
@@ -451,6 +458,12 @@ class AgentToolManager constructor(
         // Per-task policy: `b4.run`'s file:// and upload must obey the same
         // boundary as the coding tools (read lazily — the policy changes per task).
         accessPolicy = { accessPolicy },
+        // `b4.run` runs the CLI on the same OS boundary as `coding.shell`: it was the widest
+        // remaining agent channel (it spawned the CLI at the backend's integrity level).
+        cliProcessManager = ai.platon.pulsar.agentic.cli.CliProcessManager(
+            sandbox = { runCatching { ai.platon.pulsar.coding.CodingComponents.sandbox(accessPolicy) }.getOrNull() },
+            workspace = { workspaceRoot },
+        ),
     )
 
     /**

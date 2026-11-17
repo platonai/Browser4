@@ -1096,7 +1096,16 @@ open class StatefulAgentRunner(
                 } else {
                     effectivePolicy
                 }
-                it.agentToolManager.applyAccessPolicy(taskPolicy, status.id)
+                // The task type is a permission input, not just a prompt hint: `--coding` selects the
+                // coding isolation profile (read like the user, write only the workspace plus build
+                // caches), browse keeps the minimal profile. `applyAccessPolicy` rebuilds the shell,
+                // so the backend is chosen from the mode on the very next tool call.
+                val policyWithMode = if (codingMode) {
+                    taskPolicy.copy(mode = ai.platon.pulsar.coding.AgentMode.CODING)
+                } else {
+                    taskPolicy.copy(mode = ai.platon.pulsar.coding.AgentMode.BROWSE)
+                }
+                it.agentToolManager.applyAccessPolicy(policyWithMode, status.id)
                 // Explicit coding flag, never auto-detected: the coding flag is
                 // opt-in per call (`command_run`'s coding argument, e.g. the CLI's
                 // agent run --coding). A resumed run inherits it from its checkpoint.

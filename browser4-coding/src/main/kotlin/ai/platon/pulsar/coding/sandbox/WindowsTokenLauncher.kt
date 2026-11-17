@@ -77,7 +77,12 @@ object WindowsTokenLauncher {
      * Exposed for the Windows integration test, which reuses the current process token so the pipe
      * and command-line machinery can be exercised without a provisioned sandbox account.
      */
-    internal fun startWithToken(spec: ProcessSpec, token: Pointer, redirectErrorStream: Boolean): Process {
+    internal fun startWithToken(
+        spec: ProcessSpec,
+        token: Pointer,
+        redirectErrorStream: Boolean,
+        job: WindowsJob? = null,
+    ): Process {
         requireWindows()
         val program = spec.command.firstOrNull()
             ?: throw SandboxUnavailableException(SANDBOX_ID, "cannot launch an empty command")
@@ -121,6 +126,9 @@ object WindowsTokenLauncher {
             val processHandle = info.hProcess
                 ?: throw SandboxUnavailableException(SANDBOX_ID, "CreateProcessAsUserW returned no process handle")
             info.hThread?.let { Win32.kernel32.CloseHandle(it) }
+            // Best-effort cleanup membership: a job that refuses the assignment must not lose the
+            // command (the process is already running), so this is logged, not thrown.
+            job?.assign(processHandle)
             logger.info("windows sandbox process started: pid={} command={}", info.dwProcessId, spec.command.first())
             return WindowsTokenProcess(
                 processHandle = processHandle,
@@ -133,6 +141,137 @@ object WindowsTokenLauncher {
             pipes.closeAll()
             throw e
         }
+    }
+
+    /**
+     * Launches [spec] inside the AppContainer [containerSid] (browse mode).
+     *
+     * The child runs as the same user but **inside the container**: it can reach only objects whose
+     * ACL grants that SID, and — with no capabilities declared — it has no network at all. That is
+     * the difference from [startWithToken]: an integrity level narrows *writes*, a container narrows
+     * *reads* too, which is what browse mode needs ("禁止访问工作目录之外的文件").
+     *
+     * Uses `CreateProcessW` with a `STARTUPINFOEX` attribute list instead of a token, and shares the
+     * pipe, environment and command-line machinery with the token path so both behave identically for
+     * the call sites.
+     */
+    fun startInAppContainer(
+        spec: ProcessSpec,
+        containerSid: Pointer,
+        redirectErrorStream: Boolean,
+        job: WindowsJob? = null,
+    ): Process {
+        requireWindows()
+        val program = spec.command.firstOrNull()
+            ?: throw SandboxUnavailableException(SANDBOX_ID, "cannot launch an empty command")
+        val pipes = createPipes(redirectErrorStream)
+        var attributeMemory: Memory? = null
+        try {
+            val environment = spec.environment
+            val environmentMemory = buildEnvironmentBlock(environment)
+            val executable = resolveProgram(program, environment)
+            val commandLine = buildWindowsCommandLine(spec.command)
+            val commandMemory = Memory((commandLine.length + 1) * 2L).also { it.setWideString(0, commandLine) }
+
+            attributeMemory = buildCapabilityAttributeList(containerSid)
+            val startup = Win32.StartupInfoEx().apply {
+                StartupInfo.dwFlags = Win32.STARTF_USESTDHANDLES
+                StartupInfo.hStdInput = pipes.childStdin
+                StartupInfo.hStdOutput = pipes.childStdout
+                StartupInfo.hStdError = pipes.childStderr
+                // `STARTUPINFOEX` requires `cb` to describe the extended structure, not the prefix.
+                StartupInfo.cb = size()
+                lpAttributeList = attributeMemory
+            }
+            startup.write()
+            val info = Win32.ProcessInformation()
+            val created = Win32.kernel32.CreateProcessW(
+                WString(executable),
+                commandMemory,
+                null,
+                null,
+                true,
+                Win32.EXTENDED_STARTUPINFO_PRESENT or Win32.CREATE_UNICODE_ENVIRONMENT or Win32.CREATE_NO_WINDOW,
+                environmentMemory,
+                WString(spec.directory.toAbsolutePath().toString()),
+                startup.pointer,
+                info,
+            )
+            val error = if (created) 0 else Native.getLastError()
+            info.read()
+            pipes.closeChildEnds()
+            if (!created) {
+                pipes.closeParentEnds()
+                fail(
+                    "CreateProcessW(AppContainer) failed (error $error)" +
+                        if (error == Win32.ERROR_ACCESS_DENIED) {
+                            ": the container SID has no access to the executable or the working directory"
+                        } else "",
+                )
+            }
+            val processHandle = info.hProcess
+                ?: throw SandboxUnavailableException(SANDBOX_ID, "CreateProcessW returned no process handle")
+            info.hThread?.let { Win32.kernel32.CloseHandle(it) }
+            job?.assign(processHandle)
+            logger.info(
+                "windows appcontainer process started: pid={} command={}",
+                info.dwProcessId, spec.command.first(),
+            )
+            return WindowsTokenProcess(
+                processHandle = processHandle,
+                processId = info.dwProcessId.toLong(),
+                stdinHandle = pipes.parentStdin,
+                stdoutHandle = pipes.parentStdout,
+                stderrHandle = pipes.parentStderr,
+            )
+        } catch (e: Throwable) {
+            pipes.closeAll()
+            throw e
+        } finally {
+            attributeMemory?.let { runCatching { Win32.kernel32.DeleteProcThreadAttributeList(it) } }
+        }
+    }
+
+    /**
+     * The `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES` list for [containerSid].
+     *
+     * No capabilities are declared on purpose: `internetClient` absent means the container has no
+     * egress, which is exactly `NetPolicy.BrowserOnly` — the browser itself lives in the backend,
+     * outside this container.
+     */
+    private fun buildCapabilityAttributeList(containerSid: Pointer): Memory {
+        val sizeHolder = Memory(Native.POINTER_SIZE.toLong())
+        // First call is expected to fail with ERROR_INSUFFICIENT_BUFFER and fill in the size.
+        Win32.kernel32.InitializeProcThreadAttributeList(null, 1, 0, sizeHolder)
+        val required = if (Native.POINTER_SIZE == 8) sizeHolder.getLong(0) else sizeHolder.getInt(0).toLong()
+        if (required <= 0) {
+            fail("InitializeProcThreadAttributeList returned no size (error ${Native.getLastError()})")
+        }
+        val list = Memory(required)
+        if (!Win32.kernel32.InitializeProcThreadAttributeList(list, 1, 0, sizeHolder)) {
+            fail("InitializeProcThreadAttributeList failed (error ${Native.getLastError()})")
+        }
+        val capabilities = Win32.SecurityCapabilities().apply {
+            AppContainerSid = containerSid
+            Capabilities = null
+            CapabilityCount = 0
+            Reserved = 0
+        }
+        capabilities.write()
+        if (!Win32.kernel32.UpdateProcThreadAttribute(
+                list,
+                0,
+                Win32.PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+                capabilities.pointer,
+                capabilities.size(),
+                null,
+                null,
+            )
+        ) {
+            Win32.kernel32.DeleteProcThreadAttributeList(list)
+            fail("UpdateProcThreadAttribute(SECURITY_CAPABILITIES) failed (error ${Native.getLastError()})")
+        }
+        return list
     }
 
     private fun requireWindows() {

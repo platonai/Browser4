@@ -2,6 +2,8 @@ package ai.platon.pulsar.coding
 
 import ai.platon.pulsar.coding.sandbox.ExecutionSandbox
 import ai.platon.pulsar.coding.sandbox.ExecutionSandboxes
+import ai.platon.pulsar.coding.sandbox.SandboxFileOps
+import ai.platon.pulsar.coding.sandbox.SandboxedFileOps
 import org.slf4j.LoggerFactory
 import java.nio.file.Path
 
@@ -46,9 +48,9 @@ object CodingComponents {
         }
         if (System.getProperty(AgentAccessPolicy.PROP_ALLOW_EXTERNAL_ACCESS, "false").toBoolean()) {
             logger.warn(
-                "{} is deprecated and advisory only: prefer browser4.agent.access; the OS sandbox " +
-                    "still enforces what a process may reach",
+                "{} is deprecated and advisory only: prefer browser4.agent.access; {}",
                 "browser4.agent.allowExternalAccess=true",
+                SandboxStatus.boundaryClause(),
             )
         }
     }
@@ -408,7 +410,30 @@ object CodingComponents {
             boundaryAuthorizer = boundary,
             readableRoots = ReadablePaths.roots().toSet(),
             additionalDirs = policy.additionalDirs,
+            // Plan P3-6: the write side of the same boundary the shell gets. Provider, not instance:
+            // the backend follows the task's mode, and an installation without a usable backend
+            // silently keeping the in-process path is exactly the drift this seam must not have —
+            // so the provider answers `null` only for a backend that *cannot* execute file ops.
+            mutationOpsProvider = { fileOps(policy, root) },
         )
+    }
+
+    /**
+     * The write-side OS boundary for [policy] in [root], or `null` when this task has none.
+     *
+     * `null` means the historical in-process write path and only two things produce it: an
+     * `--unrestricted` task (which asks for the operator's own permissions) and a backend that
+     * cannot execute file operations inside its boundary ([ExecutionSandbox.executesFileOps]).
+     * `coding.permissions` reports which of the two applies, because "no boundary" and "boundary that
+     * does not cover this channel" are different facts.
+     *
+     * A backend that *can* but fails to start is not `null`: [SandboxFileOps] throws and the tool call
+     * is refused. Falling back to an unconfined write there would silently undo the whole point.
+     */
+    fun fileOps(policy: AgentAccessPolicy, root: Path): SandboxFileOps? {
+        if (policy.unrestricted) return null
+        val sandbox = sandbox(policy)
+        return SandboxedFileOps.forSandbox(sandbox, root, policy.additionalDirs.toList())
     }
 
     /**
@@ -429,7 +454,30 @@ object CodingComponents {
      * the build-only shell and `coding.runCode`: an unrestricted task has to be unsandboxed on all
      * of them, or "the OS sandbox is not applied" would hold for one path and not for another.
      */
-    fun sandbox(policy: AgentAccessPolicy): ExecutionSandbox? =
-        if (policy.unrestricted) ExecutionSandboxes.of("off") else null
+    fun sandbox(policy: AgentAccessPolicy): ExecutionSandbox =
+        if (policy.unrestricted) {
+            ExecutionSandboxes.of("off")
+        } else {
+            ExecutionSandboxes.resolveForMode(policy.mode)
+        }
+
+    /**
+     * One line for `coding.permissions`: which OS boundary this task actually has.
+     *
+     * Goals and enforcement are two different facts (2026-11-16: refusals claimed an OS boundary that
+     * did not exist), so the line names the backend, the mode's goals, and whether a `net=off` request
+     * is enforceable at all.
+     */
+    fun isolationSummary(policy: AgentAccessPolicy): String {
+        val profile = IsolationProfile.forMode(policy.mode)
+        val sandbox = runCatching { sandbox(policy) }.getOrNull()
+        val backend = sandbox?.id ?: "off"
+        val network = when {
+            sandbox == null || backend == "off" -> "NOT enforced (no OS backend)"
+            sandbox.enforcesNetwork -> "enforced"
+            else -> "NOT enforced by this backend (it cannot refuse a socket)"
+        }
+        return "OS sandbox: $backend — ${profile.describe()}; network: $network"
+    }
 
 }

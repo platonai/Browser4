@@ -97,6 +97,7 @@
 ① 工具列表裁剪   buildCliEngineToolSet ── 被拒方法从注册表消失（exposeTools 也取不回）
 ② 方法门         CodingToolExecutor.callFunctionOn → policy.denial() → ToolAccessDeniedException
 ③ 组件投影       CodingComponents.fs / shell → readOnly / allowExecution / commandAllowedProvider
+                （+ fs 的 mutationOpsProvider：写操作交给沙箱内的子进程执行）
 ④ 边界授权       Authorizer：CAP_FS_BOUNDARY（canonical）/ CAP_SHELL_BOUNDARY（lexical）
 ⑤ 执行沙箱       ExecutionSandbox + 环境白名单 + 运行时否决
 ```
@@ -143,6 +144,24 @@ Authorizer 按 `(root, 可读根, add-dir)` 缓存，LRU 上限 64（每个任�
 `code=SANDBOX_DENIED`（原始 OS 证据只进日志）。进程环境由 `SandboxEnvironment` 重建：只继承白名单变量
 （PATH / JAVA_HOME / maven / gradle / 临时目录等），长生命周期密钥不会被继承；显式声明的密钥仍然放行，
 但记一条 `ENV_PASSTHROUGH` 事件。
+
+后端**按模式**选择（P1.5）：`--coding` 走 coding 链（`windows-low-il` → `windows-acl`），即使安装默认是
+`off` 也会拿到真实的写强制；browse 不会落到 coding 后端（完整性级别不管读），在 AppContainer 落地前保持
+安装默认。`coding.permissions` 会打印后端 id、模式的四条轴，以及"网络是否被强制"。
+
+**文件写操作也在强制层内**（P3-6）：`coding.write`/`append`/`replace`/`editLines`/`delete`/`mkdir`/
+`copy`/`move`/`revert` 的实际改动由**沙箱内的子进程**执行（`SandboxedFileOps`，后端声明
+`executesFileOps` 即可；`windows-low-il` 与 `windows-appcontainer` 都是如此）。后端过去是 Medium 进程，
+所以这条通道曾是最宽的一条——字符串层一旦有洞，写就出去了；现在补上的是内核判定：路径先打完包，
+再由 Low/容器子进程搬到目标位置，跨出工作区的写入被 OS 拒绝，工具返回结构化错误。命令行的引号规则不能
+叠加，因此载荷走**工作区内的暂存文件**（`.b4scratch/fs-bridge/payload-*.bin`），只把路径作为普通 argv
+传给 `-File` 脚本；`replace`/`move` 的语义保持原子（`ReplaceFile`/同卷 rename，跨卷退化为复制+删除）。
+
+读仍然在后端进程里，这是设计而非缺口：coding 的读目标就是"继承当前用户"，而 browse 的读范围就是工作区
+（容器读得到的正是后端读得到的）。`coding.permissions` 按后端把这些"在/不在边界内"的通道写清楚。
+
+沙箱为 `off` 时，字符串层的拒绝文案会明确写出「没有 OS 沙箱在运行」，不再暗示身后存在强制层
+（2026-11-16：`ADVISORY_NOTE` 从常量改成按 `ExecutionSandboxes.configuredId()` 生成的动态文案）。
 
 ---
 
@@ -228,7 +247,7 @@ REST 控制器**故意不开 CORS**：批准等于授予写文件/执行命令�
 | 额外目录 | `agent run --add-dir`、REPL `/add-dir`、`/dirs [clear]` | 无 |
 | 全权 | `agent run --unrestricted` | 关 |
 | 可读根 | `-Dbrowser4.agent.readPaths` | Browser4 数据根、`~/.browser4`、CLI 工作区、源检出 |
-| OS 沙箱 | `-Dbrowser4.agent.sandbox` | 老装 `off`；Windows 新装 `windows-acl`；库/测试 `off` |
+| OS 沙箱 | `-Dbrowser4.agent.sandbox` | Windows：默认 `windows-acl`（新装与老装一次性升级）；`windows-low-il` 是**免账户免管理员**的 coding 推荐后端（写与凭据读强制、网络不强制）；其它平台 `off`（待 P2）；库/测试 `off` |
 | 额外受保护路径 | `-Dbrowser4.agent.protected.extra` | 无 |
 
 `--unrestricted` 是 pass-through：preset 置 `full`、清空 `denyTools` 与 protected/sensitive 清单、
@@ -236,9 +255,18 @@ REST 控制器**故意不开 CORS**：批准等于授予写文件/执行命令�
 **两件事不解除**：OS 凭证库（`ALWAYS_REFUSED`），以及会摧毁运行时自身的命令（`handOffVetoViolation`）——
 「用我的权限」不等于「把我的密钥交给模型」。
 
-沙箱默认值由 `SandboxDefaults.apply` 在应用入口（不是库默认）决定：显式属性永远优先；已有数据目录的老装保持
-`off`；全新安装取平台后端（Windows 目前是 `windows-acl`，Linux/macOS 待 P2）；决定写进
-`<data>/.browser4/sandbox-default`，之后重放而不是重新推断。
+沙箱默认值由 `SandboxDefaults.apply` 在应用入口（不是库默认）决定：显式属性永远优先；全新安装取平台后端
+（Windows 目前是 `windows-acl`，Linux/macOS 待 P2）；**老装一次性升级到平台后端**——它的历史 `off` 只是
+「边界还不存在时的自动默认」，从来不是操作者的决定，而 `off` 时字符串层就是唯一边界（2026-11-16 对
+run `966a5f2e` 的复盘：`python -c`、`powershell -File`、`%VAR%` 展开都走出了工作区，而拒绝文案还在宣称
+「OS 沙箱在强制」）。
+
+升级**以就绪为条件**（`WindowsSandboxBootstrap.isReady()`：账户 `net user` 可用 + 凭据可读，只检查、
+不改 ACL）。未就绪则保持 `off` 并打出 `sandbox boundary NOT enforced: …`，且**不 pin 决定**，管理员补好
+账户后下一次启动自动升级——因为把不可用的后端打开会让每条 `coding.shell` 硬失败，那不是边界而是故障。
+
+决定写进 `<data>/.browser4/sandbox-default`，格式 `v2:<id>`：`v2:off` 是真正的操作者决定，后续启动不再
+升级；显式 `-Dbrowser4.agent.sandbox=off` 是随时可用的回滚。
 
 ---
 
@@ -292,6 +320,7 @@ CLI `/access`、`FailureCategory` 把结构化拒绝归类为「权限问题」�
 | `CodingAccessEnforcementTest` | 端到端拒绝、报告与实际门一致 |
 | `OperatorScopeEnforcementTest` | 一个路径/程序的授权不能解锁另一个 |
 | `SandboxDefaultsTest` / `SandboxProbeTest` / `WindowsSandboxTest` | 沙箱默认选择、写入探针、失败即硬报 |
+| `SandboxFileOpsTest` | 每个文件变更都交给边界；边界拒绝 → 工具错误且不落盘；边界无法解析 → 同样不落盘（无进程内回退）；真实 Low-IL / 容器子进程区内通、区外拒；生产接线（`CodingComponents.fs`）端到端 |
 
 改权限相关代码时，**先跑这三个**：矩阵覆盖、决策基线、报告一致性。它们失败通常意味着「改动比你以为的大」。
 

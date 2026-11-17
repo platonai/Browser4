@@ -313,8 +313,10 @@ A watched `agent run -i` session on a TTY keeps `browser4.agent.access`; an expl
   are not an OS-level sandbox: every preset that allows the project build (`read-build`,
   `write`, `full`) executes repository code (Maven plugins, npm scripts). The execution
   sandbox (`browser4.agent.sandbox`, see [config.md](../../../docs/config.md)) enforces
-  where a process may write when your platform has a backend; otherwise use a container or
-  VM when the repository itself is untrusted.
+  where a process may write when your platform has a backend — `coding.shell`/`coding.runCode`
+  and, on `windows-low-il`/`windows-appcontainer`, the file mutations themselves (each change
+  runs in a sandboxed child); otherwise use a container or VM when the repository itself is
+  untrusted.
 - `--access` is scoped to the task and reset when it ends, so the next task on the same
   backend starts from the server default again.
 
