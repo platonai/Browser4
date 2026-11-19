@@ -2382,7 +2382,9 @@ pub async fn follow_task(
                         follower.renderer.time_prefix()
                     ));
                 }
-                return Ok(());
+                // Exit 130 (via the sentinel), not 0: the wait was interrupted, so it produced no
+                // result. The outcome line above is already printed, so the code travels alone.
+                return Err(crate::AGENT_RUN_INTERRUPTED.to_string());
             }
         }
     }
@@ -2561,7 +2563,11 @@ fn terminal_failure_event(
 }
 
 /// Cancel a task and describe the outcome in one line.
-async fn cancel_task(client: &Client, base_url: &str, task_id: &str) -> String {
+///
+/// Shared by every wait path (`-i`, `--follow`, `--wait`) so an interrupt produces the same
+/// request and the same wording: the task lives in the backend, so a local exit alone would leave
+/// it running (observed 2026-11-19: a killed CLI kept burning model rounds to completion).
+pub(crate) async fn cancel_task(client: &Client, base_url: &str, task_id: &str) -> String {
     match cancel_command_task(client, base_url, task_id).await {
         Ok(response) if response.is_success() => {
             let parsed: Value = serde_json::from_str(&response.body).unwrap_or(Value::Null);

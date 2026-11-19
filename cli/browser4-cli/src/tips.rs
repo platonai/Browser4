@@ -347,6 +347,9 @@ const TIPS_AGENT: &[Tip] = &[
     Tip {
         text: "`agent result <id>` exits non-zero for a failed task — read `errorCode` and the `resume:` line, or pass `--allow-failed` to exit 0 while still seeing the failed payload",
     },
+    Tip {
+        text: "Ctrl+C asks the backend to cancel the task in every wait mode (`-i`, `--follow`, `--wait`) — the run lives on the server, so interrupt it instead of killing the CLI; a force-killed CLI leaves the task running and `agent status <id>` is how you find it again",
+    },
 ];
 
 const TIPS_WEBMINER: &[Tip] = &[

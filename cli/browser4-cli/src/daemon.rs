@@ -1296,6 +1296,22 @@ async fn running_server_version(client: &Client, base_url: &str, port: u16) -> O
     probe_server_version(client, base_url).await
 }
 
+/// Env var the dev wrappers (`b4w.ps1` / `b4w.sh`) set so a hint can name the command the user
+/// actually typed instead of `browser4-cli.exe`.
+pub const INVOKE_HINT_ENV: &str = "BROWSER4_CLI_INVOKE_HINT";
+
+/// [INVOKE_HINT_ENV] when set and non-blank, else [fallback].
+///
+/// The single place that reads the variable: `daemon.rs` compiles into both the library and the
+/// binary, and a hint that spells the variable differently on one side would silently fall back.
+pub fn invocation_hint_or(fallback: &str) -> String {
+    std::env::var(INVOKE_HINT_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
 /// Notice for `BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1` when a server is already
 /// running, or `None` when the flag is unset.
 ///
@@ -1307,15 +1323,24 @@ async fn running_server_version(client: &Client, base_url: &str, port: u16) -> O
 /// (this cost a full diagnostic cycle during the plugin fix).
 ///
 /// Deliberately a notice rather than an auto stop/rebuild/restart: silently
-/// killing a running server would throw away live browser sessions.
+/// killing a running server would throw away live browser sessions. It is also
+/// deliberately **not** an error (exit code unchanged): `-Rebuild` is set by
+/// habit on routine dev commands, and failing them would only teach people to
+/// ignore the message. What the notice must spell out is the one thing the flag
+/// cannot do — the command that follows runs against the server that is already
+/// up, so its jars may predate the edit that prompted the rebuild.
 fn force_rebuild_ignored_message(port: u16) -> Option<String> {
     if !should_force_rebuild_bundle() {
         return None;
     }
+    // The hint names the wrapper the user typed (`./b4w.ps1 stop`), which is what they can paste
+    // back; `daemon::invocation_hint_or` is shared with the binary so the env var cannot drift.
+    let bin = invocation_hint_or("browser4-cli");
     Some(format!(
-        "\u{26A0}  ignoring {FORCE_REBUILD_BUNDLE_ENV}=1: a Browser4 server is already running on port {port}.\n\
-         \x20  The runtime bundle is only rebuilt when the CLI starts the server.\n\
-         \x20  To rebuild it now:  browser4-cli stop   (then re-run this command)"
+        "\u{26A0}  ignoring {FORCE_REBUILD_BUNDLE_ENV}=1 (b4w.ps1 `-Rebuild`): a Browser4 server is already running on port {port}.\n\
+         \x20  The runtime bundle is only rebuilt when this command itself starts the server, so this run\n\
+         \x20  uses the server that is up — its jars may be older than the sources you just changed.\n\
+         \x20  To rebuild it now:  {bin} stop   (then re-run this command)"
     ))
 }
 
@@ -16839,8 +16864,12 @@ mod tests {
             "notice must name the port holding the running server: {message}"
         );
         assert!(
-            message.contains("browser4-cli stop"),
+            message.contains(" stop"),
             "notice must name the way to make the flag take effect: {message}"
+        );
+        assert!(
+            message.contains("may be older than the sources"),
+            "notice must say the run uses the already-running server: {message}"
         );
 
         match previous {

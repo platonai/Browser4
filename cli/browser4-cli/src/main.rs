@@ -348,6 +348,34 @@ enum ExitCode {
     /// The command ran to completion but one or more items failed
     /// (e.g. crawl pages that failed to fetch or extract) — results are partial.
     PartialFailure = 6,
+    /// Interrupted by the user (Ctrl+C while a command was waiting).
+    ///
+    /// 130 is the shell convention for a signal death (128 + SIGINT), so a script that already
+    /// distinguishes "killed" from "failed" keeps working. A handler that *handled* the interrupt
+    /// — `agent run --wait` / `--follow` ask the backend to cancel the task and print what
+    /// happened — still reports it, because returning 0 would claim the run produced a result.
+    Interrupted = 130,
+}
+
+/// Sentinel an interrupted `agent run` wait loop returns instead of an error message.
+///
+/// The handler has already printed what happened (`⏹ Agent task … cancelled.` plus the
+/// `agent status <id>` hint), so the interrupt must not be rendered a second time — only the exit
+/// code has to carry it. `run()` returns `Result<(), CliError>` while the agent handlers return
+/// `Result<(), String>`, so a marker string is the channel; `__grep_no_matches__` set the same
+/// precedent for "message already printed, code still matters".
+pub(crate) const AGENT_RUN_INTERRUPTED: &str = "__agent_run_interrupted__";
+
+/// Map an `agent run` error onto [CliError].
+///
+/// A user interrupt keeps its own exit code and stays silent (see [AGENT_RUN_INTERRUPTED]);
+/// everything else is an ordinary failure with the message the model/backend produced.
+fn agent_run_error(message: String) -> CliError {
+    if message == AGENT_RUN_INTERRUPTED {
+        CliError(ExitCode::Interrupted, String::new())
+    } else {
+        message.into()
+    }
 }
 
 /// Normalised error type that pairs a machine-readable exit code with a
@@ -719,12 +747,10 @@ fn cli_binary_name() -> String {
 /// development wrappers — which is not what the user typed and not what they
 /// can paste back.  The wrappers export `BROWSER4_CLI_INVOKE_HINT`
 /// (`./b4w.ps1`, `./b4w.sh`); prefer it, and fall back to the binary name.
+/// The env-var read itself lives in [`daemon::invocation_hint_or`] because
+/// `daemon.rs` needs the same value for its own notice.
 fn cli_invocation_hint() -> String {
-    std::env::var("BROWSER4_CLI_INVOKE_HINT")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(cli_binary_name)
+    daemon::invocation_hint_or(&cli_binary_name())
 }
 
 fn no_active_session_message() -> String {
@@ -734,6 +760,15 @@ fn no_active_session_message() -> String {
         None,
         "No active session is currently stored for this CLI context.",
         &[
+            // A session-less `agent run --coding` task reaches this every time its nested
+            // `browser4-cli tab …` runs before the attach: `open <url>` would launch a SECOND,
+            // logged-out browser, while the browser the task actually needs (the user's, already
+            // signed in) is one `attach` away. Name the attach first, and name `-s` because a
+            // second unnamed attach is refused (run `4125acaa`, 2026-11-19).
+            &format!(
+                "attach the browser you are already signed in to: `{bin} -s <name> attach --cdp <port>` \
+                 (list the ports with `{bin} attach --list`)."
+            ),
             &format!("run `{bin} open <url>` to start a new session."),
             "after tab operations, use `goto <url>` to restore the active page.",
             &format!("check available sessions with `{bin} list`."),
@@ -829,11 +864,12 @@ fn check_unnamed_slot_free(
     }
     let state = read_state(state_dir, None);
     if let Some(ref existing_id) = state.session_id {
+        let bin = cli_invocation_hint();
         return Err(format!(
             "An unnamed session already exists: {existing_id}\n\
              An unnamed session already drives a browser, so a second attach must not displace it.\n\
-             Name your sessions with `-s <name>` instead, or run `browser4-cli close` to end the \
-             current unnamed session first."
+             Re-run with a name — `{bin} -s <name> attach --cdp <port>` (any name works, e.g. \
+             `-s weibo`) — or end the current unnamed session first with `{bin} close`."
         ));
     }
     Ok(())
@@ -16369,7 +16405,29 @@ async fn handle_agent_run(
                 }
             }
 
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            // Ctrl+C must ask the backend to cancel, not just end this process: the task lives in
+            // the server, so a local exit alone leaves it burning model rounds to completion while
+            // the terminal claims the user stopped it (observed 2026-11-19). `--follow` already
+            // does this; `--wait` used to sleep straight through the signal.
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
+                _ = tokio::signal::ctrl_c() => {
+                    let outcome = crate::agent_interactive::cancel_task(client, base_url, &task_id).await;
+                    let _ = update_async_task_status(&task_id, "cancelled", None);
+                    cli_println!();
+                    cli_println!("⏹ {}", outcome);
+                    cli_println!(
+                        "The backend was asked to stop; 'agent status {}' shows the final state.",
+                        task_id
+                    );
+                    json_field("task_id", json!(&task_id));
+                    json_field("status", json!("cancelled"));
+                    // Exit 130, not 0: the wait produced no result, and the cancel above is the
+                    // only thing that happened. The message is already on screen, so the marker
+                    // maps to a silent `ExitCode::Interrupted` (see `agent_run_error`).
+                    return Err(AGENT_RUN_INTERRUPTED.to_string());
+                }
+            }
         }
     }
 
@@ -33744,8 +33802,21 @@ async fn run(
         // backend, evict a session slot, or attach anything.  Handling it here —
         // before the server gate — keeps the command instant and side-effect
         // free on a machine where the backend is not running.
+        //
+        // It must also run OUTSIDE the async context: the scan probes each port
+        // with `reqwest::blocking`, whose internal tokio runtime panics when it is
+        // dropped from an async task ("Cannot drop a runtime in a context where
+        // blocking is not allowed", exit 101 — hit on 2026-11-19 with a browser
+        // listening on a debug port).  `handle_attach` wraps the same resolution in
+        // `spawn_blocking` for exactly this reason; the early-return path needs the
+        // same treatment, or the panic only shows up on a machine that actually has
+        // a `--remote-debugging-port` browser running.
         if parsed.get("list").and_then(Value::as_bool).unwrap_or(false) {
-            handle_attach_list(&parsed).map_err(|message| CliError(ExitCode::Usage, message))?;
+            let list_args = parsed.clone();
+            tokio::task::spawn_blocking(move || handle_attach_list(&list_args))
+                .await
+                .map_err(|e| CliError(ExitCode::General, format!("attach --list failed: {e}")))?
+                .map_err(|message| CliError(ExitCode::Usage, message))?;
             emit_json_envelope_for_early_return(&command);
             return Ok(());
         }
@@ -34542,7 +34613,8 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
             )
-            .await?;
+            .await
+            .map_err(agent_run_error)?;
         }
         "agent-status" => {
             handle_agent_status(&client, &base_url, &tool_params).await?;
@@ -38692,11 +38764,34 @@ mod tests {
     }
 
     #[test]
+    fn user_interrupt_exits_130_silently() {
+        // 130 = 128 + SIGINT, so a script that distinguishes "killed" from "failed" keeps working.
+        assert_eq!(130, ExitCode::Interrupted as i32);
+
+        let interrupted = agent_run_error(AGENT_RUN_INTERRUPTED.to_string());
+        assert_eq!(ExitCode::Interrupted, interrupted.code());
+        assert!(
+            interrupted.message().is_empty(),
+            "the wait loop already printed the cancel outcome; the code travels alone"
+        );
+
+        let ordinary = agent_run_error("Agent task failed: boom".to_string());
+        assert_eq!(ExitCode::General, ordinary.code());
+        assert_eq!("Agent task failed: boom", ordinary.message());
+    }
+
+    #[test]
     fn no_active_session_message_uses_structured_cli_format() {
         let message = no_active_session_message();
 
         assert!(message.contains("🔐 Session required"));
         assert!(message.contains("💡 What to try"));
+        // The browser the user is signed in to is one attach away; `open` would start a second,
+        // logged-out browser. A session-less `agent run --coding` task hit exactly this dead end
+        // (run `4125acaa`, 2026-11-19).
+        assert!(message.contains("attach the browser you are already signed in to"), "{message}");
+        assert!(message.contains("-s <name> attach --cdp <port>"), "{message}");
+        assert!(message.contains("attach --list"), "{message}");
         assert!(message.contains("open <url>` to start a new session"));
         assert!(message.contains("after tab operations, use `goto <url>`"));
         assert!(message.contains("check available sessions with"));
@@ -49757,6 +49852,13 @@ linkGroups:
         );
         assert!(err.contains("s-abc123"), "expected session id in: {err}");
         assert!(err.contains("-s <name>"), "expected -s hint in: {err}");
+        // A named retry is the *fix*, so the message has to show the whole command — the agent in
+        // run `4125acaa` only discovered `-s weibo attach …` by trial and error.
+        assert!(
+            err.contains("attach --cdp <port>"),
+            "expected a copy-pasteable attach command in: {err}"
+        );
+        assert!(err.contains("-s weibo"), "expected a concrete name example in: {err}");
     }
 
     #[test]
