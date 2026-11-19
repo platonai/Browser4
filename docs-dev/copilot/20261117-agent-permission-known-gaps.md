@@ -181,11 +181,22 @@
 - **系统怎么披露**：`code=SANDBOX_DENIED` 的 hint 现在点名这条 ACE 与 `icacls … /remove *<sid>`
   （`SandboxDenials.LOW_IL_HINT`）；症状/处置写进 `docs/agent-permissions.md` §10.10。
 - **证据 / 复测**：三阶段对照（无 ACE → 可列；加包 SID ACE → 列不出；`/remove` → 恢复）3/3 稳定；
-  测试见 `SandboxDenialsTest`（localized denial + hint）与 `SandboxStatusTest`。
+  测试见 `SandboxDenialsTest`（localized denial + hint）、`SandboxStatusTest` 与
+  `ContainerAceScanTest`（SID 分类 / icacls 解析 / 候选根 / 告警文案）。
 - **收口路径**：① 用 marker 实现 `revoke`（`icacls <dir> /remove "*<sid>"`），
   在容器后端停止/任务结束时回收；② 启动自检：low-il 就绪探针顺带扫一遍工作区与工具链根的
   DACL，发现包 SID ACE 就**在选后端阶段**警告并给修复命令；③ 明确"绝不给用户全局目录授权"。
 - **建议时机**：先做 ③（约定）与 ②（告警），再做 ①（回收）。
+- **状态：CLOSED（2026-11-20）**，三条都落了：
+  1. **约定**——`WindowsAppContainerSandbox.grant()` 的 KDoc 写死"只授工作区 + 该任务的 `--add-dir`"，
+     `WindowsAppContainerSandboxTest` 的 `grantsTheContainerSid` 用"只发一次 `icacls /grant`"钉住；
+  2. **自检**——`ContainerAceScan`（新文件）+ `WindowsLowIntegritySandbox.advisoryNotes()`：扫工具链根、
+     `PATH` 目录与其 `node_modules/*`（≤96 目录，实测 ~1 s，每个后端实例一次），命中就打 WARN 并进
+     `coding.permissions`；开关 `-Dbrowser4.agent.sandbox.checkContainerAces`；
+  3. **回收**——marker 改记 `sid|path`，`revokeRecordedGrants()` 在 `prepare()` 里回收"本任务不需要且超过
+     保留期"的授予（默认 6 h，`grantRetentionHours`）；老式路径-only marker 先读目录 ACL 归因，无法唯一
+     归因则只丢 marker + 给手工命令，不猜着改 ACL。
+  剩余：ACE 若落在**非**本后端记过的目录（别的工具/手工实验），仍只能靠手工命令或自检告警。
 
 ---
 

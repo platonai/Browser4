@@ -585,13 +585,26 @@ icacls '<dir>' /remove "*S-1-15-2-<hash>"   # 只删这一条，不要 /reset �
 不改 ACL 也能干活的路子：`b4.run` 产品通道；或直接调目录里的 exe（`.cmd` shim 要经 `cmd.exe` 解析批处理，
 被挡时同样报「拒绝访问」）。
 
-产品侧已落（2026-11-19）：`SandboxDenials` 现在认中文拒绝文案（`拒绝访问`），`windows-low-il` 的
-`code=SANDBOX_DENIED` 的 `hint` 里直接带上 `icacls … /remove *<sid>` 这条命令；`SandboxStatus` /
-`SandboxDenials` 改为读**任务实际的后端**（`CodingComponents.sandbox(policy)`），不再只读
-`browser4.agent.sandbox` 属性——此前它们会在 low-il 生效时对模型宣称「no OS sandbox is active」。
+产品侧已落（2026-11-19 / 11-20）：
 
-未收口：`windows-appcontainer` 目前只记录 grant、没有撤销通道（`grantedRoots` + marker）；
-容器实验留下的 ACE 要靠上面的手工命令回收。
+- `SandboxDenials` 现在认中文拒绝文案（`拒绝访问`），`windows-low-il` 的 `code=SANDBOX_DENIED` 的 `hint`
+  里直接带上 `icacls … /remove *<sid>` 这条命令；`SandboxStatus` / `SandboxDenials` 改为读**任务实际的
+  后端**（`CodingComponents.sandbox(policy)`），不再只读 `browser4.agent.sandbox` 属性——此前它们会在
+  low-il 生效时对模型宣称「no OS sandbox is active」。
+- **自检**：`windows-low-il` 在每个后端实例第一次被查询时扫一遍候选根（工具链根 + `PATH` 目录 +
+  `PATH` 前缀下的 `node_modules/*`，上限 96 个目录、实测 ~1 s），发现包 SID ACE 就以 WARN 打出
+  `icacls … /remove` 命令；同一条也出现在 `coding.permissions` 的 `OS sandbox:` 行下面
+  （`ExecutionSandbox.advisoryNotes()`）。开关：`-Dbrowser4.agent.sandbox.checkContainerAces=off`。
+- **回收**：`windows-appcontainer` 的 grant marker 现在记 `sid|path`，`revokeRecordedGrants()` 会在
+  `prepare()` 里把「本任务不需要且超过保留期」的授予撤掉（默认 6 h，
+  `-Dbrowser4.agent.sandbox.grantRetentionHours=0|off` 关闭）。只删它自己记过的目录；老式只有路径的
+  marker 会先读该目录 ACL，能唯一归因才删，归因不了就丢掉 marker 并打一条手工命令——不猜着改 ACL。
+- **约定**：容器只授「工作区 + 该任务 `--add-dir` 的目录」，绝不授用户全局目录（`%APPDATA%`、npm 前缀、
+  JDK 安装）；这条写在 `WindowsAppContainerSandbox.grant()` 的 KDoc 里，`WindowsAppContainerSandboxTest`
+  用「只发一次 `icacls /grant`」钉住它。
+
+仍未收口的只剩：ACE 一旦落在**非** `windows-appcontainer` 记过的目录上（别的工具、手工实验），回收只能
+靠上面的手工命令或自检告警。
 
 ---
 
