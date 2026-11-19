@@ -36,6 +36,10 @@ class ShadowBootTest {
         assertTrue(ShadowBoot.shouldRun(listOf("browser4-apps/browser4-bundle/src/main/kotlin/X.kt"), "auto"))
         assertFalse(ShadowBoot.shouldRun(listOf("browser4-plugins/browser4-seo/src/main/kotlin/X.kt"), "auto"))
         assertFalse(ShadowBoot.shouldRun(listOf("docs/config.md"), "auto"))
+        // Documentation inside a boot-chain module is documentation all the same: a note cannot
+        // break startup, and its directory name must not turn it into a boot-chain change.
+        assertFalse(ShadowBoot.shouldRun(listOf("browser4-rest/README.md"), "auto"))
+        assertFalse(ShadowBoot.shouldRun(listOf("browser4-rest/src/main/resources/notes.md"), "auto"))
         assertFalse(ShadowBoot.shouldRun(listOf("tests/foo.kt"), "auto"))
     }
 
