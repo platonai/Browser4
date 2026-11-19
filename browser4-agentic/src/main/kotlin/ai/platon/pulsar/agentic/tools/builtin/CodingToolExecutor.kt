@@ -1075,21 +1075,25 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 val startLine = paramInt(args, "startLine", functionName, required = false, default = null)
                 val endLine = paramInt(args, "endLine", functionName, required = false, default = null)
                 if (startLine != null || endLine != null) {
-                    fs.readFileLines(
-                        path = path,
-                        startLine = startLine ?: 1,
-                        endLine = endLine ?: -1,
+                    withEncodingNote(
+                        fs.readFileLinesText(
+                            path = path,
+                            startLine = startLine ?: 1,
+                            endLine = endLine ?: -1,
+                        )
                     )
                 } else {
-                    fs.readFile(path)
+                    withEncodingNote(fs.readFileText(path))
                 }
             }
             "readLines" -> {
                 validateArgs(args, allowed = setOf("path", "startLine", "endLine"), required = setOf("path"), functionName)
-                fs.readFileLines(
-                    path = paramString(args, "path", functionName)!!,
-                    startLine = paramInt(args, "startLine", functionName, required = false, default = 1) ?: 1,
-                    endLine = paramInt(args, "endLine", functionName, required = false, default = -1) ?: -1,
+                withEncodingNote(
+                    fs.readFileLinesText(
+                        path = paramString(args, "path", functionName)!!,
+                        startLine = paramInt(args, "startLine", functionName, required = false, default = 1) ?: 1,
+                        endLine = paramInt(args, "endLine", functionName, required = false, default = -1) ?: -1,
+                    )
                 )
             }
             "readFiles" -> {
@@ -2582,6 +2586,24 @@ class CodingToolExecutor : AbstractToolExecutor() {
     }
 
     /**
+     * Announce a **lenient decode** in the tool output, not in the file content.
+     *
+     * A GBK build log (or `cmd.exe` output) used to fail the whole read with `Input length = 1`;
+     * it is now decoded leniently, and the model has to know the non-ASCII part may be re-coded.
+     * The note cannot be prepended inside [CodingAgentFileSystem.readFile]: that entry point also
+     * feeds parsers (`RepoConsistencyReporter` reads `VERSION` / `pom.xml`, `coding.verify`'s trap
+     * check reads source files), where a leading note would corrupt the value. So the file system
+     * reports the fact ([CodingAgentFileSystem.TextRead.recoded]) and this layer phrases it.
+     */
+    private fun withEncodingNote(read: CodingAgentFileSystem.TextRead): String =
+        if (read.recoded) {
+            "[note] the file is not valid UTF-8; decoded leniently (GB18030 when it decodes cleanly)\n" +
+                read.text
+        } else {
+            read.text
+        }
+
+    /**
      * Read several files in one tool call (plan N1).
      *
      * Why this exists: a measured coding round costs ~0.6-0.9 s of fixed latency before any
@@ -2602,8 +2624,7 @@ class CodingToolExecutor : AbstractToolExecutor() {
         startLine: Int,
         maxLinesPerFile: Int,
         maxTotalChars: Int,
-    ): String {
-        val requested = paths.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    ): String {        val requested = paths.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
         if (requested.isEmpty()) {
             return "No files requested: pass paths=[\"a.kt\", \"b.kt\"] (a comma-separated string is accepted too)."
         }

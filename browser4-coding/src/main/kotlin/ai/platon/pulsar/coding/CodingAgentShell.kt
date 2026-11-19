@@ -246,6 +246,39 @@ class CodingAgentShell(
      */
     val workspaceRoot: Path get() = baseDir
 
+    /**
+     * The backend this shell's children actually run under.
+     *
+     * [sandbox] is the seam [CodingComponents.shell] hands over (`sandbox(policy)`), i.e. the backend
+     * the task's mode chain selected. Only a shell built without it falls back to the process-wide
+     * property — reading that property alone reported "no OS sandbox is active" for a task that was
+     * demonstrably running low-integrity children (run `4125acaa`, 2026-11-19).
+     */
+    private fun effectiveSandboxId(): String = SandboxStatus.effectiveIdOf(sandbox)
+
+    /**
+     * Spelled into every string-guard refusal (plan P3-5/D2).
+     *
+     * The text used to advertise `-Dbrowser4.agent.shell.pathGuard=off`, which read as an official
+     * bypass and implied the switch was a boundary. The guard is advisory, so the refusal now says so
+     * and points at the workspace instead.
+     *
+     * 2026-11-16 (review of agent run `966a5f2e`): the old wording promised "the OS sandbox enforces
+     * the boundary when enabled" — and on an installation whose `browser4.agent.sandbox` is `off`
+     * nothing enforces it. That run left the workspace through `python -c`, a `powershell -File`
+     * script and `%VAR%` expansions while every refusal still read as if an OS boundary were behind
+     * it. The note follows the **effective** enforcement (the task's backend, not the bare
+     * property — run `4125acaa`, 2026-11-19), so a model reading it cannot over-trust the check.
+     */
+    private fun advisoryNote(): String =
+        if (SandboxStatus.osBoundaryActive(sandbox)) {
+            "the path check is advisory — the OS sandbox (${effectiveSandboxId()}) enforces the boundary; "
+        } else {
+            "the path check is advisory and no OS sandbox is active " +
+                "(${ExecutionSandboxes.PROP_SANDBOX}=off), so a command that runs its own code can " +
+                "leave the workspace; "
+        }
+
     companion object {
         const val MAX_TIMEOUT_SECONDS = 600L
         const val MAX_OUTPUT_CHARS = 200_000
@@ -261,29 +294,6 @@ class CodingAgentShell(
 
         /** Prefix of every [argumentPathViolation] message; used to pick the audit code. */
         private const val PATH_GUARD_PREFIX = "path guard: "
-
-        /**
-         * Spelled into every string-guard refusal (plan P3-5/D2).
-         *
-         * The text used to advertise `-Dbrowser4.agent.shell.pathGuard=off`, which read as an
-         * official bypass and implied the switch was a boundary. The guard is advisory, so the
-         * refusal now says so and points at the workspace instead.
-         *
-         * 2026-11-16 (review of agent run `966a5f2e`): the old wording promised "the OS sandbox
-         * enforces the boundary when enabled" — and on an installation whose
-         * `browser4.agent.sandbox` is `off` nothing enforces it. That run left the workspace through
-         * `python -c`, a `powershell -File` script and `%VAR%` expansions while every refusal still
-         * read as if an OS boundary were behind it. The note now follows the **effective**
-         * enforcement, so a model reading it cannot over-trust the check.
-         */
-        private fun advisoryNote(): String =
-            if (SandboxStatus.osBoundaryActive) {
-                "the path check is advisory — the OS sandbox enforces the boundary; "
-            } else {
-                "the path check is advisory and no OS sandbox is active " +
-                    "(${ExecutionSandboxes.PROP_SANDBOX}=off), so a command that runs its own code can " +
-                    "leave the workspace; "
-            }
 
         /** Prefix of every [protectedPathViolation] message; used to pick the audit code. */
         private const val PROTECTED_PATH_PREFIX = "protected path: "
@@ -2634,7 +2644,11 @@ class CodingAgentShell(
 
         // Plan P3-3: an OS-level denial becomes a structured refusal for the model; the raw bytes
         // were logged by the translator, so they stay available for the audit trail.
-        val denial = if (exitCode != 0) SandboxDenials.envelope("coding.shell", command, err + "\n" + out) else null
+        val denial = if (exitCode != 0) {
+            SandboxDenials.envelope("coding.shell", command, err + "\n" + out, effectiveSandboxId())
+        } else {
+            null
+        }
 
         return ShellResult(
             sessionId = sessionId,

@@ -8,7 +8,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.nio.ByteBuffer
-import java.nio.charset.CharacterCodingException
 import java.nio.charset.Charset
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
@@ -139,6 +138,16 @@ class CodingAgentFileSystem(
      * unconfined (see [SandboxFileOps]).
      */
     private val mutationOpsProvider: (() -> SandboxFileOps?)? = null,
+    /**
+     * The backend the calling task actually runs under, used by the refusals' boundary clause.
+     *
+     * A refusal that names the wrong layer is worse than one that names none: on run `4125acaa`
+     * (2026-11-19) the hint read "no OS sandbox is active" next to a task whose children were
+     * demonstrably low-integrity, which reads as "the boundary is only advisory, try harder". The
+     * production wiring ([CodingComponents.fs]) passes the task's resolved backend; a direct
+     * construction falls back to the process-wide property.
+     */
+    private val sandboxIdProvider: () -> String = { SandboxStatus.effectiveId },
 ) {
     /**
      * The boundary [Authorizer] actually in effect — the injected shared instance, or the
@@ -146,6 +155,16 @@ class CodingAgentFileSystem(
      * "would this path be allowed?" without executing the operation.
      */
     val activeBoundaryAuthorizer: Authorizer get() = boundaryAuthorizer ?: fallbackBoundaryAuthorizer
+
+    /**
+     * One decoded read: the text plus whether the bytes were **not** valid UTF-8.
+     *
+     * [recoded] is a display fact, not a content fact: the tool layer that answers a human or a
+     * model announces it, while [readFile] — which also feeds parsers that read `VERSION`,
+     * `pom.xml` and source files — returns [text] unchanged.
+     */
+    data class TextRead(val text: String, val recoded: Boolean = false)
+
     companion object {
         const val MAX_READ_SIZE_BYTES = 5 * 1024 * 1024L // 5 MB
         const val MAX_GLOB_RESULTS = 10_000
@@ -608,25 +627,44 @@ class CodingAgentFileSystem(
      * Read a text file. Path is resolved relative to [workspaceRoot], or absolute
      * when [allowExternalAccess] is true.
      */
-    suspend fun readFile(path: String, encoding: Charset = StandardCharsets.UTF_8): String {
-        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
-        if (!resolved.exists()) return errorResult("File not found: $path")
-        if (resolved.isDirectory()) return errorResult("Path is a directory: $path")
+    suspend fun readFile(path: String, encoding: Charset = StandardCharsets.UTF_8): String =
+        readFileText(path, encoding).text
+
+    /**
+     * A decoded file read: [text] as [readFile] returns it, plus whether the bytes were **not**
+     * valid UTF-8 and had to be decoded leniently.
+     *
+     * The flag is separate from [text] on purpose: `readFile` also feeds parsers
+     * (`RepoConsistencyReporter` reads `VERSION` / `pom.xml`, `coding.verify`'s trap check reads
+     * source files), so a note prepended to the content would corrupt a value. Only the tool layer
+     * that talks to a human/model may announce it (see `CodingToolExecutor`).
+     */
+    suspend fun readFileText(path: String, encoding: Charset = StandardCharsets.UTF_8): TextRead {
+        val resolved = resolvePath(path) ?: return TextRead(errorResult(unresolvedPath(path)))
+        if (!resolved.exists()) return TextRead(errorResult("File not found: $path"))
+        if (resolved.isDirectory()) return TextRead(errorResult("Path is a directory: $path"))
         if (Files.size(resolved) > MAX_READ_SIZE_BYTES) {
-            return errorResult("File too large (${Files.size(resolved)} bytes, max $MAX_READ_SIZE_BYTES): $path")
+            return TextRead(errorResult("File too large (${Files.size(resolved)} bytes, max $MAX_READ_SIZE_BYTES): $path"))
         }
 
         val ext = resolved.extension.lowercase()
         if (ext in BINARY_EXTENSIONS) {
-            return "[Binary file: $path (${Files.size(resolved)} bytes, type: $ext)]"
+            return TextRead("[Binary file: $path (${Files.size(resolved)} bytes, type: $ext)]")
         }
 
         return try {
             withContext(Dispatchers.IO) {
-                Files.readString(resolved, encoding)
-            }.let { truncateForContext(it, path = path) }
+                val bytes = Files.readAllBytes(resolved)
+                if (encoding != StandardCharsets.UTF_8) return@withContext TextRead(String(bytes, encoding))
+                // Lenient decode: a strict decoder turns a GBK build log (or `cmd.exe` output) into
+                // `Failed to read …: Input length = 1`, which reads like a broken tool rather than
+                // "this file is not UTF-8" (run `4125acaa`, 2026-11-19: a Chinese `拒绝访问。` in
+                // `.b4scratch/dump.err` was unreadable exactly when it mattered).
+                val decoded = decodeText(bytes, detectTextEncoding(bytes))
+                TextRead(decoded.text, decoded.recoded)
+            }.let { TextRead(truncateForContext(it.text, path = path), it.recoded) }
         } catch (e: IOException) {
-            errorResult("Failed to read '$path': ${e.message}")
+            TextRead(errorResult("Failed to read '$path': ${e.message}"))
         }
     }
 
@@ -641,19 +679,38 @@ class CodingAgentFileSystem(
         startLine: Int = 1,
         endLine: Int = -1,
         maxChars: Int = DEFAULT_MAX_OUTPUT_CHARS,
-    ): String {
-        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
-        if (!resolved.exists()) return errorResult("File not found: $path")
+    ): String = readFileLinesText(path, startLine, endLine, maxChars).text
+
+    /** [readFileLines] with the lenient-decode flag, for the tool layer that may announce it. */
+    suspend fun readFileLinesText(
+        path: String,
+        startLine: Int = 1,
+        endLine: Int = -1,
+        maxChars: Int = DEFAULT_MAX_OUTPUT_CHARS,
+    ): TextRead {
+        val resolved = resolvePath(path) ?: return TextRead(errorResult(unresolvedPath(path)))
+        if (!resolved.exists()) return TextRead(errorResult("File not found: $path"))
 
         return try {
             withContext(Dispatchers.IO) {
-                val lines = Files.readAllLines(resolved)
+                val bytes = Files.readAllBytes(resolved)
+                val decoded = decodeText(bytes, detectTextEncoding(bytes))
+                val text = decoded.text
+                // An empty file has no lines at all, so the old `coerceIn(0, lines.size - 1)` threw
+                // "Cannot coerce value to an empty range: maximum -1 is less than minimum 0" — the
+                // tool then reported that internal message as the *reason* it could not read the
+                // file, hiding "the file is empty" (run `4125acaa`, 2026-11-19: a zero-byte
+                // `.b4scratch/posts.json`).
+                val lines = text.split('\n').let { if (it.size == 1 && it[0].isEmpty()) emptyList() else it }
+                    .let { if (it.isNotEmpty() && it.last().isEmpty()) it.dropLast(1) else it }
+                    .map { it.removeSuffix("\r") }
+                if (lines.isEmpty()) return@withContext TextRead("", decoded.recoded)
                 val s = (startLine - 1).coerceIn(0, lines.size - 1)
                 val e = if (endLine < 0) lines.size else endLine.coerceIn(s, lines.size)
-                lines.subList(s, e).joinToString("\n")
-            }.let { truncateForContext(it, maxChars, path) }
+                TextRead(lines.subList(s, e).joinToString("\n"), decoded.recoded)
+            }.let { TextRead(truncateForContext(it.text, maxChars, path), it.recoded) }
         } catch (e: IOException) {
-            errorResult("Failed to read '$path': ${e.message}")
+            TextRead(errorResult("Failed to read '$path': ${e.message}"))
         }
     }
 
@@ -1860,9 +1917,11 @@ class CodingAgentFileSystem(
     /**
      * Decode [bytes] as [encoding], never throwing on malformed input.
      *
-     * UTF-8 is attempted strictly first so the usual case stays byte-exact; a file that fails
-     * is re-decoded with replacement ([DecodedText.recoded] = true) instead of being dropped,
-     * so the ASCII part of a GBK/Shift-JIS source file still matches a symbol search.
+     * UTF-8 is attempted strictly first so the usual case stays byte-exact; a file that fails is
+     * re-decoded — first as **GB18030** (a GBK superset, i.e. what a Chinese Windows writes into a
+     * console log), then with replacement ([DecodedText.recoded] = true). Replacement alone kept the
+     * ASCII part readable but turned the interesting part of a build log into `����`; a strict
+     * decoder was worse still, failing the whole read with `Input length = 1`.
      */
     private fun decodeText(bytes: ByteArray, encoding: TextEncoding): DecodedText {
         val offset = when {
@@ -1879,15 +1938,24 @@ class CodingAgentFileSystem(
             TextEncoding.UTF16BE ->
                 DecodedText(String(bytes, offset, length, StandardCharsets.UTF_16BE), false)
 
-            TextEncoding.UTF8 -> try {
-                val decoder = StandardCharsets.UTF_8.newDecoder()
-                    .onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT)
-                DecodedText(decoder.decode(ByteBuffer.wrap(bytes, offset, length)).toString(), false)
-            } catch (_: CharacterCodingException) {
-                DecodedText(String(bytes, offset, length, StandardCharsets.UTF_8), true)
+            TextEncoding.UTF8 -> runCatching {
+                decodeStrict(bytes, offset, length, StandardCharsets.UTF_8)
+            }.map { DecodedText(it, false) }.getOrElse {
+                val gb18030 = runCatching { Charset.forName("GB18030") }.getOrNull()
+                val viaGb = gb18030?.let { charset ->
+                    runCatching { decodeStrict(bytes, offset, length, charset) }.getOrNull()
+                }
+                DecodedText(viaGb ?: String(bytes, offset, length, StandardCharsets.UTF_8), true)
             }
         }
+    }
+
+    /** Strict decode of `bytes[offset, offset+length)` — throws on malformed input. */
+    private fun decodeStrict(bytes: ByteArray, offset: Int, length: Int, charset: Charset): String {
+        val decoder = charset.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+        return decoder.decode(ByteBuffer.wrap(bytes, offset, length)).toString()
     }
 
     /**
@@ -2586,8 +2654,12 @@ class CodingAgentFileSystem(
             "(coding.permissions lists them); reading is allowed for the readable roots listed by " +
             "coding.permissions (add your own with -Dbrowser4.agent.readPaths=...), and the " +
             "deprecated allowExternalAccess opt-in still relaxes the boundary check only — " +
-            SandboxStatus.boundaryClause() + ", and credential locations stay refused either way",
+            SandboxStatus.boundaryClauseFor(effectiveSandboxId()) + ", and credential locations stay refused either way",
     )
+
+    /** The backend this file system's task runs under, for the refusals' boundary clause. */
+    private fun effectiveSandboxId(): String =
+        runCatching { sandboxIdProvider() }.getOrDefault(SandboxStatus.effectiveId)
 
     /**
      * Reject destructive ops on repo-governance files (VERSION, AGENTS.md, poms, ...)

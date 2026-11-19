@@ -50,7 +50,11 @@ object CodingComponents {
             logger.warn(
                 "{} is deprecated and advisory only: prefer browser4.agent.access; {}",
                 "browser4.agent.allowExternalAccess=true",
-                SandboxStatus.boundaryClause(),
+                // Deliberately neutral: this runs at domain construction, before any task exists, so
+                // there is no per-task backend to name — and the bare property reads `off` even when
+                // a mode chain will select `windows-low-il` (run 4125acaa, 2026-11-19). The tool
+                // refusals name the resolved backend; `coding.permissions` reports it per task.
+                "see coding.permissions for the layer actually in force",
             )
         }
     }
@@ -415,6 +419,11 @@ object CodingComponents {
             // silently keeping the in-process path is exactly the drift this seam must not have —
             // so the provider answers `null` only for a backend that *cannot* execute file ops.
             mutationOpsProvider = { fileOps(policy, root) },
+            // The refusals must name the layer this task actually runs under, not the bare
+            // `browser4.agent.sandbox` property (which reads `off` while the coding chain runs
+            // windows-low-il — run 4125acaa, 2026-11-19). Lazy: resolving instantiates/probes the
+            // backend, and a refusal is rare compared with a tool call.
+            sandboxIdProvider = { sandbox(policy).id },
         )
     }
 

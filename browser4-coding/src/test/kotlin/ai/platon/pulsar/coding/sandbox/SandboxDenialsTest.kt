@@ -74,4 +74,47 @@ class SandboxDenialsTest {
         assertFalse(SandboxDenials.isDenial("BUILD SUCCESS"), "a clean build is not a denial")
         assertFalse(SandboxDenials.isDenial("this module manages permissions"), "an ordinary word is not a denial")
     }
+
+    /**
+     * Run `4125acaa` (2026-11-19): a Chinese Windows child reported `拒绝访问。` — the ASCII-only
+     * marker list matched nothing, so the raw text reached the model and the sandbox looked like a
+     * broken tool instead of a boundary.
+     */
+    @Test
+    @DisplayName("the localized (zh-CN) denial is translated as well")
+    fun localizedDenialIsTranslated() {
+        val envelope = SandboxDenials.envelope(
+            tool = "coding.shell",
+            command = "browser4-cli --version",
+            evidence = "拒绝访问。",
+            sandboxId = "windows-low-il",
+        )
+
+        assertTrue(envelope != null, "a localized denial under a task backend must be translated")
+        assertTrue(envelope!!.contains("code=SANDBOX_DENIED"), envelope)
+        assertFalse(envelope.contains("拒绝访问"), "the raw OS text stays out of the model-facing text: $envelope")
+        assertTrue(
+            envelope.contains("S-1-15-2"),
+            "the low-integrity refusal must name the stale container ACE as a cause: $envelope",
+        )
+    }
+
+    @Test
+    @DisplayName("the task's own backend is enough: the process-wide property may still read off")
+    fun taskBackendEnablesTranslation() = withSandbox("off") {
+        val envelope = SandboxDenials.envelope("coding.shell", "npm -v", "Access is denied.", "windows-acl")
+
+        assertTrue(envelope != null, "the caller's backend decides, not the property")
+        assertTrue(envelope!!.contains("windows-acl"), envelope)
+        assertFalse(envelope.contains("S-1-15-2"), "the container-ACE note belongs to windows-low-il only: $envelope")
+    }
+
+    @Test
+    @DisplayName("an explicit off backend stays untranslated, even under a configured property")
+    fun explicitOffIsNotTranslated() = withSandbox("windows-acl") {
+        assertNull(
+            SandboxDenials.envelope("coding.shell", "echo x", "Access is denied.", "off"),
+            "when the task has no boundary, an access denial is an ordinary OS error",
+        )
+    }
 }
