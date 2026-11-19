@@ -311,13 +311,13 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 
 | 领域 | 命令 |
 |---|---|
-| 会话与服务端 | `open`、`attach`、`close`、`list`、`status`、`doctor`、`stop`、`kill-all`、`install`、`upgrade`、`uninstall` |
-| 导航 | `goto`、`go-back`、`go-forward`、`reload` |
+| 会话与服务端 | `open`、`attach`、`close`、`list`、`status`、`doctor`、`stop`、`kill all`、`install`、`upgrade`、`uninstall` |
+| 导航 | `goto`、`go back`、`go forward`、`reload` |
 | 交互 | `snapshot`、`click`、`dblclick`、`hover`、`fill`、`type`、`press`、`select`、`check`、`uncheck`、`drag`、`upload`、`wait`、`frames`、`frame` |
 | 键盘与鼠标 | `keydown`、`keyup`、`mousemove`、`mousedown`、`mouseup`、`mousewheel`、`scroll` |
-| 检查与提取 | `get`、`eval`、`console`、`cdp`、`screenshot`、`pdf`、`htmlsnapshot`、`generate-locator`、`resize`、`dialog-accept`、`dialog-dismiss` |
-| 标签页与存储 | `tab-list`、`tab-new`、`tab-close`、`tab-select`、`state-save`、`state-load`、`cookie-*`、`localstorage-*`、`sessionstorage-*`、`webdb` |
-| AI（需要 LLM key） | `extract`、`summarize`、`chat`、`chat-result`、`agent run`、`agent status`、`agent result`、`agent list` |
+| 检查与提取 | `get`、`eval`、`console`、`cdp`、`screenshot`、`pdf`、`htmlsnapshot`、`generate locator`、`resize`、`dialog accept`、`dialog dismiss` |
+| 标签页与存储 | `tab list`、`tab new`、`tab close`、`tab select`、`state save`、`state load`、`cookie`、`localstorage`、`sessionstorage`、`webdb` |
+| AI（需要 LLM key） | `extract`、`summarize`、`chat`、`chat result`、`agent run`、`agent status`、`agent result`、`agent list` |
 | 规模化自动化 | `batch`、`loop`、`swarm`、`crawl`、`webminer` |
 | 网络 | `network requests`、`network request`、`network har`、`network route`、`network unroute` |
 | 插件、工具与 skills | `plugin`、`tool list`、`tool call`、`skills`、`skill-*` |
@@ -348,7 +348,7 @@ browser4-cli agent run "compare the first 3 keyboards" --wait
 |---|---:|---|
 | `BROWSER4_CLI_HTTP_TIMEOUT_SECS` | `30` | 大多数命令 |
 | `BROWSER4_CLI_INPUT_TIMEOUT_SECS` | `90` | `type`、`fill` 及其他较慢的输入流程 |
-| `BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS` | `120` | `goto`、`reload`、`go-back`、`go-forward` |
+| `BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS` | `120` | `goto`、`reload`、`go back`、`go forward` |
 
 ```bash
 export BROWSER4_CLI_INPUT_TIMEOUT_SECS=180

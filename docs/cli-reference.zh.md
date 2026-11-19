@@ -10,20 +10,20 @@
 
 | 命令 | 说明 |
 |---|---|
-| `open [url]` | 打开浏览器会话，或重新连接已有会话。**默认为无头模式。** 支持 `--headed`（可视窗口）、`--headless`、`--profile <path>`、`--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`、`--interact-level <FASTEST\|FAST\|DEFAULT>`。**注意：** `SYSTEM_DEFAULT` 已废弃，Chrome ≥ 143 不支持——复用系统浏览器状态请用 `attach` + `state-save`/`state-load`（见 [browser-state-import.md](../skills/browser4-cli/references/browser-state-import.md)）。 |
+| `open [url]` | 打开浏览器会话，或重新连接已有会话。**默认为无头模式。** 支持 `--headed`（可视窗口）、`--headless`、`--profile <path>`、`--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`、`--interact-level <FASTEST\|FAST\|DEFAULT>`。**注意：** `SYSTEM_DEFAULT` 已废弃，Chrome ≥ 143 不支持——复用系统浏览器状态请用 `attach` + `state save`/`state load`（见 [browser-state-import.md](../skills/browser4-cli/references/browser-state-import.md)）。 |
 | `attach` | 通过 CDP 或 Browser4 扩展附加到现有浏览器。支持 `--cdp <url\|port\|channel>` 与远程 endpoint 选项。channel 名会依次从浏览器的 `DevToolsActivePort`、`--remote-debugging-port` 与监听端口收集候选，并绑定第一个能承载页面的端点——走 `/json`，或走 Chrome 内置 `chrome://inspect/#remote-debugging` 开关发布的浏览器级 WebSocket（也可直接 `attach --cdp ws://127.0.0.1:<port>/devtools/browser/<uuid>`）。成功附加后 CLI 会打印实际连接的浏览器（`Connected browser: …` / `Attached to … at …`），当实际浏览器与请求的 channel 不符（如请求 msedge 却连到 Chrome）时会输出 ⚠ 告警——请在驱动会话前核对。 |
 | `close` | 关闭当前活动浏览器会话。 |
 | `list` | 列出浏览器会话及其状态和下次打开行为。Connection 列优先显示后端上报的真实浏览器，并在 channel 冲突时标注（如 `requested msedge · actual Google Chrome`）。支持 `--all`：额外加一列 Workspace 并纳入其它 checkout 持久化的会话（`*` 标记当前所在 workspace；其它 workspace 的行显示 Unknown / `-` / Refresh，因为当前后端无法校验它们）。 |
-| `session-default <name>` | 把一个命名会话设为默认未命名会话。 |
-| `close-all` | 关闭所有会话，但不停止后端。 |
-| `kill-all` | 强制停止后端以及 Browser4 管理的浏览器进程。 |
+| `session default <name>` | 把一个命名会话设为默认未命名会话。 |
+| `close all` | 关闭所有会话，但不停止后端。 |
+| `kill all` | 强制停止后端以及 Browser4 管理的浏览器进程。 |
 | `stop` | 优雅停止 Browser4 服务。 |
 | `status` | 显示服务版本、端口、健康状态，以及 Web 状态面板地址（`http://<server>:18182/status`）。存在活动会话时还会打印当前会话小节：Name / Session ID / Status / Display / Connection / Next open。 |
 | `doctor` | 运行诊断：构建信息、LLM 状态（含实际读取的配置文件、生效的 provider key 与实际请求的模型）、陈旧 daemon 清理、可选修复。支持 `--verbose` 与 `--fix`；`--fix` 还会写入一份带注释的 LLM 配置模板。 |
 | `doctor log [name]` | 列出、查看、tail 或 grep 后端日志文件。支持 `--tail`、grep 风格参数，以及 `doctor log <name> grep <pattern>`。 |
 | `doctor metrics [filter]` | 列出、过滤或 grep 后端指标。支持 `doctor metrics grep <pattern>`。 |
 | `doctor status [--section <name>] [--verbose]` | 在终端分层显示状态面板聚合报告：默认显示概要层，`--verbose` 显示完整明细，`--section` 钻取单个报告（health、build、runtime、llm、sessions、pulsar-sessions、swarm、url-pool、browsers、drivers、privacy、plugins、skills、metrics、logs），`--json` 输出机器可读 JSON。 |
-| `delete-data` | 删除会话数据。 |
+| `delete data` | 删除会话数据。 |
 | `install` | 安装 Browser4 运行时 bundle。支持 `--tag <version>` 与 `--force`。 |
 | `upgrade` | 升级 CLI / 运行时 bundle。支持 `--tag <version>` 与 `--force`。 |
 | `uninstall` | 删除全局安装和运行时数据。支持 `-y`、`--yes`、`--dry-run`。 |
@@ -45,7 +45,7 @@ browser4-cli doctor status --section skills --verbose
 指标、日志文件；自动刷新，可用 `?refresh=<ms>` 调整间隔）。面板数据来自聚合端点
 `GET /api/system/status`；原有单个端点（`/api/system/health`、`/api/system/build`、
 `/api/doctor/llm-status`、`/api/doctor/metrics`、`/api/doctor/log-files`、`/api/plugins`、
-`/api/skills`）继续可用。`browser4-cli plugin-list` 也会报告每个已安装插件的加载/启用状态与
+`/api/skills`）继续可用。`browser4-cli plugin list` 也会报告每个已安装插件的加载/启用状态与
 SDK 版本；同样的报告也可以在终端中通过 `browser4-cli doctor status` 分层查看。
 
 **页面截图：** 打开 `http://127.0.0.1:18182/pages.html` 可以网格形式查看所有会话中打开的网页。
@@ -60,8 +60,8 @@ SWARM 会话的所有页面仅显示占位图。截图采用**异步加载**—�
 | 命令 | 说明 |
 |---|---|
 | `goto <url>` | 导航到 URL；如果需要会自动打开 / 重连会话。 |
-| `go-back` | 在浏览器历史中后退。 |
-| `go-forward` | 在浏览器历史中前进。 |
+| `go back` | 在浏览器历史中后退。 |
+| `go forward` | 在浏览器历史中前进。 |
 | `reload` | 刷新当前页面。 |
 
 ## 核心交互
@@ -117,10 +117,10 @@ browser4-cli wait --load networkidle
 | `eval [expression] [ref]` | 在页面或某元素上执行 JavaScript。支持 `--file`、`--stdin`、`--base64`、`--await`、`--wait-selector`、`--json`。 |
 | `console [min-level]` | 列出浏览器控制台消息。支持 `--clear`。 |
 | `cdp <method>` | 发送任意 Chrome DevTools Protocol 命令。支持 `--json <params>`。 |
-| `generate-locator <ref>` | 为 snapshot ref 或已有选择器生成最佳 CSS selector。 |
+| `generate locator <ref>` | 为 snapshot ref 或已有选择器生成最佳 CSS selector。 |
 | `resize <width> <height>` | 调整浏览器窗口尺寸。 |
-| `dialog-accept [prompt]` | 接受 alert / confirm / prompt 对话框，并可填写 prompt 内容。 |
-| `dialog-dismiss` | 关闭 alert / confirm / prompt 对话框。 |
+| `dialog accept [prompt]` | 接受 alert / confirm / prompt 对话框，并可填写 prompt 内容。 |
+| `dialog dismiss` | 关闭 alert / confirm / prompt 对话框。 |
 
 `get` 支持的 mode：
 
@@ -192,32 +192,32 @@ browser4-cli htmlsnapshot readability --text-only --all
 
 | 命令 | 说明 |
 |---|---|
-| `tab-list` | 列出打开的标签页及其索引、标题、URL；配合 `--json` 可获得完整 GUID。 |
-| `tab-new [url]` | 打开新标签页，可选同时导航到 URL。 |
-| `tab-close [index]` | 按索引关闭标签页；支持 `--guid <guid>`。 |
-| `tab-select <index>` | 按索引切换标签页；支持 `--guid <guid>`。 |
+| `tab list` | 列出打开的标签页及其索引、标题、URL；配合 `--json` 可获得完整 GUID。 |
+| `tab new [url]` | 打开新标签页，可选同时导航到 URL。 |
+| `tab close [index]` | 按索引关闭标签页；支持 `--guid <guid>`。 |
+| `tab select <index>` | 按索引切换标签页；支持 `--guid <guid>`。 |
 
 ## 浏览器存储与本地页面数据
 
 | 命令 | 说明 |
 |---|---|
-| `state-save [filename]` | 把 cookies 和 localStorage 保存为 JSON 文件。 |
-| `state-load <filename>` | 从 JSON 文件恢复 cookies 和 localStorage。 |
-| `cookie-list` | 列出 cookies。支持 `--domain`、`--path`。 |
-| `cookie-get <name>` | 按名称获取 cookie。 |
-| `cookie-set <name> <value>` | 设置 cookie。支持 `--domain`、`--path`、`--expires`、`--httpOnly`、`--secure`、`--sameSite`。 |
-| `cookie-delete <name>` | 按名称删除 cookie。支持 `--domain`、`--path`。 |
-| `cookie-clear` | 清空所有 cookies。 |
-| `localstorage-list` | 列出 localStorage 项。 |
-| `localstorage-get <key>` | 读取 localStorage 键。 |
-| `localstorage-set <key> <value>` | 设置 localStorage 键。 |
-| `localstorage-delete <key>` | 删除 localStorage 键。 |
-| `localstorage-clear` | 清空 localStorage。 |
-| `sessionstorage-list` | 列出 sessionStorage 项。 |
-| `sessionstorage-get <key>` | 读取 sessionStorage 键。 |
-| `sessionstorage-set <key> <value>` | 设置 sessionStorage 键。 |
-| `sessionstorage-delete <key>` | 删除 sessionStorage 键。 |
-| `sessionstorage-clear` | 清空 sessionStorage。 |
+| `state save [filename]` | 把 cookies 和 localStorage 保存为 JSON 文件。 |
+| `state load <filename>` | 从 JSON 文件恢复 cookies 和 localStorage。 |
+| `cookie list` | 列出 cookies。支持 `--domain`、`--path`。 |
+| `cookie get <name>` | 按名称获取 cookie。 |
+| `cookie set <name> <value>` | 设置 cookie。支持 `--domain`、`--path`、`--expires`、`--httpOnly`、`--secure`、`--sameSite`。 |
+| `cookie delete <name>` | 按名称删除 cookie。支持 `--domain`、`--path`。 |
+| `cookie clear` | 清空所有 cookies。 |
+| `localstorage list` | 列出 localStorage 项。 |
+| `localstorage get <key>` | 读取 localStorage 键。 |
+| `localstorage set <key> <value>` | 设置 localStorage 键。 |
+| `localstorage delete <key>` | 删除 localStorage 键。 |
+| `localstorage clear` | 清空 localStorage。 |
+| `sessionstorage list` | 列出 sessionStorage 项。 |
+| `sessionstorage get <key>` | 读取 sessionStorage 键。 |
+| `sessionstorage set <key> <value>` | 设置 sessionStorage 键。 |
+| `sessionstorage delete <key>` | 删除 sessionStorage 键。 |
+| `sessionstorage clear` | 清空 sessionStorage。 |
 | `webdb export <dir>` | 把 Browser4 web database 中的页面导出到本地目录。 |
 | `webdb normalize <url>` | 把 URL 规范化为 web database key 格式。 |
 
@@ -230,7 +230,7 @@ browser4-cli htmlsnapshot readability --text-only --all
 | `extract <instruction>` | 从当前页面提取结构化数据。支持 `--schema <json\|@file>`、`--filename`、`--raw`、`--stdout`。 |
 | `summarize [instruction]` | 总结当前页面内容。支持 `--selector`、`--filename`、`--raw`、`--stdout`。 |
 | `chat <message>` | 发送纯 AI chat 请求，不自动追加浏览器上下文。 |
-| `chat-result <id>` | 获取异步 chat 任务结果。 |
+| `chat result <id>` | 获取异步 chat 任务结果。 |
 | `agent run <task>` | 提交一个自主浏览器任务，并立即获得任务 ID。支持 `--wait`（阻塞等待结果）和 `--wait-timeout <秒>`（默认 600）。`--follow` 实时输出每一步（工具调用、模型发言、慢/失败工具）并以结果收尾——Ctrl+C 会取消任务；`--ndjson` 把同一流输出为每行一个 JSON 对象。`-i` 进入交互会话，任务运行中键入的内容会注入该任务（steering，绝不会被排成第二个任务）；`/stats` 报告本次运行的 LLM 轮次/请求数、token 消耗（provider 上报时含 prompt cache 读取/写入量与命中率）与工具调用；每任务预算按**缓存未命中** token 计（默认 5M，prompt cache 读取不计费），预算耗尽时可直接选择“继续”（预算翻倍），每个任务结束 `-i` 会预测 2~3 条编号的后续**任务**（优先模型自己给出的后续建议，其次从结果里推导：未解决的问题、待评审/测试/提交的文件、可深挖的发现），而不是内部命令；同一 session 内任务互相继承上下文——每个任务都带上前序任务的压缩 `## Session context` 以及你中途的修正（修正后的目标覆盖原目标，当前指令优先级最高；`browser4.agent.session.contextTokens` 控制预算，`/new` 重新开始上下文）；`/result [--json] [--full]` 可重新打印上次结果（`--json` 美化 JSON，`--full` 不再折叠）。后端抖动或某个步骤无法解析都不会中断实时输出：`-i` 会继续跟随仍在运行的任务，并跳过那一条无法解析的步骤。任务类型默认为浏览器任务；`--coding` 显式标记纯编码任务（不做自动判定）。`--access <预设>`（`full`/`write`/`read-build`/`read`）可收窄该任务的编码工具权限，任务结束后复位；`--unrestricted` 则以**你自己的 OS 权限**运行该任务（full 预设、无工作区/受保护路径护栏、不施加 OS 沙箱，shell 自身的规则也一并放开：命令白名单（`for` 循环、内联脚本在任何模式下都原样交给平台 shell 执行；该开关额外放开 PowerShell cmdlet 这类白名单外程序）），按任务审计、`--resume` 会继承；但 OS 凭据目录（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.config/gcloud`）以及会杀死或重建后端的命令仍然拒绝；`--add-dir <目录>` 为该任务额外授权一个**已存在**的目录（可重复；可读、可写、可作为 shell 工作目录——`--access` 仍限制能否写入，凭据目录始终拒绝，`--resume` 会继承该授权；`-i` 会话内可用 `/add-dir <目录>` 随时追加、`/dirs [clear]` 列出或清空）；被拒的步骤不是死路——`coding.requestAccess` 会登记一个 pending 请求且不阻塞任务，操作员通过 `POST /api/agent/<taskId>/access/<requestId>/approve` 批准，而 `denyTools`、受保护路径与敏感路径永不批准；无 TTY 的任务（脚本、CI、提交式任务）默认派生 `full` 并允许出站网络，而非沿用服务端预设（`browser4.agent.access.unattended` 可收窄） |
 | `agent status <id>` | 查询任务状态——共享状态信封（`status`：queued/running/done/failed/cancelled，另有 `statusCode`、`message` 与 agent 步数）。 |
 | `agent result <id>` | 获取已完成任务的结果：摘要、`keyFindings`、`filesChanged`，以及产物所在的 workspace 目录。人类可读输出按段落渲染（`--json` 打印原始信封）。 |
@@ -254,12 +254,12 @@ browser4-cli agent status agent-task-1
 可用于 batch 的命令：
 
 ```text
-goto  go-back  go-forward  reload  press  key  keyboard  type  keydown  keyup
-click  dblclick  hover  fill  select  upload  check  uncheck  drag  focus
-mousemove  mousedown  mouseup  mousewheel  scroll  wait  get  eval
-snapshot  screenshot  pdf  dialog-accept  dialog-dismiss  resize
-tab-list  tab-new  window-new  tab-close  tab-select  frame
-htmlsnapshot  htmlsnapshot-capture  htmlsnapshot-get  htmlsnapshot-get-all
+goto, go back, go forward, reload, press, key, keyboard, type, keydown, keyup,
+click, dblclick, hover, fill, select, upload, check, uncheck, drag, focus,
+mousemove, mousedown, mouseup, mousewheel, scroll, wait, get, eval,
+snapshot, screenshot, pdf, dialog accept, dialog dismiss, resize,
+tab list, tab new, window new, tab close, tab select, frame,
+htmlsnapshot, htmlsnapshot capture, htmlsnapshot get, htmlsnapshot get all
 ```
 
 ```bash
@@ -368,11 +368,11 @@ Browser4 中有两套不同的 “skill” 表面：
 
 | 命令 | 说明 |
 |---|---|
-| `skill-list` | 列出已安装的后端 skill。 |
-| `skill-info <id>` | 显示 skill 详细元数据。 |
-| `skill-install <path>` | 从包含 `SKILL.md` 的目录安装一个 skill。支持 `--overwrite`。 |
-| `skill-uninstall <id>` | 按 ID 删除 skill。 |
-| `skill-reload <id>` | 从源目录重新加载 skill。 |
+| `skill list` | 列出已安装的后端 skill。 |
+| `skill info <id>` | 显示 skill 详细元数据。 |
+| `skill install <path>` | 从包含 `SKILL.md` 的目录安装一个 skill。支持 `--overwrite`。 |
+| `skill uninstall <id>` | 按 ID 删除 skill。 |
+| `skill reload <id>` | 从源目录重新加载 skill。 |
 
 ## 渐进式经验记忆
 

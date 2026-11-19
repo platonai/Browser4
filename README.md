@@ -304,13 +304,13 @@ command, option and platform note. This table is the day-to-day subset.
 
 | Area | Commands |
 |---|---|
-| Sessions & server | `open`, `attach`, `close`, `list`, `status`, `doctor`, `stop`, `kill-all`, `install`, `upgrade`, `uninstall` |
-| Navigation | `goto`, `go-back`, `go-forward`, `reload` |
+| Sessions & server | `open`, `attach`, `close`, `list`, `status`, `doctor`, `stop`, `kill all`, `install`, `upgrade`, `uninstall` |
+| Navigation | `goto`, `go back`, `go forward`, `reload` |
 | Interaction | `snapshot`, `click`, `dblclick`, `hover`, `fill`, `type`, `press`, `select`, `check`, `uncheck`, `drag`, `upload`, `wait`, `frames`, `frame` |
 | Keyboard & mouse | `keydown`, `keyup`, `mousemove`, `mousedown`, `mouseup`, `mousewheel`, `scroll` |
-| Inspection & extraction | `get`, `eval`, `console`, `cdp`, `screenshot`, `pdf`, `htmlsnapshot`, `generate-locator`, `resize`, `dialog-accept`, `dialog-dismiss` |
-| Tabs & storage | `tab-list`, `tab-new`, `tab-close`, `tab-select`, `state-save`, `state-load`, `cookie-*`, `localstorage-*`, `sessionstorage-*`, `webdb` |
-| AI (needs an LLM key) | `extract`, `summarize`, `chat`, `chat-result`, `agent run`, `agent status`, `agent result`, `agent list` |
+| Inspection & extraction | `get`, `eval`, `console`, `cdp`, `screenshot`, `pdf`, `htmlsnapshot`, `generate locator`, `resize`, `dialog accept`, `dialog dismiss` |
+| Tabs & storage | `tab list`, `tab new`, `tab close`, `tab select`, `state save`, `state load`, `cookie`, `localstorage`, `sessionstorage`, `webdb` |
+| AI (needs an LLM key) | `extract`, `summarize`, `chat`, `chat result`, `agent run`, `agent status`, `agent result`, `agent list` |
 | Automation at scale | `batch`, `loop`, `swarm`, `crawl`, `webminer` |
 | Network | `network requests`, `network request`, `network har`, `network route`, `network unroute` |
 | Plugins, tools & skills | `plugin`, `tool list`, `tool call`, `skills`, `skill-*` |
@@ -348,7 +348,7 @@ Four rules that catch most people out:
 |---|---:|---|
 | `BROWSER4_CLI_HTTP_TIMEOUT_SECS` | `30` | most commands |
 | `BROWSER4_CLI_INPUT_TIMEOUT_SECS` | `90` | `type`, `fill`, and other slower input workflows |
-| `BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS` | `120` | `goto`, `reload`, `go-back`, `go-forward` |
+| `BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS` | `120` | `goto`, `reload`, `go back`, `go forward` |
 
 ```bash
 export BROWSER4_CLI_INPUT_TIMEOUT_SECS=180

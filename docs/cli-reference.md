@@ -11,20 +11,20 @@ English | [简体中文](cli-reference.zh.md)
 
 | Command | Description |
 |---|---|
-| `open [url]` | Open a browser session or reconnect to an existing one. **Headless by default.** Supports `--headed` (visible window), `--headless`, `--profile <path>`, `--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`, `--interact-level <FASTEST\|FAST\|DEFAULT>`. **Note:** `SYSTEM_DEFAULT` is deprecated and unsupported on Chrome ≥ 143 — use `attach` + `state-save`/`state-load` to reuse system browser state (see [browser-state-import.md](../skills/browser4-cli/references/browser-state-import.md)). |
+| `open [url]` | Open a browser session or reconnect to an existing one. **Headless by default.** Supports `--headed` (visible window), `--headless`, `--profile <path>`, `--profile-mode <DEFAULT\|SYSTEM_DEFAULT\|SEQUENTIAL\|TEMPORARY>`, `--interact-level <FASTEST\|FAST\|DEFAULT>`. **Note:** `SYSTEM_DEFAULT` is deprecated and unsupported on Chrome ≥ 143 — use `attach` + `state save`/`state load` to reuse system browser state (see [browser-state-import.md](../skills/browser4-cli/references/browser-state-import.md)). |
 | `attach` | Attach to an existing browser via CDP or the Browser4 extension. Supports `--cdp <url\|port\|channel>` and remote endpoint options. A channel name resolves candidates from the browser's `DevToolsActivePort`, `--remote-debugging-port` and listening ports, and binds the first endpoint that can host a page — over `/json`, or over the browser-level WebSocket that Chrome's built-in `chrome://inspect/#remote-debugging` toggle publishes (`attach --cdp ws://127.0.0.1:<port>/devtools/browser/<uuid>` also works). After a successful attach the CLI prints the browser that actually connected (`Connected browser: …` / `Attached to … at …`) and shows a ⚠ warning when it conflicts with the requested channel (e.g. requested msedge but Chrome connected) — verify it before driving the session. |
 | `close` | Close the active browser session. |
 | `list` | List browser sessions with their status and next-open behavior. The Connection column prefers the backend-reported actual browser and annotates channel conflicts (e.g. `requested msedge · actual Google Chrome`). Supports `--all`, which adds a Workspace column and includes the sessions persisted by every other checkout (`*` marks the workspace you are running in; foreign rows read Unknown / `-` / Refresh because this backend cannot verify them). |
-| `session-default <name>` | Make a named session become the default unnamed session. |
-| `close-all` | Close all sessions without stopping the backend. |
-| `kill-all` | Force-stop the backend and Browser4-managed browser processes. |
+| `session default <name>` | Make a named session become the default unnamed session. |
+| `close all` | Close all sessions without stopping the backend. |
+| `kill all` | Force-stop the backend and Browser4-managed browser processes. |
 | `stop` | Gracefully stop the Browser4 server. |
 | `status` | Show server version, port, health, and the web status panel URL (`http://<server>:18182/status`). When a session is active it also prints a current-session block: Name / Session ID / Status / Display / Connection / Next open. |
 | `doctor` | Run diagnostics: build info, LLM status (including the configuration file it reads, the winning provider key and the active model), stale daemon cleanup, optional repair. Supports `--verbose` and `--fix`; `--fix` also writes a commented LLM config template. |
 | `doctor log [name]` | List, view, tail, or grep backend log files. Supports `--tail`, grep-style flags, and `doctor log <name> grep <pattern>`. |
 | `doctor metrics [filter]` | List, filter, or grep backend metrics. Supports `doctor metrics grep <pattern>`. |
 | `doctor status [--section <name>] [--verbose]` | Print the aggregated status panel report in the terminal: summary layer by default, full detail with `--verbose`, one report with `--section` (health, build, runtime, llm, sessions, pulsar-sessions, swarm, url-pool, browsers, drivers, privacy, plugins, skills, metrics, logs), machine-readable JSON with `--json`. |
-| `delete-data` | Delete session data. |
+| `delete data` | Delete session data. |
 | `install` | Install the Browser4 runtime bundle. Supports `--tag <version>` and `--force`. |
 | `upgrade` | Upgrade the CLI/runtime bundle. Supports `--tag <version>` and `--force`. |
 | `uninstall` | Remove global installs and runtime data. Supports `-y`, `--yes`, and `--dry-run`. |
@@ -48,7 +48,7 @@ browser/driver binding and tab counts, with on-demand live tab details via
 metrics, log files; auto-refreshes, set `?refresh=<ms>` to change the interval). The panel
 is backed by the aggregated `GET /api/system/status` endpoint; the individual endpoints
 (`/api/system/health`, `/api/system/build`, `/api/doctor/llm-status`, `/api/doctor/metrics`,
-`/api/doctor/log-files`, `/api/plugins`, `/api/skills`) remain available. `browser4-cli plugin-list` also
+`/api/doctor/log-files`, `/api/plugins`, `/api/skills`) remain available. `browser4-cli plugin list` also
 reports load/enable state and SDK version for every installed plugin; the same reports can be
 read from the terminal with `browser4-cli doctor status`.
 
@@ -65,8 +65,8 @@ never blocks on a capture. Backed by `GET /api/pages` and
 | Command | Description |
 |---|---|
 | `goto <url>` | Navigate to a URL; auto-opens/reconnects a session if needed. |
-| `go-back` | Go back in browser history. |
-| `go-forward` | Go forward in browser history. |
+| `go back` | Go back in browser history. |
+| `go forward` | Go forward in browser history. |
 | `reload` | Reload the current page. |
 
 ## Core interaction
@@ -122,10 +122,10 @@ browser4-cli wait --load networkidle
 | `eval [expression] [ref]` | Evaluate JavaScript on the page or an element. Supports `--file`, `--stdin`, `--base64`, `--await`, `--wait-selector`, `--json`. |
 | `console [min-level]` | List browser console messages. Supports `--clear`. |
 | `cdp <method>` | Send an arbitrary Chrome DevTools Protocol command. Supports `--json <params>`. |
-| `generate-locator <ref>` | Generate the best CSS selector for a snapshot ref or existing selector. |
+| `generate locator <ref>` | Generate the best CSS selector for a snapshot ref or existing selector. |
 | `resize <width> <height>` | Resize the browser window. |
-| `dialog-accept [prompt]` | Accept an alert/confirm/prompt dialog, optionally filling the prompt. |
-| `dialog-dismiss` | Dismiss an alert/confirm/prompt dialog. |
+| `dialog accept [prompt]` | Accept an alert/confirm/prompt dialog, optionally filling the prompt. |
+| `dialog dismiss` | Dismiss an alert/confirm/prompt dialog. |
 
 `get` modes:
 
@@ -197,32 +197,32 @@ For deep X-SQL usage, see [skills/browser4-cli/references/htmlsnapshot.md](../sk
 
 | Command | Description |
 |---|---|
-| `tab-list` | List open tabs with indexes, titles, and URLs; use `--json` for full GUIDs. |
-| `tab-new [url]` | Open a new tab, optionally navigating to a URL. |
-| `tab-close [index]` | Close a tab by index; supports `--guid <guid>`. |
-| `tab-select <index>` | Switch to a tab by index; supports `--guid <guid>`. |
+| `tab list` | List open tabs with indexes, titles, and URLs; use `--json` for full GUIDs. |
+| `tab new [url]` | Open a new tab, optionally navigating to a URL. |
+| `tab close [index]` | Close a tab by index; supports `--guid <guid>`. |
+| `tab select <index>` | Switch to a tab by index; supports `--guid <guid>`. |
 
 ## Browser storage and local page data
 
 | Command | Description |
 |---|---|
-| `state-save [filename]` | Save cookies and localStorage to a JSON file. |
-| `state-load <filename>` | Restore cookies and localStorage from a JSON file. |
-| `cookie-list` | List cookies. Supports `--domain`, `--path`. |
-| `cookie-get <name>` | Get a cookie by name. |
-| `cookie-set <name> <value>` | Set a cookie. Supports `--domain`, `--path`, `--expires`, `--httpOnly`, `--secure`, `--sameSite`. |
-| `cookie-delete <name>` | Delete a cookie by name. Supports `--domain`, `--path`. |
-| `cookie-clear` | Clear all cookies. |
-| `localstorage-list` | List localStorage entries. |
-| `localstorage-get <key>` | Read a localStorage key. |
-| `localstorage-set <key> <value>` | Set a localStorage key. |
-| `localstorage-delete <key>` | Delete a localStorage key. |
-| `localstorage-clear` | Clear localStorage. |
-| `sessionstorage-list` | List sessionStorage entries. |
-| `sessionstorage-get <key>` | Read a sessionStorage key. |
-| `sessionstorage-set <key> <value>` | Set a sessionStorage key. |
-| `sessionstorage-delete <key>` | Delete a sessionStorage key. |
-| `sessionstorage-clear` | Clear sessionStorage. |
+| `state save [filename]` | Save cookies and localStorage to a JSON file. |
+| `state load <filename>` | Restore cookies and localStorage from a JSON file. |
+| `cookie list` | List cookies. Supports `--domain`, `--path`. |
+| `cookie get <name>` | Get a cookie by name. |
+| `cookie set <name> <value>` | Set a cookie. Supports `--domain`, `--path`, `--expires`, `--httpOnly`, `--secure`, `--sameSite`. |
+| `cookie delete <name>` | Delete a cookie by name. Supports `--domain`, `--path`. |
+| `cookie clear` | Clear all cookies. |
+| `localstorage list` | List localStorage entries. |
+| `localstorage get <key>` | Read a localStorage key. |
+| `localstorage set <key> <value>` | Set a localStorage key. |
+| `localstorage delete <key>` | Delete a localStorage key. |
+| `localstorage clear` | Clear localStorage. |
+| `sessionstorage list` | List sessionStorage entries. |
+| `sessionstorage get <key>` | Read a sessionStorage key. |
+| `sessionstorage set <key> <value>` | Set a sessionStorage key. |
+| `sessionstorage delete <key>` | Delete a sessionStorage key. |
+| `sessionstorage clear` | Clear sessionStorage. |
 | `webdb export <dir>` | Export pages from the Browser4 web database to a local directory. |
 | `webdb normalize <url>` | Normalize a URL into the web database key format. |
 
@@ -235,7 +235,7 @@ These commands require an LLM key.
 | `extract <instruction>` | Extract structured data from the current page. Supports `--schema <json\|@file>`, `--filename`, `--raw`, `--stdout`. |
 | `summarize [instruction]` | Summarize the current page. Supports `--selector`, `--filename`, `--raw`, `--stdout`. |
 | `chat <message>` | Send a plain AI chat request without auto-appended browser context. |
-| `chat-result <id>` | Retrieve the result of an async chat task. |
+| `chat result <id>` | Retrieve the result of an async chat task. |
 | `agent run <task>` | Submit an autonomous browser task and immediately receive a task ID. Supports `--wait` (block for the result) and `--wait-timeout <seconds>` (default 600). `--follow` streams every step (tool calls, model text, slow/failed tools) and ends with the result — Ctrl+C cancels the task; `--ndjson` emits that stream as one JSON object per line. `-i` opens an interactive session where a line typed while a task runs steers it (never queued as a second task), and `/stats` reports the run's LLM rounds/requests, token usage (prompt-cache reads/writes and hit rate included when the provider reports them) and tool calls; the per-task budget counts **cache-miss** tokens (5M by default — prompt-cache reads are free), a budget abort offers a one-key "continue" with the cap doubled, and after every task `-i` predicts 2–3 numbered next *tasks* — the model's own follow-up suggestions first, then what the payload left open (files to review/test/commit, findings to dig into, a failure to diagnose) — never a menu of CLI commands; every task of a session also inherits a compacted `## Session context` block of the earlier ones, plus any mid-session correction — a revised goal supersedes the original, and the current instruction wins over both (`/new` starts a fresh context), and `/result [--json] [--full]` re-prints the last payload (pretty-printed JSON, or nothing folded). A backend hiccup or an unreadable step never ends the live view: `-i` keeps following a task that still runs and skips the one unreadable step. Task type is browser by default; `--coding` explicitly marks a pure file/build task (never auto-detected). `--access <preset>` (`full`/`write`/`read-build`/`read`) narrows that task's coding tools and is reset when the task ends; `--unrestricted` runs it with YOUR own OS permissions instead (full preset, no workspace/protected rails, no OS sandbox — and the shell's command allow-list off as well, so programs outside it (a PowerShell cmdlet, for example) run verbatim; shapes the checker cannot decompose, such as `for` loops and inline scripts, are handed to the platform shell in every mode), audited per task and inherited by `--resume`, while the OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) and the commands that would kill or rebuild the backend stay refused; `--add-dir <folder>` grants this task an extra **existing** folder besides its workspace (repeatable; readable, writable and usable as a shell working directory — `--access` still bounds what may be written there, credential stores stay refused, and `--resume` inherits the grant; in `-i`, `/add-dir <folder>` grants one mid-session and `/dirs [clear]` lists or drops the grants); a refused step is not a dead end — `coding.requestAccess` files a non-blocking pending request and an operator approves it through `POST /api/agent/<taskId>/access/<requestId>/approve`, while `denyTools`, protected paths and sensitive paths are never approved; a job with no TTY (scripts, CI, submitted tasks) derives `full` with outbound network instead of the server-wide preset (`browser4.agent.access.unattended` narrows it) |
 | `agent status <id>` | Check a task — the shared status envelope (`status`: queued/running/done/failed/cancelled, plus `statusCode`, `message` and the agent's step count). |
 | `agent result <id>` | Fetch a completed task's result: its summary, `keyFindings`, `filesChanged` and the workspace its deliverables live in. Rendered as sections (`--json` prints the raw envelope). |
@@ -259,12 +259,12 @@ browser4-cli agent status agent-task-1
 Batch-compatible commands:
 
 ```text
-goto  go-back  go-forward  reload  press  key  keyboard  type  keydown  keyup
-click  dblclick  hover  fill  select  upload  check  uncheck  drag  focus
-mousemove  mousedown  mouseup  mousewheel  scroll  wait  get  eval
-snapshot  screenshot  pdf  dialog-accept  dialog-dismiss  resize
-tab-list  tab-new  window-new  tab-close  tab-select  frame
-htmlsnapshot  htmlsnapshot-capture  htmlsnapshot-get  htmlsnapshot-get-all
+goto, go back, go forward, reload, press, key, keyboard, type, keydown, keyup,
+click, dblclick, hover, fill, select, upload, check, uncheck, drag, focus,
+mousemove, mousedown, mouseup, mousewheel, scroll, wait, get, eval,
+snapshot, screenshot, pdf, dialog accept, dialog dismiss, resize,
+tab list, tab new, window new, tab close, tab select, frame,
+htmlsnapshot, htmlsnapshot capture, htmlsnapshot get, htmlsnapshot get all
 ```
 
 ```bash
@@ -376,11 +376,11 @@ Browser4 has two different "skill" surfaces:
 
 | Command | Description |
 |---|---|
-| `skill-list` | List installed backend skills. |
-| `skill-info <id>` | Show detailed skill metadata. |
-| `skill-install <path>` | Install a skill from a directory containing `SKILL.md`. Supports `--overwrite`. |
-| `skill-uninstall <id>` | Remove a skill by ID. |
-| `skill-reload <id>` | Reload a skill from its source directory. |
+| `skill list` | List installed backend skills. |
+| `skill info <id>` | Show detailed skill metadata. |
+| `skill install <path>` | Install a skill from a directory containing `SKILL.md`. Supports `--overwrite`. |
+| `skill uninstall <id>` | Remove a skill by ID. |
+| `skill reload <id>` | Reload a skill from its source directory. |
 
 ## Progressive experience memory
 

@@ -299,7 +299,7 @@ Snapshot files are written to **`.browser4-cli/snapshot/` under the current work
 
 **They accumulate.** Every navigation and interaction that triggers a capture (`goto`, `open`, `click`, `fill`, `select`, …) writes a new timestamped file, plus any `snapshot` command run without `--stdout`. Over a session this can grow to hundreds of files; the directory is gitignored in the Browser4 repo (`.gitignore`: `.browser4-cli/`), but other projects may not ignore it.
 
-Manage the directory with the `snapshot list` / `snapshot clean` commands (canonical kebab-case names `snapshot-list` / `snapshot-clean`; both spellings work):
+Manage the directory with the `snapshot list` / `snapshot clean` commands (the kebab names `snapshot-list` / `snapshot-clean` are rejected with a pointer to the spaced form):
 
 ```bash
 browser4-cli snapshot list              # show saved files (name, size, modified; default: 20 most recent)

@@ -85,7 +85,7 @@ At build time, `build.rs` scans the `skills/` directory and embeds every file
 into the binary as static strings.  The `skills` command reads from these
 embedded strings — it never touches the network.
 
-- **`skills` (and `skills-list`)** — prints the names of all bundled skills.
+- **`skills` / `skills list`** — prints the names of all bundled skills.
 - **`skills get <name>`** — prints the SKILL.md content for a skill.  With
   `--full`, concatenates all bundled files for that skill (references, extra
   docs).
