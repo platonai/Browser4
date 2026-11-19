@@ -219,4 +219,48 @@ class WindowsLowIntegritySandboxTest {
             runCatching { root.toFile().deleteRecursively() }
         }
     }
+
+    @Test
+    @DisplayName("a refused label is repaired by granting OWNER RIGHTS and retried exactly once")
+    fun refusedLabelIsRepairedByGrantingOwnerRights() {
+        assumeTrue(isWindows, "icacls only exists on Windows")
+        val workspace = Files.createDirectories(tempDir.resolve("ws-heal"))
+        var labels = 0
+        val runner = FakeRunner { command ->
+            when {
+                command.contains("/setintegritylevel") && command[1] == workspace.toString() -> {
+                    labels++
+                    if (labels == 1) SandboxCommandResult(5, "Access is denied.") else SandboxCommandResult(0)
+                }
+                else -> SandboxCommandResult(0)
+            }
+        }
+
+        sandbox(runner).prepare(spec(workspace), workspace, allowNetwork = false)
+
+        val grant = runner.calls.single { it.contains("/grant") && it[1] == workspace.toString() }
+        assertEquals("*S-1-3-4:(OI)(CI)(WDAC,WO)", grant.last())
+        assertEquals(2, labels, "the label is retried once, not in a loop: ${runner.calls}")
+    }
+
+    @Test
+    @DisplayName("when the owner grant is refused too, prepare still fails hard on the label")
+    fun refusedLabelWithoutGrantStaysFatal() {
+        assumeTrue(isWindows, "icacls only exists on Windows")
+        val workspace = Files.createDirectories(tempDir.resolve("ws-nogrant"))
+        val runner = FakeRunner { command ->
+            when {
+                command.contains("/grant") -> SandboxCommandResult(1, "Access is denied.")
+                command.contains("/setintegritylevel") && command[1] == workspace.toString() ->
+                    SandboxCommandResult(5, "Access is denied.")
+                else -> SandboxCommandResult(0)
+            }
+        }
+
+        val error = assertThrows(SandboxUnavailableException::class.java) {
+            sandbox(runner).prepare(spec(workspace), workspace, allowNetwork = false)
+        }
+
+        assertTrue(error.message!!.contains("cannot lower the mandatory label"), error.message!!)
+    }
 }

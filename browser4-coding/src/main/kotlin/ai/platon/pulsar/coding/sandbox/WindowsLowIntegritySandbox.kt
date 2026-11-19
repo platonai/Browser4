@@ -68,6 +68,9 @@ class WindowsLowIntegritySandbox(
         private const val PROBE_TIMEOUT_SECONDS = 30L
         private const val PROBE_TIMEOUT_EXIT = 42
 
+        /** `ERROR_ACCESS_DENIED`: the label write needs `WRITE_OWNER` (see [OwnerSecurityRights]). */
+        private const val ERROR_ACCESS_DENIED = 5
+
         /**
          * The in-workspace probe: write a file, or list a directory, and report via the exit code.
          *
@@ -267,10 +270,23 @@ class WindowsLowIntegritySandbox(
         if (labeledRoots.putIfAbsent(normalized, Unit) != null) return
         if (isLabelled(normalized, deep)) return
         val level = if (deep) "(OI)(CI)Low" else "Low"
-        val result = runner.run(
-            listOf("icacls", normalized.toString(), "/setintegritylevel", level),
-            LABEL_TIMEOUT_SECONDS,
-        )
+        val label = listOf("icacls", normalized.toString(), "/setintegritylevel", level)
+        var result = runner.run(label, LABEL_TIMEOUT_SECONDS)
+        if (!result.ok && result.exitCode == ERROR_ACCESS_DENIED) {
+            // Ownership implies WRITE_DAC but not WRITE_OWNER, and a DACL inherited from a
+            // shared root carries Modify only: the label write is refused. Grant the owner the
+            // two rights and retry once — a resumed worktree, a mirror root and an `--add-dir`
+            // root never passed through the creation-time grant in WorkspaceIsolation.begin.
+            if (OwnerSecurityRights.grant(normalized, runner)) {
+                result = runner.run(label, LABEL_TIMEOUT_SECONDS)
+                if (result.ok) {
+                    logger.info(
+                        "windows-low-il repaired the label of {} after granting OWNER RIGHTS",
+                        normalized,
+                    )
+                }
+            }
+        }
         if (result.ok) {
             rememberLabelled(normalized, deep)
             return
