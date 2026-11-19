@@ -1,5 +1,6 @@
 package ai.platon.pulsar.coding.sandbox
 
+import ai.platon.pulsar.coding.CodingComponents
 import ai.platon.pulsar.coding.IsolationProfile
 import ai.platon.pulsar.coding.MirrorRoots
 import ai.platon.pulsar.coding.ReadablePaths
@@ -58,6 +59,18 @@ class WindowsLowIntegritySandbox(
     private val credentialStores: List<String> = ReadablePaths.ALWAYS_REFUSED,
     /** Where the "already labelled" markers live; injectable so tests keep the user data dir clean. */
     private val markerDir: Path? = SandboxDefaults.defaultDataDir().resolve("sandbox").resolve("low-il"),
+    /**
+     * Where the container-ACE self-check looks (plan G9). Injectable so a test lists its own
+     * directories instead of the developer's real `PATH`.
+     */
+    private val aceRoots: () -> List<Path> = {
+        ContainerAceScan.candidateRoots(CodingComponents.toolchainRoots(), ContainerAceScan.defaultPathDirs())
+    },
+    /** The scan itself; injectable so a test reports a finding without touching a real DACL. */
+    private val aceScanner: (Collection<Path>) -> List<String> = { roots ->
+        // Warnings, not findings: this constructor is public and must not expose an internal type.
+        ContainerAceScan.scan(roots, runner).map { ContainerAceScan.warning(it) }
+    },
 ) : ExecutionSandbox {
 
     companion object {
@@ -87,6 +100,18 @@ class WindowsLowIntegritySandbox(
         """.trimIndent()
 
         private val logger = LoggerFactory.getLogger(WindowsLowIntegritySandbox::class.java)
+
+        /**
+         * Switches the container-ACE self-check off (`off`/`false`/`0`). On by default: the check is
+         * bounded (≤ [ContainerAceScan.MAX_SCAN_DIRS] `icacls` calls, once per backend) and it is the
+         * only way an operator learns why a toolchain call suddenly says "拒绝访问".
+         */
+        const val PROP_CHECK_CONTAINER_ACES = "browser4.agent.sandbox.checkContainerAces"
+
+        private fun aceCheckEnabled(): Boolean {
+            val raw = System.getProperty(PROP_CHECK_CONTAINER_ACES, "on").trim().lowercase()
+            return raw != "off" && raw != "false" && raw != "0"
+        }
     }
 
     /** Roots already labelled by this instance; labels are idempotent and icacls is not free. */
@@ -94,6 +119,31 @@ class WindowsLowIntegritySandbox(
 
     /** Credential stores labelled by this instance (`"ok"`), so a failure is retried next time. */
     private val credentialLabels = ConcurrentHashMap<Path, String>()
+
+    /**
+     * Stale container grants that would break this backend's own children (plan G9), found once.
+     *
+     * A directory carrying an AppContainer package SID is unreadable to a low-integrity token
+     * (measured 2026-11-19, see [ContainerAceScan]) — and the two backends share a mode chain, so a
+     * leftover `windows-appcontainer` grant on a toolchain tree silently disables `coding.shell`
+     * calls into it. Nothing here edits an ACL: the note carries the `icacls … /remove` command.
+     */
+    private val containerAceWarnings: List<String> by lazy {
+        if (!aceCheckEnabled()) return@lazy emptyList()
+        val warnings = runCatching { aceScanner(aceRoots()) }.getOrElse { e ->
+            logger.debug("container ACE self-check skipped: {}", e.message)
+            emptyList()
+        }
+        // Logged here, once per backend: `ContainerAceScan.scan` itself stays side-effect free so a
+        // caller (or a test) can ask without producing log noise.
+        warnings.forEach { logger.warn("{}", it) }
+        warnings
+    }
+
+    /** Whether the one-shot self-check has run (it is warmed by the first [prepare], see G9). */
+    private val containerAceReported = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    override fun advisoryNotes(): List<String> = containerAceWarnings
 
     override val id: String = SANDBOX_ID
 
@@ -143,6 +193,13 @@ class WindowsLowIntegritySandbox(
         // `resolver-status.properties`), and those are Medium until the tree is labelled.
         caches().forEach { labelWritable(it, deep = true) }
         if (protectCredentialStores) labelCredentialsOnce()
+
+        // Plan G9, "startup self-check": warm the scan once per backend so a stale container grant is
+        // in the log *before* the task's first toolchain command fails with a bare "拒绝访问" (~1 s,
+        // measured; never fatal — each finding is a warning, not a refusal).
+        if (containerAceReported.compareAndSet(false, true)) {
+            logger.debug("container ACE self-check: {} finding(s)", containerAceWarnings.size)
+        }
 
         if (!verifiedWorkspaces.contains(root)) {
             // `?:` would treat "the probe passed" (null) as "no probe was supplied" and run the

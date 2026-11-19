@@ -48,6 +48,10 @@ class WindowsLowIntegritySandboxTest {
         protectCredentialStores = false,
         // Tests label their own throwaway trees; no marker files in the user data dir.
         markerDir = null,
+        // The G9 self-check is exercised by its own tests; here it would only add `icacls` calls to
+        // the fake runner that the label assertions count.
+        aceRoots = { emptyList() },
+        aceScanner = { emptyList() },
     )
 
     private fun spec(workspace: Path) = ProcessSpec(
@@ -262,5 +266,69 @@ class WindowsLowIntegritySandboxTest {
         }
 
         assertTrue(error.message!!.contains("cannot lower the mandatory label"), error.message!!)
+    }
+
+    // ------------------------------------------------------------------
+    // G9: the self-check that names a stale AppContainer grant
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a stale container ACE on a toolchain tree becomes an advisory note")
+    fun staleContainerAceIsReported() {
+        val stale = Files.createDirectories(tempDir.resolve("stale-toolchain"))
+        val sid = "S-1-15-2-1-2-3-4-5-6-7-8"
+        val sandbox = WindowsLowIntegritySandbox(
+            runner = FakeRunner { SandboxCommandResult(0) },
+            probe = { null },
+            caches = { emptyList() },
+            protectCredentialStores = false,
+            markerDir = null,
+            aceRoots = { listOf(stale) },
+            aceScanner = { roots ->
+                ContainerAceScan
+                    .scan(roots, FakeRunner { SandboxCommandResult(0, "$sid:(OI)(CI)(RX)") })
+                    .map { ContainerAceScan.warning(it) }
+            },
+        )
+
+        val notes = sandbox.advisoryNotes()
+
+        assertEquals(1, notes.size, "one finding, one line: $notes")
+        assertTrue(notes.single().contains(stale.toString()), notes.single())
+        assertTrue(notes.single().contains("/remove"), "the note carries the fix: ${notes.single()}")
+    }
+
+    @Test
+    @DisplayName("a clean installation, and the switch off, report nothing")
+    fun cleanInstallationReportsNothing() {
+        val clean = Files.createDirectories(tempDir.resolve("clean-toolchain"))
+        val quiet = WindowsLowIntegritySandbox(
+            runner = FakeRunner { SandboxCommandResult(0) },
+            probe = { null },
+            caches = { emptyList() },
+            protectCredentialStores = false,
+            markerDir = null,
+            aceRoots = { listOf(clean) },
+            aceScanner = { emptyList() },
+        )
+        assertTrue(quiet.advisoryNotes().isEmpty(), "a clean tree has nothing to report")
+
+        val previous = System.getProperty(WindowsLowIntegritySandbox.PROP_CHECK_CONTAINER_ACES)
+        try {
+            System.setProperty(WindowsLowIntegritySandbox.PROP_CHECK_CONTAINER_ACES, "off")
+            val disabled = WindowsLowIntegritySandbox(
+                runner = FakeRunner { SandboxCommandResult(0) },
+                probe = { null },
+                caches = { emptyList() },
+                protectCredentialStores = false,
+                markerDir = null,
+                aceRoots = { listOf(clean) },
+                aceScanner = { error("the scan must not run when the switch is off") },
+            )
+            assertTrue(disabled.advisoryNotes().isEmpty(), "off disables the scan entirely")
+        } finally {
+            if (previous == null) System.clearProperty(WindowsLowIntegritySandbox.PROP_CHECK_CONTAINER_ACES)
+            else System.setProperty(WindowsLowIntegritySandbox.PROP_CHECK_CONTAINER_ACES, previous)
+        }
     }
 }

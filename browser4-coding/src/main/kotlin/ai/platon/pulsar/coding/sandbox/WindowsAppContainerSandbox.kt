@@ -51,6 +51,21 @@ class WindowsAppContainerSandbox(
         private const val PROBE_TIMEOUT_SECONDS = 30L
         private const val PROBE_TIMEOUT_EXIT = 42
 
+        /**
+         * How long a recorded grant may sit unused before [revokeRecordedGrants] removes it.
+         *
+         * `0` disables the cleanup, `off`/`never` disables it forever; the default six hours is far
+         * longer than a container task lives, so a live task never loses a grant it is using (plan G9).
+         */
+        const val PROP_GRANT_RETENTION_HOURS = "browser4.agent.sandbox.grantRetentionHours"
+
+        internal fun defaultGrantRetention(): java.time.Duration {
+            val raw = System.getProperty(PROP_GRANT_RETENTION_HOURS, "6").trim().lowercase()
+            if (raw == "off" || raw == "never") return java.time.Duration.ofDays(365_000)
+            val hours = raw.toLongOrNull() ?: 6L
+            return java.time.Duration.ofHours(hours.coerceAtLeast(0L))
+        }
+
         private val logger = LoggerFactory.getLogger(WindowsAppContainerSandbox::class.java)
     }
 
@@ -131,6 +146,12 @@ class WindowsAppContainerSandbox(
         val container = container
         grant(root, container, required = true)
         extraWritableRoots.map { it.toAbsolutePath().normalize() }.forEach { grant(it, container, required = true) }
+
+        // G9: drop grants this task does not need (older than the retention window). Cheap — the
+        // marker directory holds one small file per grant — and it is what keeps a container
+        // experiment from leaving an ACE on a toolchain tree forever.
+        runCatching { revokeRecordedGrants(keep = listOf(root) + extraWritableRoots) }
+            .onFailure { logger.debug("could not revoke stale container grants: {}", it.message) }
 
         val environment = sandboxEnvironment(spec.environment, root)
         if (!verifiedWorkspaces.contains(root)) {
@@ -221,19 +242,26 @@ class WindowsAppContainerSandbox(
      * Grants the container `(OI)(CI)M` on [path] (deep, inherited by new members).
      *
      * `icacls` accepts the `*S-1-15-2-…` SID form, which is why the container needs no readable name.
-     * The grant is recorded next to the data directory so a restart does not re-walk a workspace.
+     * The grant is recorded next to the data directory so a restart does not re-walk a workspace —
+     * and so it can be **revoked** later ([revokeRecordedGrants]).
+     *
+     * **Only the task's own roots are ever granted**: the workspace and the folders the task added
+     * (`--add-dir`), which is all [prepare] passes here. Granting a user-global directory (`%APPDATA%`,
+     * an npm prefix, a JDK install) is what G9 exists to undo: the container keeps working from the
+     * task's copy, and the leftover entry makes that tree unreadable to `windows-low-il` — the backend
+     * that shares the coding mode chain with it (see [ContainerAceScan]).
      */
     private fun grant(path: Path, container: ContainerIdentity, required: Boolean) {
         if (!Files.exists(path)) return
         val normalized = path.toAbsolutePath().normalize()
         if (grantedRoots.putIfAbsent(normalized, Unit) != null) return
-        if (isGranted(normalized)) return
+        if (isGranted(normalized, container)) return
         val result = runner.run(
             listOf("icacls", normalized.toString(), "/grant", "*${container.sidString}:(OI)(CI)(M)"),
             GRANT_TIMEOUT_SECONDS,
         )
         if (result.ok) {
-            rememberGrant(normalized)
+            rememberGrant(normalized, container)
             return
         }
         grantedRoots.remove(normalized)
@@ -247,20 +275,111 @@ class WindowsAppContainerSandbox(
         logger.warn("windows-appcontainer could not grant {} ({})", normalized, detail)
     }
 
-    private fun isGranted(path: Path): Boolean {
+    /**
+     * Whether this exact path already carries a grant for [container].
+     *
+     * The recorded SID is compared, not just the marker's existence: a re-created container profile
+     * gets a new SID, and a marker from the old one would otherwise suppress the grant the task needs.
+     */
+    private fun isGranted(path: Path, container: ContainerIdentity): Boolean {
         val marker = markerFile(path, "grant") ?: return false
-        return Files.isRegularFile(marker)
+        // `(sid, recordedPath)` — a legacy path-only marker answers `null` and is therefore *not*
+        // treated as granted: the grant call is idempotent, a missing ACE is not.
+        val sid = readMarker(marker)?.first ?: return false
+        return sid.equals(container.sidString, ignoreCase = true)
     }
 
-    private fun rememberGrant(path: Path) {
+    private fun rememberGrant(path: Path, container: ContainerIdentity) {
         val marker = markerFile(path, "grant") ?: return
         runCatching {
             Files.createDirectories(marker.parent)
-            Files.writeString(marker, path.toString())
+            // `sid|path`: the SID is what makes a later revoke possible without a container identity,
+            // and what tells a stale grant from a live one.
+            Files.writeString(marker, "${container.sidString}|$path")
         }.onFailure { logger.debug("could not record the container grant for {}: {}", path, it.message) }
     }
 
-    private fun markerFile(path: Path, kind: String): Path? {
+    /** `(sid, path)` recorded in [marker]; `sid` is `null` for a legacy path-only marker. */
+    private fun readMarker(marker: Path): Pair<String?, Path>? = runCatching {
+        val text = Files.readString(marker).trim()
+        if (text.isEmpty()) return@runCatching null
+        val separator = text.indexOf('|')
+        if (separator > 0 && text.substring(0, separator).uppercase().startsWith("S-1-15-2-")) {
+            text.substring(0, separator) to Path.of(text.substring(separator + 1))
+        } else {
+            null to Path.of(text)
+        }
+    }.getOrNull()
+
+    /**
+     * Revoke container grants this installation recorded that the current task does not need.
+     *
+     * Closes the other half of G9: [grant] records every grant, but nothing used to undo one, so a
+     * container experiment left an ACE on a toolchain tree for good. Only markers **older than**
+     * [retention] are touched, so a container task running right now keeps its grants; [keep] is
+     * everything the calling task is about to grant, and is never revoked.
+     *
+     * A legacy path-only marker has no SID to remove; the entry is found through
+     * [ContainerAceScan.packageSidsIn] on the directory's own ACL instead. When that finds nothing
+     * (or more than one package SID, which cannot be attributed), the marker is dropped and a warning
+     * names the manual command — guessing an ACL edit is worse than asking.
+     *
+     * @return the directories whose ACE was actually removed
+     */
+    fun revokeRecordedGrants(
+        keep: Collection<Path> = emptyList(),
+        retention: java.time.Duration = defaultGrantRetention(),
+    ): List<Path> {
+        val dir = markerDir ?: return emptyList()
+        if (!Files.isDirectory(dir)) return emptyList()
+        val kept = keep.map { it.toAbsolutePath().normalize() }.toSet()
+        val deadline = System.currentTimeMillis() - retention.toMillis()
+        val revoked = mutableListOf<Path>()
+        Files.list(dir).use { stream ->
+            stream.filter { it.fileName.toString().endsWith(".grant") }.forEach { marker ->
+                val recorded = readMarker(marker) ?: run { runCatching { Files.deleteIfExists(marker) }; return@forEach }
+                val (sid, path) = recorded
+                val normalized = path.toAbsolutePath().normalize()
+                if (normalized in kept || !Files.exists(normalized)) return@forEach
+                val lastModified = runCatching { Files.getLastModifiedTime(marker).toMillis() }.getOrDefault(0L)
+                if (lastModified > deadline) return@forEach
+                val targetSid = sid ?: ContainerAceScan.packageSidsIn(
+                    runner.run(listOf("icacls", normalized.toString()), GRANT_TIMEOUT_SECONDS).output,
+                ).singleOrNull()
+                if (targetSid == null) {
+                    logger.warn(
+                        "windows-appcontainer cannot attribute the recorded grant on {} to one SID; " +
+                            "check `icacls {}` for an `S-1-15-2-...` entry and remove it by hand",
+                        normalized, normalized,
+                    )
+                    runCatching { Files.deleteIfExists(marker) }
+                    return@forEach
+                }
+                val result = runner.run(ContainerAceScan.removeCommand(normalized, targetSid), GRANT_TIMEOUT_SECONDS)
+                if (result.ok) {
+                    revoked.add(normalized)
+                    runCatching { Files.deleteIfExists(marker) }
+                    logger.info("windows-appcontainer revoked a stale grant on {} ({})", normalized, targetSid)
+                } else {
+                    logger.warn(
+                        "windows-appcontainer could not revoke the grant on {} (icacls exit={}): {}",
+                        normalized, result.exitCode, firstLine(result.output),
+                    )
+                }
+            }
+        }
+        grantsRevoked += revoked
+        return revoked
+    }
+
+    /** Grants this instance revoked, so `coding.permissions` / a test can see the cleanup happened. */
+    private val grantsRevoked = java.util.concurrent.CopyOnWriteArrayList<Path>()
+
+    /** Directories this instance revoked a container grant from ([revokeRecordedGrants]). */
+    fun revokedGrants(): List<Path> = grantsRevoked.toList()
+
+    /** Deterministic marker path for [path]; `internal` so a test can plant one. */
+    internal fun markerFile(path: Path, kind: String): Path? {
         val dir = markerDir ?: return null
         val digest = java.security.MessageDigest.getInstance("SHA-256")
             .digest("$kind|${path.toString().lowercase()}".toByteArray())

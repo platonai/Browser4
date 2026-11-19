@@ -293,8 +293,118 @@ class WindowsAppContainerSandboxTest {
         }
     }
 
+    // ------------------------------------------------------------------
+    // G9: a recorded grant must be revocable, or it outlives the task
+    // ------------------------------------------------------------------
+
+    /** Plant a grant marker exactly as `grant` writes one, aged by [ageHours]. */
+    private fun plantGrant(
+        sandbox: WindowsAppContainerSandbox,
+        path: Path,
+        content: String,
+        ageHours: Long = 24,
+    ) {
+        val marker = requireNotNull(sandbox.markerFile(path, "grant")) {
+            "the sandbox must be constructed with a markerDir for this test"
+        }
+        Files.createDirectories(marker.parent)
+        Files.writeString(marker, content)
+        Files.setLastModifiedTime(
+            marker,
+            java.nio.file.attribute.FileTime.fromMillis(
+                System.currentTimeMillis() - java.time.Duration.ofHours(ageHours).toMillis(),
+            ),
+        )
+    }
+
+    @Test
+    @DisplayName("a stale recorded grant is revoked with the SID the marker recorded")
+    fun revokesStaleRecordedGrant() {
+        val markers = Files.createDirectories(tempDir.resolve("markers"))
+        val stale = Files.createDirectories(tempDir.resolve("stale-toolchain"))
+        val runner = FakeRunner { SandboxCommandResult(0) }
+        val sandbox = WindowsAppContainerSandbox(runner = runner, probe = { null }, markerDir = markers)
+        plantGrant(sandbox, stale, "$PACKAGE_SID|$stale")
+
+        val revoked = sandbox.revokeRecordedGrants(retention = java.time.Duration.ofHours(1))
+
+        assertEquals(listOf(stale.toAbsolutePath().normalize()), revoked)
+        assertEquals(
+            listOf(listOf("icacls", stale.toString(), "/remove", "*$PACKAGE_SID")),
+            runner.calls,
+            "the removal names the recorded SID, not a freshly derived one",
+        )
+        assertFalse(Files.exists(sandbox.markerFile(stale, "grant")!!), "the marker goes with the grant")
+        assertEquals(revoked, sandbox.revokedGrants(), "the cleanup is observable")
+    }
+
+    @Test
+    @DisplayName("a grant the task still needs, or one that is still fresh, is never revoked")
+    fun keepsNeededAndFreshGrants() {
+        val markers = Files.createDirectories(tempDir.resolve("markers"))
+        val needed = Files.createDirectories(tempDir.resolve("workspace"))
+        val fresh = Files.createDirectories(tempDir.resolve("fresh-toolchain"))
+        val runner = FakeRunner { SandboxCommandResult(0) }
+        val sandbox = WindowsAppContainerSandbox(runner = runner, probe = { null }, markerDir = markers)
+        plantGrant(sandbox, needed, "$PACKAGE_SID|$needed")
+        plantGrant(sandbox, fresh, "$PACKAGE_SID|$fresh", ageHours = 0)
+
+        val revoked = sandbox.revokeRecordedGrants(keep = listOf(needed), retention = java.time.Duration.ofHours(1))
+
+        assertTrue(revoked.isEmpty(), "nothing qualified: $revoked")
+        assertTrue(runner.calls.isEmpty(), "no icacls at all: ${runner.calls}")
+        assertTrue(Files.exists(sandbox.markerFile(needed, "grant")!!), "the task's own root keeps its grant")
+        assertTrue(Files.exists(sandbox.markerFile(fresh, "grant")!!), "a live task keeps its grant")
+    }
+
+    @Test
+    @DisplayName("a legacy path-only marker is attributed through the directory's own ACL")
+    fun legacyMarkerUsesTheDirectoryAcl() {
+        val markers = Files.createDirectories(tempDir.resolve("markers"))
+        val stale = Files.createDirectories(tempDir.resolve("legacy-toolchain"))
+        val runner = FakeRunner { command ->
+            // The ACL read (2 argv elements) reports the entry; the removal (4) succeeds.
+            if (command.size == 2) SandboxCommandResult(0, "$PACKAGE_SID:(OI)(CI)(RX)") else SandboxCommandResult(0)
+        }
+        val sandbox = WindowsAppContainerSandbox(runner = runner, probe = { null }, markerDir = markers)
+        plantGrant(sandbox, stale, stale.toString())
+
+        val revoked = sandbox.revokeRecordedGrants(retention = java.time.Duration.ofHours(1))
+
+        assertEquals(listOf(stale.toAbsolutePath().normalize()), revoked)
+        assertEquals(2, runner.calls.size, "first the ACL read, then the removal: ${runner.calls}")
+        assertEquals(listOf("icacls", stale.toString(), "/remove", "*$PACKAGE_SID"), runner.calls[1])
+    }
+
+    @Test
+    @DisplayName("an unattributable legacy marker is dropped instead of guessing an ACL edit")
+    fun unattributableLegacyMarkerIsDropped() {
+        val markers = Files.createDirectories(tempDir.resolve("markers"))
+        val stale = Files.createDirectories(tempDir.resolve("ambiguous-toolchain"))
+        val otherSid = "S-1-15-2-9-9-9-9-9-9-9-9"
+        val runner = FakeRunner { command ->
+            if (command.size == 2) SandboxCommandResult(0, "$PACKAGE_SID:(OI)(CI)(RX)\n$otherSid:(OI)(CI)(M)")
+            else SandboxCommandResult(0)
+        }
+        val sandbox = WindowsAppContainerSandbox(runner = runner, probe = { null }, markerDir = markers)
+        plantGrant(sandbox, stale, stale.toString())
+
+        val revoked = sandbox.revokeRecordedGrants(retention = java.time.Duration.ofHours(1))
+
+        assertTrue(revoked.isEmpty(), "two candidate SIDs must not be guessed between: $revoked")
+        assertEquals(1, runner.calls.size, "only the ACL read happened: ${runner.calls}")
+        assertFalse(
+            Files.exists(sandbox.markerFile(stale, "grant")!!),
+            "the marker is dropped so the next grant rewrites it with a SID",
+        )
+    }
+
     private companion object {
         /** curl could not resolve, connect or get an answer: it tried, and the network refused it. */
         private val CURL_NO_EGRESS = setOf(6, 7, 28)
+
+        /** A concrete AppContainer package SID — what a grant writes, and what G9 has to clean up. */
+        private const val PACKAGE_SID =
+            "S-1-15-2-740000081-2787761786-2739701453-4027781610-3709442335-2178988983-1814727619"
     }
 }

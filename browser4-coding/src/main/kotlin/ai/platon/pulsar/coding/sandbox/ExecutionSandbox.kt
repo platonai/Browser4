@@ -125,6 +125,18 @@ interface ExecutionSandbox {
         allowNetwork: Boolean,
         extraWritableRoots: List<Path> = emptyList(),
     ): ProcessSpec
+
+    /**
+     * Operator-facing notes about this installation that would make a child fail for a reason the
+     * sandbox cannot fix by itself, one line each (`coding.permissions` prints them).
+     *
+     * Today that is the stale AppContainer grant of [ContainerAceScan] (plan G9): a package-SID ACE
+     * left behind by `windows-appcontainer` makes a whole toolchain tree unreadable to a
+     * low-integrity child, and the only fix is an `icacls … /remove` the operator has to run.
+     *
+     * Backends that have nothing to say return an empty list; the notes are never a failure.
+     */
+    fun advisoryNotes(): List<String> = emptyList()
 }
 
 object OffSandbox : ExecutionSandbox {

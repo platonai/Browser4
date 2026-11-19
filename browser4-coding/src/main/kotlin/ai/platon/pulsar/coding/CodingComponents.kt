@@ -508,7 +508,13 @@ object CodingComponents {
             sandbox.enforcesNetwork -> "enforced"
             else -> "NOT enforced by this backend (it cannot refuse a socket)"
         }
-        return "OS sandbox: $backend — ${profile.describe()}; network: $network"
+        // Plan G9: an installation-level reason this backend's children will fail, e.g. a stale
+        // AppContainer grant that makes a toolchain tree unreadable to a low-integrity token. The
+        // note is informational — it never turns the line into a failure — but it is the only place
+        // an operator looking at `coding.permissions` would otherwise not see it.
+        val notes = runCatching { sandbox?.advisoryNotes().orEmpty() }.getOrDefault(emptyList())
+        val summary = "OS sandbox: $backend — ${profile.describe()}; network: $network"
+        return if (notes.isEmpty()) summary else summary + notes.joinToString("") { "\n" + it }
     }
 
 }
