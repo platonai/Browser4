@@ -49,12 +49,12 @@ session (whose state container) × display (how it renders) × source (whose bro
 **Rules and pitfalls**
 
 - Single task, sequential script, CI one-liner → default session. **Any parallelism → always pass `-s <name>`:** the unnamed slot is shared by every invocation that omits `-s`, and `goto` silently reconnects to it (last writer wins). Named sessions additionally keep their own cookies/login state across runs.
-- `session-default <name>` promotes an existing named session into the unnamed slot (useful when a workflow should switch which session is "current").
+- `session default <name>` promotes an existing named session into the unnamed slot (useful when a workflow should switch which session is "current").
 - Bulk, non-interactive, throughput-oriented → **SWARM** (`swarm create` → `swarm query --sql @q.sql --seed-file urls.txt --refresh`). Sequential multi-page crawling with link discovery is `crawl`; periodic repeats are `loop` — do not use swarm for either.
 - `attach` and `open` share the session namespace: `attach --extension` fails with `An unnamed session already exists` unless you pass `-s <name>` or `close` first.
 - A swarm session is isolated from default/named sessions and needs the `browser4-swarm` runtime plugin — without it the API answers `503 {"error":"Swarm not installed"}`.
 - On a fresh swarm session the first jobs stay `queued` for ~30–60 s while the browser contexts boot. That is normal, not a stall.
-- One `close` = one session. `close-all` closes all sessions and clears local state but leaves the backend running. Named sessions create one permanent profile directory each; there is no automatic retention/eviction.
+- One `close` = one session. `close all` closes all sessions and clears local state but leaves the backend running. Named sessions create one permanent profile directory each; there is no automatic retention/eviction.
 
 ## 2. Axis 2 — Display Mode
 
@@ -153,7 +153,7 @@ warning and Chrome starts normally. `SUPERVISED` does **not** imply headless: on
 |---|---|---|---|
 | Browser | Chrome by default, or ego lite via `open --channel ego-lite` — launched by Browser4 | any already-running CDP endpoint: Chrome/Edge/Electron/cloud | already-running Chrome/Edge **with the Browser4 extension installed** |
 | Setup | none | remote debugging enabled in either form — start the browser with `--remote-debugging-port=N` (plus a non-default `--user-data-dir`), or flip `chrome://inspect/#remote-debugging` → *"Allow remote debugging for this browser instance"* | install the extension; optionally set `BROWSER4_EXTENSION_TOKEN` to skip the approval dialog |
-| Login state | whatever the Browser4 profile holds (or `state-save`/`state-load`) | the real profile you are using | the real profile you are using |
+| Login state | whatever the Browser4 profile holds (or `state save`/`state load`) | the real profile you are using | the real profile you are using |
 | Connection check | — | candidates from `DevToolsActivePort` + process listeners are probed, and the first endpoint that can host a page wins: an HTTP endpoint with `/json` page targets, or a browser-level WebSocket that answers `Target.getTargets`; loud errors otherwise | session stays pending until the extension connects; pending connections expire after ~2 min |
 | `close` behaviour | **terminates the browser process** | disconnects; **the browser keeps running**, but the tab Browser4 was driving is closed | disconnects the relay; the browser keeps running, but the tabs Browser4 drove are removed (`chrome.tabs.remove`) |
 | If the connection drops | a new session can be created | **never silently replaced** — the command errors and asks you to re-attach | same, and a stale extension session is auto-reconnected once |
@@ -184,7 +184,7 @@ endpoint is verified — page targets, and the browser family against the reques
 - `BROWSER4_EXTENSION_TOKEN` only auto-approves the connect page — it is not a security boundary.
 - `--extension <channel>` opens the connect page **only in that channel's browser**; a wrong family fails the attach instead of driving the wrong browser: [attach.md](attach.md#verify-the-actual-browser-after-attach).
 
-**`SYSTEM_DEFAULT` profile mode is deprecated.** Pointing Browser4 at your everyday browser profile no longer works with Chrome ≥143. To act as the logged-in user, use one of the attach paths; to move authentication into a managed session, use `state-save` / `state-load`.
+**`SYSTEM_DEFAULT` profile mode is deprecated.** Pointing Browser4 at your everyday browser profile no longer works with Chrome ≥143. To act as the logged-in user, use one of the attach paths; to move authentication into a managed session, use `state save` / `state load`.
 
 ## 4. Secondary Knobs
 
@@ -197,7 +197,7 @@ endpoint is verified — page targets, and the browser family against the reques
 | Proxy rotation | `proxy.rotation.url`, only for `SEQUENTIAL`/`TEMPORARY` | IP rotation requires giving up the shared `DEFAULT` profile. A single fixed proxy is `browser.launch.chrome.args=--proxy-server=…`; full guide: [ip-proxy.md](../../../docs/ip-proxy.md). |
 | Browser channel | managed = Chrome (default) or ego lite via `open --channel ego-lite`; attach = chrome*/msedge*/ego-lite | Managed ego lite needs the browser installed (or `ego.path` set on the backend); Edge/Canary/Electron/cloud → attach only. |
 | Platform | GUI-less envs force headless; sandboxed shells need writable `BROWSER4_RUNTIME_DIR` / `BROWSER4_CLI_STATE_DIR` | Determines whether headed is even possible and whether the backend can start. |
-| Lifecycle | `close` (one session) · `close-all` · `swarm close` | `swarm close` also aborts pending tasks; forgetting it holds contexts and the worker pool. |
+| Lifecycle | `close` (one session) · `close all` · `swarm close` | `swarm close` also aborts pending tasks; forgetting it holds contexts and the worker pool. |
 | Observability | `list` (Connection column shows the **actual** browser, flagging channel mismatches; Display column shows the creation-time mode — Headed/Headless/Supervised/Attached) · `status` · `screenshot` | Always confirm the real browser after an attach — driving the wrong profile looks like "lost login state". |
 | Cold start | first `open` starts the runtime; first swarm jobs wait 30–60 s | Do not diagnose a cold start as a hang. |
 | Per-session concurrency | commands on one session are serialized | Parallelism comes from multiple sessions/contexts, not from issuing commands concurrently to one session. |
@@ -276,10 +276,10 @@ Both behaviours below are documented but not covered by an assertion. Each has a
 pwsh browser4-tests/tests-production/verify-named-session-profile.ps1 -RestartBackend
 ```
 
-Manual equivalent: `-s repro open` → `-s repro cookie-set b4_repro_marker keepme --expires 7d` (persistent) → `-s repro cookie-list` (present) → `browser4-cli stop` (stops the backend) → `-s repro open` (auto-starts a fresh backend) → `-s repro cookie-list` (still there?). Compare the directories under `~/.browser4/context/groups/named/PULSAR_CHROME/` too: a **new** `cx.<uuid>` means a new, empty profile.
+Manual equivalent: `-s repro open` → `-s repro cookie set b4_repro_marker keepme --expires 7d` (persistent) → `-s repro cookie list` (present) → `browser4-cli stop` (stops the backend) → `-s repro open` (auto-starts a fresh backend) → `-s repro cookie list` (still there?). Compare the directories under `~/.browser4/context/groups/named/PULSAR_CHROME/` too: a **new** `cx.<uuid>` means a new, empty profile.
 
 - **STABLE** — same session id and the marker cookie came back: reopening by name really restores the same profile.
-- **REBOUND** — identity was not preserved (new session id) and/or the marker cookie was lost: login state is *not* guaranteed across a restart — persist auth with `state-save`/`state-load` instead. A lost cookie alone does not prove a new profile directory (a non-persistent context drops it too), so the script reports the session id, the cookie and the profile directories as separate signals; the on-disk layout has differed between versions, so the directory signal is best effort
+- **REBOUND** — identity was not preserved (new session id) and/or the marker cookie was lost: login state is *not* guaranteed across a restart — persist auth with `state save`/`state load` instead. A lost cookie alone does not prove a new profile directory (a non-persistent context drops it too), so the script reports the session id, the cookie and the profile directories as separate signals; the on-disk layout has differed between versions, so the directory signal is best effort
   (`context/groups/named/**` and `browser/chrome/**` are both searched for `cx.*`).
 
 > **Careful with the restart step:** `browser4-cli stop` also sweeps orphaned browser processes, so every browser Browser4 launched is closed with it.
@@ -293,13 +293,13 @@ chrome --remote-debugging-port=9222 https://example.com
 pwsh browser4-tests/tests-production/verify-attach-close-tabs.ps1 -Cdp 9222
 ```
 
-It reports `PROCESS SURVIVED`/`PROCESS KILLED` plus `TABS CLOSED` (listing the tabs that disappeared) or `TABS UNTOUCHED`. Extension-attached sessions can be checked by hand: `attach --extension`, note the tabs with `tab-list`, `close`, compare — the relay removes the tabs it drove via `chrome.tabs.remove`.
+It reports `PROCESS SURVIVED`/`PROCESS KILLED` plus `TABS CLOSED` (listing the tabs that disappeared) or `TABS UNTOUCHED`. Extension-attached sessions can be checked by hand: `attach --extension`, note the tabs with `tab list`, `close`, compare — the relay removes the tabs it drove via `chrome.tabs.remove`.
 
 **Measured results (reference machine, 2026-09-11)** — CLI `4.13.17` against runtime bundle `4.13.14-SNAPSHOT`, with the CLI warning that the served backend was **older than the checked-out sources** (`4.13.18-SNAPSHOT`); re-run both scripts after a bundle rebuild before treating these as current.
 
 | Measurement | Observed |
 |---|---|
-| Named-session profile across a backend restart | **REBOUND** — the session id changed (`b8c986c7…` → `8d99d197…`) after `stop` + re-open by name, and the persistent marker cookie (`--expires 7d`) was gone (`cookie-list` → `[]`, `document.cookie` empty). No `named`/`cx.*` profile directories existed on that build, so the directory signal could not be attributed. |
+| Named-session profile across a backend restart | **REBOUND** — the session id changed (`b8c986c7…` → `8d99d197…`) after `stop` + re-open by name, and the persistent marker cookie (`--expires 7d`) was gone (`cookie list` → `[]`, `document.cookie` empty). No `named`/`cx.*` profile directories existed on that build, so the directory signal could not be attributed. |
 | `close` on a CDP-attached session | **PROCESS SURVIVED + TABS CLOSED** — the browser kept answering `/json/version`; the tab the session had bound (a newly created `about:blank`) disappeared, while the pre-existing `https://example.com/` tab stayed open. Confirms the close semantics in [attach.md](attach.md#close-vs-disconnect). |
 
 **Other open points.** `PROTOTYPE` profile mode is documented as the base for `SEQUENTIAL`/`TEMPORARY`, while the in-repo generator for it currently creates a default profile — treat it as advanced/unverified. Mode-specific media behaviour (video, clipboard, downloads) is not implemented per mode, so no differences can be promised.

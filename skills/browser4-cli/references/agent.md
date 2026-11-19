@@ -56,7 +56,7 @@ Two consequences matter in practice:
 
 - **The submission echoes the binding, and so does the backend log.** The CLI prints `Task submitted: <id> (session=<sid>, <connection>)` or `(no session — a session-less task)`; `--json` carries `session_id`/`session_connection`, `--ndjson` puts `sessionId`/`connection` on the `task.submitted` line. The authoritative log lines are `tool.call start … tool=command_run session=<browser session>` and `Submitting agent task <task-id> (session=<browser session>)` — both must carry the session id the
   CLI reported. Lines naming the agent's own session use `agentSession=` — a second, unrelated UUID (the agentic session), never the browser session.
-- **Its navigation is not visible in your session's tab list.** The backend saves the URL you were on before the task and navigates back to it when the task ends, so `tab-list`, `page-info` and `snapshot` keep showing your own page and the agent's intermediate pages never appear there. Observe its work through `agent status` (step count and message) and through the artifacts it reports.
+- **Its navigation is not visible in your session's tab list.** The backend saves the URL you were on before the task and navigates back to it when the task ends, so `tab list`, `page info` and `snapshot` keep showing your own page and the agent's intermediate pages never appear there. Observe its work through `agent status` (step count and message) and through the artifacts it reports.
 - **Its deliverables are files, not always fields.** When a task says "extract X", the agent usually writes the data into a file under its own per-task **workspace** and returns a short summary. `agent result` names that directory (`workspace`) and lists the files the agent reported (`filesChanged`), so the deliverable is reachable without searching the backend's app-data tree by hand:
 
 ```bash
@@ -214,7 +214,7 @@ The payload is the agent's **completion report**, not just a summary:
 
 ```bash
 browser4-cli open https://app.example.com
-browser4-cli state-load auth.json
+browser4-cli state load auth.json
 browser4-cli agent run "Navigate to the reports dashboard, extract all monthly metrics, and summarize trends"
 ```
 

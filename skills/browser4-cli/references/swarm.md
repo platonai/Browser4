@@ -333,7 +333,7 @@ browser4-cli swarm list --clear   # remove all tracked swarm tasks
 browser4-cli swarm close   # equivalent to close when swarm session is active
 ```
 
-Also accessible via: `close`, `close-all`, or `kill-all`. The swarm session is included in `close-all` enumeration — if `close-all` reports "0 session(s)" but swarm tasks are still tracked, the swarm session was already closed.
+Also accessible via: `close`, `close all`, or `kill all`. The swarm session is included in `close all` enumeration — if `close all` reports "0 session(s)" but swarm tasks are still tracked, the swarm session was already closed.
 
 ## Flags
 

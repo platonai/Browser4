@@ -30,7 +30,7 @@ and one state directory:
 | Browser prototype | `~/.browser4/browser/chrome/prototype` | linked (junction/symlink) to the global prototype — shared seed state for `SEQUENTIAL`/`TEMPORARY` contexts |
 | LLM config (`config/conf-enabled`) | `~/.browser4/config` | linked (junction/symlink) into the workspace app data — still one source of truth |
 | AOT cache | shared | per checkout (no cross-checkout invalidation) |
-| `browser4-cli stop` | stops every managed backend | stops **only this checkout's** backends (`kill-all` stays global) |
+| `browser4-cli stop` | stops every managed backend | stops **only this checkout's** backends (`kill all` stays global) |
 
 The per-checkout AOT cache is keyed by bundle tag + jar list + JVM flags, so a
 dev rebuild that changes the jar list/sizes retrains once in the background
@@ -88,8 +88,8 @@ report the skew). See [CLI install & upgrade](../../docs/cli-install-upgrade.md#
 | `close` | Close the browser. Reports what actually happened: the backend's tri-state (`browserTerminated` true/false/null) decides whether “terminated” is printed, and survivors are named |
 | `disconnect` | Alias of `close`, for an attached session: it detaches from the external browser (whose tabs this session was driving are closed) instead of pretending to terminate it |
 | `list` | List browser sessions with their status and next-open behavior. `--all` adds a Workspace column covering the sessions persisted by every other checkout; `--verbose` lifts the URL/Session-ID column caps |
-| `close-all` | Close all browser sessions without stopping the Browser4 backend |
-| `kill-all` | Forcefully stop the Browser4 backend and kill all browser processes |
+| `close all` | Close all browser sessions without stopping the Browser4 backend |
+| `kill all` | Forcefully stop the Browser4 backend and kill all browser processes |
 | `stop` | Gracefully stop the Browser4 server |
 | `status` | Show Browser4 server status (version, port, health) |
 
@@ -98,8 +98,8 @@ report the skew). See [CLI install & upgrade](../../docs/cli-install-upgrade.md#
 | Command | Description |
 |---|---|
 | `goto <url>` | Navigate to a URL, auto-opening or refreshing the session when needed |
-| `go-back` | Go back to the previous page |
-| `go-forward` | Go forward to the next page |
+| `go back` | Go back to the previous page |
+| `go forward` | Go forward to the next page |
 | `reload` | Reload the current page |
 
 ### Keyboard
@@ -144,12 +144,12 @@ report the skew). See [CLI install & upgrade](../../docs/cli-install-upgrade.md#
 | `scrollintoview <selector>` | Scroll an element into the center of the viewport |
 | `pushstate <url>` | Push a history entry via `history.pushState` without reloading |
 | `highlight <selector>` | Outline an element and scroll it into view (debug aid) |
-| `dialog-accept [prompt]` | Accept a dialog |
-| `dialog-dismiss` | Dismiss a dialog |
-| `dialog-status` | Report whether a native JS dialog is pending (type + message) |
+| `dialog accept [prompt]` | Accept a dialog |
+| `dialog dismiss` | Dismiss a dialog |
+| `dialog status` | Report whether a native JS dialog is pending (type + message) |
 | `errors` | List console errors only (alias of `console --min-level error`) |
 | `resize <w> <h>` | Resize the browser window |
-| `delete-data` | Delete session data |
+| `delete data` | Delete session data |
 | `upload <ref> <file> [file...]` | Upload one or more local files to a page file input (target must be an `<input type="file">`; paths must be readable by the browser process — remote backend: resolved on the backend host; supports multi-file and `--no-snapshot`) |
 | `batch [command...]` | Execute multiple commands in one invocation — the steps run on the client, one backend call per step, through the same path as the equivalent standalone command (`--bail` stops at the first failure, `--json` reads the command array from stdin; exit code 5 means at least one step failed) |
 
@@ -164,11 +164,11 @@ report the skew). See [CLI install & upgrade](../../docs/cli-install-upgrade.md#
 
 | Command | Description |
 |---|---|
-| `tab-list` | List all tabs with index, GUID, title, and URL |
-| `tab-new [url]` | Create a new tab |
+| `tab list` | List all tabs with index, GUID, title, and URL |
+| `tab new [url]` | Create a new tab |
 | `window new [url]` | Create a new browser window (equivalent to a new tab) |
-| `tab-close [index]` | Close a browser tab. Use `--guid <guid>` for GUID-based close |
-| `tab-select <index>` | Select a browser tab. Use `--guid <guid>` for GUID-based select |
+| `tab close [index]` | Close a browser tab. Use `--guid <guid>` for GUID-based close |
+| `tab select <index>` | Select a browser tab. Use `--guid <guid>` for GUID-based select |
 
 ### Frames (iframes)
 
@@ -193,7 +193,7 @@ frames) are not supported in this version — `frames` cannot see them and
 | `set headers --json '<json>'` | Set extra HTTP headers (`Network.setExtraHTTPHeaders`) |
 | `set media --color-scheme <light\|dark\|no-preference>` | Emulate `prefers-color-scheme` (`Emulation.setEmulatedMedia`) |
 | `set device --width <px> --height <px> [--dpr <n>] [--mobile]` | Emulate device metrics (`Emulation.setDeviceMetricsOverride`) |
-| `vitals`, `web-vitals` | Measure Core Web Vitals (LCP, CLS, INP, FCP, TTFB) via injected web-vitals lib |
+| `vitals`, `web vitals` | Measure Core Web Vitals (LCP, CLS, INP, FCP, TTFB) via injected web-vitals lib |
 | `profiler start` | Start the V8 CPU profiler (`Profiler.enable` + `Profiler.start`) |
 | `profiler stop [--file out.cpuprofile]` | Stop the profiler and save the `.cpuprofile` file |
 
@@ -228,27 +228,27 @@ Full guide: [`skills/browser4-cli/references/network.md`](../../skills/browser4-
 
 | Command | Description |
 |---|---|
-| `state-save [filename]` | Save cookies and localStorage to a JSON file |
-| `state-load <filename>` | Load cookies and localStorage from a JSON file |
-| `cookie-list` | List browser cookies |
-| `cookie-get <name>` | Get a cookie by name |
-| `cookie-set <name> <value>` | Set a browser cookie |
-| `cookie-delete <name>` | Delete a browser cookie by name |
-| `cookie-clear` | Clear all browser cookies |
-| `localstorage-list` | List localStorage entries |
-| `localstorage-get <key>` | Get a localStorage value by key |
-| `localstorage-set <key> <value>` | Set a localStorage value |
-| `localstorage-delete <key>` | Delete a localStorage entry |
-| `localstorage-clear` | Clear localStorage |
-| `sessionstorage-list` | List sessionStorage entries |
-| `sessionstorage-get <key>` | Get a sessionStorage value by key |
-| `sessionstorage-set <key> <value>` | Set a sessionStorage value |
-| `sessionstorage-delete <key>` | Delete a sessionStorage entry |
-| `sessionstorage-clear` | Clear sessionStorage |
+| `state save [filename]` | Save cookies and localStorage to a JSON file |
+| `state load <filename>` | Load cookies and localStorage from a JSON file |
+| `cookie list` | List browser cookies |
+| `cookie get <name>` | Get a cookie by name |
+| `cookie set <name> <value>` | Set a browser cookie |
+| `cookie delete <name>` | Delete a browser cookie by name |
+| `cookie clear` | Clear all browser cookies |
+| `localstorage list` | List localStorage entries |
+| `localstorage get <key>` | Get a localStorage value by key |
+| `localstorage set <key> <value>` | Set a localStorage value |
+| `localstorage delete <key>` | Delete a localStorage entry |
+| `localstorage clear` | Clear localStorage |
+| `sessionstorage list` | List sessionStorage entries |
+| `sessionstorage get <key>` | Get a sessionStorage value by key |
+| `sessionstorage set <key> <value>` | Set a sessionStorage value |
+| `sessionstorage delete <key>` | Delete a sessionStorage entry |
+| `sessionstorage clear` | Clear sessionStorage |
 
 To reuse your **system browser's** logged-in state in a Browser4-managed
-session: `attach --extension` (or `attach --cdp`) → `state-save <file>` →
-`open --fresh` → `state-load <file>`. Full-profile copies (history, passwords,
+session: `attach --extension` (or `attach --cdp`) → `state save <file>` →
+`open --fresh` → `state load <file>`. Full-profile copies (history, passwords,
 extensions) are also possible via `open --profile` or PROTOTYPE mode. See
 [browser-state-import.md](../../skills/browser4-cli/references/browser-state-import.md).
 
@@ -423,7 +423,7 @@ Details: [Crawl checkpoint & resume](../../docs/crawl-checkpoint-resume.md).
 | `htmlsnapshot grep [OPTIONS] <pattern>` | Search a fresh snapshot of the active page's HTML with regex patterns and grep-style output (--expires <dur> searches the stored snapshot) |
 | `htmlsnapshot inspect [selector]` | Discover CSS selectors over a fresh snapshot of the active page (--expires <dur> inspects the stored snapshot) |
 | `htmlsnapshot readability [url]` | Extract the main article content with a Readability-style heuristic (no LLM) — the active page, or that URL's own stored copy (--expires <dur> for the active page's stored snapshot) |
-| `generate-locator <ref>` | Generate a unique CSS selector path for an element |
+| `generate locator <ref>` | Generate a unique CSS selector path for an element |
 | `diff snapshot [before] [after]` | Diff two saved accessibility snapshots (defaults to the two most recent) |
 
 ### Skills
@@ -450,7 +450,7 @@ Skills are AI agent instruction files bundled into the CLI binary at compile tim
 | `webminer update` | Update to the latest release |
 | `webminer version` | Show installed and latest available versions |
 | `webminer uninstall` | Remove the installed release |
-| `webminer run-example` | Download the sample dataset and run the full pipeline (needs 7-Zip) |
+| `webminer run example` | Download the sample dataset and run the full pipeline (needs 7-Zip) |
 | `webminer all <html-dir>` | Full pipeline (encode → cluster → views) with `--max-files` (default **40** — raise it for larger corpora, the run truncates silently), `--output`, `--resume`. The interactive report and encoded dataset go to the OS temp dir (`%TEMP%/webminer-pereg/…`), not `--output` |
 | `webminer views <result-dir>` | Rebuild interactive views from an existing clustering result |
 

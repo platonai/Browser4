@@ -1,6 +1,6 @@
 ---
 title: "Tabs — Lifecycle, GUIDs, and Extension Sessions"
-description: "Reference for tab management: tab-list / tab-new / tab-select / tab-close, stable GUID targeting, session scoping, last-tab behavior, insert-position caveats, and the extension-attached session quirks (delayed close confirmation, re-attach tab scope)."
+description: "Reference for tab management: tab list / tab new / tab select / tab close, stable GUID targeting, session scoping, last-tab behavior, insert-position caveats, and the extension-attached session quirks (delayed close confirmation, re-attach tab scope)."
 tier: catalog
 ---
 
@@ -8,13 +8,13 @@ tier: catalog
 
 Tab commands scope to a session — all operations affect the session targeted via
 `-s <session>` (or the DEFAULT session when `-s` is omitted). `-s` is a **global** flag, so it
-always goes **before** the command: `browser4-cli -s job-42 tab-list`.
+always goes **before** the command: `browser4-cli -s job-42 tab list`.
 
 ## Overview
 
 Canonical reference for the tab command family and the behaviour behind it: stable GUID
 targeting, session scoping, last-tab handling, insert-position caveats, and the quirks of
-extension-attached sessions. Read it when a tab you expected is missing from `tab-list`, or
+extension-attached sessions. Read it when a tab you expected is missing from `tab list`, or
 before you rely on an index. The step-by-step workflow, the recipes and the error recovery
 live in [tab-management.md](tab-management.md).
 
@@ -22,24 +22,24 @@ live in [tab-management.md](tab-management.md).
 
 | Command | Returns | One-line description |
 |---------|---------|----------------------|
-| `tab-list` | tab table, or a JSON envelope with `output.tabs[]` and `output.count` | List the session's tabs with index, GUID, title, URL and active flag |
-| `tab-new [url]` | the new tab's GUID (the index is Chrome's choice) | Open a tab; `about:blank` when the URL is omitted |
-| `tab-select <index>` / `--guid <guid>` | — | Make a tab the active page context — re-`snapshot` afterwards |
-| `tab-close [index]` / `--guid <guid>` | — | Close a tab; closes the current tab when no target is given |
+| `tab list` | tab table, or a JSON envelope with `output.tabs[]` and `output.count` | List the session's tabs with index, GUID, title, URL and active flag |
+| `tab new [url]` | the new tab's GUID (the index is Chrome's choice) | Open a tab; `about:blank` when the URL is omitted |
+| `tab select <index>` / `--guid <guid>` | — | Make a tab the active page context — re-`snapshot` afterwards |
+| `tab close [index]` / `--guid <guid>` | — | Close a tab; closes the current tab when no target is given |
 
 All four accept `-s <session>` (DEFAULT session otherwise) and `--json`.
 
 ## Key notes
 
-- **GUIDs:** `tab-list` shows a `GUID` column. Use `--guid` for stable targeting across tab
+- **GUIDs:** `tab list` shows a `GUID` column. Use `--guid` for stable targeting across tab
   reordering. Extension sessions show a `chrome:` prefix on numeric GUIDs; regular sessions use
   32-char hex GUIDs.
 - **Machine-readable output:** Use `--json` either before or after the command:
-  `browser4-cli --json tab-list` or `browser4-cli tab-list --json`. Output is a JSON envelope —
+  `browser4-cli --json tab list` or `browser4-cli tab list --json`. Output is a JSON envelope —
   `{"status":"ok","command":"tab-list","output":{"tabs":[{"index":0,"guid":"…","url":"…","title":"…","active":true}],"count":N}}`.
   The `tabs` array and `count` are nested inside `output`, and each tab also carries `active`.
   `active` is **Browser4's own marker for the tab the session currently targets** (the one
-  `tab-select` last switched to), not CDP tab activation in the browser window: Browser4 opens tabs
+  `tab select` last switched to), not CDP tab activation in the browser window: Browser4 opens tabs
   over CDP and never makes one the browser's foreground tab, so `active: true` does not mean the tab
   is the window's selected tab, and it does not mean the page sees itself as focused — that comes
   from the per-tab focus emulation (see [browser-modes.md](browser-modes.md)).
@@ -48,34 +48,34 @@ All four accept `-s <session>` (DEFAULT session otherwise) and `--json`.
   is drawn only when the backend reported an active tab for the session, so a table with no marker
   means “the active tab could not be determined”, never “no tab is active”. A session that has just
   been opened and never switched reports its **first** tab as active (there is no front driver until
-  something calls `tab-select`, and the backend falls back to the first tab rather than reporting
+  something calls `tab select`, and the backend falls back to the first tab rather than reporting
   every row inactive).
 - **Session scoping:** Prefix tab commands with `-s <session-id>` to target a non-default session.
   The `list` command shows all tracked sessions and their IDs.
 - **Last-tab behavior:** Chrome requires at least one open tab. Closing the last tab makes Chrome
-  create a replacement — the CLI prints a note on stderr, and `tab-list` still shows 1 tab
+  create a replacement — the CLI prints a note on stderr, and `tab list` still shows 1 tab
   afterward. Whether that replacement is blank depends on Chrome's behavior, so do not rely on it
   being `about:blank`.
 - **Tab insert position:** New tabs are inserted by Chrome (not Browser4), and the resulting index
   varies by platform, Chrome version and mode. The CLI re-identifies the new tab by GUID rather
-  than assuming a position. Always run `tab-list` after creating a tab, and prefer `--guid` when
+  than assuming a position. Always run `tab list` after creating a tab, and prefer `--guid` when
   order matters.
-- **No auto-snapshot:** `tab-list`, `tab-new`, `tab-close` and `tab-select` do NOT trigger
-  automatic snapshots. After `tab-select`, run `snapshot` explicitly to get fresh element refs for
+- **No auto-snapshot:** `tab list`, `tab new`, `tab close` and `tab select` do NOT trigger
+  automatic snapshots. After `tab select`, run `snapshot` explicitly to get fresh element refs for
   the new active tab — the switch changes the active page context.
-- **`window new` is an alias of `tab-new` here:** in the managed/headless backend both commands
+- **`window new` is an alias of `tab new` here:** in the managed/headless backend both commands
   create an additional tab/target in the same browser and auto-select it, printing the same
   `Created tab with GUID: …` / `✓ Switched to tab <n>` lines. A separate OS window is a headed-mode
   artifact, not something the command controls.
 - **Popups:** a page-opened popup (`window.open`, `target="_blank"`) is an ordinary new target.
-  The CLI does not announce it and does not switch to it (auto-select lives in the `tab-new` /
-  `window new` dispatch), so run `tab-list` after triggering the popup and switch explicitly with
-  `tab-select <index>` or `--guid <guid>`. **Note:** whether every popup type is registered in
-  `tab-list` is not covered by tests yet — verify on your build.
+  The CLI does not announce it and does not switch to it (auto-select lives in the `tab new` /
+  `window new` dispatch), so run `tab list` after triggering the popup and switch explicitly with
+  `tab select <index>` or `--guid <guid>`. **Note:** whether every popup type is registered in
+  `tab list` is not covered by tests yet — verify on your build.
   In **extension-attached sessions** the real browser's popup blocker is in charge: a
   `window.open` the browser refused (no user gesture — the usual page-load "popup test") does
   **not** create a tab, so no stray `about:blank` appears next to the page you are driving. A
-  popup opened by a real user gesture keeps the normal behaviour and appears in `tab-list`;
+  popup opened by a real user gesture keeps the normal behaviour and appears in `tab list`;
   a managed (headless) browser is launched with `--disable-popup-blocking`, so there the popup
   really does open.
 - **Extension sessions:** When closing tabs on extension-attached sessions, the backend may report
@@ -87,32 +87,32 @@ All four accept `-s <session>` (DEFAULT session otherwise) and `--json`.
 - **Extension re-attach creates a fresh tab scope:** Each `attach --extension` establishes a new
   WebSocket connection and creates its own tab tracking scope. After re-attaching (e.g. after
   navigating to `chrome://version/` which drops the connection), only tabs created through the
-  *new* connection are visible in `tab-list`. Tabs from the previous connection are still open in
+  *new* connection are visible in `tab list`. Tabs from the previous connection are still open in
   Chrome but are not tracked by the new session. To work with those tabs, either re-open them via
-  `tab-new` in the new session, or use `-s <name>` to preserve a named session that survives
+  `tab new` in the new session, or use `-s <name>` to preserve a named session that survives
   re-attach.
 
 ## Examples
 
 ```bash
 # List all tabs in the default session
-browser4-cli tab-list
+browser4-cli tab list
 
 # Machine-readable tab data (both forms work)
-browser4-cli --json tab-list
-browser4-cli tab-list --json
+browser4-cli --json tab list
+browser4-cli tab list --json
 # Output: {"status":"ok","command":"tab-list","output":{"tabs":[{"index":0,"guid":"…","url":"about:blank","title":"(no title)","active":true}],"count":1}}
 
 # Open a tab and switch to it
-browser4-cli tab-new https://httpbin.org/get
+browser4-cli tab new https://httpbin.org/get
 # Output:
 #   Created tab with GUID: 2AAA0C47... (https://httpbin.org/get)
 #   Switched to tab 0 (https://httpbin.org/get)
 # Note: the index is chosen by Chrome and varies by platform and mode.
-# Run `tab-list` to confirm it, or target the tab with --guid.
+# Run `tab list` to confirm it, or target the tab with --guid.
 
 # Close by GUID (survives reordering)
-browser4-cli tab-close --guid 2AAA0C47D288D3943BA85D31AA8D084C
+browser4-cli tab close --guid 2AAA0C47D288D3943BA85D31AA8D084C
 ```
 
 ## Related

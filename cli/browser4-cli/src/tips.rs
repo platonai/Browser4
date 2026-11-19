@@ -120,7 +120,7 @@ const TIPS_INTERACTION: &[Tip] = &[
         text: "Use `press Enter` after `fill` to submit forms — `fill` alone does not trigger submission",
     },
     Tip {
-        text: "Use `generate-locator <ref>` to get a robust CSS selector from a snapshot ref for repeated use",
+        text: "Use `generate locator <ref>` to get a robust CSS selector from a snapshot ref for repeated use",
     },
 ];
 
@@ -351,7 +351,7 @@ const TIPS_AGENT: &[Tip] = &[
 
 const TIPS_WEBMINER: &[Tip] = &[
     Tip {
-        text: "webminer clusters downloaded HTML pages into interactive views — start with `webminer install`, then `webminer run-example`",
+        text: "webminer clusters downloaded HTML pages into interactive views — start with `webminer install`, then `webminer run example`",
     },
     Tip {
         text: "Use `webminer all <html-dir>` to run the full pipeline (encode → cluster → views) with cluster counts auto-detected",
@@ -387,10 +387,10 @@ const TIPS_ATTACH: &[Tip] = &[
 
 const TIPS_COOKIE: &[Tip] = &[
     Tip {
-        text: "Use `state-save` and `state-load` to persist/restore cookies and localStorage across sessions",
+        text: "Use `state save` and `state load` to persist/restore cookies and localStorage across sessions",
     },
     Tip {
-        text: "Use `cookie-list` to inspect all cookies set by the current page",
+        text: "Use `cookie list` to inspect all cookies set by the current page",
     },
 ];
 
@@ -420,16 +420,16 @@ const TIPS_INSPECT: &[Tip] = &[
 
 const TIPS_TABS: &[Tip] = &[
     Tip {
-        text: "Use `tab-select <index>` or `tab-select --guid <guid>` to switch between tabs — then re-snapshot to get fresh refs for the new tab",
+        text: "Use `tab select <index>` or `tab select --guid <guid>` to switch between tabs — then re-snapshot to get fresh refs for the new tab",
     },
     Tip {
-        text: "Use `tab-new [url]` to open a page in a new tab without losing the current page state",
+        text: "Use `tab new [url]` to open a page in a new tab without losing the current page state",
     },
     Tip {
-        text: "Use `tab-close [index]` or `tab-close --guid <guid>` to close a tab by its index or stable GUID from tab-list output",
+        text: "Use `tab close [index]` or `tab close --guid <guid>` to close a tab by its index or stable GUID from tab list output",
     },
     Tip {
-        text: "Use `tab-list` to see all tabs with their index, GUID, title, and URL — the GUID is stable even when tabs are reordered",
+        text: "Use `tab list` to see all tabs with their index, GUID, title, and URL — the GUID is stable even when tabs are reordered",
     },
 ];
 
@@ -450,10 +450,10 @@ const TIPS_FRAME: &[Tip] = &[
 
 const TIPS_STORAGE: &[Tip] = &[
     Tip {
-        text: "Use `localstorage-get` and `sessionstorage-get` to extract client-side stored data",
+        text: "Use `localstorage get` and `sessionstorage get` to extract client-side stored data",
     },
     Tip {
-        text: "Use `state-save` before and `state-load` after to checkpoint browser state across sessions",
+        text: "Use `state save` before and `state load` after to checkpoint browser state across sessions",
     },
 ];
 

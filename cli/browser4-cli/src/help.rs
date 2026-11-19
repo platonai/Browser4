@@ -132,7 +132,7 @@ pub fn public_command_name(name: &str) -> &str {
         "experience-save" => "experience save",
         "experience-query" => "experience query",
         "experience-list" => "experience list",
-        "experience-deep-learn" => "experience deep-learn",
+        "experience-deep-learn" => "experience deep learn",
         "plugin-list" => "plugin list",
         "plugin-info" => "plugin info",
         "plugin-install" => "plugin install",
@@ -145,7 +145,7 @@ pub fn public_command_name(name: &str) -> &str {
         "webminer-update" => "webminer update",
         "webminer-version" => "webminer version",
         "webminer-uninstall" => "webminer uninstall",
-        "webminer-run-example" => "webminer run-example",
+        "webminer-run-example" => "webminer run example",
         "webminer-all" => "webminer all",
         "webminer-views" => "webminer views",
         "agent-cancel" => "agent cancel",
@@ -197,6 +197,55 @@ pub fn public_command_name(name: &str) -> &str {
         "har-start" => "network har start",
         "har-stop" => "network har stop",
         "profiles-list" => "profiles list",
+        // Families whose public spelling is the spaced form; the kebab
+        // spelling is still accepted as an alias (`tab list`, `cookie get`,
+        // …). Keeping the table exhaustive (instead of splitting on `-`) is
+        // what lets the public name differ from the registry key where the
+        // grouping word is not the first token (`har-start` → `network har
+        // start`) or the tail is already hyphenated (`webminer run example`).
+        "close-all" => "close all",
+        "cookie-clear" => "cookie clear",
+        "cookie-delete" => "cookie delete",
+        "cookie-get" => "cookie get",
+        "cookie-list" => "cookie list",
+        "cookie-set" => "cookie set",
+        "delete-data" => "delete data",
+        "dialog-accept" => "dialog accept",
+        "dialog-dismiss" => "dialog dismiss",
+        "dialog-status" => "dialog status",
+        "generate-locator" => "generate locator",
+        "go-back" => "go back",
+        "go-forward" => "go forward",
+        "kill-all" => "kill all",
+        "localstorage-clear" => "localstorage clear",
+        "localstorage-delete" => "localstorage delete",
+        "localstorage-get" => "localstorage get",
+        "localstorage-list" => "localstorage list",
+        "localstorage-set" => "localstorage set",
+        "page-info" => "page info",
+        // `profile-import` deliberately keeps its kebab name: the spaced form
+        // `profile import` is a plugin-declared CLI command (`ToolSpec.cliName`
+        // in browser4-profile-import), and the CLI resolves that spec before
+        // normalising, so advertising the built-in under the same spelling
+        // would point at a command the declared one shadows.
+        "session-default" => "session default",
+        "sessionstorage-clear" => "sessionstorage clear",
+        "sessionstorage-delete" => "sessionstorage delete",
+        "sessionstorage-get" => "sessionstorage get",
+        "sessionstorage-list" => "sessionstorage list",
+        "sessionstorage-set" => "sessionstorage set",
+        "skill-info" => "skill info",
+        "skill-install" => "skill install",
+        "skill-list" => "skill list",
+        "skill-reload" => "skill reload",
+        "skill-uninstall" => "skill uninstall",
+        "state-load" => "state load",
+        "state-save" => "state save",
+        "tab-close" => "tab close",
+        "tab-list" => "tab list",
+        "tab-new" => "tab new",
+        "tab-select" => "tab select",
+        "web-vitals" => "web vitals",
         _ => name,
     }
 }
@@ -529,7 +578,7 @@ fn quick_start_box() -> Vec<String> {
         ("click <ref>", "Click an element by ref (e5) or CSS selector"),
         ("fill <ref> \"<txt>\"", "Fill a form field (--submit presses Enter)"),
         ("htmlsnapshot", "Capture the live page into the store (reads too)"),
-        ("dialog-accept", "Accept a native JS dialog (alert/confirm/prompt)"),
+        ("dialog accept", "Accept a native JS dialog (alert/confirm/prompt)"),
     ];
     let cmd_col = ENTRIES
         .iter()
@@ -693,7 +742,7 @@ const COMMON_WORKFLOWS: &[(&str, &[(&str, Option<&str>)])] = &[
                 Some("auto-accept dialog in one step"),
             ),
             (
-                "OR click <ref>  →  dialog-accept",
+                "OR click <ref>  →  dialog accept",
                 Some("a click parked on a dialog (DIALOG_PENDING); then accept"),
             ),
         ],
@@ -1067,7 +1116,7 @@ pub fn generate_quick_reference() -> String {
         "Scroll the page · screenshot [ref] [-o <file>] captures page or element",
     ));
     lines.push("  Refs are single-use: re-snapshot after any interaction, navigation, or tab switch.".to_string());
-    lines.push("  A native dialog blocks every later command — click --auto-dismiss-dialogs, or dialog-accept.".to_string());
+    lines.push("  A native dialog blocks every later command — click --auto-dismiss-dialogs, or dialog accept.".to_string());
 
     // ── Extract & Query ──
     lines.push(String::new());
@@ -1113,7 +1162,7 @@ pub fn generate_quick_reference() -> String {
         "Close the session · list sessions · attach to an external browser",
     ));
     lines.push(fmt_cmd(
-        "tab-list · tab-select <n> · tab-new",
+        "tab list · tab select <n> · tab new",
         "Tabs — list, switch, open; needed after --follow or a target=_blank click",
     ));
     lines.push(fmt_cmd(
@@ -1516,9 +1565,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Notes:".to_string());
         for line in [
             "  - Modes: geo, offline, headers, media, device. Scope: the current tab of the",
-            "    session — emulation is tab state, not session data, so `delete-data` does not",
+            "    session — emulation is tab state, not session data, so `delete data` does not",
             "    clear it; closing the session does.",
-            "  - Persistence: geo, media and headers survive `reload`, `go-back` and a cross-URL",
+            "  - Persistence: geo, media and headers survive `reload`, `go back` and a cross-URL",
             "    `goto`. Device metrics survive those too — a `goto` re-applies the override after",
             "    normalising the viewport, and `resize` changes the size while keeping the scale",
             "    factor and the mobile flag — so `set device` stands until you clear it.",
@@ -1839,7 +1888,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             4,
         ));
         lines.push(wrap_text(
-            "A native dialog raised by the click leaves the page blocked for the following command: pass --auto-dismiss-dialogs to accept it in the same step, or answer it afterwards with `dialog-accept` / `dialog-dismiss` / `dialog-status`.",
+            "A native dialog raised by the click leaves the page blocked for the following command: pass --auto-dismiss-dialogs to accept it in the same step, or answer it afterwards with `dialog accept` / `dialog dismiss` / `dialog status`.",
             "  - ",
             4,
         ));
@@ -2709,7 +2758,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             4,
         ));
         lines.push(wrap_text(
-            "A named session whose `close` discarded its profile is announced when it is opened again: the browser starts with a fresh profile. Move state with `state-save` before closing and `state-load` after reopening.",
+            "A named session whose `close` discarded its profile is announced when it is opened again: the browser starts with a fresh profile. Move state with `state save` before closing and `state load` after reopening.",
             "  - ",
             4,
         ));
@@ -3986,9 +4035,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli generate-locator e5".to_string());
-        lines.push("  browser4-cli generate-locator backend:15".to_string());
-        lines.push("  browser4-cli generate-locator \".product-card\"".to_string());
+        lines.push("  browser4-cli generate locator e5".to_string());
+        lines.push("  browser4-cli generate locator backend:15".to_string());
+        lines.push("  browser4-cli generate locator \".product-card\"".to_string());
     }
 
     if cmd.name == "loop" {
@@ -4218,7 +4267,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    `snapshot --stdout | head` or running a full `tab-list`."
+            "    `snapshot --stdout | head` or running a full `tab list`."
                 .to_string(),
         );
         lines.push(
@@ -4230,7 +4279,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - page-info does NOT trigger a post-command snapshot — it is"
+            "  - page info does NOT trigger a post-command snapshot — it is"
                 .to_string(),
         );
         lines.push(
@@ -4239,9 +4288,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli page-info".to_string());
-        lines.push("  browser4-cli --json page-info".to_string());
-        lines.push("  browser4-cli -s <session> page-info".to_string());
+        lines.push("  browser4-cli page info".to_string());
+        lines.push("  browser4-cli --json page info".to_string());
+        lines.push("  browser4-cli -s <session> page info".to_string());
     }
 
     if cmd.name == "tab-new" {
@@ -4260,7 +4309,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    anywhere in it. Read the index from `tab-list` instead of predicting it, and"
+            "    anywhere in it. Read the index from `tab list` instead of predicting it, and"
                 .to_string(),
         );
         lines.push(
@@ -4272,18 +4321,18 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Use the printed index or GUID from tab-list to reference the tab in"
+            "  - Use the printed index or GUID from tab list to reference the tab in"
                 .to_string(),
         );
         lines.push(
-            "    subsequent commands (tab-select, tab-close)."
+            "    subsequent commands (tab select, tab close)."
                 .to_string(),
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli tab-new".to_string());
-        lines.push("  browser4-cli tab-new https://example.com".to_string());
-        lines.push("  browser4-cli -s <session> tab-new https://httpbin.org/get".to_string());
+        lines.push("  browser4-cli tab new".to_string());
+        lines.push("  browser4-cli tab new https://example.com".to_string());
+        lines.push("  browser4-cli -s <session> tab new https://httpbin.org/get".to_string());
     }
 
     if cmd.name == "tab-list" {
@@ -4304,7 +4353,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             4,
         ));
         lines.push(wrap_text(
-            "`--json` is accepted on either side of the command (`browser4-cli --json tab-list` or `browser4-cli tab-list --json`) and returns { tabs: [...], count: N }. Only `-s/--session` must come before the command.",
+            "`--json` is accepted on either side of the command (`browser4-cli --json tab list` or `browser4-cli tab list --json`) and returns { tabs: [...], count: N }. Only `-s/--session` must come before the command.",
             "  - ",
             4,
         ));
@@ -4317,11 +4366,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - After a tab-list, the current tab's page metadata is NOT captured —"
+            "  - After a tab list, the current tab's page metadata is NOT captured —"
                 .to_string(),
         );
         lines.push(
-            "    tab-list is read-only and does not trigger a snapshot. Run `snapshot`"
+            "    tab list is read-only and does not trigger a snapshot. Run `snapshot`"
                 .to_string(),
         );
         lines.push(
@@ -4330,9 +4379,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli tab-list".to_string());
-        lines.push("  browser4-cli --json tab-list".to_string());
-        lines.push("  browser4-cli -s <session> tab-list".to_string());
+        lines.push("  browser4-cli tab list".to_string());
+        lines.push("  browser4-cli --json tab list".to_string());
+        lines.push("  browser4-cli -s <session> tab list".to_string());
     }
 
     if cmd.name == "tab-close" {
@@ -4347,7 +4396,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    Run tab-list to see the updated indices."
+            "    Run tab list to see the updated indices."
                 .to_string(),
         );
         lines.push(
@@ -4355,7 +4404,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    tab — tab-list will still show 1 tab afterward."
+            "    tab — tab list will still show 1 tab afterward."
                 .to_string(),
         );
         lines.push(
@@ -4363,7 +4412,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    printed by tab-list and survive index shifts."
+            "    printed by tab list and survive index shifts."
                 .to_string(),
         );
         lines.push(
@@ -4380,10 +4429,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli tab-close 1           # Close tab at index 1".to_string());
-        lines.push("  browser4-cli tab-close              # Close the current tab".to_string());
-        lines.push("  browser4-cli tab-close --guid <guid> # Close by stable GUID".to_string());
-        lines.push("  browser4-cli -s <session> tab-close 0".to_string());
+        lines.push("  browser4-cli tab close 1           # Close tab at index 1".to_string());
+        lines.push("  browser4-cli tab close              # Close the current tab".to_string());
+        lines.push("  browser4-cli tab close --guid <guid> # Close by stable GUID".to_string());
+        lines.push("  browser4-cli -s <session> tab close 0".to_string());
     }
 
     if cmd.name == "tab-select" {
@@ -4402,7 +4451,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    creating or closing tabs shifts later indices. Read the index from `tab-list`"
+            "    creating or closing tabs shifts later indices. Read the index from `tab list`"
                 .to_string(),
         );
         lines.push(
@@ -4423,9 +4472,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli tab-select 0           # Select the first tab".to_string());
-        lines.push("  browser4-cli tab-select 2           # Select tab at index 2".to_string());
-        lines.push("  browser4-cli tab-select --guid <guid> # Select by stable GUID".to_string());
+        lines.push("  browser4-cli tab select 0           # Select the first tab".to_string());
+        lines.push("  browser4-cli tab select 2           # Select tab at index 2".to_string());
+        lines.push("  browser4-cli tab select --guid <guid> # Select by stable GUID".to_string());
     }
 
     if cmd.name == "state-save" {
@@ -4441,15 +4490,15 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli state-save".to_string());
-        lines.push("  browser4-cli state-save auth-state.json".to_string());
+        lines.push("  browser4-cli state save".to_string());
+        lines.push("  browser4-cli state save auth-state.json".to_string());
     }
 
     if cmd.name == "state-load" {
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli state-load auth-state.json".to_string());
-        lines.push("  browser4-cli state-load auth-state.json && browser4-cli open https://example.com".to_string());
+        lines.push("  browser4-cli state load auth-state.json".to_string());
+        lines.push("  browser4-cli state load auth-state.json && browser4-cli open https://example.com".to_string());
     }
 
     if cmd.name == "cookie-set" {
@@ -4487,7 +4536,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    (domain/path/httpOnly/secure/expires/sameSite) so a flag the backend ignored"
                 .to_string(),
         );
-        lines.push("    becomes visible without a cookie-list round trip.".to_string());
+        lines.push("    becomes visible without a cookie list round trip.".to_string());
         lines.push(
             "  - Git Bash rewrites a bare --path / before the command starts (MSYS path"
                 .to_string(),
@@ -4502,17 +4551,17 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli cookie-set session abc123".to_string());
-        lines.push("  browser4-cli cookie-set session abc123 --domain localhost --path / --httpOnly --secure".to_string());
-        lines.push("  browser4-cli cookie-set theme dark --sameSite Lax --expires 7d".to_string());
-        lines.push("  browser4-cli cookie-set theme dark --sameSite Lax --expires 2026-08-21T00:00:00Z".to_string());
+        lines.push("  browser4-cli cookie set session abc123".to_string());
+        lines.push("  browser4-cli cookie set session abc123 --domain localhost --path / --httpOnly --secure".to_string());
+        lines.push("  browser4-cli cookie set theme dark --sameSite Lax --expires 7d".to_string());
+        lines.push("  browser4-cli cookie set theme dark --sameSite Lax --expires 2026-08-21T00:00:00Z".to_string());
     }
 
     if cmd.name == "cookie-list" {
         lines.push(String::new());
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Use cookie-get <name> to look up a single cookie by name."
+            "  - Use cookie get <name> to look up a single cookie by name."
                 .to_string(),
         );
         lines.push(
@@ -4525,20 +4574,20 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli cookie-list".to_string());
-        lines.push("  browser4-cli cookie-list --domain localhost".to_string());
-        lines.push("  browser4-cli cookie-list --domain example.com --path /api".to_string());
+        lines.push("  browser4-cli cookie list".to_string());
+        lines.push("  browser4-cli cookie list --domain localhost".to_string());
+        lines.push("  browser4-cli cookie list --domain example.com --path /api".to_string());
     }
 
     if cmd.name == "cookie-get" {
         lines.push(String::new());
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Prints the bare cookie VALUE by default (matching localstorage-get and"
+            "  - Prints the bare cookie VALUE by default (matching localstorage get and"
                 .to_string(),
         );
         lines.push(
-            "    sessionstorage-get). Use --full to print the whole cookie object with all"
+            "    sessionstorage get). Use --full to print the whole cookie object with all"
                 .to_string(),
         );
         lines.push(
@@ -4556,9 +4605,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("    prefer an exact domain match.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli cookie-get session_id".to_string());
-        lines.push("  browser4-cli cookie-get theme --full".to_string());
-        lines.push("  browser4-cli cookie-get theme --domain localhost".to_string());
+        lines.push("  browser4-cli cookie get session_id".to_string());
+        lines.push("  browser4-cli cookie get theme --full".to_string());
+        lines.push("  browser4-cli cookie get theme --domain localhost".to_string());
     }
 
     if cmd.name == "cookie-delete" {
@@ -4586,14 +4635,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli cookie-delete session_id".to_string());
-        lines.push("  browser4-cli cookie-delete session_id --domain localhost --path /".to_string());
+        lines.push("  browser4-cli cookie delete session_id".to_string());
+        lines.push("  browser4-cli cookie delete session_id --domain localhost --path /".to_string());
     }
 
     if cmd.name == "cookie-clear" {
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli cookie-clear".to_string());
+        lines.push("  browser4-cli cookie clear".to_string());
     }
 
     if cmd.name == "localstorage-set" {
@@ -4613,63 +4662,63 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli localstorage-set theme dark".to_string());
-        lines.push("  browser4-cli localstorage-set user_prefs '{\"lang\":\"en\",\"tz\":\"UTC\"}'".to_string());
+        lines.push("  browser4-cli localstorage set theme dark".to_string());
+        lines.push("  browser4-cli localstorage set user_prefs '{\"lang\":\"en\",\"tz\":\"UTC\"}'".to_string());
     }
 
     if cmd.name == "localstorage-get" {
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli localstorage-get token".to_string());
+        lines.push("  browser4-cli localstorage get token".to_string());
     }
 
     if cmd.name == "localstorage-list" {
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli localstorage-list".to_string());
+        lines.push("  browser4-cli localstorage list".to_string());
     }
 
     if cmd.name == "localstorage-delete" {
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli localstorage-delete token".to_string());
+        lines.push("  browser4-cli localstorage delete token".to_string());
     }
 
     if cmd.name == "localstorage-clear" {
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli localstorage-clear".to_string());
+        lines.push("  browser4-cli localstorage clear".to_string());
     }
 
     if cmd.name == "sessionstorage-set" {
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli sessionstorage-set step 3".to_string());
-        lines.push("  browser4-cli sessionstorage-set form_data '{\"name\":\"value\"}'".to_string());
+        lines.push("  browser4-cli sessionstorage set step 3".to_string());
+        lines.push("  browser4-cli sessionstorage set form_data '{\"name\":\"value\"}'".to_string());
     }
 
     if cmd.name == "sessionstorage-get" {
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli sessionstorage-get form_data".to_string());
+        lines.push("  browser4-cli sessionstorage get form_data".to_string());
     }
 
     if cmd.name == "sessionstorage-list" {
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli sessionstorage-list".to_string());
+        lines.push("  browser4-cli sessionstorage list".to_string());
     }
 
     if cmd.name == "sessionstorage-delete" {
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli sessionstorage-delete step".to_string());
+        lines.push("  browser4-cli sessionstorage delete step".to_string());
     }
 
     if cmd.name == "sessionstorage-clear" {
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli sessionstorage-clear".to_string());
+        lines.push("  browser4-cli sessionstorage clear".to_string());
     }
 
     if cmd.name == "star" {
@@ -5024,18 +5073,18 @@ const CLI_EXAMPLES: &[(&str, &[&str])] = &[
     ),
     (
         "dialog-status",
-        &["browser4-cli dialog-status"],
+        &["browser4-cli dialog status"],
     ),
     (
         "dialog-accept",
         &[
-            "browser4-cli dialog-accept",
-            "browser4-cli dialog-accept \"Ada\"",
+            "browser4-cli dialog accept",
+            "browser4-cli dialog accept \"Ada\"",
         ],
     ),
     (
         "dialog-dismiss",
-        &["browser4-cli dialog-dismiss"],
+        &["browser4-cli dialog dismiss"],
     ),
     (
         "resize",
@@ -5043,15 +5092,15 @@ const CLI_EXAMPLES: &[(&str, &[&str])] = &[
     ),
     (
         "delete-data",
-        &["browser4-cli delete-data"],
+        &["browser4-cli delete data"],
     ),
     (
         "go-back",
-        &["browser4-cli go-back"],
+        &["browser4-cli go back"],
     ),
     (
         "go-forward",
-        &["browser4-cli go-forward"],
+        &["browser4-cli go forward"],
     ),
     (
         "reload",
@@ -5237,7 +5286,7 @@ const CLI_EXAMPLES: &[(&str, &[&str])] = &[
     ),
     (
         "web-vitals",
-        &["browser4-cli web-vitals"],
+        &["browser4-cli web vitals"],
     ),
     (
         "download",
@@ -5328,13 +5377,15 @@ const CLI_EXAMPLES: &[(&str, &[&str])] = &[
     (
         "experience-deep-learn",
         &[
-            "browser4-cli experience deep-learn https://example.com/product/1 \"extract product detail\"",
-            "browser4-cli experience deep-learn https://example.com/product/1 \"extract product detail\" --force",
+            "browser4-cli experience deep learn https://example.com/product/1 \"extract product detail\"",
+            "browser4-cli experience deep learn https://example.com/product/1 \"extract product detail\" --force",
         ],
     ),
     (
         "profile-import",
         &[
+            // Kebab on purpose: the spaced `profile import` spelling belongs to
+            // the plugin-declared command, which resolves before the built-in.
             "browser4-cli profile-import --list-sources",
             "browser4-cli profile-import --source chrome --data bookmarks,history --into temp",
         ],
@@ -5349,15 +5400,15 @@ const CLI_EXAMPLES: &[(&str, &[&str])] = &[
     ),
     (
         "session-default",
-        &["browser4-cli session-default my-session"],
+        &["browser4-cli session default my-session"],
     ),
     (
         "close-all",
-        &["browser4-cli close-all"],
+        &["browser4-cli close all"],
     ),
     (
         "kill-all",
-        &["browser4-cli kill-all"],
+        &["browser4-cli kill all"],
     ),
     (
         "stop",
@@ -5446,7 +5497,7 @@ const CLI_EXAMPLES: &[(&str, &[&str])] = &[
     ),
     (
         "webminer-run-example",
-        &["browser4-cli webminer run-example"],
+        &["browser4-cli webminer run example"],
     ),
     (
         "webminer-all",
@@ -5461,23 +5512,23 @@ const CLI_EXAMPLES: &[(&str, &[&str])] = &[
     ),
     (
         "skill-list",
-        &["browser4-cli skill-list"],
+        &["browser4-cli skill list"],
     ),
     (
         "skill-info",
-        &["browser4-cli skill-info browser4-cli"],
+        &["browser4-cli skill info browser4-cli"],
     ),
     (
         "skill-install",
-        &["browser4-cli skill-install ./my-skill"],
+        &["browser4-cli skill install ./my-skill"],
     ),
     (
         "skill-uninstall",
-        &["browser4-cli skill-uninstall my-skill"],
+        &["browser4-cli skill uninstall my-skill"],
     ),
     (
         "skill-reload",
-        &["browser4-cli skill-reload browser4-cli"],
+        &["browser4-cli skill reload browser4-cli"],
     ),
     (
         "plugin-list",
@@ -6462,6 +6513,10 @@ mod tests {
             ("is-visible", "is-visible"),
             ("htmlsnapshot get", "htmlsnapshot-get"),
             ("network requests", "network-requests"),
+            ("tab list", "tab-list"),
+            ("tab-list", "tab-list"),
+            ("cookie get", "cookie-get"),
+            ("state save", "state-save"),
             ("SET", "set"),
         ] {
             assert_eq!(
@@ -6723,6 +6778,38 @@ mod tests {
         );
         assert!(help_hint("fill").contains("--help fill"));
         assert!(help_hint("htmlsnapshot-get").contains("--help htmlsnapshot get"));
+        // A formerly hyphenated command points at its spaced spelling too.
+        assert_eq!(
+            help_hint("tab-list"),
+            "Run `browser4-cli --help tab list` for the options and examples."
+        );
+        assert_eq!(
+            help_hint("cookie-get"),
+            "Run `browser4-cli --help cookie get` for the options and examples."
+        );
+    }
+
+    /// The reference prints the public name, and every formerly hyphenated
+    /// command now prints the spaced form there. The kebab spelling stays a
+    /// working alias (`tab-list`), it is just no longer the recommended one.
+    ///
+    /// `profile-import` is the one deliberate exception: its spaced form
+    /// `profile import` is a plugin-declared CLI command (`ToolSpec.cliName`),
+    /// which the dispatcher resolves before the built-in, so advertising the
+    /// built-in under that spelling would point at the declared command.
+    #[test]
+    fn test_public_command_names_are_spaced() {
+        for cmd in all_commands() {
+            let public = public_command_name(cmd.name);
+            if cmd.name == "profile-import" {
+                continue;
+            }
+            assert!(
+                !public.contains('-'),
+                "'{}' is still displayed with a hyphen: '{public}'",
+                cmd.name
+            );
+        }
     }
 
     /// `--examples` answers from the binary when the backend is unavailable, so
@@ -7404,7 +7491,7 @@ mod tests {
         assert!(short[0].contains("# fill + press Enter"), "{short:?}");
 
         let comment = "a click parked on a dialog (DIALOG_PENDING); then accept and continue with the workflow";
-        let long = workflow_lines("OR click <ref>  →  dialog-accept", Some(comment));
+        let long = workflow_lines("OR click <ref>  →  dialog accept", Some(comment));
         assert!(long.len() >= 2, "the comment must move to its own line: {long:?}");
         assert!(long[1].trim_start().starts_with('#'), "{long:?}");
         for line in &long {
@@ -7804,7 +7891,7 @@ mod tests {
         let tab_new = help_for("tab-new");
         assert!(
             tab_new.contains("creation order"),
-            "tab-new help must explain the index:\n{tab_new}"
+            "tab new help must explain the index:\n{tab_new}"
         );
         assert!(
             !tab_new.contains("platform"),
@@ -7812,16 +7899,16 @@ mod tests {
         );
 
         let tab_list = help_for("tab-list");
-        assert!(tab_list.contains("▶"), "tab-list help must document the marker:\n{tab_list}");
+        assert!(tab_list.contains("▶"), "tab list help must document the marker:\n{tab_list}");
         assert!(
             tab_list.contains("`active` boolean"),
-            "tab-list help must document the JSON field:\n{tab_list}"
+            "tab list help must document the JSON field:\n{tab_list}"
         );
 
         let tab_select = help_for("tab-select");
         assert!(
             tab_select.contains("creation order"),
-            "tab-select help must explain the index:\n{tab_select}"
+            "tab select help must explain the index:\n{tab_select}"
         );
     }
 
@@ -8201,11 +8288,11 @@ mod tests {
         let cmds = all_commands();
         let cmd = cmds.iter().find(|c| c.name == "generate-locator").unwrap();
         let help = generate_command_help(cmd);
-        assert!(help.contains("browser4-cli generate-locator <ref>"));
+        assert!(help.contains("browser4-cli generate locator <ref>"));
         assert!(help.contains("unique CSS selector path"));
         assert!(help.contains("survive page reloads"));
-        assert!(help.contains("browser4-cli generate-locator e5"));
-        assert!(help.contains("browser4-cli generate-locator backend:15"));
+        assert!(help.contains("browser4-cli generate locator e5"));
+        assert!(help.contains("browser4-cli generate locator backend:15"));
     }
 
     #[test]
@@ -8297,7 +8384,7 @@ mod tests {
             .unwrap_or(help.len());
         let agent_body = &help[agent_start..agent_end];
         assert!(
-            agent_body.contains("experience save") && agent_body.contains("experience deep-learn"),
+            agent_body.contains("experience save") && agent_body.contains("experience deep learn"),
             "[Agent] section should list the experience-* commands:\n{agent_body}"
         );
         // The [WebMiner] section lists the full family in spaced form.
@@ -8313,7 +8400,7 @@ mod tests {
             "webminer update",
             "webminer version",
             "webminer uninstall",
-            "webminer run-example",
+            "webminer run example",
             "webminer all",
             "webminer views",
         ] {

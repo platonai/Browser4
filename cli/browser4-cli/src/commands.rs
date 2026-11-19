@@ -1150,7 +1150,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- webminer (WebMiner, bundled skill) ----
         CommandDef {
             name: "webminer",
-            description: "Run webminer (WebMiner): cluster downloaded HTML pages into interactive views. Subcommands: install, update, version, uninstall, run-example, all, views. Other commands are forwarded to scent-miner.jar (runs locally, no Browser4 server needed).",
+            description: "Run webminer (WebMiner): cluster downloaded HTML pages into interactive views. Subcommands: install, update, version, uninstall, run example, all, views. Other commands are forwarded to scent-miner.jar (runs locally, no Browser4 server needed).",
             category: Category::WebMiner,
             hidden: false,
             batch_supported: false,
@@ -3656,7 +3656,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "window-new",
-            description: "Create an additional tab (a new browser target) and make it the active one, then navigate it to <url>. Managed and headless sessions model every target as a tab, so this is what `tab-new` does plus the selection; `tab-list`/`tab-select` switch between tabs, and popups opened by the page (window.open / target=_blank) appear in the same tab list.",
+            description: "Create an additional tab (a new browser target) and make it the active one, then navigate it to <url>. Managed and headless sessions model every target as a tab, so this is what `tab new` does plus the selection; `tab list`/`tab select` switch between tabs, and popups opened by the page (window.open / target=_blank) appear in the same tab list.",
             category: Category::Tabs,
             hidden: false,
             batch_supported: true,
@@ -3677,9 +3677,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             category: Category::Tabs,
             hidden: false,
             batch_supported: true,
-            args: &[ArgDef { name: "index", description: "Zero-based tab index from tab-list output. If omitted, current tab is closed.", optional: true }],
+            args: &[ArgDef { name: "index", description: "Zero-based tab index from tab list output. If omitted, current tab is closed.", optional: true }],
             options: &[
-                OptionDef { name: "guid", description: "Close by GUID instead of index (from tab-list output)", is_bool: false, short: None },
+                OptionDef { name: "guid", description: "Close by GUID instead of index (from tab list output)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_tabs".to_string(),
@@ -3701,7 +3701,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "index", description: "Zero-based tab index", optional: true }],
             options: &[
-                OptionDef { name: "guid", description: "Select by GUID instead of index (from tab-list output)", is_bool: false, short: None },
+                OptionDef { name: "guid", description: "Select by GUID instead of index (from tab list output)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_tabs".to_string(),
@@ -12224,7 +12224,7 @@ mod tests {
         assert!(!cmd.hidden, "bare webminer should be visible in help");
         // Describes the subcommand surface so `help webminer` is useful.
         let description = cmd.description.to_lowercase();
-        for sub in ["install", "update", "version", "uninstall", "run-example", "all", "views"] {
+        for sub in ["install", "update", "version", "uninstall", "run example", "all", "views"] {
             assert!(
                 description.contains(sub),
                 "webminer description should mention '{sub}'"

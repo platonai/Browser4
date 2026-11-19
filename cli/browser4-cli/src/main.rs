@@ -5006,7 +5006,7 @@ fn validate_tab_select_target(
 ) -> Result<(), String> {
     if index.is_none() && guid.is_none() {
         return Err(
-            "tab-select requires an index or --guid (usage: browser4-cli tab-select <index> | --guid <guid>)"
+            "tab select requires an index or --guid (usage: browser4-cli tab select <index> | --guid <guid>)"
                 .to_string(),
         );
     }
@@ -19718,7 +19718,7 @@ async fn handle_experience_list(
     );
     if let Some(entries) = parsed.get("entries").and_then(|v| v.as_array()) {
         if entries.is_empty() {
-            cli_println!("No knowledge entries found. Run an agent task to build experience, then use 'experience-deep-learn' to promote facts.");
+            cli_println!("No knowledge entries found. Run an agent task to build experience, then use 'experience deep learn' to promote facts.");
         } else {
             cli_println!(
                 "{:<25}  {:<20}  {:<6}  {:<10}  {:<10}  {}",
@@ -24902,7 +24902,7 @@ async fn print_webminer_status(show_usage: bool) -> Result<(), CliError> {
         cli_println!("    update              Update to the latest release");
         cli_println!("    version             Show installed and latest versions");
         cli_println!("    uninstall           Remove the installed release");
-        cli_println!("    run-example         Download the sample dataset and run the full pipeline (needs 7-Zip)");
+        cli_println!("    run example         Download the sample dataset and run the full pipeline (needs 7-Zip)");
         cli_println!("    all <html-dir>      Run the full pipeline on downloaded HTML files");
         cli_println!("    views <result-dir>  Rebuild the interactive views from an existing run");
         cli_println!();
@@ -28769,7 +28769,7 @@ async fn handle_stop(base_url: &str) -> Result<(), String> {
             .collect();
         eprintln!(
             "⚠  {} browser process(es) of this workspace survived the stop: {} — \
-             retry `browser4-cli stop` or use `browser4-cli kill-all`.",
+             retry `browser4-cli stop` or use `browser4-cli kill all`.",
             workspace_browser_kill.remaining_pids.len(),
             pids.join(", ")
         );
@@ -28803,7 +28803,7 @@ async fn handle_stop(base_url: &str) -> Result<(), String> {
 
     if workspace_scoped {
         cli_println!(
-            "Other workspaces keep their own backends; use 'browser4-cli kill-all' to stop every workspace."
+            "Other workspaces keep their own backends; use 'browser4-cli kill all' to stop every workspace."
         );
     }
     Ok(())
@@ -31415,8 +31415,33 @@ fn validate_required_args(
 // Entry point
 // ---------------------------------------------------------------------------
 
-/// Rewrite spaced prefixed subcommands like `swarm create` / `agent run`
-/// to their internal kebab-case command forms.
+/// Command families whose public spelling is spaced (`tab list`, `cookie get`,
+/// `dialog accept`, …) and whose registry key is the kebab form.
+///
+/// Every entry is a prefix with no bare command of its own, paired with the
+/// subcommands it accepts. `close` has a bare form but takes no arguments, so
+/// `close all` is unambiguous; the dispatch still validates the subcommand so a
+/// stray positional (`close /tmp/x`) keeps its "unexpected argument" error.
+const SPACED_PREFIXES: &[(&str, &[&str])] = &[
+    ("close", &["all"]),
+    ("cookie", &["clear", "delete", "get", "list", "set"]),
+    ("delete", &["data"]),
+    ("dialog", &["accept", "dismiss", "status"]),
+    ("generate", &["locator"]),
+    ("go", &["back", "forward"]),
+    ("kill", &["all"]),
+    ("localstorage", &["clear", "delete", "get", "list", "set"]),
+    ("page", &["info"]),
+    ("session", &["default"]),
+    ("sessionstorage", &["clear", "delete", "get", "list", "set"]),
+    ("skill", &["info", "install", "list", "reload", "uninstall"]),
+    ("state", &["load", "save"]),
+    ("tab", &["close", "list", "new", "select"]),
+    ("web", &["vitals"]),
+];
+
+/// Rewrite spaced prefixed subcommands like `swarm create` / `agent run` /
+/// `tab list` to their internal kebab-case command forms.
 fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
     let prefix = args.first().map(|s| s.as_str())?;
     let sub = args.get(1)?;
@@ -31611,6 +31636,13 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
             rewritten.extend(args[2..].iter().cloned());
             return Some(rewritten);
         }
+        // `webminer run example` is the spaced public name of
+        // `webminer-run-example` (the JAR's own `run-example` subcommand).
+        if sub == "run" && args.get(2).map(String::as_str) == Some("example") {
+            let mut rewritten = vec!["webminer-run-example".to_string()];
+            rewritten.extend(args[3..].iter().cloned());
+            return Some(rewritten);
+        }
         return None;
     }
     // "tool" is a prefix-only command (tool call <name>, tool list). Only
@@ -31620,6 +31652,19 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         let known_subs = ["call", "list"];
         if known_subs.contains(&sub.as_str()) {
             let mut rewritten = vec![format!("tool-{}", sub)];
+            rewritten.extend(args[2..].iter().cloned());
+            return Some(rewritten);
+        }
+        return None;
+    }
+    // Families whose public spelling is the spaced form (`tab list`,
+    // `cookie get`, `dialog accept`, …). None of these has a bare form, so only
+    // a known subcommand is rewritten; any other second token passes through
+    // untouched and is rejected by dispatch instead of being swallowed as a
+    // positional argument.
+    if let Some((_, subs)) = SPACED_PREFIXES.iter().find(|(name, _)| *name == prefix) {
+        if subs.contains(&sub.as_str()) {
+            let mut rewritten = vec![format!("{}-{}", prefix, sub)];
             rewritten.extend(args[2..].iter().cloned());
             return Some(rewritten);
         }
@@ -31686,7 +31731,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "experience-save" => Some("experience save"),
         "experience-query" => Some("experience query"),
         "experience-list" => Some("experience list"),
-        "experience-deep-learn" => Some("experience deep-learn"),
+        "experience-deep-learn" => Some("experience deep learn"),
         // Plugin dashed forms are accepted directly — do not reject them.
         "skills-list" => Some("skills list"),
         "skills-get" => Some("skills get"),
@@ -31745,7 +31790,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "webminer-update" => Some("webminer update"),
         "webminer-version" => Some("webminer version"),
         "webminer-uninstall" => Some("webminer uninstall"),
-        "webminer-run-example" => Some("webminer run-example"),
+        "webminer-run-example" => Some("webminer run example"),
         "webminer-all" => Some("webminer all"),
         "webminer-views" => Some("webminer views"),
         _ => None,
@@ -31757,6 +31802,26 @@ fn preferred_prefixed_group_form(command: &str) -> Option<&'static str> {
         "agent" => Some("agent <subcommand>"),
         "swarm" => Some("swarm <subcommand>"),
         "co" => Some("swarm <subcommand>"),
+        // Spaced-only families (see `SPACED_PREFIXES`): the bare prefix is not
+        // a command, so it answers with the recommended spelling instead of a
+        // bare "Unknown command". `close` is deliberately absent — it is a
+        // real command on its own, and `close all` is the spaced form of
+        // `close-all` handled by the rewrite.
+        "cookie" => Some("cookie <subcommand>"),
+        "delete" => Some("delete <subcommand>"),
+        "dialog" => Some("dialog <subcommand>"),
+        "generate" => Some("generate <subcommand>"),
+        "go" => Some("go <subcommand>"),
+        "kill" => Some("kill <subcommand>"),
+        "localstorage" => Some("localstorage <subcommand>"),
+        "page" => Some("page <subcommand>"),
+        "profile" => Some("profile <subcommand>"),
+        "session" => Some("session <subcommand>"),
+        "sessionstorage" => Some("sessionstorage <subcommand>"),
+        "skill" => Some("skill <subcommand>"),
+        "state" => Some("state <subcommand>"),
+        "tab" => Some("tab <subcommand>"),
+        "web" => Some("web <subcommand>"),
         // `plugin` bare is a valid command (lists available plugin tools), so
         // it must not be rejected here — only `plugin <subcommand>` typos are
         // caught later by the unknown-command suggestion path.
@@ -32173,14 +32238,14 @@ fn compile_batch_step(
     let cmd_def = command_map.get(&nested_command).ok_or_else(|| {
         format!(
             "Unknown command: {}. Run 'browser4-cli help' for usage.",
-            nested_command
+            public_command_name(&nested_command)
         )
     })?;
 
     if !cmd_def.batch_supported {
         return Err(format!(
             "Command '{}' is not supported in batch mode. Batch mode only supports DOM operations.",
-            nested_command
+            public_command_name(cmd_def.name)
         ));
     }
 
@@ -32222,7 +32287,7 @@ fn compile_batch_step(
         "open" | "close" => {
             return Err(format!(
                 "Batch command only supports DOM operations. '{}' is not allowed. Please execute it separately.",
-                nested_command
+                public_command_name(&nested_command)
             ));
         }
         "eval" => {
@@ -35363,7 +35428,13 @@ fn could_be_declared_cli_command(args: &[String]) -> bool {
     let Some(second) = args.get(1) else {
         return false;
     };
-    if second.starts_with('-') || commands_map().contains_key(first) {
+    if second.starts_with('-')
+        || commands_map().contains_key(first)
+        // A spaced form the CLI owns (`tab list`, `swarm create`) dispatches
+        // locally: probing the backend for it put a specs round-trip in front
+        // of every such command.
+        || rewrite_prefixed_command(args).is_some()
+    {
         return false;
     }
     true
@@ -39696,6 +39767,163 @@ mod tests {
         assert_eq!(rewritten[2], ".product-title");
     }
 
+    /// Every command whose public name is the spaced form (`tab list`,
+    /// `cookie get`, `dialog accept`, …) must run from that spelling: the
+    /// reference prints the spaced name, so it has to be the one that works.
+    /// The kebab registry key stays a working alias.
+    #[test]
+    fn rewrite_prefixed_command_accepts_every_spaced_public_name() {
+        for cmd in crate::commands::all_commands() {
+            let public = crate::help::public_command_name(cmd.name);
+            if public == cmd.name {
+                continue;
+            }
+            let tokens: Vec<String> = public.split(' ').map(str::to_string).collect();
+            let rewritten = rewrite_prefixed_command(&tokens).unwrap_or_else(|| {
+                panic!("spaced form '{public}' of '{}' is not rewritten", cmd.name)
+            });
+            assert_eq!(
+                rewritten[0], cmd.name,
+                "'{public}' must dispatch to '{}'",
+                cmd.name
+            );
+        }
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_handles_spaced_tab_storage_and_dialog_families() {
+        for (spaced, flat) in [
+            (vec!["tab", "list"], "tab-list"),
+            (vec!["tab", "new", "https://example.com"], "tab-new"),
+            (vec!["tab", "select", "2"], "tab-select"),
+            (vec!["tab", "close", "--guid", "abc"], "tab-close"),
+            (vec!["cookie", "set", "k", "v", "--domain", "localhost"], "cookie-set"),
+            (vec!["cookie", "clear"], "cookie-clear"),
+            (vec!["localstorage", "get", "token"], "localstorage-get"),
+            (vec!["sessionstorage", "clear"], "sessionstorage-clear"),
+            (vec!["state", "save", "auth.json"], "state-save"),
+            (vec!["dialog", "accept", "Ada"], "dialog-accept"),
+            (vec!["page", "info"], "page-info"),
+            (vec!["go", "back"], "go-back"),
+            (vec!["skill", "list"], "skill-list"),
+            (vec!["close", "all"], "close-all"),
+            (vec!["kill", "all"], "kill-all"),
+            (vec!["web", "vitals"], "web-vitals"),
+            (vec!["session", "default", "job-42"], "session-default"),
+            (vec!["generate", "locator", "e5"], "generate-locator"),
+            (vec!["delete", "data"], "delete-data"),
+        ] {
+            let args: Vec<String> = spaced.iter().map(|s| s.to_string()).collect();
+            let rewritten = rewrite_prefixed_command(&args)
+                .unwrap_or_else(|| panic!("'{spaced:?}' must rewrite to '{flat}'"));
+            assert_eq!(rewritten[0], flat, "'{spaced:?}' must dispatch to '{flat}'");
+            assert_eq!(
+                &rewritten[1..],
+                &args[2..],
+                "'{flat}' must keep the arguments after the subcommand"
+            );
+        }
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_leaves_unknown_spaced_subcommands_alone() {
+        for tokens in [
+            vec!["tab", "foo"],
+            vec!["cookie", "/tmp/cookies.json"],
+            vec!["state", "clear"],
+            vec!["dialog", "close"],
+            vec!["web", "registry"],
+            vec!["session", "list"],
+            vec!["close"],
+        ] {
+            let args: Vec<String> = tokens.iter().map(|s| s.to_string()).collect();
+            assert!(
+                rewrite_prefixed_command(&args).is_none(),
+                "{args:?} must not be rewritten — only known subcommands are"
+            );
+        }
+    }
+
+    #[test]
+    fn preferred_prefixed_group_form_names_the_new_spaced_families() {
+        for (prefix, hint) in [
+            ("tab", "tab <subcommand>"),
+            ("cookie", "cookie <subcommand>"),
+            ("state", "state <subcommand>"),
+            ("dialog", "dialog <subcommand>"),
+            ("web", "web <subcommand>"),
+            ("session", "session <subcommand>"),
+        ] {
+            assert_eq!(
+                preferred_prefixed_group_form(prefix),
+                Some(hint),
+                "bare '{prefix}' must point at the spaced form"
+            );
+        }
+        // `close` is a real command, so it must not be rejected with a group hint.
+        assert_eq!(preferred_prefixed_group_form("close"), None);
+    }
+
+    /// The public contract for the renamed families: the spaced form is the
+    /// recommended spelling (`--help` prints it) and the kebab form keeps
+    /// working. `preferred_spaced_command_form` drives a hard "Unsupported
+    /// command form" error, so these commands must never be entered into it —
+    /// existing scripts keep running with the hyphen.
+    #[test]
+    fn renamed_families_keep_their_kebab_form_accepted() {
+        for flat in [
+            "tab-close",
+            "tab-list",
+            "tab-new",
+            "tab-select",
+            "cookie-clear",
+            "cookie-delete",
+            "cookie-get",
+            "cookie-list",
+            "cookie-set",
+            "localstorage-clear",
+            "localstorage-delete",
+            "localstorage-get",
+            "localstorage-list",
+            "localstorage-set",
+            "sessionstorage-clear",
+            "sessionstorage-delete",
+            "sessionstorage-get",
+            "sessionstorage-list",
+            "sessionstorage-set",
+            "state-load",
+            "state-save",
+            "dialog-accept",
+            "dialog-dismiss",
+            "dialog-status",
+            "page-info",
+            "go-back",
+            "go-forward",
+            "generate-locator",
+            "close-all",
+            "kill-all",
+            "delete-data",
+            "session-default",
+            "skill-info",
+            "skill-install",
+            "skill-list",
+            "skill-reload",
+            "skill-uninstall",
+            "web-vitals",
+            "profile-import",
+        ] {
+            assert!(
+                commands::commands_map().contains_key(flat),
+                "'{flat}' must exist in the registry"
+            );
+            assert_eq!(
+                preferred_spaced_command_form(flat),
+                None,
+                "'{flat}' is the working alias of its spaced form and must not be rejected"
+            );
+        }
+    }
+
     #[test]
     fn rewrite_prefixed_command_handles_htmlsnapshot_algorithms() {
         let rewritten = rewrite_prefixed_command(&[
@@ -39987,8 +40215,12 @@ mod tests {
         assert!(!could_be_declared_cli_command(&args(&["fill", "e5"])));
         // A flag in second position is an option, not a subcommand.
         assert!(!could_be_declared_cli_command(&args(&["profile", "--json"])));
+        // A spaced form the CLI owns is dispatched locally, not probed.
+        assert!(!could_be_declared_cli_command(&args(&["tab", "list"])));
+        assert!(!could_be_declared_cli_command(&args(&["swarm", "create"])));
         // The declared spaced form (`profile import`) is exactly this shape.
         assert!(could_be_declared_cli_command(&args(&["profile", "import"])));
+        assert!(could_be_declared_cli_command(&args(&["profile", "sources"])));
     }
 
     /// `--examples` must resolve a spaced subcommand the same way `help` does,
@@ -41552,7 +41784,7 @@ linkGroups:
         );
         assert_eq!(
             preferred_spaced_command_form("experience-deep-learn"),
-            Some("experience deep-learn")
+            Some("experience deep learn")
         );
     }
 
@@ -50192,6 +50424,28 @@ linkGroups:
         assert!(rewrite_prefixed_command(&["webminer".to_string()]).is_none());
     }
 
+    /// The WebMiner sample commands are displayed as `webminer run example`;
+    /// the JAR's own `run-example` spelling keeps working as an alias.
+    #[test]
+    fn rewrite_prefixed_command_handles_webminer_run_example_spaced_form() {
+        let rewritten = rewrite_prefixed_command(&[
+            "webminer".to_string(),
+            "run".to_string(),
+            "example".to_string(),
+            "--force".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "webminer-run-example");
+        assert_eq!(rewritten[1], "--force");
+
+        let legacy = rewrite_prefixed_command(&[
+            "webminer".to_string(),
+            "run-example".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(legacy[0], "webminer-run-example");
+    }
+
     #[test]
     fn preferred_spaced_command_form_includes_webminer_subcommands() {
         assert_eq!(
@@ -50212,7 +50466,7 @@ linkGroups:
         );
         assert_eq!(
             preferred_spaced_command_form("webminer-run-example"),
-            Some("webminer run-example")
+            Some("webminer run example")
         );
         assert_eq!(
             preferred_spaced_command_form("webminer-all"),

@@ -104,7 +104,7 @@ FORM_HTML=$(browser4-cli htmlsnapshot get html "form")
 # Step 3: Capture an interactive snapshot to get element refs
 browser4-cli snapshot -v 0
 
-# Step 4: Bridge DOM selectors to snapshot refs using generate-locator
+# Step 4: Bridge DOM selectors to snapshot refs using generate locator
 # or by extracting id/class attributes:
 browser4-cli get attr "#full-name" id
 
@@ -114,7 +114,7 @@ browser4-cli fill e15 "john@example.com"
 browser4-cli select e18 "CA"
 ```
 
-> **Important:** `fill` and `select` require snapshot element refs (e.g., `e12`), not CSS selectors. Use the interactive `snapshot` command to get refs, then bridge from DOM selectors using `get attr <selector> id` or `generate-locator <ref>`. The `htmlsnapshot get` commands in steps 10a–10b are for **understanding** the form structure; **interacting** with it requires the accessibility-tree snapshot and its ref-based commands.
+> **Important:** `fill` and `select` require snapshot element refs (e.g., `e12`), not CSS selectors. Use the interactive `snapshot` command to get refs, then bridge from DOM selectors using `get attr <selector> id` or `generate locator <ref>`. The `htmlsnapshot get` commands in steps 10a–10b are for **understanding** the form structure; **interacting** with it requires the accessibility-tree snapshot and its ref-based commands.
 
 ---
 
