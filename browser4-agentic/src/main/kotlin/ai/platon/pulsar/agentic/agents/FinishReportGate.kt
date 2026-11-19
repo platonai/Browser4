@@ -52,7 +52,9 @@ internal data class FinishEvidence(
  *    gate.
  * 3. **a gate that did not run and carries no `detail`** — a silent gate that
  *    reads as a pass.
- * 4. **`filesChanged` entries git does not show** — an invented change.
+ * 4. **`filesChanged` entries neither git nor the run's own trace shows** — an
+ *    invented change. (Git alone is not enough: an untracked file the run created
+ *    and then deleted leaves no trace in `git status` — run `4125acaa`, 2026-11-19.)
  * 5. **a configured required gate missing or `ok:false`** — an unsupported
  *    success claim.
  *
@@ -141,22 +143,33 @@ internal object FinishReportGate {
             }
         }
 
-        // 4. Reported changes must exist in git's view of the work tree.
+        // 4. Reported changes must exist in git's view of the work tree — or in the
+        //    run's own mutation trace when git cannot see them.
         //
-        // One direction only: reported ⊆ git-changed. The reverse ("git shows a
-        // change the report omits") is NOT checked, because the working tree may
-        // legitimately carry unrelated changes from before the task and the agent
-        // has no run-start baseline to subtract them.
+        // One direction only: reported ⊆ git-changed ∪ traced. The reverse ("git shows
+        // a change the report omits") is NOT checked, because the working tree may
+        // legitimately carry unrelated changes from before the task and the agent has
+        // no run-start baseline to subtract them.
+        //
+        // The trace half exists because `git status` cannot see an **untracked file's
+        // lifecycle**: it never listed the file, so deleting it again is equally
+        // invisible. Run `4125acaa` (2026-11-19) wrote 23 `.b4scratch/*` helpers,
+        // deleted them before finishing, listed them honestly in `filesChanged` — and
+        // this rule failed the whole task (`Invalid state: step 0 - Finish report
+        // rejected`) although `coding.verify` had passed and the deliverable was
+        // written. The rule's intent (no *invented* change) is preserved: an entry
+        // backed by neither git nor the run's own trace is still a violation.
         val reported = evidence.filesChanged.map { it.trim() }.filter { it.isNotEmpty() }
         val changed = evidence.gitChangedFiles
         if (reported.isNotEmpty() && changed != null) {
+            val traced = tracedMutationPaths(evidence)
             val normalized = reported.map { normalizePath(it) }
             val phantom = normalized.filterNot { path ->
-                changed.any { c -> c == path || c.endsWith("/$path") || path.endsWith("/$c") }
+                matchesAnyPath(changed, path) || matchesAnyPath(traced, path)
             }
             if (phantom.isNotEmpty()) {
-                violations += "filesChanged lists ${phantom.size} file(s) git does not show as changed: " +
-                    phantom.take(5).joinToString(", ")
+                violations += "filesChanged lists ${phantom.size} file(s) neither git nor this run's " +
+                    "file trace shows: " + phantom.take(5).joinToString(", ")
             }
         }
 
@@ -279,6 +292,22 @@ internal object FinishReportGate {
             .map { it.key }
             .filter { isMaterialPath(it, evidence) }
     }
+
+    /**
+     * Every path the run's own file-system trace mentions, `write` and `delete` alike.
+     *
+     * A path only appears here because this run handed it to `coding.*` — so a report that
+     * lists it is describing what actually happened, even when git cannot corroborate it
+     * (an untracked file that the run deleted again leaves no trace in `git status`).
+     */
+    private fun tracedMutationPaths(evidence: FinishEvidence): Set<String> =
+        evidence.recordedMutations.mapNotNull { entry ->
+            normalizePath(entry.substringAfter(' ', "")).takeIf { it.isNotEmpty() }
+        }.toSet()
+
+    /** Path equality that tolerates a repo-relative/absolute-prefix mismatch either way. */
+    private fun matchesAnyPath(paths: Collection<String>, path: String): Boolean =
+        paths.any { p -> p == path || p.endsWith("/$path") || path.endsWith("/$p") }
 
     /**
      * Whether a mutated path is material to the checkout: a path git reports as

@@ -113,7 +113,61 @@ class FinishReportGateTest {
             )
         )
         assertFalse(verdict.passed)
-        assertTrue(verdict.violations.any { it.contains("git does not show as changed") }, "${verdict.violations}")
+        assertTrue(
+            verdict.violations.any { it.contains("neither git nor this run's file trace shows") },
+            "${verdict.violations}",
+        )
+    }
+
+    /**
+     * Run `4125acaa` (2026-11-19): the agent wrote 23 helper files under `.b4scratch/`, deleted
+     * them before finishing, listed them in `filesChanged` — and rule 4 failed the whole task
+     * ("Invalid state: step 0 - Finish report rejected") although `coding.verify` passed and
+     * the deliverable was written. `git status` never saw those files: nothing was ever
+     * staged, and deleting an untracked file is as invisible as creating it.
+     */
+    @Test
+    @DisplayName("rule 4: a file the run created and deleted itself is backed by the trace, not a phantom")
+    fun scratchFileBackedByTraceIsAccepted() {
+        val verdict = FinishReportGate.evaluate(
+            evidence(
+                filesChanged = listOf(".b4scratch/collect.js", "examples/scripts/weibo-ego-lite.mjs"),
+                gitChangedFiles = setOf("examples/scripts/weibo-ego-lite.mjs"),
+                recordedMutations = listOf(
+                    "write .b4scratch/collect.js",
+                    "delete .b4scratch/collect.js",
+                    "write examples/scripts/weibo-ego-lite.mjs",
+                ),
+            )
+        )
+
+        assertTrue(verdict.passed, "the run's own trace backs the scratch entry: ${verdict.violations}")
+    }
+
+    @Test
+    @DisplayName("rule 4: a file neither git nor the trace shows is still an invented change")
+    fun inventedFileStillRejectedNextToTracedOnes() {
+        val verdict = FinishReportGate.evaluate(
+            evidence(
+                filesChanged = listOf("examples/scripts/weibo-ego-lite.mjs", "docs/invented.md"),
+                gitChangedFiles = setOf("examples/scripts/weibo-ego-lite.mjs"),
+                recordedMutations = listOf(
+                    "write .b4scratch/collect.js",
+                    "delete .b4scratch/collect.js",
+                    "write examples/scripts/weibo-ego-lite.mjs",
+                ),
+            )
+        )
+
+        assertFalse(verdict.passed, "docs/invented.md is backed by nothing")
+        assertTrue(
+            verdict.violations.any { it.contains("docs/invented.md") },
+            "the violation must name the invented file only: ${verdict.violations}",
+        )
+        assertTrue(
+            verdict.violations.none { it.contains(".b4scratch/") },
+            "the traced scratch file must not be named: ${verdict.violations}",
+        )
     }
 
     @Test
