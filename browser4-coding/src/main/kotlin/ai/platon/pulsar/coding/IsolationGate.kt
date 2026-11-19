@@ -157,8 +157,7 @@ object IsolationGate {
             return Decision(
                 false,
                 "coding.verify did not cover ${uncovered.joinToString(", ")} — recorded: [$verified]. " +
-                    "Verify every changed module (one that depends on all of them, or one verdict per " +
-                    "ecosystem: mvn -pl <module> -am / module=\"${ModuleMap.CLI_CRATE}\")",
+                    coverageHint(modules, graph),
                 changed,
                 modules,
                 passing.firstOrNull()?.module,
@@ -176,6 +175,28 @@ object IsolationGate {
             modules,
             used.joinToString(", ") { it.module ?: "?" },
         )
+    }
+
+    /**
+     * What to verify instead, naming the concrete `module=` whose build covers the change set.
+     *
+     * "Verify every changed module" says nothing about which module's `-am` build contains the
+     * others, so a change spanning two modules can only be rescued by reasoning about the
+     * dependency direction — the 2026-11-18 run guessed it backwards (`browser4-coding` for a
+     * change that also touched `browser4-agentic`), the merge was refused, and 19 minutes of
+     * work stayed in the worktree. [ModuleResolver.suggestVerifier] answers that question from
+     * the same graph the coverage check uses.
+     */
+    private fun coverageHint(modules: Set<String>, graph: ModuleGraph.Graph?): String = buildString {
+        append("Verify every changed module, or one whose `-am` build compiles all of them")
+        ModuleResolver.suggestVerifier(modules, graph)?.let { verifier ->
+            append(": coding.verify(module=\"").append(verifier)
+            append("\") → mvn -pl ").append(verifier).append(" -am covers this change set")
+        }
+        if (ModuleMap.CLI_CRATE in modules) {
+            append("; the Rust crate needs module=\"").append(ModuleMap.CLI_CRATE).append("\"")
+        }
+        append('.')
     }
 
     /**

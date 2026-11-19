@@ -107,6 +107,41 @@ class IsolationGateTest {
     }
 
     @Test
+    @DisplayName("a coverage refusal names the module whose -am build covers every changed module")
+    fun coverageRefusalNamesTheVerifier() {
+        // The 2026-11-18 run: two files in browser4-coding plus one in browser4-agentic, verified
+        // browser4-coding only. The run then reasoned "verify every changed module" without being
+        // told which module's build contains the other, guessed the upstream one, and the merge was
+        // refused. The refusal must name the module that actually covers the change set.
+        val decision = IsolationGate.evaluate(
+            listOf(
+                "browser4-coding/src/main/kotlin/ai/platon/pulsar/coding/sandbox/WindowsNativeApi.kt",
+                "browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/tools/builtin/B4CliToolExecutor.kt",
+            ),
+            verdict("browser4-coding", passed = true),
+        )
+
+        assertFalse(decision.allow)
+        assertEquals(setOf("browser4-coding", "browser4-agentic"), decision.requiredModules)
+        assertTrue(decision.reason.contains("did not cover browser4-agentic"), decision.reason)
+        assertTrue(decision.reason.contains("module=\"browser4-agentic\""), decision.reason)
+    }
+
+    @Test
+    @DisplayName("the coverage hint still names the Rust crate when the change spans ecosystems")
+    fun coverageHintNamesBothEcosystems() {
+        val decision = IsolationGate.evaluate(
+            listOf("cli/browser4-cli/src/main.rs", "browser4-coding/src/main/kotlin/X.kt"),
+            verdict(ModuleMap.CLI_CRATE, passed = true),
+        )
+
+        assertFalse(decision.allow)
+        assertTrue(decision.reason.contains("did not cover browser4-coding"), decision.reason)
+        assertTrue(decision.reason.contains("module=\"browser4-coding\""), decision.reason)
+        assertTrue(decision.reason.contains("module=\"${ModuleMap.CLI_CRATE}\""), decision.reason)
+    }
+
+    @Test
     @DisplayName("turning the requirement off allows an unverified code change")
     fun requirementCanBeDisabled() {
         val decision = IsolationGate.evaluate(

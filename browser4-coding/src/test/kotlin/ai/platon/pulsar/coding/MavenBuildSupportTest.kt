@@ -333,6 +333,35 @@ class MavenBuildSupportTest {
             "build output is not part of the reactor"
         )
     }
+
+    // ==================== build environment ====================
+
+    @Test
+    @DisplayName("the Maven child gets LOCALAPPDATA inside the workspace so the Kotlin daemon can write")
+    fun buildEnvironmentRedirectsLocalAppData(@TempDir tmp: Path) {
+        // The Kotlin compiler client writes `kotlin-daemon-client-tsmarker*.tmp` into
+        // %LOCALAPPDATA%\kotlin\daemon before it reaches the daemon. A restricted-token backend
+        // cannot write there, so every `coding.mvnBuild` died in kapt with AccessDeniedException
+        // (2026-11-18) — before compiling a single file. The override must therefore land inside
+        // the workspace, where the sandbox grants write access.
+        val shell = CodingAgentShell(baseDir = tmp)
+        val env = MavenBuildSupport.buildEnvironment(shell)
+
+        val isWindows = System.getProperty("os.name").lowercase().contains("win")
+        if (!isWindows) {
+            assertTrue(env.isEmpty(), "only Windows derives the Kotlin daemon directory from LOCALAPPDATA: $env")
+            return
+        }
+        val localAppData = env["LOCALAPPDATA"]
+        assertNotNull(localAppData, "LOCALAPPDATA must be overridden: $env")
+        val dir = Path.of(localAppData!!)
+        assertEquals(
+            ".b4scratch/home/AppData/Local",
+            runCatching { shell.canonicalWorkspaceDir.relativize(dir) }.getOrNull()?.toString()?.replace('\\', '/'),
+            "the override must live inside the workspace and match the AppContainer layout, was $dir",
+        )
+        assertTrue(Files.isDirectory(dir), "the override must exist before Maven starts: $dir")
+    }
 }
 
 

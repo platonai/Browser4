@@ -107,6 +107,70 @@ object ModuleResolver {
     fun requiresVerification(changedFiles: Collection<String>): Boolean =
         changedFiles.any { !isDocumentation(it) }
 
+    /** The static snapshot's edges inverted once: module → modules it directly depends on. */
+    private val STATIC_DEPENDENCIES: Map<String, List<String>> by lazy {
+        val inverted = mutableMapOf<String, MutableSet<String>>()
+        ModuleMap.DEPENDENTS.forEach { (dependency, dependents) ->
+            dependents.forEach { dependent ->
+                inverted.getOrPut(dependent) { linkedSetOf() }.add(dependency)
+            }
+        }
+        inverted.mapValues { it.value.toList() }
+    }
+
+    /**
+     * The `module=` value whose `mvn -pl <module> -am` build compiles every module in [modules].
+     *
+     * `-am` builds the module **and its dependencies**, so "verify the module I edited most" is
+     * not enough when the change set also touches a module that depends on it — that dependent is
+     * not in the build at all. On 2026-11-18 a run changed `browser4-coding` (2 files) and
+     * `browser4-agentic` (1 file), verified `browser4-coding`, and the isolation gate refused the
+     * merge; the task failed with its work stranded in the worktree. There *was* one module whose
+     * build covers both (`browser4-agentic`, which depends on `browser4-coding`), so the refusal
+     * can name it instead of making the model reason about the dependency direction.
+     *
+     * The smallest **dependency closure** wins: `browser4-agentic` and `browser4-rest` both cover
+     * the example change set, and the `browser4-agentic` build compiles far fewer modules.
+     *
+     * @param modules changed modules; [ModuleMap.CLI_CRATE] is ignored because cargo is not a
+     *   Maven module and always needs its own verdict
+     * @param graph the workspace's own module graph when available (it knows foreign edges); the
+     *   static [ModuleMap] snapshot otherwise
+     * @return a `module=` value that covers all of [modules], or null when no single module does
+     *   (a Rust-only change, or modules whose edges are unknown)
+     */
+    fun suggestVerifier(modules: Set<String>, graph: ModuleGraph.Graph? = null): String? {
+        val mavenModules = modules - ModuleMap.CLI_CRATE
+        if (mavenModules.isEmpty()) return null
+        if (mavenModules.size == 1) return mavenModules.first()
+        val candidates = graph?.nodes?.keys ?: ModuleMap.MODULES
+        return candidates.asSequence()
+            .filter { covers(it, mavenModules, graph) }
+            .minWithOrNull(compareBy<String>({ dependencyClosure(it, graph).size }, { it }))
+    }
+
+    /**
+     * Every module [module] transitively depends on, itself included.
+     *
+     * Read per node, so a graph that only partly overlaps the static snapshot still answers for
+     * the nodes it knows.
+     */
+    private fun dependencyClosure(module: String, graph: ModuleGraph.Graph?): Set<String> {
+        val seen = linkedSetOf(module)
+        var frontier = listOf(module)
+        while (frontier.isNotEmpty()) {
+            frontier = frontier.flatMap { current ->
+                val dependencies = if (graph != null && current in graph.nodes) {
+                    graph.nodes[current]?.dependencies.orEmpty()
+                } else {
+                    STATIC_DEPENDENCIES[current].orEmpty()
+                }
+                dependencies.filter { seen.add(it) }
+            }
+        }
+        return seen
+    }
+
     private fun normalize(path: String): String =
         path.replace('\\', '/').trim().removePrefix("./").trimEnd('/')
 }

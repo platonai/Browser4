@@ -2,6 +2,7 @@ package ai.platon.pulsar.coding
 
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.nio.file.Files
 import java.nio.file.Path
 
 /**
@@ -193,6 +194,55 @@ class MavenBuildSupport(
          */
         private fun workspaceRoot(shell: CodingAgentShell): Path? =
             runCatching { shell.canonicalWorkspaceDir }.getOrNull()
+
+        /**
+         * Workspace-relative directory holding state the build tools insist on writing outside
+         * the workspace; see [buildEnvironment].
+         *
+         * `.b4scratch` is already gitignored, skipped by the build fingerprint and skipped by the
+         * module-graph scan, so redirecting tool state here cannot evict a cache entry or add a
+         * bogus module node.
+         */
+        const val SCRATCH_DIR = ".b4scratch"
+
+        /**
+         * The `LOCALAPPDATA` a sandboxed child gets, relative to [SCRATCH_DIR].
+         *
+         * Deliberately the same layout the AppContainer sandbox points the whole child at
+         * (`WindowsAppContainerSandbox.sandboxEnvironment`): one directory per mechanism would
+         * give the same tool two caches depending on which sandbox happened to be active.
+         */
+        private val LOCAL_APPDATA_SUBDIR = listOf("home", "AppData", "Local")
+
+        /**
+         * Environment overrides for the Maven child process (empty when none are needed).
+         *
+         * On Windows the Kotlin compiler client writes a `kotlin-daemon-client-tsmarker*.tmp`
+         * file into `%LOCALAPPDATA%\kotlin\daemon` *before* it can reach the compiler daemon. A
+         * backend running under a restricted token cannot write there, and the build then dies
+         * with `AccessDeniedException: ...\kotlin-daemon-client-tsmarker....tmp` during kapt —
+         * before a single source file is compiled. Every `coding.mvnBuild` of a run failed that
+         * way on 2026-11-18, which left `compile` unusable and pushed the agent into a
+         * compile-free verdict.
+         *
+         * Pointing `LOCALAPPDATA` at a directory inside the workspace fixes it at the source: the
+         * daemon directory comes from that variable. `LOCALAPPDATA` is whitelisted by
+         * [ai.platon.pulsar.coding.sandbox.SandboxEnvironment] and an explicitly declared value
+         * wins over the inherited one, so the override survives the sandbox without widening it.
+         *
+         * @return `LOCALAPPDATA` → `<workspace>/.b4scratch/home/AppData/Local` on Windows; empty
+         *   elsewhere, or when the workspace root cannot be resolved
+         */
+        fun buildEnvironment(shell: CodingAgentShell): Map<String, String> {
+            val isWindows = System.getProperty("os.name", "").lowercase().contains("win")
+            if (!isWindows) return emptyMap()
+            val root = workspaceRoot(shell) ?: return emptyMap()
+            val dir = runCatching {
+                val scratch = root.resolve(SCRATCH_DIR)
+                Files.createDirectories(LOCAL_APPDATA_SUBDIR.fold(scratch) { path, segment -> path.resolve(segment) })
+            }.getOrNull() ?: return emptyMap()
+            return mapOf("LOCALAPPDATA" to dir.toAbsolutePath().normalize().toString())
+        }
 
         /**
          * Parse Kotlin/Java compiler errors from Maven output.
@@ -466,7 +516,9 @@ class MavenBuildSupport(
         buildFingerprint: BuildFingerprint?,
         threads: String?,
     ): BuildResult {
-        val result = runMavenWithSelectorFallback(shell, selector, timeoutSeconds, workingDir) { resolved ->
+        val result = runMavenWithSelectorFallback(
+            shell, selector, timeoutSeconds, workingDir, buildEnvironment(shell),
+        ) { resolved ->
             mavenBuildCommand(launcher, resolved, goalList, skipTests, threads)
         }
 
@@ -549,7 +601,9 @@ class MavenBuildSupport(
     ): BuildResult {
         val launcher = mavenLauncher(shell, workingDir)
         val selector = resolveModuleSelector(shell, module, workingDir) ?: module
-        val result = runMavenWithSelectorFallback(shell, selector, timeoutSeconds, workingDir) { resolved ->
+        val result = runMavenWithSelectorFallback(
+            shell, selector, timeoutSeconds, workingDir, buildEnvironment(shell),
+        ) { resolved ->
             mavenTestCommand(launcher, resolved, testClasses)
         }
         val combined = listOf(result.stdout, result.stderr)
@@ -582,12 +636,13 @@ class MavenBuildSupport(
         module: String,
         timeoutSeconds: Long,
         workingDir: String?,
+        env: Map<String, String>,
         commandFor: (selector: String) -> String,
     ): ShellResult {
         val timeout = timeoutSeconds.coerceIn(1, CodingAgentShell.MAX_TIMEOUT_SECONDS)
         val primary = commandFor(module)
         logger.info("Maven: {}", primary)
-        val first = runCommand(shell, primary, timeout, workingDir)
+        val first = runCommand(shell, primary, timeout, workingDir, env)
         if (first.exitCode == 0 || !isMavenModuleSelectorFailure(first.stdout + "\n" + first.stderr)) {
             return first
         }
@@ -597,7 +652,7 @@ class MavenBuildSupport(
         }
         val fallback = commandFor(":$artifactId")
         logger.info("Maven module path selector failed for '{}'; retrying with artifactId selector: {}", module, fallback)
-        return runCommand(shell, fallback, timeout, workingDir)
+        return runCommand(shell, fallback, timeout, workingDir, env)
     }
 
     /** Run one Maven command line — through the injected runner (tests) or the real shell. */
@@ -606,8 +661,9 @@ class MavenBuildSupport(
         command: String,
         timeout: Long,
         workingDir: String?,
+        env: Map<String, String>,
     ): ShellResult = commandRunner?.invoke(shell, command, timeout, workingDir)
-        ?: shell.executeRaw(command = command, timeoutSeconds = timeout, workingDir = workingDir)
+        ?: shell.executeRaw(command = command, timeoutSeconds = timeout, workingDir = workingDir, env = env)
 
     /**
      * Format a [BuildResult] for the agent: diagnostics first (structured),

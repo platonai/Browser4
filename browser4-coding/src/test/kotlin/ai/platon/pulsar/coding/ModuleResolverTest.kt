@@ -141,4 +141,39 @@ class ModuleResolverTest {
         assertTrue(ModuleResolver.covers(ModuleMap.CLI_CRATE, setOf(ModuleMap.CLI_CRATE), graph))
         assertTrue(ModuleResolver.covers("app", emptySet(), graph), "an empty change set needs no verifier")
     }
+
+    // -- suggesting which module to verify --------------------------------------
+
+    @Test
+    @DisplayName("the suggestion names the smallest module whose -am build covers every change")
+    fun suggestsCoveringVerifier() {
+        // The 2026-11-18 failure: 2 files in browser4-coding + 1 in browser4-agentic, verified
+        // browser4-coding only. browser4-agentic depends on browser4-coding, so its -am build
+        // compiles both — that is the verdict that would have merged.
+        assertEquals(
+            "browser4-agentic",
+            ModuleResolver.suggestVerifier(setOf("browser4-coding", "browser4-agentic")),
+        )
+        assertEquals("browser4-agentic", ModuleResolver.suggestVerifier(setOf("browser4-agentic")))
+        // The crate is not a Maven module: the Maven half can still be named, the Rust half cannot.
+        assertEquals(
+            "browser4-coding",
+            ModuleResolver.suggestVerifier(setOf("browser4-coding", ModuleMap.CLI_CRATE)),
+        )
+        assertNull(
+            ModuleResolver.suggestVerifier(setOf(ModuleMap.CLI_CRATE)),
+            "cargo is not a Maven module and always needs its own verdict",
+        )
+    }
+
+    @Test
+    @DisplayName("a foreign graph suggests the module that depends on the library it changed")
+    fun suggestsForeignVerifier() {
+        assertEquals("app", ModuleResolver.suggestVerifier(setOf("lib", "app"), demoGraph()))
+        assertNull(
+            ModuleResolver.suggestVerifier(setOf("lib", "app")),
+            "the static Browser4 snapshot cannot cover a foreign repo's modules — guessing would " +
+                "name a module the workspace does not have",
+        )
+    }
 }
