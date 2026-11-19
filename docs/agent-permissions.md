@@ -366,6 +366,7 @@ CLI `/access`、`FailureCategory` 把结构化拒绝归类为「权限问题」�
 | `Error: Unexpected error executing '<cmd>' — Windows sandbox unavailable: cannot lower the mandatory label …` | `coding.shell`、`mvnBuild`、`verify(compile\|test)`、`b4.run` 共用同一个 `prepare()` | 同上 |
 | `sandbox boundary NOT enforced: …`（启动日志） | `SandboxDefaults` 的就绪判定没过，后端保持 `off` | 不是本节：按日志点名的缺件处理（账户 / 凭据 / 令牌） |
 | `windows-low-il write probe passed: workspace=…` | 打标与三段探针都过了 | 健康状态，无需动作 |
+| 沙箱**能起来**、工作区读写正常，但工具链目录里 `dir` 报「找不到文件」/ exe 或 `.cmd` 报「拒绝访问」/ `node -e readdirSync` 报 `EPERM`，同一条命令在普通 shell 里正常 | 目标目录的 DACL 上有**AppContainer 包 SID**（`S-1-15-2-<hash>`）的遗留 ACE：低完整性 + 受限令牌读不了它 | §10.10 |
 
 本节故障**不会**出现 `sandbox boundary NOT enforced`：`isReady()` 只验「能造出 Low 令牌」，
 不验「工作区能降标签」，所以选后端阶段放行、运行时才炸（缺口见 §10.8）。
@@ -527,6 +528,70 @@ takeown /f '<ws>' /r /d y     # 需要提升的 SeTakeOwnership（管理员）
 - 沙箱设计与已知约束：[agent-permissions-redesign.md](agent-permissions-redesign.md) §8
 - 属性、失败语义与回滚：[config.md](config.md)（`browser4.agent.sandbox` 一节）
 - 拒绝码与操作员审批：[agent-access.md](../skills/browser4-cli/references/agent-access.md)
+
+### 10.10 低完整性读不到工具链目录（遗留 AppContainer ACE）
+
+与 §10 前九节相反：**沙箱正常起来了**，工作区里读写/构建都好，只有**工作区外**的某些目录进不去。
+
+症状（2026-11-19，run `4125acaa` 实测）：
+
+```text
+coding.shell> browser4-cli --version
+✗ FAILED · exit 1
+拒绝访问。
+
+coding.shell> dir /b "…\npm\node_modules\browser4-cli"
+找不到文件                      # 同一父目录 …\npm\node_modules 却列得出来
+
+node -e "readdirSync('…/npm/node_modules/browser4-cli')"
+ERR EPERM: operation not permitted, scandir '…'
+```
+
+而**同一账户**在普通 shell（Medium IL）、`runas /trustlevel:0x20000`（受限令牌）、以及直接
+`node_modules\browser4-cli\bin\browser4-cli-win32-x64.exe --version` 下全部正常；`icacls` 里当前用户还是 `(F)`。
+子进程自报身份是 `Mandatory Label\Low Mandatory Level (S-1-16-4096)`，即 `windows-low-il` 确实生效。
+
+根因：对象 DACL 里若有 **AppContainer 包 SID**（`S-1-15-2-<hash>`）的**显式** ACE，Low 完整性 + 受限令牌
+对它的**读/枚举**都会被内核拒绝（`CreateProcess` 落在该目录内的 exe 也一并「拒绝访问」）。这类 ACE 通常是
+`windows-appcontainer` 后端（或它的实验/测试）给容器授权后没有回收留下的：
+`icacls <dir> /grant "*<containerSid>:(OI)(CI)(M|RX)"`。
+
+已实测的边界（同一台机器、同一个受限 Low 令牌）：
+
+| 目录上的额外 ACE | Low IL 结果 |
+|---|---|
+| 无 | 可列/可读/可执行 |
+| 外部普通 SID（`S-1-5-21-…-9999:(OI)(CI)(RX)`） | 正常 |
+| `S-1-15-2-1`（ALL APPLICATION PACKAGES） | 正常 |
+| **具体包 SID `S-1-15-2-740…:(OI)(CI)(RX)`** | **列不出 / 拒绝访问** |
+| 同一条包 SID ACE 被 `/remove` 后 | 立即恢复正常 |
+
+最小复现（**新建**一个自己的目录，不动现有对象）：
+
+```powershell
+$p = Join-Path $env:TEMP 'ace-probe'; New-Item -ItemType Directory $p | Out-Null; Set-Content "$p\a.txt" hi
+icacls $p /grant "*S-1-15-2-740000081-2787761786-2739701453-4027781610-3709442335-2178988983-1814727619:(OI)(CI)(RX)"
+# 在低完整性沙箱子进程里：dir $p → 找不到文件；type $p\a.txt → 拒绝访问
+icacls $p /remove "*S-1-15-2-740…"   # 立刻恢复
+```
+
+处置（属主天然有 `WRITE_DAC`，通常不需要管理员）：
+
+```powershell
+icacls '<dir>'                              # 找不带 (I) 的 S-1-15-2-<hash> ACE
+icacls '<dir>' /remove "*S-1-15-2-<hash>"   # 只删这一条，不要 /reset 整条 DACL
+```
+
+不改 ACL 也能干活的路子：`b4.run` 产品通道；或直接调目录里的 exe（`.cmd` shim 要经 `cmd.exe` 解析批处理，
+被挡时同样报「拒绝访问」）。
+
+产品侧已落（2026-11-19）：`SandboxDenials` 现在认中文拒绝文案（`拒绝访问`），`windows-low-il` 的
+`code=SANDBOX_DENIED` 的 `hint` 里直接带上 `icacls … /remove *<sid>` 这条命令；`SandboxStatus` /
+`SandboxDenials` 改为读**任务实际的后端**（`CodingComponents.sandbox(policy)`），不再只读
+`browser4.agent.sandbox` 属性——此前它们会在 low-il 生效时对模型宣称「no OS sandbox is active」。
+
+未收口：`windows-appcontainer` 目前只记录 grant、没有撤销通道（`grantedRoots` + marker）；
+容器实验留下的 ACE 要靠上面的手工命令回收。
 
 ---
 

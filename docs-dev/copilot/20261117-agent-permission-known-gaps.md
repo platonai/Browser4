@@ -36,6 +36,7 @@
 | G6 | C | `windows-acl` 的文件写未下沉 | 低（该后端需管理员，实践少见） | 中（要一台已 provisioning 的机器） | OPEN |
 | G7 | C | 每次文件变更 ~0.4s（一进程一次操作） | 低（只影响时长） | 中（常驻助手 = 生命周期风险） | OPEN |
 | G8 | C | browse 未默认启用容器：容器内无解释器/工具链 | 中（browse 目标含"允许写脚本"） | 高（部署层决定） | OPEN |
+| G9 | C | 容器 grant 只记录不回收；残留的包 SID ACE 让 `windows-low-il` 读不到该目录 | 中（整棵工具链目录被挡，报错是裸「拒绝访问。」） | 低（按 marker 撤销 + 启动自检） | OPEN（2026-11-19 已手工处置一次） |
 
 ---
 
@@ -164,6 +165,27 @@
 - **收口路径**：部署层决定——把共享工具链装到 `ALL APPLICATION PACKAGES` 可读的位置，
   或给那些目录预置 ACE（需管理员/WRITE_DAC）；否则接受"容器模式不给脚本解释器"。
 - **建议时机**：与 G2 一起考虑（都属于"边界之外的可达性"问题）。
+
+### G9 — 容器 grant 只记录不回收：残留的包 SID ACE 会让 `windows-low-il` 读不到该目录
+
+- **现状**：`WindowsAppContainerSandbox.grant()` 每次授权都在 data 目录旁边写一个 marker
+  （`grantedRoots` + `<digest>.grant`），但**没有撤销通道**；容器实验/测试跑完后，
+  目标目录上的 `icacls … /grant "*<containerSid>:(OI)(CI)(M|RX)"` 会一直留着。
+- **根因（实测，2026-11-19）**：对象 DACL 里只要有一条**具体包 SID**（`S-1-15-2-<hash>`，
+  不是 `S-1-15-2-1`）的显式 ACE，**低完整性 + 受限令牌**（`windows-low-il` 的子进程）对该对象的
+  **读/枚举**就会被内核拒绝：`dir` 报「找不到文件」、目录内 exe/`.cmd` 报「拒绝访问」、
+  `node -e readdirSync` 报 `EPERM`；同一账户在普通 shell、`runas /trustlevel` 下都正常。
+  实测矩阵与最小复现见 [`docs/agent-permissions.md` §10.10](../../docs/agent-permissions.md)。
+- **危害**：中。一个遗留 ACE 会让**整棵工具链目录**对 coding 沙箱不可读，而报错是裸的
+  「拒绝访问。」——2026-11-19 那次 `agent run` 为此浪费了约 25 步（run `4125acaa`）。
+- **系统怎么披露**：`code=SANDBOX_DENIED` 的 hint 现在点名这条 ACE 与 `icacls … /remove *<sid>`
+  （`SandboxDenials.LOW_IL_HINT`）；症状/处置写进 `docs/agent-permissions.md` §10.10。
+- **证据 / 复测**：三阶段对照（无 ACE → 可列；加包 SID ACE → 列不出；`/remove` → 恢复）3/3 稳定；
+  测试见 `SandboxDenialsTest`（localized denial + hint）与 `SandboxStatusTest`。
+- **收口路径**：① 用 marker 实现 `revoke`（`icacls <dir> /remove "*<sid>"`），
+  在容器后端停止/任务结束时回收；② 启动自检：low-il 就绪探针顺带扫一遍工作区与工具链根的
+  DACL，发现包 SID ACE 就**在选后端阶段**警告并给修复命令；③ 明确"绝不给用户全局目录授权"。
+- **建议时机**：先做 ③（约定）与 ②（告警），再做 ①（回收）。
 
 ---
 
