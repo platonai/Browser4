@@ -411,6 +411,7 @@ browser4-cli agent run "Read the previous task's log and explain why it failed" 
 | `code=PATH_DENIED` | the path is outside the workspace | see [agent-workspace.md](agent-workspace.md) — name the input, use `--coding`, or widen paths |
 | `code=PROTECTED_PATH` / `code=SENSITIVE_PATH` | rails, not capabilities | never approvable; copy the data somewhere allowed |
 | `code=SANDBOX_DENIED` | the OS sandbox refused the operation (the step's `needed` names the granted roots) | keep the command inside the workspace and granted roots; change the sandbox configuration, not the command |
+| `Error: Failed to write … the OS sandbox 'windows-low-il' could not start …` / `Unexpected error executing … Windows sandbox unavailable …` | the OS sandbox could not start on this workspace (an integrity label cannot be lowered without `WRITE_OWNER`); read-only tools keep working | the operator repairs the workspace ACL — symptom table, minimal `icacls` grant and verification in [agent-permissions.md](../../../docs/agent-permissions.md) §10; changing `--access` / `--unrestricted` does not help |
 | An approved grant "did not apply" | the effect does not cover the method, the grant expired, or a rail matched (denied tool, protected path, workspace boundary, command whitelist) | ask for the right effect (`fs.write` vs `fs.exec`), re-request after expiry, or remove the rail in the embedding configuration — a rail is never approvable |
 
 ## Related

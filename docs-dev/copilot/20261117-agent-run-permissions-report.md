@@ -224,6 +224,6 @@ Linux → `landlock`/`bwrap`，macOS → `seatbelt`（**均未实现**，选到�
 
 ## 15. 代码索引
 
-见 [`docs/agent-permissions.md`](../../docs/agent-permissions.md) §11「关键文件索引」。本报告新增的两条通道实现在
+见 [`docs/agent-permissions.md`](../../docs/agent-permissions.md) §12「关键文件索引」。本报告新增的两条通道实现在
 `browser4-coding/.../sandbox/SandboxFileOps.kt`（文件写下沉）与
 `browser4-coding/.../CodingComponents.kt#b4RunSandbox`（`b4.run` 产品通道决策）。

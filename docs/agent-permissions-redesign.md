@@ -186,7 +186,7 @@ P1 的接线点：`AgentAccessPolicy` 增加 `mode: AgentMode`（由 `--coding`/
 
 实测（本机，普通用户、非管理员）：Low 子进程在工作区内写成功、在 `~` 下写被拒、列 `~/.ssh` 被拒；探针脚本用 PowerShell `-File` 传路径，避免 `cmd /c` 自带引号与 launcher 的 C 运行库引号规则打架（这个坑真踩了：`echo x> "C:\a b\f"` 报"文件名、目录名或卷标语法不正确"）。
 
-已知约束：`icacls /setintegritylevel` 需要目标上的 **WRITE_OWNER**。产品的工作区在 `<app data>/agent/...`（用户私有）没问题；`%TEMP%` 这类继承自共享目录的位置不行 —— 后端现在对此直接报错（"cannot lower the mandatory label … needs WRITE_OWNER"），而不是含糊地失败在探针上。
+已知约束：`icacls /setintegritylevel` 需要目标上的 **WRITE_OWNER**。产品的工作区在 `<app data>/agent/...`（用户私有）没问题；`%TEMP%` 这类继承自共享目录的位置不行 —— 后端现在对此直接报错（"cannot lower the mandatory label … needs WRITE_OWNER"），而不是含糊地失败在探针上。排障步骤、实测有效的两种最小授权与验证判据见 [agent-permissions.md](agent-permissions.md) §10。
 
 ---
 

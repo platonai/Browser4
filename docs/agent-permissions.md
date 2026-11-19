@@ -12,7 +12,7 @@
 > [docs-dev/copilot/20261117-agent-permission-known-gaps.md](../docs-dev/copilot/20261117-agent-permission-known-gaps.md)；
 > 沙箱后端的设计与实验见
 > [docs/agent-permissions-redesign.md](agent-permissions-redesign.md)。
-> 最后核对：2026-11-17（`windows-low-il` / `windows-appcontainer`、文件写下沉、`b4.run` 产品通道）。符号名稳定，行号会漂移，定位请以类/方法名为准。
+> 最后核对：2026-11-18（新增 §10 故障排查；§10.8 第 1、2 条已实现；复核 `windows-low-il` / `windows-appcontainer`、文件写下沉、`b4.run` 产品通道）。符号名稳定，行号会漂移，定位请以类/方法名为准。
 
 ---
 
@@ -333,13 +333,204 @@ CLI `/access`、`FailureCategory` 把结构化拒绝归类为「权限问题」�
 | `CodingAccessEnforcementTest` | 端到端拒绝、报告与实际门一致 |
 | `OperatorScopeEnforcementTest` | 一个路径/程序的授权不能解锁另一个 |
 | `SandboxDefaultsTest` / `SandboxProbeTest` / `WindowsSandboxTest` | 沙箱默认选择、写入探针、失败即硬报 |
+| `OwnerSecurityRightsTest` / `WindowsLowIntegritySandboxTest` | OWNER RIGHTS 的 argv 形状、真实授权后能打标；`exit=5` 时自愈恰好重试一次、授权也失败时仍硬失败 |
 | `SandboxFileOpsTest` | 每个文件变更都交给边界；边界拒绝 → 工具错误且不落盘；边界无法解析 → 同样不落盘（无进程内回退）；真实 Low-IL / 容器子进程区内通、区外拒；生产接线（`CodingComponents.fs`）端到端 |
 
 改权限相关代码时，**先跑这三个**：矩阵覆盖、决策基线、报告一致性。它们失败通常意味着「改动比你以为的大」。
 
 ---
 
-## 10. 容易混淆的相邻概念
+## 10. 故障排查：`windows-low-il` 起不来（读得动、改不动）
+
+`windows-low-il` 的写边界靠给工作区**降强制性标签**（mandatory label）兑现，而写显式标签需要目标上的
+`WRITE_OWNER`。仓库若是从共享位置（`%TEMP%`、`D:\workspace` 这类只继承 `Authenticated Users:(M)` 的目录）
+拷贝或解压出来的，DACL 里就没有这一位（属主身份也不隐含它），于是沙箱在 `prepare()` 就起不来：
+**一条 ACL 问题同时打死写、执行、构建、测试，而读路径（后端进程内）完全正常**。
+
+### 10.1 先分清三层：策略拒绝 / 沙箱内拒绝 / 沙箱起不来
+
+| 形态 | 是谁 | 特征 |
+|---|---|---|
+| 策略拒绝 | `Authorizer` / 方法门 | `PERMISSION_DENIED \| code=TOOL_DENIED\|PATH_DENIED\|… \| hint=… \| needed=…`；`coding.permissions` / `coding.explain` 能解释 |
+| 沙箱内拒绝 | 沙箱是好的，OS 挡了这一次操作 | `PERMISSION_DENIED \| code=SANDBOX_DENIED \| tool=… \| detail=… \| hint=… \| needed=…` |
+| **沙箱起不来** | `prepare()` 失败，压根没进沙箱 | `Error: … could not start …` / `Error: Unexpected error executing … Windows sandbox unavailable: …`；`coding.permissions` 一片正常，工具照样失败 |
+
+三者的处置完全不同：前两种改策略或改命令，第三种**只能改机器状态**（见 §10.5）。把第三种误判成第一种
+是本故障最贵的弯路——换预设、加 `--unrestricted`、换引号重试，全部无效。
+
+### 10.2 症状字符串 → 原因 → 处置
+
+| 症状（原文片段） | 是什么 | 处置 |
+|---|---|---|
+| `Error: Failed to write '<p>': the OS sandbox 'windows-low-il' could not start for 'write' on '<abs>': Windows sandbox unavailable: cannot lower the mandatory label of '<ws>' (icacls exit=5: …)` | 文件变更走 `SandboxedFileOps`，`prepare()` 在任何字节落盘**之前**就失败 | §10.4 → §10.5 |
+| `Error: Unexpected error executing '<cmd>' — Windows sandbox unavailable: cannot lower the mandatory label …` | `coding.shell`、`mvnBuild`、`verify(compile\|test)`、`b4.run` 共用同一个 `prepare()` | 同上 |
+| `sandbox boundary NOT enforced: …`（启动日志） | `SandboxDefaults` 的就绪判定没过，后端保持 `off` | 不是本节：按日志点名的缺件处理（账户 / 凭据 / 令牌） |
+| `windows-low-il write probe passed: workspace=…` | 打标与三段探针都过了 | 健康状态，无需动作 |
+
+本节故障**不会**出现 `sandbox boundary NOT enforced`：`isReady()` 只验「能造出 Low 令牌」，
+不验「工作区能降标签」，所以选后端阶段放行、运行时才炸（缺口见 §10.8）。
+
+### 10.3 根因
+
+1. **契约**：沙箱起不来必须硬失败，绝不回退裸启动（`ExecutionSandbox` 的 KDoc）；`windows-low-il` 又声明
+   `executesFileOps = true`，所以**文件变更也走 Low-IL 子进程**，一处 ACL 坏掉就同时废掉写与执行。
+2. **唯一失败点**：`WindowsLowIntegritySandbox.prepare()` →
+   `labelWritable(workspace, deep = true, required = true)` → `icacls <ws> /setintegritylevel (OI)(CI)Low`。
+   `icacls` 返回 `exit=5`（`ERROR_ACCESS_DENIED`）→ `fail()` → `SandboxUnavailableException`。
+3. **为什么需要 `WRITE_OWNER`**：给对象写显式 mandatory label 属于「改安全信息」；对象属主只隐含
+   `READ_CONTROL` 与 `WRITE_DAC`，`WRITE_OWNER` 只能来自 DACL 或 `SeTakeOwnership` / `SeRestore`。
+   继承来的 `Modify`（`icacls` 里的 `(M)`）**不含**这两位，所以「我是属主、我能读写」和「我能改标签」是两件事。
+4. **为什么 worktree 特别容易中**：`WorkspaceIsolation` 用 `git worktree add` 在
+   `<repo>/.browser4/worktrees/<runId>` 建树，DACL 全继承仓库根；仓库根若是从共享位置拷来的
+   （属主落到别的账户或 `Administrators` 组），`icacls` 必然 `exit=5`。重建 worktree、删 `.browser4`
+   都不改变继承链。
+5. **诊断为何抓不到**：`labelWritable` 只把 `exit code + 首行` 带进异常，不带账户 / 属主 / DACL；首行是
+   本地化的 `icacls` 文本，而它走的是 `SystemSandboxCommandRunner` 的 UTF-8 解码（Kotlin `bufferedReader()`
+   默认 UTF-8），`decodeConsole` 的 GBK 兜底只用在探针输出上——中文 Windows 上会乱码。
+
+### 10.4 现场诊断（只读，四条）
+
+```powershell
+whoami /user                                        # 当前账户与 SID
+(Get-Acl '<ws>').Owner                              # 属主是谁
+icacls '<ws>'                                       # DACL：有没有带 WDAC/WO 的 ACE（继承的 (M) 不够）
+whoami /priv | findstr /i "TakeOwnership Restore"   # takeown 路线是否可用
+```
+
+再用一个**临时子目录**验证「确实是这个 ACL 问题」，不动工作区本身：
+
+```powershell
+$p = Join-Path '<ws>' '.b4-label-probe'
+New-Item -ItemType Directory $p | Out-Null
+icacls $p /setintegritylevel "(OI)(CI)Low"; "exit=$LASTEXITCODE"
+Remove-Item $p -Recurse -Force
+```
+
+`exit=5` + `Access is denied` /「拒绝访问」→ 命中本节。`exit=0` → 标签不是原因，回去按 §10.1 找
+`PERMISSION_DENIED`。
+
+### 10.5 修复（按代价从低到高）
+
+**A. 最小授权，不动属主**（首选；属主天然有 `WRITE_DAC`，**不需要管理员**）
+
+```powershell
+icacls '<ws>' /grant "*S-1-3-4:(OI)(CI)(WDAC,WO)"
+```
+
+`S-1-3-4` 是 OWNER RIGHTS：把 `WRITE_DAC` / `WRITE_OWNER` 只授给对象属主，不额外扩大任何人的读权限。
+两个细节不能省：
+
+- **要带 `(OI)(CI)`**：任务的工作区 `.browser4/worktrees/<runId>` 是**之后**才由 `git worktree add` 创建的，
+  不带继承性的 ACE 传不到新树，下一个 `agent run` 照样失败；继承 ACE 同时会补到已有子树
+  （实测：父目录授权后新建的子目录带 `OWNER RIGHTS:(I)(OI)(CI)(WDAC,WO)`，对其 `setintegritylevel` 返回 0）。
+- **不需要 `/T`**：`/setintegritylevel (OI)(CI)Low` 写的是可继承的强制性标签，子对象自动继承
+  （实测：父目录打标后子文件显示 `Mandatory Label\Low Mandatory Level:(I)(NW)`），只有根对象需要 `WRITE_OWNER`。
+
+这条授权**写进目录 DACL、持久生效**，不是每次运行都要做：任务的 worktree 会继承它，之后每个
+`agent run` 自动可用。只有这几类情况需要重做一次：重新 `git clone` / 重新解压 / 从别的机器或共享位置再拷一份
+（新树重新继承父目录 ACL），或换到另一个 Windows 账户（`OWNER RIGHTS` 只对对象属主生效）。
+反过来，检出放在用户档案下（`C:\Users\<you>\…`）时**根本不需要这一步**——用户对自己档案有显式 `FullControl`，
+天然带 `WRITE_OWNER`；`D:\` 根、`%TEMP%`、共享盘这类只继承 `Authenticated Users:(M)` 的位置才需要。
+当前代码在 `WorkspaceIsolation.begin` 建完 worktree 时就自动补这条授权（`sandbox/OwnerSecurityRights.kt`），
+所以**新任务不需要手工处理**；下面的命令用于已有树、`--add-dir` 根，以及不含该修复的版本。
+全新安装的 coding 任务天然被覆盖（它的工作区就是任务 worktree）；即使工作区不是 worktree
+（数据目录被指到共享盘这类情况），`labelWritable` 的自愈也会在原地补授权。
+
+`--add-dir` 的额外根各自补一次（它们与工作区同为 `required = true` 的打标目标）；镜像根 / 缓存根打不上只 warn，不是硬失败。
+撤销本条授权：`icacls '<ws>' /remove:g "*S-1-3-4"`。
+
+> 注意 `prepare()` 的授权范围比"工作区"宽：`labelWritable` 的自愈对**任何**出现 `icacls exit=5` 的打标目标生效，包括
+> 镜像模式下的真实源树（`MirrorRoots`）和 `~/.m2` 这类缓存根。授权本身只给对象属主 `(WDAC,WO)`，不扩大任何人的读写，
+> 失败也只 warn。反过来，**已经可打标**的目标永远不会触发自愈——所以确切的语义是"授权只补在打不上标签的地方"，
+> 不是"后端只会改工作区的 ACL"。
+
+**B. 全控制**（等价、更宽）
+
+```powershell
+icacls '<ws>' /grant "<DOMAIN\user>:(OI)(CI)F"
+```
+
+`F` 含 `WRITE_OWNER`，同样不需要 `/T`；同样要带 `(OI)(CI)`，否则之后创建的 worktree 继承不到。
+
+**C. 属主不是自己、DACL 也改不动**
+
+```powershell
+takeown /f '<ws>' /r /d y     # 需要提升的 SeTakeOwnership（管理员）
+```
+
+先看 §10.4 的 `whoami /priv`；没有 `SeTakeOwnership` 就别试，直接走 D。
+另一种「属主不是自己」更隐蔽：企业环境给父目录配了可继承的**属主** ACE（新对象属主自动落成
+`Administrators`），任务 worktree 建出来就不归本人所有——建树时的 `OWNER RIGHTS` 落在组上、对你不生效，
+只能走 C 或 D。
+
+**D. 不动 ACL：换后端或回滚**（操作员动作）
+
+- `-Dbrowser4.agent.sandbox=windows-acl`：文件工具留在后端进程内，但要先 `net user` provision 沙箱账户与
+  凭据，多数机器需要管理员，可能撞同一堵墙；
+- `-Dbrowser4.agent.sandbox=off`：唯一必然可用的一键回滚。显式 `-D` 不写标记、下次启动不保持；只有启动时
+  **推导**出的 `off` 才落成 `v2:off`（永久决定）。语义见 [config.md](config.md) 的 `browser4.agent.sandbox` 一节。
+
+`b4w stop/start`、重启后端属操作员工作，agent 不得自行执行（运行时自毁护栏也会拒绝）。
+
+**E. 结构上避开**
+
+把工作区放到用户私有位置（产品默认 `<app data>/agent/...`、或 `%LOCALAPPDATA%\browser4\…`），
+继承用户档案的 DACL，天然可降标签；共享目录下继承 `Modify` 的路径永远需要 A / B 的显式授权。
+
+### 10.6 修复后验证（逐级，缺一不可）
+
+1. `icacls '<ws>' /setintegritylevel "(OI)(CI)Low"` → `Successfully processed 1 files`。
+   这条是**验收探针**，会真的给工作区打标，与沙箱 `prepare()` 做的事一致；
+2. 一次 `coding.mkdir` / `coding.write` 成功；
+3. 后端日志出现 `windows-low-il write probe passed: workspace=…`；
+4. `coding.verify(module=<m>, checks=compile,test)` 能真正拉起 Maven。
+
+`coding.verify(checks=repo-consistency)` 走的是 `RepoConsistencyReporter.check(fs)`，**不启动进程**，
+所以故障期间它仍然 `passed=true`——它证明「仓库自洽」，不证明「写边界恢复」，别拿它当验收。
+
+### 10.7 诊断期哪些工具还能用
+
+| 仍可用（后端进程内，不经过 `prepare()`） | 不可用（都要过 `prepare()`） |
+|---|---|
+| `coding.read` / `readLines` / `readFiles` / `grep` / `glob` / `listDir` / `stat` / `changeSummary` | `coding.write` / `append` / `replace` / `editLines` / `insertAfter` / `mkdir` / `delete` / `copy` / `move` / `revert` |
+| `coding.permissions` / `coding.explain`、`coding.validate(type=repo-consistency)`、`coding.verify(checks=repo-consistency)` | `coding.shell` / `runCode` / `mvnBuild`、`coding.verify(checks=compile\|test)`、`skill.run` / `runScript`、`b4.run` / `b4.batch` |
+| `memory.*`、`system.*`、浏览器 / 页面工具 | — |
+
+浏览器 / 页面工具本身不经这条通道（它们走 driver，不是 `coding` 沙箱）；若看到它们失败，先确认那一步是不是
+经由 `b4.run` 或需要 shell 的辅助脚本。
+
+### 10.8 别踩的坑与未收口的缺口
+
+不要做的：
+
+- 不要改 `--access` / `--unrestricted`：这不是策略拒绝，`coding.permissions` 全绿也照样写不动；
+- 不要换引号、换解释器、加 `..` 重试，也不要删 `.browser4/worktrees` 重建：新树继承同一套 DACL；
+- 不要指望 agent 自己修好：修复动作本身就是写操作，正被这个故障挡着——必须由操作员在真实终端执行。
+
+代码级收口（1、2 已落地，3–6 仍开放）：
+
+1. ✅ `WorkspaceIsolation.begin` 建完 worktree 立即补 `OWNER RIGHTS` 的 `(OI)(CI)(WDAC,WO)`；唯一授权点是
+   `sandbox/OwnerSecurityRights.kt`，拒绝时只 warn、不阻断建树（`windows-acl`/`off` 安装从不打标）；
+2. ✅ `labelWritable` 自愈：`exit=5` 时先补 `(WDAC,WO)` 再重试一次（**只一次**），仍失败才抛；
+3. 报错可修复化：带 `user=` / `owner=` / ASCII 化的 `icacls` 原文，并给一行可粘贴的修复命令；
+4. `isReady()` 增加「工作区可标注」探针，不就绪就在**选后端阶段**降级并 warn，而不是每条工具调用运行时炸；
+5. `coding.permissions` 暴露 `sandbox.id` / `ready` / `reason`，并给外部智能体一个可轮询的自检端点；
+6. `labelWritable` 的错误文本改走 `decodeConsole`（或 `chcp 65001`），别让本地化乱码进 JSON。
+
+测试覆盖：`OwnerSecurityRightsTest`（argv 形状 + 真实授权后能打标）、`WindowsLowIntegritySandboxTest`
+（拒绝后自愈恰好重试一次、授权也失败时仍硬失败）、`WorkspaceIsolationTest.newWorktreeIsLabelable`
+（在只有 `Modify` 的临时根下建树，仍能真正打标）。新增测试请沿用「先由 `begin` 授权，再打标」这个前提，
+不要再假设 `%TEMP%` 天然可打标。
+
+### 10.9 相关文档
+
+- 沙箱设计与已知约束：[agent-permissions-redesign.md](agent-permissions-redesign.md) §8
+- 属性、失败语义与回滚：[config.md](config.md)（`browser4.agent.sandbox` 一节）
+- 拒绝码与操作员审批：[agent-access.md](../skills/browser4-cli/references/agent-access.md)
+
+---
+
+## 11. 容易混淆的相邻概念
 
 - **`IsolationGate`** 不是权限门：它决定隔离 worktree 的变更能否合并回主树（要求改动过的模块有通过的
   `coding.verify`）。
@@ -351,7 +542,7 @@ CLI `/access`、`FailureCategory` 把结构化拒绝归类为「权限问题」�
 
 ---
 
-## 11. 关键文件索引
+## 12. 关键文件索引
 
 | 文件 | 内容 |
 |---|---|
@@ -365,6 +556,8 @@ CLI `/access`、`FailureCategory` 把结构化拒绝归类为「权限问题」�
 | `browser4-coding/.../ReadablePaths.kt`、`SensitivePaths.kt` | 可读根、凭证路径的判定顺序 |
 | `browser4-coding/.../CodingAgentShell.kt`、`CodingAgentFileSystem.kt` | 命令分层、路径守卫、受保护/敏感清单 |
 | `browser4-coding/.../sandbox/ExecutionSandbox.kt`、`SandboxDefaults.kt` | 沙箱后端、环境白名单、默认策略 |
+| `browser4-coding/.../sandbox/WindowsLowIntegritySandbox.kt`、`OwnerSecurityRights.kt` | Low-IL 后端：令牌、打标（`labelWritable`）、OWNER RIGHTS 授权、三段探针 |
+| `browser4-coding/.../WorkspaceIsolation.kt` | 隔离 worktree 的创建 / 复用 / 合并（沙箱 ACL 的继承源头） |
 | `browser4-agentic/.../tools/builtin/CodingToolExecutor.kt` | 方法门、`permissions` / `explain` / `requestAccess` |
 | `browser4-agentic/.../tools/AgentToolManager.kt` | `applyAccessPolicy` / `resetAccessPolicy` / 组件重建 |
 | `browser4-agentic/.../agents/RobustBrowserAgent.kt` | `buildCliEngineToolSet` 的工具列表裁剪 |
@@ -375,7 +568,7 @@ CLI `/access`、`FailureCategory` 把结构化拒绝归类为「权限问题」�
 
 ---
 
-## 12. 一句话总结
+## 13. 一句话总结
 
 **任务拿到一份声明式策略（preset + 护栏 + 增补作用域），每次调用都过低门槛的方法门与高精度的目标级边界判定，
 被拒时拿到可执行的 `hint` 而非散文；操作员可以按目标粒度、带 TTL 地临时放宽，但放宽永远跨不过护栏，

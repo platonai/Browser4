@@ -598,6 +598,10 @@ docker run -d -p 18182:18182 `
   backend process. Fix the cause, choose a backend that can run the writes (`windows-acl`, whose file
   tools stay in-process), or roll the boundary back to `off` explicitly.
 
+  Repair steps for the workspace-without-`WRITE_OWNER` case — the exact symptom strings, the two minimal
+  `icacls` grants (neither needs elevation when you own the directory), and the four-step verification —
+  are in [agent-permissions.md](agent-permissions.md) §10「故障排查」.
+
   ```bash
   # First start on Windows (fresh install): defaults to windows-acl.
   # Pin a backend explicitly, or roll back to unsandboxed execution:
@@ -722,7 +726,12 @@ docker run -d -p 18182:18182 `
 * **`browser4.agent.isolation.requireVerify`** *(default: `true`)*
   A coding run that changed code is merged back only when `coding.verify` produced a
   **passing** verdict covering the changed modules. Documentation-only changes need no
-  build. A refused merge fails the task and keeps the worktree; nothing is applied.
+  build, and neither does a change no Maven module owns (`bin/`, `chrome-extension/`): there,
+  no `-pl` build could compile it, so any passing verdict will do — in practice
+  `coding.verify(checks="repo-consistency")`, which scans the tree without starting a
+  process. The verdict still has to describe the tree being merged in both cases
+  (content digest, else timestamp). A refused merge fails the task and keeps the
+  worktree; nothing is applied.
 
 * **`browser4.agent.lock.staleHours`** *(default: `12`)*
   One coding task per checkout at a time (`.git/b4-coding.lock`). A lock whose process is
@@ -825,7 +834,7 @@ All are JVM system properties (set with `BROWSER4_SERVER_OPTS` or `-D…` when y
 | `browser4.agent.sandbox` | Windows: `windows-acl` (fresh install, and a one-time upgrade of an existing one); `windows-low-il` is the recommended opt-in for coding-only work; `off` elsewhere until P2 | OS enforcement for `coding.shell`/`coding.runCode`, and for the file mutations on `windows-low-il`/`windows-appcontainer`. Unavailable backend, unknown id or unimplemented id → task fails (`SandboxUnavailableException`); never falls back. A denial becomes `code=SANDBOX_DENIED`. A persisted `v2:off`, or `-Dbrowser4.agent.sandbox=off`, keeps the historical unsandboxed behaviour. `windows-low-il` confines writes and credential reads but **not** the network. |
 | `browser4.agent.sandbox.account` | `browser4-agent` | Windows sandbox account. Missing account/credential or failed ACLs → hard failure at task start. |
 | `browser4.agent.workspace.isolation` | `worktree` | Coding tasks run in an isolated git worktree and merge back as a patch; `off` restores in-place execution. A coding task whose workspace is **not** a git work tree fails with instructions (installing git, or setting this to `off`) instead of degrading to the mirror, whose writes reach the checkout with no merge step. A patch larger than 32 MiB is refused too: keep build output and binary assets out of the change set. |
-| `browser4.agent.isolation.requireVerify` | `true` | A code change is merged only with passing `coding.verify` verdicts covering **every** changed module (one verdict covers several via `-am`; a Rust + Kotlin change needs one per ecosystem) **that still describe the tree being merged**: `coding.verify` records `verifiedAt` + a content digest, and a file written after the verdict refuses the merge with "re-run verify for the final change set". |
+| `browser4.agent.isolation.requireVerify` | `true` | A code change is merged only with passing `coding.verify` verdicts covering **every** changed module (one verdict covers several via `-am`; a Rust + Kotlin change needs one per ecosystem) **that still describe the tree being merged**: `coding.verify` records `verifiedAt` + a content digest, and a file written after the verdict refuses the merge with "re-run verify for the final change set". Documentation paths and paths no module owns (`bin/`, `chrome-extension/`) add no requirement of their own; a change set with **no** owned module needs one passing verdict of any kind (e.g. `checks="repo-consistency"`), still bound to the final tree by the same digest/timestamp check. |
 | `browser4.agent.lock.staleHours` | `12` | One coding task per checkout — `agent run --coding` **and** `coding.devTask(execute=true)` both take `<repo>/.git/b4-coding.lock`, because both can merge into that checkout. A lock older than this is taken over, as is one whose pid is gone **on this host**. A lock written by another host (a checkout reached over a share) is judged by age only — a same-numbered pid here says nothing about the other machine's holder. |
 | `browser4.agent.protected.extra` | empty | Extra workspace-relative paths a task may not modify (defaults already cover `b4w.*`, `bin/build.ps1`, `bin/recover.ps1`, `build-runtime-bundle.ps1`, `mvnw*`, `.mvn/`). |
 | `browser4.agent.isolation.keep` | `3` | Isolated worktrees always retained (newest by task activity — the ledger's end/start time, falling back to the directory mtime — first). Older ones are reclaimed with `git worktree remove` once they also exceed `isolation.maxAgeDays` **and** their manifest proves the task merged — a tree whose change never reached the checkout (refused, failed, cancelled, crashed, still running) is never reclaimed, and neither is one with no manifest. |
