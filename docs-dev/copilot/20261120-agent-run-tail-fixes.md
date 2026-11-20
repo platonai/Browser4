@@ -120,13 +120,60 @@ coding_shell(command="cmd /c echo %BROWSER4_CLI_STATE_DIR%")
 
 `tips.rs` / `help.rs` 的 `BROWSER4_CLI_STATE_DIR` 说明补上"读写同一目录 + agent 沙箱指到 `<workspace>/.b4scratch/cli-state`"；`docs/metadata-files.md` §8 增 `Fallback`、`In agent sandboxes`、`Write check` 三行。
 
+## 第四轮（真实 agent run 暴露的两个沙箱缺陷）
+
+前一轮的 `coding.verify` 在裸 `tool call` 下拿不到 Maven reactor（没有任务工作区镜像），于是改用**真实 `agent run`**（`--coding --wait`）来跑门禁。两次 run 共 3m11s + 51s，暴露两个此前没人测过的问题。
+
+### 4.1 F1：沙箱内**无法编译 Kotlin 模块**（已修）
+
+第一次 run：`coding.verify(module=browser4-coding, checks=compile)` FAILED，但**没有一条编译器诊断**：
+
+```
+[ERROR] java.nio.file.AccessDeniedException:
+  C:\Users\pereg\AppData\Local\kotlin\daemon\kotlin-daemon-client-tsmarker*.tmp
+[ERROR] … kotlin-maven-plugin:2.3.21:kapt (default-kapt) on project browser4-coding: Compilation failure
+```
+
+低完整性（Low）子进程写不了 Medium 的 `%LOCALAPPDATA%\kotlin\daemon`，kapt 在**读第一个源文件之前**就失败——默认 `windows-low-il` 后端下，任何要求 agent 修 Kotlin 模块并 verify 的任务必然失败。
+
+修法两层（都落地）：
+
+- `CodingComponents.toolchainEntries()` 新增 `toolchain:kotlin-local`（`%LOCALAPPDATA%\kotlin`）与 `toolchain:kotlin-home`（`~/.kotlin`），并加入 `IsolationProfile.CACHE_ENTRY_IDS`——和 `~/.m2`、`~/.gradle` 一样被标记为可写缓存；
+- 受限构建传 `-Dkotlin.compiler.execution.strategy=in-process`（`CodingAgentShell.sandboxId() != "off"` 时），不再需要共享 daemon 的客户端 marker。
+
+**端到端验证**（重建后端 + 同一任务再跑一次）：
+
+```
+✔ Agent completed in 51.0s · 1 round · 2 tool(s)
+Verification: PASSED (1/1 ran) in 43.1s — compile of module browser4-coding succeeded (exit 0)
+VERDICT_JSON: {"passed":true,"module":"browser4-coding","requested":["compile"],…,"exitCode":0,…}
+```
+
+### 4.2 F2：verify 输出被截断，`VERDICT_JSON` 无法逐字引用（未修）
+
+第一次 run 里模型明确报告：工具结果中段被 `…[truncated 3275 chars]…` 截断，只能拿到 verdict 的头和尾，**无法逐字引用**——而 finish gate 正是比对这份逐字引用。成功路径的 evidence 很短（`"exit 0"`），所以第二次能完整引用；**失败路径**（evidence 塞进整段 Maven 错误）就会触发。
+
+建议：`coding.verify` 把 `VERDICT_JSON` 放在输出**第一行**（或单独一行、诊断在后），或把 `evidence` 压到若干行，或给模型一个只含 verdict 的读取入口。未在本轮修改。
+
+### 4.3 A2 的实测数据
+
+沙箱化 `coding.shell` 里直接问 PowerShell：
+
+```
+default=gb2312  out=gb2312  in=gb2312
+```
+
+所以 `powershell -Command "node x.js"` 会把子进程的 UTF-8 按 GB2312 解码再以 GBK 写出，采集层无法还原。代码级修法（注入 `[Console]::OutputEncoding` / 后端切码页）需要定方案；本轮先在**编码提示**里告诉模型不要这样包（`CliAgentPrompt.kt`，`CliAgentPromptTest` 15 passed）。
+
 ## 后续（未做）
 
-1. PowerShell 的 `[Console]::OutputEncoding`：没有对应的环境变量可设，只能给后端进程切控制台码页（`SetConsoleOutputCP`）或在命令前注入初始化语句；两者都需要在真实 GBK 控制台上实测，本轮先做能验证的部分（Python stdio + CLI 自身控制台）。
-2. 状态文件"存在但不可读"（deny-read 单文件）仍不进 fallback：只在文件缺失时回退。更好的修法是"读失败就报错"，而不是静默返回默认状态。
-3. fallback 目录是 CWD 相对：读写已一致，但跨不同工作目录仍不连续。
-4. `A19` 已验证（见上），但只覆盖"环境变量是否注入"；"沙箱内 `attach` 一次成功"仍需一条带浏览器的 e2e。
-5. `jsCodeOnly` 把模板字面量整体置空：`${…}` 里的代码关键词不再参与启发式（对词匹配是保守选择；要更准可复用扫描器状态机）。
+1. PowerShell 的 `[Console]::OutputEncoding`：没有对应的环境变量可设，只能给后端进程切控制台码页（`SetConsoleOutputCP`）或在命令前注入初始化语句；两者都需要在真实 GBK 控制台上实测。
+2. `coding.verify` 的 `VERDICT_JSON` 截断（F2，见 4.2）：失败路径的 evidence 太长，模型引不到逐字 verdict。
+3. 状态文件"存在但不可读"（deny-read 单文件）不再静默（已加警告），但仍不回退——是否回退要看是否接受 mtime 比较。
+4. fallback 目录是 CWD 相对：读写已一致，但跨不同工作目录仍不连续。
+5. `A19` 已验证环境变量注入；"沙箱内 `attach` 一次成功"仍需一条带浏览器的 e2e。
+6. `jsCodeOnly` 已保留 `${…}` 里的代码（第三轮），仅模板文本仍置空——这是刻意的。
+
 
 
 
