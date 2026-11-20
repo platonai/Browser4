@@ -585,17 +585,23 @@ jobs:
           #
           # The first command that needs the backend builds the runtime bundle (~3-5 min on a cold
           # runner) and launches the JVM, so use the suite's own probe as that command (a "session
-          # required" refusal still means the server came up) and then poll `status` until UP.
-          & $env:BROWSER4_E2E_CLI tool call coding_permissions --json '{}'
-          Write-Host "warm-up exit: $LASTEXITCODE (session refusal is expected and harmless here)"
-
-          $deadline = (Get-Date).AddMinutes(10)
+          # required" refusal still means the server came up) and poll `status` until UP.
+          #
+          # Retry the warm-up: the launcher gives a fresh JVM only 120 s to answer the health probe
+          # (`JAR_SERVER_READY_TIMEOUT`), and a cold Windows runner can miss that even with the
+          # bundle already built — a timeout kills the JVM it just started, so the next attempt is
+          # the cheap one (bundle built, JVM start only).
+          $deadline = (Get-Date).AddMinutes(20)
+          $attempt = 0
           $status = ''
           while ((Get-Date) -lt $deadline) {
+            $attempt++
+            Write-Host "backend warm-up attempt ${attempt}:"
+            & $env:BROWSER4_E2E_CLI tool call coding_permissions --json '{}' 2>&1 | Out-String | Write-Host
             $status = (& $env:BROWSER4_E2E_CLI status 2>&1 | Out-String)
             if ($status -match 'Server health:\s*UP') {
               Write-Host $status
-              Write-Host 'Backend is UP.'
+              Write-Host "Backend is UP (warm-up attempt ${attempt})."
               exit 0
             }
             Start-Sleep -Seconds 10
