@@ -32850,11 +32850,47 @@ fn apply_config_defaults(global: &mut GlobalFlags) {
     }
 }
 
+/// Point a Windows console at UTF-8 before the first byte is printed.
+///
+/// `println!` writes UTF-8 bytes, and a console left on the OEM code page (cp936/GBK on a zh-CN
+/// host) renders Chinese as mojibake — which is why the docs told users to prefix every command
+/// with `chcp 65001`. Doing it here makes `browser4-cli` print correctly in the same window
+/// without the ceremony. Only a real console is touched: output redirected to a pipe or a file is
+/// already UTF-8 and must stay byte-identical (and `chcp` cannot affect a pipe anyway).
+#[cfg(windows)]
+fn ensure_utf8_console() {
+    use std::io::IsTerminal;
+
+    const CP_UTF8: u32 = 65001;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetConsoleOutputCP() -> u32;
+        fn SetConsoleOutputCP(code_page: u32) -> i32;
+    }
+
+    if !std::io::stdout().is_terminal() {
+        return;
+    }
+    // Safety: both calls take and return plain integers and only touch this process's console;
+    // there is no pointer or lifetime to get wrong.
+    unsafe {
+        if GetConsoleOutputCP() != CP_UTF8 {
+            let _ = SetConsoleOutputCP(CP_UTF8);
+        }
+    }
+}
+
+/// Non-Windows: consoles are UTF-8 (or the toolchain's locale) already.
+#[cfg(not(windows))]
+fn ensure_utf8_console() {}
+
 fn main() {
     // First statement in the process: every segment reported by `[timing]` is
     // measured from here. Off unless BROWSER4_CLI_TIMING / TRACE is set.
     timing::init();
     install_broken_pipe_panic_hook();
+    ensure_utf8_console();
     init_root_search_start_dir_from_startup();
     timing::mark("hooks");
 
@@ -36613,6 +36649,20 @@ mod tests {
              thread (build.rs: cargo:rustc-link-arg=/STACK:...), got {reserve} — the debug \
              build's async chain overflowed the 1 MB default on `click`"
         );
+    }
+
+    /// The UTF-8 console switch must work with no console and must link.
+    ///
+    /// A test process normally has its stdout captured (a pipe), which is exactly the case the
+    /// `IsTerminal` guard exists for: the call must be a silent no-op there. Run from a real
+    /// console it simply switches that console. The value of the test is the second half — a typo
+    /// in the `extern "system"` block is a *link* error, and this is the only test binary that
+    /// links those imports on Windows.
+    #[cfg(windows)]
+    #[test]
+    fn test_ensure_utf8_console_is_a_noop_on_a_piped_stdout() {
+        ensure_utf8_console();
+        ensure_utf8_console();
     }
 
     /// Guard that restores an env var to its previous value on drop, holding the shared
