@@ -110,6 +110,11 @@ coding_shell(command="cmd /c echo %BROWSER4_CLI_STATE_DIR%")
 | agentic 模块 | `mvn -o -pl browser4-agentic -Dtest=CliOutputDecodingTest,CliProcessManagerTest,CliProcessManagerSandboxTest,CliStateEnvTest test` | 24 passed |
 | 控制台实测（真实控制台） | `Start-Process cmd.exe`（新控制台）→ 跑 `browser4-cli --version` → P/Invoke 读 `GetConsoleOutputCP`/`GetConsoleCP` | `out=65001 in=936`：切换生效。**注意 `chcp` 无参打印的是输入码页**，用它验会被误判成"没变" |
 | A19（真实 `windows-low-il` 后端） | `pwsh browser4-tests/permission-e2e/run-permission-e2e.ps1 -Case A19-sandbox-cli-state-in-workspace` | **PASS (9.9s)**；`coding_shell` 输出 `<task>\.b4scratch\cli-state` |
+| 整个 Tier A（沙箱后端，新构建） | `run-permission-e2e.ps1 -Tier A` | **17 PASS / 0 FAIL / 4 SKIP**（A12 需 bwrap；A13/A14/A17b 需 `sandbox=off`） |
+| 边界关闭的 twin | 后端以 `BROWSER4_SERVER_OPTS=-Dbrowser4.agent.sandbox=off` 重启后 `-Case 'A13-off-twin-script,A14-off-twin-env-composed,A17b-off-twin-junction'` | **3 PASS**（反空转成立） |
+| A19 复跑（恢复沙箱后端后） | `-Case A19-…` | PASS (6.1s) |
+
+> 重启后端时踩到一次：`./b4w.ps1 open` 在 `stop` 之后挂了 10 分钟，没有 JVM、没有新日志；杀掉重试（不设 `BROWSER4_CLI_DISABLE_AOT_CACHE`、不截断输出）后 13.6s 正常。原因未定位，疑似 AOT 训练锁/首启竞争；在此记录以免下次当成"我改坏了"。
 
 ### 3.5 文档
 
