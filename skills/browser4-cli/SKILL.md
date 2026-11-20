@@ -192,7 +192,7 @@ The `list` command also has a **Display** column with the mode fixed at session 
 
 Two on-disk locations — don't confuse them:
 
-- **Session state** lives in `~/.browser4` by default (per checkout in development mode — see **Development Mode** below), falling back to `./.browser4-cli-state` when unwritable — reads and writes resolve the same directory, and a sandboxed agent shell gets `BROWSER4_CLI_STATE_DIR=<workspace>/.b4scratch/cli-state` instead; override with `BROWSER4_CLI_STATE_DIR` / `BROWSER4_RUNTIME_DIR`.
+- **Session state** lives in `~/.browser4` by default (per checkout in development mode — see **Development Mode** below). When that is not writable the CLI **anchors** a fallback instead of deriving one from the working directory: `<workspace>/.b4scratch/cli-state` (the same directory a sandboxed agent shell is given via `BROWSER4_CLI_STATE_DIR`), else `<checkout>/.b4scratch/cli-state`, else a `.browser4-cli-state` in a parent directory, else `./.browser4-cli-state`. Reads and writes resolve that one directory, an older `./.browser4-cli-state` is migrated into it on the first relocated write (leaving a `STATE_DIR_POINTER` behind), and `status` prints both the directory and the anchor (`session_state_anchor` in `--json`). Override with `BROWSER4_CLI_STATE_DIR` / `BROWSER4_RUNTIME_DIR`.
 - **Snapshots** (accessibility-tree captures from `snapshot` / `htmlsnapshot`) live in `./.browser4-cli/snapshot/`, relative to the directory the command runs in — the same directory the `extract` / `summarize` file output uses. Look there when hunting saved snapshot files or cleaning up capture artifacts.
 
 ### Configuration

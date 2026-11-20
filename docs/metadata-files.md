@@ -376,8 +376,9 @@ install/upgrade operations.
 | Property | Value |
 |---|---|
 | **Paths** | `~/.browser4/cli-state.json` and `~/.browser4/sessions/{name}.json` |
-| **Fallback** | `./.browser4-cli-state/…` (same layout) — used by reads **and** writes when the primary is not writable, e.g. a Low-integrity agent child that may read `~/.browser4` but not write it |
-| **In agent sandboxes** | the runner sets `BROWSER4_CLI_STATE_DIR=<workspace>/.b4scratch/cli-state`, so `b4.run`, `coding.shell` and skill scripts share one session state |
+| **Fallback** | A workspace-**anchored** directory (same layout), used by reads **and** writes when the primary is not writable, e.g. a Low-integrity agent child that may read `~/.browser4` but not write it. Resolution walks up from the working directory: `STATE_DIR_POINTER` → `<workspace>/.b4scratch/cli-state` → `<checkout>/.b4scratch/cli-state` → a parent `.browser4-cli-state` → `./.browser4-cli-state`. Anchoring is what keeps "one workspace, one state dir": a CWD-relative fallback made `attach` in one directory and `eval` in another resolve to different files |
+| **Legacy fallback** | A `./.browser4-cli-state` left by a pre-anchor CLI is still **read** (after the anchored directory), and is **migrated** into the anchored one on the first relocated write; the old directory then holds a `STATE_DIR_POINTER` file naming the new path, which later invocations follow |
+| **In agent sandboxes** | the runner sets `BROWSER4_CLI_STATE_DIR=<workspace>/.b4scratch/cli-state`, so `b4.run`, `coding.shell` and skill scripts share one session state — the same directory an un-injected invocation anchors to |
 | **Write check** | a write is read back before it reports success; a file that no longer holds this command's session fails the command instead of surfacing as `Session required` later |
 | **Format** | JSON |
 | **Overridable by** | `BROWSER4_CLI_STATE_DIR` env var |
