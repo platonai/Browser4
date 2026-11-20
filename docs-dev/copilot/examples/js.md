@@ -26,6 +26,6 @@
 
 ## 校验与运行
 
-- `coding.validate(type="js", path=...)` — 括号平衡、return、use strict、反模式
+- `coding.validate(type="js", path=...)` — 定界符配对（跳过注释、字符串、模板串与正则字面量，报 `line:col`）、return、use strict、反模式
 - `tab.eval(expression=<读入的 JS>)` + `tab.console()` — 浏览器内运行时测试
 - 插件内资源路径一致性：`validate(plugin)` 检查 Service 的 loadResource 路径存在对应文件

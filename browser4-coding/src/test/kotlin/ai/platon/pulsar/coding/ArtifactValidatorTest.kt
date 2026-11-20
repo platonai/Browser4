@@ -301,6 +301,58 @@ class ArtifactValidatorTest {
         assertTrue(issues.any { it.severity == Severity.ERROR && it.message.contains("Unbalanced") })
     }
 
+    @Test
+    @DisplayName("validateKotlinToolExecutor ignores delimiters in strings, comments and raw strings")
+    fun validateKotlinToolExecutorIgnoresNonStructuralBraces() {
+        // A ToolExecutor is mostly prompt/JSON literals; the old `count { it == '{' }` called this
+        // file unbalanced even though it compiles. Built line by line: the injected raw-string
+        // lines have no indent, which would defeat `trimIndent()` on a block literal.
+        val content = listOf(
+            "package test",
+            "",
+            "class TestToolExecutor : AbstractToolExecutor() {",
+            "    override val domain = \"test\"",
+            "    // prose with a lone brace: {",
+            "    /* block { comment } */",
+            "    private val json = \"{\\\"a\\\": 1}\"",
+            "    private val doc = \"\"\"",
+            "    {\"multi\": \"line\"}",
+            "    \"\"\"",
+            "    override fun callFunctionOn() {",
+            "        toolSpec[\"x\"] = spec",
+            "    }",
+            "}",
+        ).joinToString("\n")
+
+        val issues = ArtifactValidator.validateKotlinToolExecutor(content, "Test.kt")
+        assertTrue(
+            issues.none { it.severity == Severity.ERROR },
+            "a delimiter inside a literal is not code: ${issues.filter { it.severity == Severity.ERROR }}",
+        )
+    }
+
+    @Test
+    @DisplayName("validateKotlinToolExecutor understands quotes inside a template expression")
+    fun validateKotlinToolExecutorHandlesQuotesInInterpolation() {
+        // `${map["key"]}` puts a quoted string inside the interpolation. Ending the outer literal
+        // at the first `"` would leave a stray `]` and report a delimiter that is not there.
+        val content = listOf(
+            "package test",
+            "class TestToolExecutor : AbstractToolExecutor() {",
+            "    fun f(map: Map<String, String>) {",
+            "        val s = \"\${map[\"key\"]}\"",
+            "    }",
+            "    override fun callFunctionOn() {}",
+            "}",
+        ).joinToString("\n")
+
+        val issues = ArtifactValidator.validateKotlinToolExecutor(content, "Test.kt")
+        assertTrue(
+            issues.none { it.severity == Severity.ERROR },
+            "the interpolation is code, not a broken literal: ${issues.filter { it.severity == Severity.ERROR }}",
+        )
+    }
+
     // --- Skill validation ---
 
     @Test
@@ -490,6 +542,84 @@ class ArtifactValidatorTest {
     }
 
     @Test
+    @DisplayName("validateJs ignores delimiters in prose comments")
+    fun validateJsIgnoresCommentProse() {
+        // 2026-11-20 run: `coding_validate(type=js)` counted the `1)` / `2)` list markers in a
+        // comment and reported unbalanced parentheses, so the agent rewrote its comments to pass.
+        val content = """
+            (function() {
+                'use strict';
+                // The account page exposes two endpoints:
+                //   1) /ajax/statuses/mymblog
+                //   2) /ajax/statuses/longtext
+                var where = location.href;
+                return { where: where };
+            })();
+        """.trimIndent()
+
+        val result = ArtifactValidator.validateJs(content, "test.js")
+        assertTrue(
+            result.issues.none { it.severity == Severity.ERROR },
+            "a bracket in a comment is not syntax: ${result.issues.filter { it.severity == Severity.ERROR }}",
+        )
+    }
+
+    @Test
+    @DisplayName("validateJs ignores delimiters in strings, templates and regexes")
+    fun validateJsIgnoresLiterals() {
+        val content = """
+            (function() {
+                'use strict';
+                var s = "hello (world";
+                var t = `value: ${'$'}{s.length})`;
+                var re = /recaptcha\.execute\((.+)/;
+                var re2 = /\/u\/(\d+)/;
+                var q = 'a[href*="/u/"]';
+                var ratio = s.length / 2;
+                return { s: s, t: t, re: String(re), re2: String(re2), q: q, ratio: ratio };
+            })();
+        """.trimIndent()
+
+        val result = ArtifactValidator.validateJs(content, "test.js")
+        assertTrue(
+            result.issues.none { it.severity == Severity.ERROR },
+            "delimiters inside literals are not syntax: ${result.issues.filter { it.severity == Severity.ERROR }}",
+        )
+    }
+
+    @Test
+    @DisplayName("validateJs still catches a closer hidden in a comment")
+    fun validateJsCatchesMissingCloserHiddenByComment() {
+        // The old raw count was balanced here (3 open / 3 close) because the comment supplied the
+        // missing `)`: the broken script passed and only failed later in `tab.eval`.
+        val content = """
+            (function() {
+                'use strict';
+                var x = 1;
+                // legacy note: )
+            }();
+        """.trimIndent()
+
+        val result = ArtifactValidator.validateJs(content, "test.js")
+        val error = result.issues.firstOrNull { it.severity == Severity.ERROR }
+        assertNotNull(error, "a missing closer must not be excused by a comment: ${result.issues}")
+        assertTrue(error!!.message.contains("Unbalanced"), error.message)
+        assertTrue(error.message.contains("line "), "the message must locate the problem: ${error.message}")
+    }
+
+    @Test
+    @DisplayName("validateJs reports a mismatched pair instead of only counting it")
+    fun validateJsReportsMismatchedPairs() {
+        // `)(` has as many openers as closers, so the old count called it balanced.
+        val content = "(function() { return 1; ))(;"
+        val result = ArtifactValidator.validateJs(content, "test.js")
+        assertTrue(
+            result.issues.any { it.severity == Severity.ERROR && it.message.contains("Unbalanced") },
+            "a closer that does not match the open delimiter is an error: ${result.issues}",
+        )
+    }
+
+    @Test
     @DisplayName("validateJs warns about missing return")
     fun validateJsMissingReturn() {
         val content = "(function() { 'use strict'; var x = 1; })();"
@@ -503,6 +633,36 @@ class ArtifactValidatorTest {
         val content = "(function() { 'use strict'; document.write('test'); return 'ok'; })();"
         val result = ArtifactValidator.validateJs(content, "test.js")
         assertTrue(result.issues.any { it.severity == Severity.WARNING && it.message.contains("document.write") })
+    }
+
+    @Test
+    @DisplayName("validateJs does not read words out of comments and strings")
+    fun validateJsWordHeuristicsSeeCodeOnly() {
+        // `// no return value here` used to satisfy the return check, `// eval( is dangerous` used
+        // to produce an eval warning, and a quoted `document.write(html)` used to warn too.
+        val content = """
+            (function() {
+                'use strict';
+                // no return value here
+                // eval( is dangerous
+                var example = "document.write(html)";
+                var x = 1;
+            })();
+        """.trimIndent()
+
+        val result = ArtifactValidator.validateJs(content, "test.js")
+        assertTrue(
+            result.issues.any { it.severity == Severity.WARNING && it.message.contains("return") },
+            "a comment must not satisfy the return check: ${result.issues}",
+        )
+        assertTrue(
+            result.issues.none { it.severity == Severity.WARNING && it.message.contains("eval(") },
+            "eval( in a comment is not a call: ${result.issues}",
+        )
+        assertTrue(
+            result.issues.none { it.severity == Severity.WARNING && it.message.contains("document.write") },
+            "document.write( in a string is not a call: ${result.issues}",
+        )
     }
 
     // --- Script validation ---
@@ -525,6 +685,48 @@ class ArtifactValidatorTest {
         val content = "Write-Host 'Hello'"
         val result = ArtifactValidator.validateScript(content, "build.ps1")
         assertTrue(result.issues.any { it.severity == Severity.INFO && it.message.contains("param") })
+    }
+
+    @Test
+    @DisplayName("validateScript PS1 ignores braces in comments, strings and here-strings")
+    fun validateScriptPs1IgnoresNonStructuralBraces() {
+        // The raw count this replaces reported `# usage: { -Path }` and `'{"a":1}'` as an
+        // unbalanced script, so the agent rewrote working scripts to satisfy the checker.
+        val content = """
+            param([string]${'$'}Path)
+            ${'$'}ErrorActionPreference = "Stop"
+            # usage: Get-Thing { -Path <dir> }
+            <# block comment with { and } #>
+            ${'$'}json = '{"a": 1}'
+            ${'$'}msg = "a closing brace } inside a string"
+            ${'$'}here = @"
+            literal { brace in a here-string
+            "@
+            Write-Host ${'$'}msg ${'$'}json ${'$'}here
+        """.trimIndent()
+
+        val result = ArtifactValidator.validateScript(content, "build.ps1")
+        assertTrue(
+            result.issues.none { it.severity == Severity.ERROR },
+            "non-structural braces must not fail the script: ${result.issues.filter { it.severity == Severity.ERROR }}",
+        )
+    }
+
+    @Test
+    @DisplayName("validateScript PS1 still catches a brace that is never closed")
+    fun validateScriptPs1DetectsUnbalancedBraces() {
+        val content = """
+            param([string]${'$'}Path)
+            ${'$'}ErrorActionPreference = "Stop"
+            if (${'$'}Path) {
+                Write-Host ${'$'}Path
+        """.trimIndent()
+
+        val result = ArtifactValidator.validateScript(content, "build.ps1")
+        val error = result.issues.firstOrNull { it.severity == Severity.ERROR }
+        assertNotNull(error, "a missing '}' has to be reported: ${result.issues}")
+        assertTrue(error!!.message.contains("Unbalanced"), error.message)
+        assertTrue(error.message.contains("line "), "the message must locate the problem: ${error.message}")
     }
 
     @Test
