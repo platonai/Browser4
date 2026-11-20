@@ -457,16 +457,21 @@ object ExecutionSandboxes {
      * Readiness is what keeps this honest: `windows-appcontainer` is listed for browse but not
      * implemented, and `windows-acl` needs administrator provisioning, so neither is selected just
      * because it appears in the chain.
+     *
+     * @param chain the candidate ids, in order. Defaults to this host's chain; a caller that reasons
+     *   about another platform (a test of the Windows rules on a Linux CI, say) passes
+     *   `IsolationProfile.backendChain(mode, osName = ...)` instead of mutating `os.name`.
      */
     fun resolveForMode(
         mode: AgentMode,
         ready: (String) -> Boolean = { id -> runCatching { of(id).isReady() }.getOrDefault(false) },
         instantiate: (String) -> ExecutionSandbox = { id -> of(id) },
+        chain: List<String> = IsolationProfile.backendChain(mode),
     ): ExecutionSandbox {
         SandboxDefaults.operatorConfiguredId()?.let { explicit ->
             return instantiate(explicit)
         }
-        for (id in IsolationProfile.backendChain(mode)) {
+        for (id in chain) {
             if (!ready(id)) continue
             val sandbox = instantiate(id)
             // A backend that must not be a default (see [autoSelectable]) is skipped rather than

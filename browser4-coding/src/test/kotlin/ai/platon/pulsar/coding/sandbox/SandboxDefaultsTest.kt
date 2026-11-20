@@ -1,5 +1,6 @@
 package ai.platon.pulsar.coding.sandbox
 
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -39,8 +40,15 @@ class SandboxDefaultsTest {
         }
     }
 
-    private fun marker(dataDir: Path): Path = dataDir.resolve(SandboxDefaults.MARKER)
+    /**
+     * `apply()` is global state (see [SandboxDefaults.resetForTests]). Several cases below apply an
+     * explicit id, and leaving that behind would make every later `resolveForMode` in this JVM
+     * resolve to it — a class-order dependency, not a behaviour.
+     */
+    @AfterEach
+    fun resetPublishedDefault() = SandboxDefaults.resetForTests()
 
+    private fun marker(dataDir: Path): Path = dataDir.resolve(SandboxDefaults.MARKER)
     private fun newDataDir(name: String): Path = tempDir.resolve(name).resolve(".browser4")
 
     private fun existingDataDir(name: String): Path = Files.createDirectories(newDataDir(name))

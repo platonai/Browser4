@@ -84,6 +84,19 @@ object SandboxDefaults {
                 ?.lowercase()
         }
 
+    /**
+     * Test-only: forget the decision [apply] published.
+     *
+     * [apply] fills in [defaultApplied]/[operatorExplicit], which every later [operatorConfiguredId]
+     * call in the same JVM reads. Without this, a test that applies an explicit id would leave each
+     * subsequent `ExecutionSandboxes.resolveForMode` resolving to that id — a failure that depends on
+     * class order, not on the code under test.
+     */
+    internal fun resetForTests() {
+        defaultApplied = false
+        operatorExplicit = null
+    }
+
     private val MARKER_PATTERN = Regex("^v(\\d+):(.+)$")
 
     /**

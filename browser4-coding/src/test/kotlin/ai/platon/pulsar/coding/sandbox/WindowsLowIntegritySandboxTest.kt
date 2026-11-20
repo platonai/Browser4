@@ -63,6 +63,9 @@ class WindowsLowIntegritySandboxTest {
     @Test
     @DisplayName("release restores the task's label to Medium, and only once")
     fun releaseRestoresTheMediumLabel() {
+        // `prepare()` refuses off Windows (SandboxUnavailableException) — that refusal is asserted by
+        // `refusesOffWindows`; this case asserts the label work, which needs `icacls`.
+        assumeTrue(isWindows, "icacls only exists on Windows")
         // Review S2: the Low token is shared by every task, so a workspace left Low is writable by
         // any later task. The restore is what bounds the grant to the task's own lifetime.
         val runner = FakeRunner { SandboxCommandResult(0) }

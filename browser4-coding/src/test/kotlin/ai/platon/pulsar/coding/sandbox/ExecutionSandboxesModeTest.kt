@@ -50,11 +50,30 @@ class ExecutionSandboxesModeTest {
         }
     }
 
+    /**
+     * Resolves [mode] as if this host were Windows.
+     *
+     * `IsolationProfile.backendChain` answers for the *host* (`landlock`/`bwrap` on Linux,
+     * `seatbelt` on macOS), while the rules asserted here are the Windows ones that production runs.
+     * Injecting the chain keeps these cases true on every host; reading the host chain instead left
+     * them green only on Windows and red on the Linux nightly that runs them (run 44760333819).
+     */
+    private fun resolveOnWindows(
+        mode: AgentMode,
+        ready: (String) -> Boolean,
+        instantiate: (String) -> ExecutionSandbox,
+    ): ExecutionSandbox = ExecutionSandboxes.resolveForMode(
+        mode,
+        ready = ready,
+        instantiate = instantiate,
+        chain = IsolationProfile.backendChain(mode, osName = "Windows 11"),
+    )
+
     @Test
     @DisplayName("coding resolves to the low-integrity backend when it is ready")
-    fun codingResolvesToLowIntegrity() {
+    fun codingResolvesToLowIntegrity() = withSandboxProperty(null) {
         val ready = setOf("windows-low-il")
-        val selected = ExecutionSandboxes.resolveForMode(
+        val selected = resolveOnWindows(
             AgentMode.CODING,
             ready = { it in ready },
             instantiate = { FakeSandbox(it) },
@@ -65,11 +84,11 @@ class ExecutionSandboxesModeTest {
 
     @Test
     @DisplayName("browse never falls through to the coding backend")
-    fun browseDoesNotUseTheCodingBackend() {
+    fun browseDoesNotUseTheCodingBackend() = withSandboxProperty(null) {
         // Only the account backend is usable here: browse must take it, not `windows-low-il`, because
         // browse needs *read* confinement and an integrity level does not provide one.
         val ready = setOf("windows-low-il", "windows-acl")
-        val selected = ExecutionSandboxes.resolveForMode(
+        val selected = resolveOnWindows(
             AgentMode.BROWSE,
             ready = { it in ready },
             instantiate = { FakeSandbox(it) },
@@ -80,10 +99,10 @@ class ExecutionSandboxesModeTest {
 
     @Test
     @DisplayName("an unimplemented backend in the chain is skipped, not fatal")
-    fun unimplementedBackendIsSkipped() {
+    fun unimplementedBackendIsSkipped() = withSandboxProperty(null) {
         // `windows-appcontainer` is browse's first choice but is not implemented: the chain must keep
         // walking instead of throwing.
-        val selected = ExecutionSandboxes.resolveForMode(
+        val selected = resolveOnWindows(
             AgentMode.BROWSE,
             ready = { it == "windows-acl" },
             instantiate = { FakeSandbox(it) },
@@ -94,10 +113,10 @@ class ExecutionSandboxesModeTest {
 
     @Test
     @DisplayName("a backend that must not be a default is skipped for a mode that never asked for it")
-    fun notAutoSelectableIsSkipped() {
+    fun notAutoSelectableIsSkipped() = withSandboxProperty(null) {
         // `windows-appcontainer` confines reads *and* writes but cannot reach the user profile, where
         // `browser4-cli` lives; until that is solved it must not become a browse task's default.
-        val selected = ExecutionSandboxes.resolveForMode(
+        val selected = resolveOnWindows(
             AgentMode.BROWSE,
             ready = { true },
             instantiate = { id -> FakeSandbox(id, autoSelectable = id != "windows-appcontainer") },
@@ -133,9 +152,9 @@ class ExecutionSandboxesModeTest {
 
     @Test
     @DisplayName("the fallback never claims readiness it did not get")
-    fun readinessIsNotAssumed() {
+    fun readinessIsNotAssumed() = withSandboxProperty(null) {
         val ready = setOf("windows-appcontainer")
-        val selected = ExecutionSandboxes.resolveForMode(
+        val selected = resolveOnWindows(
             AgentMode.BROWSE,
             ready = { it in ready },
             instantiate = { FakeSandbox(it) },
