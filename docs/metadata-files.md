@@ -376,6 +376,9 @@ install/upgrade operations.
 | Property | Value |
 |---|---|
 | **Paths** | `~/.browser4/cli-state.json` and `~/.browser4/sessions/{name}.json` |
+| **Fallback** | `./.browser4-cli-state/…` (same layout) — used by reads **and** writes when the primary is not writable, e.g. a Low-integrity agent child that may read `~/.browser4` but not write it |
+| **In agent sandboxes** | the runner sets `BROWSER4_CLI_STATE_DIR=<workspace>/.b4scratch/cli-state`, so `b4.run`, `coding.shell` and skill scripts share one session state |
+| **Write check** | a write is read back before it reports success; a file that no longer holds this command's session fails the command instead of surfacing as `Session required` later |
 | **Format** | JSON |
 | **Overridable by** | `BROWSER4_CLI_STATE_DIR` env var |
 | **Created by** | Various CLI commands that modify session state (`open`, `goto`, etc.) |

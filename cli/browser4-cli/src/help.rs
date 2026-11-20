@@ -423,7 +423,7 @@ const ENVIRONMENT_VARIABLES: &[EnvVarDef] = &[
     EnvVarDef {
         name: "BROWSER4_CLI_STATE_DIR",
         json_type: "string",
-        description: "Override CLI session state directory (default: ~/.browser4); falls back to ./.browser4-cli-state when unwritable",
+        description: "Override CLI session state directory (default: ~/.browser4); falls back to ./.browser4-cli-state when unwritable — reads and writes use the same directory, and an agent sandbox points it at <workspace>/.b4scratch/cli-state",
     },
     EnvVarDef {
         name: "BROWSER4_RUNTIME_DIR",
