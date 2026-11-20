@@ -241,7 +241,12 @@ class ExecutionSandboxTest {
 
         val env = SandboxEnvironment.build(inherited)
 
-        assertEquals(setOf("PATH", "HOME", "JAVA_HOME", "USERPROFILE"), env.keys)
+        // PYTHONIOENCODING is a deliberate default (Python writes GBK into a UTF-8 pipe on a
+        // zh-CN host otherwise), so it is present even though nothing inherited it.
+        assertEquals(
+            setOf("PATH", "HOME", "JAVA_HOME", "USERPROFILE", "PYTHONIOENCODING"),
+            env.keys,
+        )
         assertFalse(env.containsValue("sk-deepseek"))
         assertFalse(env.containsValue("ghp_x"))
     }
@@ -315,5 +320,31 @@ class ExecutionSandboxTest {
         val output = shell.execute(command)
 
         assertTrue(output.contains("http://127.0.0.1:18182"), output)
+    }
+
+    @Test
+    @DisplayName("children get a UTF-8 stdio contract for Python, and an explicit value wins")
+    fun pythonStdioDefaultsToUtf8() = runBlocking {
+        Files.createDirectories(tempDir.resolve("ws"))
+        // On a zh-CN Windows host `print('中文')` writes GBK bytes into a pipe the agent reads as
+        // UTF-8, so the text arrived as mojibake (or, with per-line decoding, one wrong word).
+        val shell = CodingAgentShell(baseDir = tempDir.resolve("ws"))
+        val command = if (System.getProperty("os.name").lowercase().contains("win")) {
+            "echo %PYTHONIOENCODING%"
+        } else {
+            "echo \"\$PYTHONIOENCODING\""
+        }
+        assertTrue(shell.execute(command).contains("utf-8"), "every child needs the contract")
+
+        // The inherited value is not whitelisted, so it cannot leak in and override the default…
+        assertEquals(
+            "utf-8",
+            SandboxEnvironment.build(mapOf("PYTHONIOENCODING" to "gbk"))["PYTHONIOENCODING"],
+        )
+        // …while an explicitly declared one (session env) still wins.
+        assertEquals(
+            "gbk",
+            SandboxEnvironment.build(emptyMap(), mapOf("PYTHONIOENCODING" to "gbk"))["PYTHONIOENCODING"],
+        )
     }
 }

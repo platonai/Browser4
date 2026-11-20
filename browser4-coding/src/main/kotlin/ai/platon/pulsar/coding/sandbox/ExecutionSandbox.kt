@@ -451,6 +451,17 @@ object SandboxEnvironment {
 
     fun isWhitelisted(name: String): Boolean = name.uppercase() in WHITELISTED
 
+    /**
+     * Variables every child gets, independent of the whitelist, unless the caller declares them.
+     *
+     * `PYTHONIOENCODING` fixes Python's **stdio** encoding: on a zh-CN Windows host
+     * `print('中文')` writes GBK bytes into a pipe the agent reads as UTF-8, so the text either
+     * arrived as mojibake or (with per-line decoding) as one misread word. It is deliberately
+     * narrow — `PYTHONUTF8=1` would also switch how scripts *open files*, which changes the
+     * behaviour of working tasks, so it is not forced here.
+     */
+    private val DEFAULTS: Map<String, String> = mapOf("PYTHONIOENCODING" to "utf-8")
+
     fun isSecretName(name: String): Boolean {
         val upper = name.uppercase()
         return SECRET_MARKERS.any { upper.contains(it) }
@@ -467,6 +478,9 @@ object SandboxEnvironment {
         val env = LinkedHashMap<String, String>()
         for ((name, value) in inherited) {
             if (isWhitelisted(name)) env[name] = value
+        }
+        for ((name, value) in DEFAULTS) {
+            env[name] = value
         }
         for ((name, value) in explicit) {
             if (isSecretName(name)) {

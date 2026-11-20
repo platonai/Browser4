@@ -695,7 +695,10 @@ The runtime bundle is stored separately in a platform-conventional application-d
    # Or install globally:
    cd cli/browser4-cli && cargo install --path .
    ```
-   > On Windows, prefix the command with `chcp 65001 >nul &&` for proper UTF-8 output.
+   > On Windows the CLI switches its own console to UTF-8 (code page 65001) before printing, so
+   > `browser4-cli` output renders correctly without a wrapper. A shell that started under a
+   > legacy code page still needs `chcp 65001 >nul &&` for *piped* output to be decoded correctly
+   > (Windows PowerShell 5.1 caches `[Console]::OutputEncoding` at startup).
    > See [Build from Source](docs/build-from-source.md) for full platform-specific instructions.
 
    **Dev-mode wrappers (no install needed):** The repo root provides shell wrappers
