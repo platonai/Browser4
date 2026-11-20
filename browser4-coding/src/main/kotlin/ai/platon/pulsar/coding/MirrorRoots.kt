@@ -14,7 +14,9 @@ import java.nio.file.Path
  * mirror.
  *
  * This object looks for directory entries that are links (junctions or symlinks) and resolves where
- * they really point. A target that still lives inside the workspace is not a mirror and is ignored.
+ * they really point. A target that still lives inside the workspace is not a mirror and is ignored;
+ * a target that is not a module of a checkout is ignored too, because the result is a **writable**
+ * root (see [isCheckoutLinkedModule]).
  * Links are never descended into, so the walk never traverses the source tree.
  *
  * ## Bounded on purpose
@@ -79,7 +81,10 @@ internal object MirrorRoots {
                 val real = runCatching { entry.toRealPath() }.getOrNull()
                 val isLink = real != null && !samePath(real, absolute)
                 if (isLink) {
-                    if (real != null && !real.startsWith(realRoot)) {
+                    // A link target is a GRANT (the boundary authorizer treats it as writable and
+                    // the low-integrity backend lowers its mandatory label), so it must be a module
+                    // of a checkout — never an arbitrary folder a link happens to point at.
+                    if (real != null && !real.startsWith(realRoot) && isCheckoutLinkedModule(real)) {
                         roots.add(real.normalize())
                     }
                     continue // never descend into a linked tree
@@ -90,6 +95,35 @@ internal object MirrorRoots {
 
         visit(realRoot, 0)
         return roots
+    }
+
+    /**
+     * Whether a link target is a module of a checkout, i.e. a real mirror rather than an arbitrary
+     * folder a workspace link points at.
+     *
+     * The boundary authorizer treats every returned mirror root as **writable**, and
+     * [ai.platon.pulsar.coding.sandbox.WindowsLowIntegritySandbox] lowers its mandatory label so the
+     * sandboxed child can write there. Accepting any link target therefore turned a workspace
+     * junction into a grant to whatever it named: `permission-e2e` A17 measured exactly that on
+     * 2026-11-20 — the canary directory (outside every readable root) came back with a Low label and
+     * the low-integrity child wrote into it, so a model that could create a junction (an inline
+     * `powershell`/`python` body is not tier-checked) escaped the boundary.
+     *
+     * A mirror target is a module *of a checkout*: walking up a bounded number of levels finds the
+     * repository markers the mirror itself was derived from. Anything else is ignored — the link
+     * still reads through the workspace path, but a write through it is refused by the policy (real
+     * path outside every writable root) and, because the target keeps its own label, by the kernel.
+     */
+    private fun isCheckoutLinkedModule(real: Path): Boolean {
+        if (!runCatching { Files.isDirectory(real) }.getOrDefault(false)) return false
+        var candidate: Path? = runCatching { real.toAbsolutePath().normalize() }.getOrNull() ?: return false
+        var hops = 0
+        while (candidate != null && hops <= MAX_SOURCE_ROOT_HOPS) {
+            if (isCheckoutRoot(candidate)) return true
+            candidate = candidate.parent
+            hops++
+        }
+        return false
     }
 
     /**
@@ -127,10 +161,15 @@ internal object MirrorRoots {
     private const val MAX_SOURCE_ROOT_HOPS = 4
 
     /** Files/dirs that make a directory a checkout root rather than a module or an accident. */
-    private val CHECKOUT_MARKERS = listOf("pom.xml", "Cargo.toml", "package.json")
+    private val CHECKOUT_MARKERS = listOf(
+        "pom.xml", "Cargo.toml", "package.json", "pyproject.toml", "setup.py", "go.mod",
+        "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "Gemfile",
+    )
 
     private fun isCheckoutRoot(dir: Path): Boolean =
-        Files.isDirectory(dir.resolve(".git")) || CHECKOUT_MARKERS.any { Files.isRegularFile(dir.resolve(it)) }
+        Files.isDirectory(dir.resolve(".git")) ||
+            Files.isRegularFile(dir.resolve(".git")) ||
+            CHECKOUT_MARKERS.any { Files.isRegularFile(dir.resolve(it)) }
 
     /** The deepest directory that contains every path in [paths], or `null` for mixed roots. */
     private fun commonAncestor(paths: Collection<Path>): Path? {

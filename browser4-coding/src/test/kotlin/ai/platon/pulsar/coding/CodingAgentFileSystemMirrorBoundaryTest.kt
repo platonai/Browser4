@@ -41,7 +41,10 @@ class CodingAgentFileSystemMirrorBoundaryTest {
     @Test
     @DisplayName("MirrorRoots.derive finds the real target of a workspace junction")
     fun derivesMirrorRoot() {
+        // A mirror target is a module of a checkout: the marker is what distinguishes it from an
+        // arbitrary folder a link points at (see MirrorRoots.isCheckoutLinkedModule).
         val real = Files.createDirectories(tempDir.resolve("real-module"))
+        Files.writeString(real.resolve("pom.xml"), "<project/>")
         val workspace = Files.createDirectories(tempDir.resolve("workspace"))
         link(workspace.resolve("browser4-coding"), real)
 
@@ -55,6 +58,7 @@ class CodingAgentFileSystemMirrorBoundaryTest {
     @DisplayName("MirrorRoots.derive finds a nested reactor module link")
     fun derivesGroupedModuleRoot() {
         val real = Files.createDirectories(tempDir.resolve("real-module"))
+        Files.writeString(real.resolve("pom.xml"), "<project/>")
         val workspace = Files.createDirectories(tempDir.resolve("workspace"))
         val group = Files.createDirectories(workspace.resolve("browser4-plugins"))
         link(group.resolve("browser4-testprobe"), real)
@@ -71,6 +75,7 @@ class CodingAgentFileSystemMirrorBoundaryTest {
         // Unbounded walking is what made the first tool call of a big workspace take minutes; a
         // link below the mirror depth is outside the contract (`WorkspaceMirror` links modules).
         val real = Files.createDirectories(tempDir.resolve("real-module"))
+        Files.writeString(real.resolve("pom.xml"), "<project/>")
         val workspace = Files.createDirectories(tempDir.resolve("workspace"))
         val deep = Files.createDirectories(workspace.resolve("a/b/c/d/e"))
         link(deep.resolve("mod"), real)
@@ -85,6 +90,7 @@ class CodingAgentFileSystemMirrorBoundaryTest {
     @DisplayName("a write through a mirrored module junction is allowed")
     fun writeThroughJunctionAllowed() = runBlocking {
         val real = Files.createDirectories(tempDir.resolve("real-module"))
+        Files.writeString(real.resolve("pom.xml"), "<project/>")
         val workspace = Files.createDirectories(tempDir.resolve("workspace"))
         link(workspace.resolve("browser4-coding"), real)
 
@@ -100,6 +106,7 @@ class CodingAgentFileSystemMirrorBoundaryTest {
     @DisplayName("a read through a mirrored module junction is allowed")
     fun readThroughJunctionAllowed() = runBlocking {
         val real = Files.createDirectories(tempDir.resolve("real-module"))
+        Files.writeString(real.resolve("pom.xml"), "<project/>")
         Files.writeString(real.resolve("note.txt"), "mirror-content")
         val workspace = Files.createDirectories(tempDir.resolve("workspace"))
         link(workspace.resolve("browser4-coding"), real)
@@ -178,5 +185,28 @@ class CodingAgentFileSystemMirrorBoundaryTest {
         val result = fs.readFile("../escape.txt")
 
         assertTrue(result.startsWith("Error:"), "traversal must be refused: $result")
+    }
+
+    @Test
+    @DisplayName("a link to a folder outside every checkout is not a grant, and a write through it is refused")
+    fun arbitraryLinkTargetIsNotAGrant() = runBlocking {
+        // permission-e2e A17 (2026-11-20): every link target was celebrated as a writable mirror
+        // root — the low-integrity backend lowered that folder's mandatory label and the sandboxed
+        // child wrote into it. A junction inside the workspace therefore became an escape to any
+        // directory the user can write, without the workspace ever naming that directory.
+        val outside = Files.createDirectories(tempDir.resolve("plain-folder"))
+        val workspace = Files.createDirectories(tempDir.resolve("workspace"))
+        link(workspace.resolve("link"), outside)
+
+        assertTrue(
+            MirrorRoots.derive(workspace).isEmpty(),
+            "a folder that is not a module of a checkout must not become a writable root",
+        )
+
+        val fs = CodingAgentFileSystem(workspace)
+        val result = fs.writeFile("link/escaped.txt", "escaped")
+
+        assertTrue(result.startsWith("Error:"), "the write through the link must be refused: $result")
+        assertFalse(Files.exists(outside.resolve("escaped.txt")), "nothing may be written through the link")
     }
 }
