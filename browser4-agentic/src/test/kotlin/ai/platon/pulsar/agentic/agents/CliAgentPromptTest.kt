@@ -50,6 +50,10 @@ class CliAgentPromptTest {
         // coding.shell is cmd.exe on Windows: POSIX tools fail.
         assertTrue(windowsPrompt.contains("cmd.exe"), windowsPrompt)
         assertTrue(windowsPrompt.contains("workingDir"), windowsPrompt)
+        // Windows PowerShell 5.1 reads a BOM-less .ps1 as ANSI, so non-ASCII literals corrupt:
+        // the prompt has to name the shell that reads UTF-8 (measured 2026-11-20).
+        assertTrue(windowsPrompt.contains("pwsh"), windowsPrompt)
+        assertTrue(windowsPrompt.contains("BOM-less"), windowsPrompt)
         // Scratch artifacts must not pollute module sources / the workspace root.
         assertTrue(windowsPrompt.contains(".b4scratch/"), windowsPrompt)
 

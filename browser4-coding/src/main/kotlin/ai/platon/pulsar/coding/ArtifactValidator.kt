@@ -1119,6 +1119,17 @@ object ArtifactValidator {
                 // Braces only, and only outside comments/strings/here-strings: `# usage: { -Path }`
                 // and `'{"a":1}'` are prose and data, not blocks.
                 issues += checkPowershellBraces(content, fileName)
+
+                // Windows PowerShell 5.1 reads a BOM-less `.ps1` as ANSI, so a non-ASCII literal
+                // is corrupted before the script runs (measured 2026-11-20: the same file prints
+                // 中文 under `pwsh` and 涓枃 under `powershell`). `coding.write` writes UTF-8
+                // without a BOM, so this is the default state of an agent-written script.
+                if (content.any { it.code > 0x7F }) {
+                    issues += ValidationIssue(Severity.WARNING,
+                        "Non-ASCII text in a .ps1 — Windows PowerShell 5.1 reads a BOM-less script as " +
+                            "ANSI and corrupts it; run it with `pwsh`, add a UTF-8 BOM, or keep it ASCII",
+                        fileName)
+                }
             }
             "bash" -> {
                 // Check for shebang

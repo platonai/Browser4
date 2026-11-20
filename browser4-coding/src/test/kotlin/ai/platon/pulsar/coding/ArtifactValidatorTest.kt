@@ -751,6 +751,31 @@ class ArtifactValidatorTest {
     }
 
     @Test
+    @DisplayName("validateScript warns when a ps1 carries non-ASCII text")
+    fun validateScriptPs1WarnsAboutNonAscii() {
+        // Windows PowerShell 5.1 reads a BOM-less script as ANSI, so a Chinese literal is
+        // corrupted before the script runs (measured: 中文 under pwsh, 涓枃 under powershell).
+        val content = """
+            param([string]${'$'}Path)
+            ${'$'}ErrorActionPreference = "Stop"
+            Write-Host "处理 ${'$'}Path"
+        """.trimIndent()
+
+        val result = ArtifactValidator.validateScript(content, "build.ps1")
+        assertTrue(
+            result.issues.any { it.severity == Severity.WARNING && it.message.contains("Non-ASCII") },
+            "the encoding footgun must be named: ${result.issues}",
+        )
+
+        val ascii = "param([string]\$Path)\n\$ErrorActionPreference = \"Stop\"\nWrite-Host \$Path"
+        assertTrue(
+            ArtifactValidator.validateScript(ascii, "build.ps1")
+                .issues.none { it.message.contains("Non-ASCII") },
+            "an ASCII script is fine",
+        )
+    }
+
+    @Test
     @DisplayName("validateScript Bash checks for shebang and set -e")
     fun validateScriptBash() {
         val content = """

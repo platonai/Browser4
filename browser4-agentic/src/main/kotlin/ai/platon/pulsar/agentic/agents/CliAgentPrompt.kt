@@ -64,9 +64,11 @@ internal object CliAgentPrompt {
             "coding.shell runs through cmd.exe (use `dir`, `type`, `findstr`, `more`; " +
                 "POSIX tools such as `head`, `sed`, `grep` are NOT available) and each call " +
                 "starts in a fresh process — pass `workingDir` instead of a `cd /d … &&` prefix. " +
-                "Do NOT wrap a command in `powershell -Command …`: PowerShell decodes the child's " +
-                "UTF-8 output with the ANSI code page (gb2312 on a Chinese Windows), so the text " +
-                "arrives as mojibake — run the tool directly, or have it write a file and read that."
+                "Write `.ps1` files for `pwsh`, not for `powershell.exe`: Windows PowerShell 5.1 " +
+                "reads a BOM-less script as ANSI, so a Chinese literal in the script is corrupted " +
+                "before it runs (measured 2026-11-20: the same file prints 中文 under `pwsh` and " +
+                "涓枃 under `powershell`); if 5.1 is required, keep the script ASCII or put the " +
+                "non-ASCII text in a data file."
         } else {
             "coding.shell runs through sh -c and each call starts in a fresh process — " +
                 "pass `workingDir` instead of a `cd … &&` prefix."
