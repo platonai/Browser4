@@ -38,6 +38,37 @@ class VerificationReportTest {
     )
 
     @Test
+    @DisplayName("the verdict line stays quotable when a check carries a long detail")
+    fun verdictStaysQuotable() {
+        // A real failure put the whole Maven tail into `detail`, the verdict line grew past the
+        // tool-result display budget, and the model could not quote VERDICT_JSON verbatim
+        // (2026-11-20 agent run) — which is what the finish gate compares.
+        val detail = buildString {
+            append("[ERROR] cannot compile with release 21\n")
+            repeat(400) { append("[ERROR] /src/Foo$it.kt:[12,5] a long repeated compiler message\n") }
+            append("BUILD FAILURE")
+        }
+        val report = VerificationReport(
+            checks = listOf(check(ok = false, exitCode = 1, detail = detail)),
+            module = "browser4-coding",
+            requested = listOf("compile"),
+            durationMs = 1_200,
+        )
+
+        val verdict = report.formatVerdict()
+        assertTrue(verdict.length < 2_000, "verdict length: ${verdict.length}")
+        assertTrue(verdict.contains("BUILD FAILURE"), "the tail has to survive: $verdict")
+
+        val json = mapper.readTree(verdict.removePrefix(VerificationReport.VERDICT_PREFIX))
+        assertFalse(json["passed"].asBoolean())
+        assertEquals(1, json["checks"][0]["exitCode"].asInt())
+        assertTrue(
+            json["checks"][0]["detail"].asText().contains("…(cut)…"),
+            "the clamped detail says it was cut: ${json["checks"][0]["detail"].asText()}",
+        )
+    }
+
+    @Test
     @DisplayName("all checks ran and passed → passed")
     fun allGreen() {
         val report = VerificationReport(

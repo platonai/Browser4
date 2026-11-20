@@ -129,7 +129,7 @@ data class VerificationReport(
         "durationMs" to durationMs,
         "verifiedAt" to verifiedAt?.toString(),
         "contentDigest" to contentDigest,
-        "failureReason" to failureReason(),
+        "failureReason" to failureReason()?.let { clamp(it, MAX_FAILURE_REASON_CHARS) },
         "checks" to checks.map { c ->
             linkedMapOf(
                 "name" to c.name,
@@ -140,10 +140,10 @@ data class VerificationReport(
                 "exitCode" to c.exitCode,
                 "durationMs" to c.durationMs,
                 "evidence" to c.evidence,
-                "detail" to c.detail,
+                "detail" to c.detail?.let { clamp(it, MAX_DETAIL_CHARS) },
                 "cached" to c.cached,
                 "fingerprint" to c.fingerprint,
-                "diagnostics" to c.diagnostics.map { d ->
+                "diagnostics" to c.diagnostics.take(MAX_VERDICT_DIAGNOSTICS).map { d ->
                     linkedMapOf(
                         "file" to d.file,
                         "line" to d.line,
@@ -152,6 +152,7 @@ data class VerificationReport(
                         "message" to d.message,
                     )
                 },
+                "diagnosticsOmitted" to (c.diagnostics.size - MAX_VERDICT_DIAGNOSTICS).coerceAtLeast(0),
             )
         },
     )
@@ -195,6 +196,32 @@ data class VerificationReport(
 
     companion object {
         private val JSON = ObjectMapper()
+
+        /**
+         * How much free text one check may put into the verdict line.
+         *
+         * The verdict is a single JSON line and the tool-result display keeps only its head and
+         * tail when it is long: a real `coding.verify` failure was cut mid-JSON, so the model
+         * could not quote `VERDICT_JSON` verbatim — which is exactly what the finish gate
+         * compares (2026-11-20 agent run). A compact verdict is therefore part of the contract,
+         * not cosmetics; the human summary keeps the full text.
+         */
+        private const val MAX_DETAIL_CHARS = 600
+        private const val MAX_FAILURE_REASON_CHARS = 800
+        private const val MAX_VERDICT_DIAGNOSTICS = 20
+
+        /**
+         * Keep the head *and* the tail of [text] within [max] characters.
+         *
+         * A compiler tail is where `BUILD FAILURE` and the failing goal live, and the head is
+         * where the first error is; dropping either loses the diagnosis.
+         */
+        internal fun clamp(text: String, max: Int): String {
+            if (text.length <= max) return text
+            val head = max * 2 / 3
+            val tail = (max - head - 7).coerceAtLeast(0)
+            return text.take(head) + "…(cut)…" + text.takeLast(tail)
+        }
 
         /**
          * Sentinel that prefixes the machine-readable verdict line in tool
