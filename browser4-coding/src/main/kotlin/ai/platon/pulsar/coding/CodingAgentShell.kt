@@ -699,6 +699,13 @@ class CodingAgentShell(
          */
         private val EXECUTABLE_SUFFIXES = listOf(".exe", ".cmd", ".bat", ".com", ".ps1")
 
+        /**
+         * Interpreter families that are commonly spelled with a version pin
+         * (`python3.12`, `python2.7`, `pip3.13`). Captured by
+         * [canonicalInterpreterName] so the pin never decides the verdict.
+         */
+        private val VERSION_PINNED_INTERPRETER = Regex("""(python|pip)(\d+)(?:\.\d+)*""")
+
         /** Recursion guard for `sh -c "sh -c '...'"` style nesting. */
         private const val MAX_INLINE_SCRIPT_DEPTH = 3
 
@@ -2589,7 +2596,9 @@ class CodingAgentShell(
     /**
      * Normalized base-command name used for allow-list membership:
      * basename, lowercase, without a Windows launcher / script suffix
-     * (`mvnw.cmd` → `mvnw`, `python3.exe` → `python3`, `/usr/bin/git` → `git`).
+     * (`mvnw.cmd` → `mvnw`, `python3.exe` → `python3`, `/usr/bin/git` → `git`),
+     * with a version-pinned interpreter folded onto its family
+     * (`python3.12` → `python3`, `python2.7` → `python`, `pip3.13` → `pip3`).
      */
     internal fun normalizeCommandName(token: String): String {
         var name = token.trim().trim('\'', '"', '\\')
@@ -2601,7 +2610,39 @@ class CodingAgentShell(
                 break
             }
         }
-        return name
+        return canonicalInterpreterName(name)
+    }
+
+    /**
+     * Fold a version-pinned interpreter onto the spelling the tiers know:
+     * `python3.12` → `python3`, `python2.7` → `python`, `pip3.13` → `pip3`.
+     *
+     * The same dev tool must not be judged differently because of how it is
+     * spelled: keeping the pin distinct made the verdict depend on whether the
+     * *host* happens to expose that exact version on PATH. On the Ubuntu 26.04
+     * nightly runner (which installs Python 3.14 and no `python3.12`),
+     * `python3.12.exe --version` was refused while `python3 --version` ran —
+     * a verdict about the runner image, not about the command (2026-11-17
+     * nightly, `CodingAgentShellTest.normalizationStripsOnlyLauncherSuffixes`).
+     *
+     * The pin is dropped only when the unpinned spelling is a known tier
+     * command, so an unknown `python3.12`-lookalike keeps its own name in the
+     * refusal message instead of borrowing `python`'s.
+     *
+     * This decides **permission, not availability**: a folded name is allowed
+     * even when that exact binary is not installed (the old PATH lookup was what
+     * made the verdict host-dependent), so a missing interpreter surfaces as the
+     * process's own "command not found" instead of a permission refusal.
+     */
+    private fun canonicalInterpreterName(name: String): String {
+        val match = VERSION_PINNED_INTERPRETER.matchEntire(name) ?: return name
+        val family = match.groupValues[1]
+        val major = family + match.groupValues[2]
+        return when {
+            major in SAFE_COMMANDS || major in DEV_COMMANDS || major in BUILD_COMMANDS -> major
+            family in SAFE_COMMANDS || family in DEV_COMMANDS || family in BUILD_COMMANDS -> family
+            else -> name
+        }
     }
 
     /** True when the raw token is spelled as a path rather than a bare name. */

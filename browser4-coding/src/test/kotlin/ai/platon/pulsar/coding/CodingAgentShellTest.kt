@@ -118,6 +118,27 @@ class CodingAgentShellTest {
         assertDenied(s, "totally-unknown-tool.exe --version", "not allowed")
     }
 
+    @Test
+    @DisplayName("a version-pinned interpreter is the same dev tool whatever the host installs")
+    fun versionPinnedInterpreterIsTheSameDevTool() {
+        // The Ubuntu 26.04 nightly runner installs Python 3.14 and no `python3.12`, so
+        // the PATH fallback made the verdict a statement about the runner image rather
+        // than about the command (2026-11-17 nightly). The pin is part of the spelling,
+        // not of the tool.
+        val s = shell()
+        assertTrueAllowed(s, "python3.13 --version")
+        assertTrueAllowed(s, "python2.7 --version")
+        assertTrueAllowed(s, "pip3.13 --version")
+        // Only a known interpreter family borrows the unpinned name; a lookalike keeps its
+        // own and stays refused.
+        assertDenied(s, "pythonista3.12 --version", "not allowed")
+
+        assertEquals("python3", s.normalizeCommandName("python3.12.exe"))
+        assertEquals("python", s.normalizeCommandName("python2.7"))
+        assertEquals("pip3", s.normalizeCommandName("/usr/bin/pip3.13"))
+        assertEquals("pythonista3.12", s.normalizeCommandName("pythonista3.12"))
+    }
+
     // --- Child-process output decoding (localized Windows) -------------------
 
     @Test
