@@ -9,10 +9,11 @@
 //! on Windows).  See [`resolve_runtime_data_dir`].
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MousePosition {
@@ -389,27 +390,108 @@ fn primary_state_dir_usable(dir: &Path) -> bool {
     }
 }
 
+/// Whether reading state has to consult the workspace-relative fallback.
+///
+/// Read and write must agree, because the fallback is where
+/// [`write_state`] *moved* the state file. The write path relocates on
+/// `PermissionDenied`, which is what a **readable but not writable** primary
+/// produces. That is exactly the shape of `~/.browser4` under the Windows
+/// Low-integrity agent sandbox (`windows-low-il`, the default coding backend):
+/// a Low token may read Medium objects and may not write them. This predicate
+/// used to be "the primary is unlistable", so a sandboxed `attach` wrote its
+/// session to `./.browser4-cli-state`, the next command read the empty primary
+/// and answered "Session required" — a success report followed by a failure
+/// the caller could only explain by retrying (2026-11-20 run).
+///
+/// A primary that is merely *missing the state file* still stays out of the
+/// fallback: after `close` that is the normal state, and reading the fallback
+/// there would resurrect a stale session forever (the regression pinned by
+/// `test_read_state_does_not_resurrect_fallback_when_primary_exists`).
+fn should_consult_fallback(implicit_default: bool, usable: bool, writable: bool) -> bool {
+    implicit_default && (!usable || !writable)
+}
+
+/// The fallback directory [`read_state`] must consult, if any.
+///
+/// `None` for an operator-pinned state dir (`BROWSER4_CLI_STATE_DIR`, or a
+/// caller that passed an explicit path): those never relocate, and
+/// [`write_state`] will not relocate either, so both sides keep the flat
+/// layout. Otherwise the fallback is selected by [`should_consult_fallback`].
+fn fallback_for(state_dir: Option<&Path>, dir: &Path) -> Option<PathBuf> {
+    if !is_implicit_default_dir(state_dir) {
+        return None;
+    }
+    let usable = primary_state_dir_usable(dir);
+    let writable = usable && primary_state_dir_writable(dir);
+    should_consult_fallback(true, usable, writable).then(fallback_state_dir)
+}
+
+/// Per-process cache for [`primary_state_dir_writable`]: one probe file per
+/// directory per invocation, however many `read_state` calls happen.
+static STATE_DIR_WRITABLE: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
+
+/// Whether a state file can actually be written into `dir`.
+///
+/// Probed with a real create+remove instead of inspecting mode bits: on
+/// Windows the answer lives in the ACL and in the mandatory integrity label
+/// (a Medium directory refuses a Low-integrity writer while it stays readable),
+/// so only an attempted write tells the truth. A missing directory is *not*
+/// treated as writable — [`primary_state_dir_usable`] already routes it to the
+/// fallback, and creating it from a read path would be a surprise.
+fn primary_state_dir_writable(dir: &Path) -> bool {
+    let cache = STATE_DIR_WRITABLE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock() {
+        if let Some(known) = guard.get(dir) {
+            return *known;
+        }
+    }
+    let writable = probe_state_dir_writable(dir);
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(dir.to_path_buf(), writable);
+    }
+    writable
+}
+
+fn probe_state_dir_writable(dir: &Path) -> bool {
+    if !primary_state_dir_usable(dir) {
+        return false;
+    }
+    let probe = dir.join(format!(".browser4-write-probe-{}", std::process::id()));
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
+        Ok(_) => {
+            let _ = fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 /// Read the persisted CLI state from disk, falling back to defaults.
 /// Auto-migrates old state files that lack the `kind` field by inferring it
 /// from the legacy `is_attached` / `attach_type` fields.
 ///
-/// When the implicit default directory (`~/.browser4`) does not exist / is
-/// not accessible (e.g. under a file sandbox where fallback writes landed in
-/// `./.browser4-cli-state`), the fallback directory is checked so sessions
-/// survive across invocations.
+/// When the state dir is not usable or not writable — a primary that could
+/// never be created, or the readable-but-not-writable `~/.browser4` of an
+/// agent sandbox — the workspace-relative fallback is read too, so a session
+/// written there survives across invocations.
 pub fn read_state(state_dir: Option<&Path>, session_name: Option<&str>) -> CliState {
     let dir = state_dir
         .map(|p| p.to_path_buf())
         .unwrap_or_else(resolve_default_state_dir);
 
-    // Only consult the fallback when the primary directory is genuinely
-    // unusable. If the primary dir merely lacks the state file (normal after
-    // `close`), the fallback must NOT be read — otherwise a stale fallback
-    // file is resurrected forever and `close-all` can never report 0.
-    let fallback = if is_implicit_default_dir(state_dir) && !primary_state_dir_usable(&dir) {
-        Some(fallback_state_dir())
-    } else {
+    // Read where the write path would have written: a stale CWD-relative
+    // fallback must not be resurrected when the primary merely lacks the file
+    // (normal after `close`), but it must be read when `write_state` had to
+    // relocate there. A primary that has the file decides on its own, so the
+    // writability probe is skipped on the common path.
+    let fallback = if state_file(&dir, session_name).is_file() {
         None
+    } else {
+        fallback_for(state_dir, &dir)
     };
 
     read_state_with_fallback(&dir, fallback.as_deref(), session_name)
@@ -445,13 +527,14 @@ fn read_state_with_fallback(
 /// Development mode uses this to tell "this checkout never recorded a server,
 /// so it needs its own development port" from "a server URL was persisted
 /// (either by a previous run of this workspace or by `--server`), so honour
-/// it".  Mirrors [`read_state`]: the workspace-relative fallback directory is
-/// checked as well when the effective state dir is the implicit default.
+/// it".  Mirrors [`read_state`] exactly — including *where* it reads — so a
+/// stale CWD-relative fallback cannot pick the port of a healthy install.
 pub fn has_persisted_state(session_name: Option<&str>) -> bool {
-    if state_file(&resolve_default_state_dir(), session_name).is_file() {
+    let primary = resolve_default_state_dir();
+    if state_file(&primary, session_name).is_file() {
         return true;
     }
-    is_implicit_default_dir(None) && state_file(&fallback_state_dir(), session_name).is_file()
+    fallback_for(None, &primary).is_some_and(|dir| state_file(&dir, session_name).is_file())
 }
 
 /// Parse and migrate a raw state JSON string.
@@ -480,6 +563,13 @@ fn migrate_legacy_kind(state: &mut CliState) {
 /// under a file sandbox), the write automatically falls back to a workspace-
 /// relative directory (`./.browser4-cli-state`) and prints a one-time warning
 /// suggesting `BROWSER4_CLI_STATE_DIR`.
+///
+/// The write is **verified by reading it back** before it reports success. A
+/// state directory that accepts the write but cannot be read back (a writable
+/// but deny-read file, another process rewriting it, a redirected `HOME`) used
+/// to surface one command later as `Session required`, which the caller could
+/// only explain by retrying; here it fails at the command that lost the state
+/// and names the file.
 pub fn write_state(
     state: &CliState,
     state_dir: Option<&Path>,
@@ -489,8 +579,8 @@ pub fn write_state(
         .map(|p| p.to_path_buf())
         .unwrap_or_else(resolve_default_state_dir);
 
-    match write_state_to_dir(state, &dir, session_name) {
-        Ok(()) => Ok(()),
+    let written = match write_state_to_dir(state, &dir, session_name) {
+        Ok(()) => dir,
         Err(e)
             if e.kind() == std::io::ErrorKind::PermissionDenied
                 && is_implicit_default_dir(state_dir) =>
@@ -514,10 +604,43 @@ pub fn write_state(
                     fallback.display()
                 );
             }
-            write_state_to_dir(state, &fallback, session_name)
+            write_state_to_dir(state, &fallback, session_name)?;
+            fallback
         }
-        Err(e) => Err(e),
+        Err(e) => return Err(e),
+    };
+
+    verify_state_round_trip(&written, state, session_name)
+}
+
+/// Re-read the state file that was just written and check it kept this
+/// command's session.
+///
+/// Read back through the same gate as [`read_state`] (so a write that landed in
+/// the fallback is verified where the next invocation will look), which is what
+/// makes "written" and "readable by the next command" the same fact.
+fn verify_state_round_trip(
+    dir: &Path,
+    state: &CliState,
+    session_name: Option<&str>,
+) -> std::io::Result<()> {
+    let persisted = read_state_with_fallback(dir, None, session_name);
+    if persisted.session_id == state.session_id {
+        return Ok(());
     }
+
+    let path = state_file(dir, session_name);
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        format!(
+            "the CLI state file {} did not keep this command's session \
+             (wrote {:?}, read back {:?}) — the state directory is not usable by this \
+             identity; set BROWSER4_CLI_STATE_DIR to a writable location",
+            path.display(),
+            state.session_id,
+            persisted.session_id,
+        ),
+    ))
 }
 
 /// Core write logic — operates on an explicit directory so the fallback
@@ -2259,6 +2382,48 @@ mod tests {
     }
 
     #[test]
+    fn test_write_state_round_trips_the_session_it_was_given() {
+        // `write_state` now reads its own file back: a writable-but-unreadable
+        // state dir must fail at the command that lost the state, not one
+        // command later as "Session required".
+        let tmp = test_temp_dir();
+        let state = CliState {
+            session_id: Some("round-trip".to_string()),
+            ..Default::default()
+        };
+        write_state(&state, Some(tmp.path()), None).unwrap();
+        assert_eq!(
+            read_state(Some(tmp.path()), None).session_id.as_deref(),
+            Some("round-trip")
+        );
+    }
+
+    #[test]
+    fn test_verify_state_round_trip_rejects_a_file_holding_another_session() {
+        let tmp = test_temp_dir();
+        let stored = CliState {
+            session_id: Some("stored".to_string()),
+            ..Default::default()
+        };
+        write_state(&stored, Some(tmp.path()), None).unwrap();
+
+        let claimed = CliState {
+            session_id: Some("claimed".to_string()),
+            ..Default::default()
+        };
+        let error = verify_state_round_trip(tmp.path(), &claimed, None).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("did not keep this command's session"),
+            "unexpected message: {message}"
+        );
+        assert!(
+            message.contains("BROWSER4_CLI_STATE_DIR"),
+            "the failure has to name the fix: {message}"
+        );
+    }
+
+    #[test]
     fn test_clear_state() {
         let tmp = test_temp_dir();
         let state = CliState::default();
@@ -2294,6 +2459,46 @@ mod tests {
         let file_path = tmp.path().join("a-file");
         fs::write(&file_path, b"x").unwrap();
         assert!(!primary_state_dir_usable(&file_path));
+    }
+
+    #[test]
+    fn test_should_consult_fallback_matches_the_write_path() {
+        // A primary that could never be created (file sandbox): the historical
+        // case the fallback was written for.
+        assert!(should_consult_fallback(true, false, false));
+        // Readable but not writable — the Windows Low-integrity sandbox shape
+        // (`windows-low-il`). `attach` relocated its state file there, so the
+        // next command must read it instead of the empty primary.
+        assert!(should_consult_fallback(true, true, false));
+        // Healthy primary: a missing file means "no state", and a stale
+        // CWD-relative fallback must stay unread or `close-all` can never
+        // report 0 (regression pinned below).
+        assert!(!should_consult_fallback(true, true, true));
+        // An operator-pinned state dir never relocates on either side.
+        assert!(!should_consult_fallback(false, true, false));
+        assert!(!should_consult_fallback(false, false, false));
+    }
+
+    #[test]
+    fn test_primary_state_dir_writable_probes_and_cleans_up() {
+        let tmp = test_temp_dir();
+        assert!(primary_state_dir_writable(tmp.path()));
+        assert_eq!(
+            fs::read_dir(tmp.path()).unwrap().filter_map(Result::ok).count(),
+            0,
+            "the writability probe must remove its probe file"
+        );
+
+        // A missing directory is not "writable": `primary_state_dir_usable`
+        // routes it to the fallback, and a read must not create it.
+        let missing = tmp.path().join("does-not-exist");
+        assert!(!primary_state_dir_writable(&missing));
+        assert!(!missing.exists());
+
+        // Nor is a regular file masquerading as the state dir.
+        let file_path = tmp.path().join("a-file");
+        fs::write(&file_path, b"x").unwrap();
+        assert!(!primary_state_dir_writable(&file_path));
     }
 
     #[test]
