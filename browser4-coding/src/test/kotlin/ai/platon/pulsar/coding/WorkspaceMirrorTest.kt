@@ -77,6 +77,18 @@ class WorkspaceMirrorTest {
         // Existing root files are never overwritten.
         assertEquals("<project/>", Files.readString(ws.resolve("pom.xml")))
         assertTrue(WorkspaceMirror.isComplete(ws, repo))
+        // The boundary reads this manifest instead of scanning the workspace (review S1): without it
+        // a mirrored write is refused, and with it only this checkout's modules are granted.
+        assertEquals(
+            setOf(
+                repo.resolve("browser4-coding").toRealPath(),
+                repo.resolve("browser4-plugins").toRealPath(),
+                repo.resolve("browser4-rest").toRealPath(),
+            ),
+            MirrorRoots.derive(ws),
+            "the manifest must grant exactly the linked modules",
+        )
+        assertEquals(repo.toRealPath(), MirrorRoots.sourceRoot(ws))
     }
 
     @Test

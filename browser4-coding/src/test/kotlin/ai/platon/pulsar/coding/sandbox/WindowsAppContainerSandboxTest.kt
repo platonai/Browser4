@@ -2,6 +2,7 @@ package ai.platon.pulsar.coding.sandbox
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -55,6 +56,60 @@ class WindowsAppContainerSandboxTest {
         )
         return Files.createDirectories(root.resolve("ws"))
     }
+
+    @Test
+    @DisplayName("each workspace gets its own container identity")
+    fun eachWorkspaceGetsItsOwnContainer() {
+        // Review S2: one shared container SID granted on N workspaces is one principal allowed into
+        // all of them. The identity is per workspace, so a task can only reach its own tree.
+        val sandbox = WindowsAppContainerSandbox(markerDir = null)
+        val a = sandbox.containerNameFor(tempDir.resolve("ws-a"))
+        val b = sandbox.containerNameFor(tempDir.resolve("ws-b"))
+
+        assertNotEquals(a, b, "two tasks must not share one SID")
+        assertEquals(a, sandbox.containerNameFor(tempDir.resolve("ws-a")), "a retried task reuses its profile")
+        assertTrue(
+            a.startsWith("${Win32.APP_CONTAINER_NAME}-"),
+            "names stay in the product's namespace: $a",
+        )
+    }
+
+    @Test
+    @DisplayName("release revokes the task's grant and deletes its profile, and only once")
+    fun releaseDropsTheTaskIdentity() {
+        assumeTrue(isWindows, "appcontainers only exist on Windows")
+        val workspace = writableWorkspace("appcontainer-release-${System.nanoTime()}")
+        val runner = FakeRunner { SandboxCommandResult(0) }
+        val deleted = mutableListOf<String>()
+        val sandbox = WindowsAppContainerSandbox(
+            runner = runner,
+            probe = { null },
+            markerDir = null,
+            deleteProfile = { name ->
+                deleted += name
+                true
+            },
+        )
+        try {
+            sandbox.prepare(spec(workspace), workspace, allowNetwork = false)
+            val expectedName = sandbox.containerNameFor(workspace)
+
+            runner.calls.clear()
+            sandbox.release(workspace)
+
+            val revoke = runner.calls.firstOrNull { it.firstOrNull() == "icacls" }
+            assertNotNull(revoke, "the grant must be revoked: ${runner.calls}")
+            assertEquals("/remove", revoke!![2])
+            assertTrue(revoke[3].startsWith("*S-1-15-2-"), "the revoke names the container SID: ${revoke[3]}")
+            assertEquals(listOf(expectedName), deleted, "the task profile must be deleted")
+
+            sandbox.release(workspace)
+            assertEquals(1, deleted.size, "a second release must be a no-op")
+        } finally {
+            runCatching { workspace.parent.toFile().deleteRecursively() }
+        }
+    }
+
 
     @Test
     @DisplayName("the container is the one backend that can refuse the network")

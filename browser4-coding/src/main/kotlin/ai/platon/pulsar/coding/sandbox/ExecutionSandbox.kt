@@ -139,6 +139,23 @@ interface ExecutionSandbox {
      * Backends that have nothing to say return an empty list; the notes are never a failure.
      */
     fun advisoryNotes(): List<String> = emptyList()
+
+    /**
+     * Releases the OS grants [prepare] made for the task that used [workspace].
+     *
+     * Called once when the task ends (normal completion, failure or cancellation). It exists because
+     * the Windows backends are only as per-task as the security identity they use: a shared account,
+     * a shared integrity level or a shared container SID lets one task write another task's
+     * workspace, and a grant left on disk outlives the task that needed it. Releasing at task end is
+     * what bounds that window (2026-11-20 review, issue S2).
+     *
+     * Contract:
+     *  - **best effort** — a failed release is logged by the caller, never propagated: the task's
+     *    result has already been decided and a cleanup failure must not turn it into an error;
+     *  - **idempotent** — a second call is a no-op;
+     *  - **narrow** — only what this task received is removed; other tasks' live grants must survive.
+     */
+    fun release(workspace: Path) {}
 }
 
 object OffSandbox : ExecutionSandbox {
@@ -178,6 +195,8 @@ class WindowsAclSandbox(
     private val provision: (Path, List<Path>) -> SandboxAccount = defaultProvision(),
     private val selfCheck: (Path, SandboxAccount) -> String? = ::defaultSelfCheck,
     cacheLimit: Int = DEFAULT_CACHE_LIMIT,
+    /** Command seam for the release path; injectable so a test never touches a real DACL. */
+    private val runner: SandboxCommandRunner = SystemSandboxCommandRunner,
 ) : ExecutionSandbox {
 
     companion object {
@@ -188,6 +207,9 @@ class WindowsAclSandbox(
          * and one password copy per workspace — would grow for the life of the backend.
          */
         const val DEFAULT_CACHE_LIMIT = 64
+
+        /** One `icacls /remove` per root; the ACL edit itself is fast, a hung console is not. */
+        private const val RELEASE_TIMEOUT_SECONDS = 30L
     }
 
     private val logger = LoggerFactory.getLogger(WindowsAclSandbox::class.java)
@@ -253,7 +275,41 @@ class WindowsAclSandbox(
             }
         }
         logger.debug("windows sandbox account ready: account={} workspace={}", entry.account.userName, root)
+        ExecutionSandboxes.bindTask(root, this)
         return spec.copy(sandboxAccount = entry.account)
+    }
+
+    /**
+     * Removes the sandbox account's grants for the workspace this task used.
+     *
+     * The account is shared by every task of the installation, so a grant left behind is a standing
+     * permission for the *next* task to write a directory it was never given: the workspace, its
+     * mirror roots and the folders the task added are all revoked here. Only `grant` ACEs are
+     * removed (`/remove:g`), never a deny the operator provisioned.
+     *
+     * Best effort by contract: a refused `icacls` is logged and the task result stands.
+     */
+    override fun release(workspace: Path) {
+        val root = workspace.toAbsolutePath().normalize()
+        val key = entries.keys.firstOrNull { sameSandboxPath(it.workspace, root) } ?: return
+        val entry = entries.remove(key) ?: return
+        synchronized(evictionLock) { recency.remove(key) }
+        val roots = (listOf(key.workspace) + MirrorRoots.derive(key.workspace) + key.extraRoots).distinct()
+        for (path in roots) {
+            val result = runner.run(
+                listOf("icacls", path.toString(), "/remove:g", entry.account.userName),
+                RELEASE_TIMEOUT_SECONDS,
+            )
+            if (result.ok) {
+                logger.info("windows sandbox released the account grant on {}", path)
+            } else {
+                logger.warn(
+                    "could not revoke the sandbox account grant on {} (icacls exit={}): {}",
+                    path, result.exitCode, result.output.lineSequence().firstOrNull { it.isNotBlank() },
+                )
+            }
+        }
+        entry.account.dispose()
     }
 
     /**
@@ -336,6 +392,42 @@ object ExecutionSandboxes {
      * every time. A property change picks a different id key and therefore a fresh instance.
      */
     private val instances = ConcurrentHashMap<String, ExecutionSandbox>()
+
+    private val logger = LoggerFactory.getLogger(ExecutionSandboxes::class.java)
+
+    /**
+     * The backend each live task's workspace was prepared under.
+     *
+     * [releaseTask] needs the *instance* that prepared the workspace: the low-integrity backend keeps
+     * per-task roots in memory and the container backend keeps a per-task identity there, so
+     * resolving a fresh instance at task end would have nothing to release. Entries are removed when
+     * the task ends; a crash leaves them in memory and the process exits with them.
+     */
+    private val taskBackends = ConcurrentHashMap<Path, ExecutionSandbox>()
+
+    /** Records that [sandbox] prepared [workspace], so its grants can be released at task end. */
+    internal fun bindTask(workspace: Path, sandbox: ExecutionSandbox) {
+        taskBackends[workspace.toAbsolutePath().normalize()] = sandbox
+    }
+
+    /**
+     * Releases the OS grants of the task that used [workspace].
+     *
+     * Called from the task-end lifecycle. No-op when this process never prepared that workspace (a
+     * resumed task whose backend already restarted, or a workspace that never ran a command), and
+     * never throws: the task's outcome has been decided by the time cleanup runs.
+     */
+    fun releaseTask(workspace: Path) {
+        val root = workspace.toAbsolutePath().normalize()
+        val binding = taskBackends.entries.firstOrNull { sameSandboxPath(it.key, root) } ?: return
+        taskBackends.remove(binding.key)
+        runCatching { binding.value.release(binding.key) }.onFailure { e ->
+            logger.warn(
+                "could not release the OS sandbox grants of {} (backend={}): {}",
+                binding.key, binding.value.id, e.message,
+            )
+        }
+    }
 
     /**
      * Plan P3-1 — fail fast when the configured id is not a known backend.
@@ -564,5 +656,16 @@ object ProcessLauncher {
         builder.environment().clear()
         builder.environment().putAll(spec.environment)
         return builder.start()
+    }
+}
+
+/** Case-insensitive on Windows so a task-end release finds the binding its prepare recorded. */
+private fun sameSandboxPath(a: Path, b: Path): Boolean {
+    val left = a.toAbsolutePath().normalize().toString()
+    val right = b.toAbsolutePath().normalize().toString()
+    return if (System.getProperty("os.name").lowercase().contains("win")) {
+        left.equals(right, ignoreCase = true)
+    } else {
+        left == right
     }
 }

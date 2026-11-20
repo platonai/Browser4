@@ -155,6 +155,14 @@ Authorizer 按 `(root, 可读根, add-dir)` 缓存，LRU 上限 64（每个任�
 `off` 也会拿到真实的写强制；browse 不会落到 coding 后端（完整性级别不管读），在 AppContainer 落地前保持
 安装默认。`coding.permissions` 会打印后端 id、模式的四条轴，以及"网络是否被强制"。
 
+**授权在任务结束时撤销**：三个 Windows 后端共用安全身份（一个 Low 令牌、一个 `browser4-agent` 账户、或过去的一个
+容器 SID），所以"某个任务拿到的工作区"如果不能收回，就是**下一个任务**的常驻写权限。`ExecutionSandbox.release(workspace)`
+在任务收尾（`AgentToolManager.endTask` 的 finally，正常结束 / 失败 / 取消都走这里）执行：low-il 把该任务打过标的根恢复成
+Medium 并删掉打标标记，`windows-acl` 用 `icacls /remove:g` 收回账户授权并释放凭据，appcontainer 收回该任务的 ACE 并删除
+**任务专属**容器 profile。AppContainer 的身份是**按工作区**的（`browser4-agent-<path 摘要>`），因此两个任务不再共享一个
+SID；low-il / windows-acl 仍共享身份，撤销只把窗口限制在任务生命周期内，任务**并发**运行时彼此可写这一点没有消失
+（2026-11-20 审查 S2）。
+
 **文件写操作也在强制层内**（P3-6）：`coding.write`/`append`/`replace`/`editLines`/`delete`/`mkdir`/
 `copy`/`move`/`revert` 的实际改动由**沙箱内的子进程**执行（`SandboxedFileOps`，后端声明
 `executesFileOps` 即可；`windows-low-il` 与 `windows-appcontainer` 都是如此）。后端过去是 Medium 进程，
@@ -215,8 +223,11 @@ Authorizer 按 `(root, 可读根, add-dir)` 缓存，LRU 上限 64（每个任�
 
 关键设计：
 
-- **护栏在「批准时」检查**（`AccessApprovals.guardrailViolation`）：模型可以随便申请，操作员的「同意」才必须守规矩。
-  跨 `denyTools`、受保护路径、凭证路径、工作区边界、命令白名单的申请直接转成 `denied`，REST 回 **409**
+- **护栏在「申请」与「批准」两处都检查**（`AccessApprovals.guardrailViolation`）：
+  申请一个**永远不可能被批准**的目标（凭证库 `~/.ssh`、受保护文件、工作区外且禁止外访的路径、白名单外的程序）
+  会**立即**转成 `denied` 并带上原因码（`ACCESS_DENIED`），模型不必等一个不存在的操作员；
+  批准时再查一次，因为策略可能在「申请」与「决定」之间变化（策略文件条目尤其如此）。
+  跨 `denyTools`、受保护路径、凭证路径、工作区边界、命令白名单的申请 REST 回 **409**
   （客户端据此区分「还没决定」与「不可能被决定」）。
 - **授权是目标级作用域**（`scopeFor`）：批准一个路径只覆盖那个路径，批准 `echo hi` 只覆盖程序名 `echo`；
   `AgentAccessPolicy.operatorAllows` 复用同一个 `Authorizer` 做匹配，不另写一套路径比较。
@@ -303,7 +314,16 @@ PERMISSION_DENIED | code=TOOL_DENIED | tool=coding.shell | detail=… | hint=…
 | 事实事件（非拒绝） | `OUT_OF_SCOPE_WRITE`、`NETWORK_TARGET`、`SCOPE_UNCERTAIN`、`ENV_PASSTHROUGH` |
 
 拒绝与「事实事件」共用一张计数表但语义相反：拒绝证明某事**没有**发生，事件证明它**发生了**。
-日志按 `tool:code` 每种形态只记一次（拒绝与事件分开计数），重试循环不会变成日志风暴。
+日志按 `tool:code` 每种形态只记一次（拒绝与事件分开计数），重试循环不会变成日志风暴；
+沙箱层的 `sandbox denied: sandbox=… tool=… command=… evidence=…` 是**每次**拒绝一条，用于按次归因
+（`permission-e2e` 的日志断言读它，而不是读按形态去重的 `coding access denied` 行）。
+
+**传输层信封**：`PermissionAudit` 按契约「返回、不抛」，所以拒绝在工具结果是**字符串**。这意味着
+`isError`/退出码曾经都表示成功（`tool call --fail-on-error` 对拒绝也退出 0，issue `20261120-0145`）。
+现在 REST 分派层识别**行首**的 `PERMISSION_DENIED | code=…`（容忍 `coding.fs` 的 `Error: ` 前缀），把信封
+标成 `isError=true` + `errorCode=PERMISSION_DENIED`，具体原因进 `structuredContent.permissionCode`
+（`PATH_DENIED` / `PROTECTED_PATH` / `SANDBOX_DENIED`…），**文本逐字不变**——模型与既有客户端看到的内容
+完全一样，只有机器调用方多拿到一个可判定的字段。`command_batch` 的 `op:"tool"` 步骤同样如此（`ok=false`）。
 
 **自省工具**（都在 `READ` 门，被拒之后也还能用）：
 
@@ -314,6 +334,17 @@ PERMISSION_DENIED | code=TOOL_DENIED | tool=coding.shell | detail=… | hint=…
 
 **其他出口**：`GET api/agent/{taskId}/access`（`state` 为 `idle`/`pending`，附 `report` 文本）、
 CLI `/access`、`FailureCategory` 把结构化拒绝归类为「权限问题」而不是普通失败、`ToolOutcome` 把拒绝渲染为 fail。
+
+**链接不授权**：镜像根只认后端自己的清单，不认工作区当前的链接拓扑。`WorkspaceMirror` 建链接时把
+`链接 → 目标` 成对记录到工作区**同级**的 `<workspace>.mirror-manifest`（任务写不到那里），`MirrorRoots.derive` 只接受
+"清单里有、仍是链接、真实目标与记录完全一致、且仍在该清单记录的检出内"的条目；源检出（`ScopeKind.SOURCE`）同样只来自这份清单。
+因此新增链接、把链接改指向别的目录、或指向另一个合法检出，都不会产生任何授权——否则"在工作区造一个 junction"就等于把
+那个目录交给沙箱子进程（2026-11-20 审查 S1：目标只要能走到任意检出标记就会被当成镜像根，单链接即可上扩到整个检出）。
+清单缺失（旧版本建的工作区）时按"没有镜像"处理：读写都留在工作区内，属于 fail-closed 而不是静默放宽。
+
+**环境只给工具链**：子进程的环境 = 白名单（toolchain + OS plumbing）+ 调用方显式声明的变量。这条**对 token 沙箱同样成立**：
+账户的持久环境块不是任务环境，必须先过 `SandboxEnvironment.isWhitelisted` 才能继承——否则用 `setx` 持久化的
+`*_API_KEY` 会直接出现在 low-il 子进程里（2026-11-20 `permission-e2e` A10 实测，`WindowsTokenLauncher.mergeEnvironment`）。
 
 **提示词披露**：`CliAgentPrompt.permissionsBlock` 把预设、边界、审批入口写进系统提示。
 最关键是那条「拒绝是结构性的，不要换引号 / 换解释器 / 加 `..` 重试」——实测里模型最费步数的行为就是

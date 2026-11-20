@@ -131,6 +131,9 @@ class CodingAgentShellWorkspaceBoundaryTest {
         Files.writeString(module.resolve("pom.xml"), "<project/>")
         val ws = Files.createDirectories(workspace.resolve("ws"))
         link(ws.resolve("browser4-coding"), module)
+        // The boundary learns the mirrored checkout from the backend's manifest, not from the link
+        // (review S1): the shell accepts `<checkout>` as a working directory because of this record.
+        MirrorRoots.writeManifest(ws, checkout, mapOf("browser4-coding" to module))
 
         val shell = CodingAgentShell(baseDir = ws)
         val output = shell.execute("echo ok", workingDir = checkout.toString())

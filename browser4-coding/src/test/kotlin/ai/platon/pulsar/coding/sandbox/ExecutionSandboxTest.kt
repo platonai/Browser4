@@ -28,6 +28,28 @@ class ExecutionSandboxTest {
     lateinit var tempDir: Path
 
     @Test
+    @DisplayName("releaseTask reaches the backend that prepared the workspace, exactly once")
+    fun releaseTaskDispatchesOnce() {
+        val released = mutableListOf<Path>()
+        val backend = object : ExecutionSandbox by OffSandbox {
+            override fun release(workspace: Path) {
+                released.add(workspace.toAbsolutePath().normalize())
+            }
+        }
+        val workspace = Files.createDirectories(tempDir.resolve("ws"))
+
+        ExecutionSandboxes.releaseTask(workspace)
+        assertTrue(released.isEmpty(), "a workspace this process never prepared has nothing to release")
+
+        ExecutionSandboxes.bindTask(workspace, backend)
+        ExecutionSandboxes.releaseTask(workspace)
+        assertEquals(listOf(workspace.toAbsolutePath().normalize()), released)
+
+        ExecutionSandboxes.releaseTask(workspace)
+        assertEquals(1, released.size, "the binding is consumed by the first release")
+    }
+
+    @Test
     @DisplayName("off and windows-acl resolve; known-but-unimplemented and unknown ids fail hard")
     fun sandboxResolution() {
         assertEquals("off", ExecutionSandboxes.of("").id)

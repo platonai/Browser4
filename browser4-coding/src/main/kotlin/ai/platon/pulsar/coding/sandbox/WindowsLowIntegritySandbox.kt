@@ -168,6 +168,15 @@ class WindowsLowIntegritySandbox(
 
     private val verifiedWorkspaces = ConcurrentHashMap<Path, Unit>()
 
+    /**
+     * The roots each task had labelled, keyed by workspace.
+     *
+     * [release] restores exactly these to Medium; recording them is what keeps the restore narrow
+     * (another live task's roots are never touched) and exact (a mirror root keeps its grant only
+     * while its task runs).
+     */
+    private val taskRoots = ConcurrentHashMap<Path, List<Path>>()
+
     override fun prepare(
         spec: ProcessSpec,
         workspace: Path,
@@ -179,15 +188,15 @@ class WindowsLowIntegritySandbox(
         if (!Files.isDirectory(root)) {
             fail("workspace '$root' is not a directory")
         }
+        val extras = extraWritableRoots.map { it.toAbsolutePath().normalize() }
+        val mirrors = MirrorRoots.derive(root)
         prepareTaskTemp(root)
         labelWritable(root, deep = true, required = true)
         // The same roots the account backend provisions: a module junction (or a worktree's source
         // checkout) is written through the workspace, so the OS must allow the write there too.
         // Not required: a workspace without mirrors has nothing to label.
-        MirrorRoots.derive(root).forEach { labelWritable(it, deep = true) }
-        extraWritableRoots.map { it.toAbsolutePath().normalize() }.forEach {
-            labelWritable(it, deep = true, required = true)
-        }
+        mirrors.forEach { labelWritable(it, deep = true) }
+        extras.forEach { labelWritable(it, deep = true, required = true) }
         // Caches are labelled deeply and only once per installation (the marker makes the walk
         // permanent): a build rewrites existing files under ~/.m2 (`_remote.repositories`,
         // `resolver-status.properties`), and those are Medium until the tree is labelled.
@@ -214,7 +223,58 @@ class WindowsLowIntegritySandbox(
         if (!allowNetwork) {
             logger.debug("windows-low-il does not enforce the network policy; the task asked for net=off")
         }
+        taskRoots[root] = listOf(root) + mirrors + extras
+        ExecutionSandboxes.bindTask(root, this)
         return launchable(spec, root)
+    }
+
+    /**
+     * Restores the task's roots to the default Medium label.
+     *
+     * The low-integrity token is shared by every task of the installation, so a workspace left Low is
+     * writable by **any** later or concurrent task (2026-11-20 review, issue S2). Restoring Medium at
+     * task end bounds that window to the task's own lifetime; nothing else is touched, so other live
+     * tasks keep their labels.
+     *
+     * Only paths this backend labelled for the task are restored; a failed `icacls` is logged and the
+     * label is left as it was (the task outcome is already decided).
+     */
+    override fun release(workspace: Path) {
+        if (!isWindows()) return
+        val root = workspace.toAbsolutePath().normalize()
+        // Only a task this process prepared left labels to restore; anything else is not ours to
+        // touch, which is also what makes a second call a no-op.
+        val roots = taskRoots.remove(root) ?: return
+        roots.distinct().forEach { restoreMedium(it) }
+        logger.info("windows-low-il released the label of {} ({} root(s))", root, roots.distinct().size)
+    }
+
+    /** Restores [path] — and everything under it — to the default Medium label. */
+    private fun restoreMedium(path: Path) {
+        val normalized = path.toAbsolutePath().normalize()
+        if (!Files.exists(normalized)) return
+        val result = runner.run(
+            listOf("icacls", normalized.toString(), "/setintegritylevel", "(OI)(CI)Medium"),
+            LABEL_TIMEOUT_SECONDS,
+        )
+        if (!result.ok) {
+            logger.warn(
+                "windows-low-il could not restore the Medium label of {} (icacls exit={}): {}",
+                normalized, result.exitCode, firstLine(result.output),
+            )
+            return
+        }
+        labeledRoots.remove(normalized)
+        forgetLabelled(normalized)
+    }
+
+    /** Drops the label markers of [path] so a later prepare labels it again instead of trusting them. */
+    private fun forgetLabelled(path: Path) {
+        for (deep in listOf(true, false)) {
+            val marker = markerFile(path, deep) ?: continue
+            runCatching { Files.deleteIfExists(marker) }
+                .onFailure { logger.debug("could not drop the label marker of {}: {}", path, it.message) }
+        }
     }
 
     /**

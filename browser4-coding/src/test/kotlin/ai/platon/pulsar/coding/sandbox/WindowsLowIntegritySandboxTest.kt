@@ -60,6 +60,31 @@ class WindowsLowIntegritySandboxTest {
         environment = mapOf("PATH" to "C:\\Windows\\System32"),
     )
 
+    @Test
+    @DisplayName("release restores the task's label to Medium, and only once")
+    fun releaseRestoresTheMediumLabel() {
+        // Review S2: the Low token is shared by every task, so a workspace left Low is writable by
+        // any later task. The restore is what bounds the grant to the task's own lifetime.
+        val runner = FakeRunner { SandboxCommandResult(0) }
+        val workspace = Files.createDirectories(tempDir.resolve("ws"))
+        val sandbox = sandbox(runner)
+        sandbox.prepare(spec(workspace), workspace, allowNetwork = false)
+
+        runner.calls.clear()
+        sandbox.release(workspace)
+
+        val restore = runner.calls.firstOrNull { it.contains("(OI)(CI)Medium") }
+        assertTrue(restore != null, "the task's label must be restored: ${runner.calls}")
+        assertEquals(workspace.toAbsolutePath().normalize().toString(), restore!![1])
+
+        runner.calls.clear()
+        sandbox.release(workspace)
+        assertTrue(
+            runner.calls.none { it.contains("(OI)(CI)Medium") },
+            "a second release must be a no-op: ${runner.calls}",
+        )
+    }
+
     /** `mklink /J` needs no elevation; `Files.createSymbolicLink` does. */
     private fun createJunction(link: Path, target: Path) {
         val process = ProcessBuilder("cmd.exe", "/c", "mklink", "/J", link.toString(), target.toString())

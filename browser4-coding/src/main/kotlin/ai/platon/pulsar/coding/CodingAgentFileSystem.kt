@@ -1072,6 +1072,14 @@ class CodingAgentFileSystem(
     suspend fun delete(path: String, recursive: Boolean = false): String {
         mutationViolation()?.let { return errorResult(it) }
         if (!allowDestructive) return errorResult("Destructive operations disabled")
+        // The link guard runs on the lexical path first: `resolvePath` judges the *target*, so a
+        // junction pointing outside the workspace is refused as PATH_DENIED and the caller never
+        // learns that the entry it tried to delete is a link (observed by
+        // `CodingAgentFileSystemLinkGuardTest.refusesToDeleteJunction`).
+        val lexical = lexicalPath(path)
+        if (lexical.startsWith(canonicalRoot)) {
+            linkDeleteRefusal(path, lexical)?.let { return errorResult(it) }
+        }
         val resolved = resolvePath(path, write = true) ?: return errorResult(unresolvedPath(path))
         if (!resolved.exists()) return errorResult("Not found: $path")
 
@@ -1093,12 +1101,8 @@ class CodingAgentFileSystem(
         // target tree. Observed in practice: an agent deleted the
         // `browser4-coding` junction inside its workspace while trying to "fix"
         // a Maven reactor problem.
-        resolveLinkTarget(resolved)?.let { target ->
-            return errorResult(
-                "Refusing to delete a link or junction: $path (it points at $target). " +
-                    "Delete the target explicitly if that is really intended."
-            )
-        }
+        resolveLinkTarget(resolved)?.let { return errorResult(linkRefusal(path, it)) }
+
         // A recursive delete must not walk through a link either: one junction
         // inside a directory turns "delete this folder" into "wipe a checkout".
         if (recursive && resolved.isDirectory()) {
@@ -1146,6 +1150,27 @@ class CodingAgentFileSystem(
     /** Version-control metadata directory names that recursive deletes must not touch. */
     private fun hasVcsChild(dir: Path): Boolean =
         VCS_DIRS.any { vcs -> Files.isDirectory(dir.resolve(vcs)) }
+
+    /**
+     * [path] as it was written, with no link followed.
+     *
+     * Relative paths resolve against the workspace, exactly like [resolvePath], but the result keeps
+     * a junction as the junction instead of turning into its target — which is what the delete guard
+     * has to look at.
+     */
+    private fun lexicalPath(path: String): Path {
+        val p = Path.of(path)
+        return if (p.isAbsolute) p.normalize() else canonicalRoot.resolve(path).normalize()
+    }
+
+    /** The message a delete returns when the entry itself is a link to [target]. */
+    private fun linkRefusal(path: String, target: Path): String =
+        "Refusing to delete a link or junction: $path (it points at $target). " +
+            "Delete the target explicitly if that is really intended."
+
+    /** [linkRefusal] when [candidate] is a link/junction, `null` otherwise. */
+    private fun linkDeleteRefusal(path: String, candidate: Path): String? =
+        resolveLinkTarget(candidate)?.let { linkRefusal(path, it) }
 
     /**
      * The link/junction target behind [path], or null when [path] is a plain

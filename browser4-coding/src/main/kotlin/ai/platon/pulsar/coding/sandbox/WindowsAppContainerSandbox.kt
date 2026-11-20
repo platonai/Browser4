@@ -38,6 +38,13 @@ class WindowsAppContainerSandbox(
     private val probe: ((Path) -> String?)? = null,
     /** Where "already granted" markers live; injectable so tests keep the user data dir clean. */
     private val markerDir: Path? = SandboxDefaults.defaultDataDir().resolve("sandbox").resolve("appcontainer"),
+    /**
+     * Deletes a container profile. Injectable so [release] can be tested without creating per-user
+     * registry state (and without JNA on a non-Windows host).
+     */
+    private val deleteProfile: (String) -> Boolean = { name ->
+        Win32.userenv.DeleteAppContainerProfile(WString(name)) == 0
+    },
 ) : ExecutionSandbox {
 
     companion object {
@@ -121,8 +128,24 @@ class WindowsAppContainerSandbox(
             return raw == "on" || raw == "true" || raw == "1" || raw == SANDBOX_ID
         }
 
-    /** The container SID: created on first use, per user, no administrator involved. */
-    private val container: ContainerIdentity by lazy { ensureContainer() }
+    /**
+     * Container identity of the installation, used only by [isReady] and by [runInContainer] before
+     * any task prepared a workspace.
+     */
+    private val probeContainer: ContainerIdentity by lazy { ensureContainer(Win32.APP_CONTAINER_NAME) }
+
+    /**
+     * One container identity per task workspace.
+     *
+     * A single shared container made every task's grants reachable from every other task: the SID is
+     * the security identity, so one SID granted on N workspaces is one principal allowed into all of
+     * them (2026-11-20 review, issue S2). A profile per workspace keeps the same mechanism while
+     * making the access set per task; [release] deletes it when the task ends.
+     */
+    private val containers = ConcurrentHashMap<Path, ContainerIdentity>()
+
+    /** The roots each task was granted, so [release] removes exactly those and nothing else. */
+    private val taskRoots = ConcurrentHashMap<Path, List<Path>>()
 
     /**
      * Process-tree lifetime, exactly like the Low-integrity backend: a backend exit takes its
@@ -160,9 +183,10 @@ class WindowsAppContainerSandbox(
         ScratchBoundary.refusal(root, root.resolve(".b4scratch"))?.let {
             fail("the task scratch directory of '$root' is not safe to use: $it")
         }
-        val container = container
+        val container = containerFor(root)
+        val extras = extraWritableRoots.map { it.toAbsolutePath().normalize() }
         grant(root, container, required = true)
-        extraWritableRoots.map { it.toAbsolutePath().normalize() }.forEach { grant(it, container, required = true) }
+        extras.forEach { grant(it, container, required = true) }
 
         // G9: drop grants this task does not need (older than the retention window). Cheap — the
         // marker directory holds one small file per grant — and it is what keeps a container
@@ -185,6 +209,8 @@ class WindowsAppContainerSandbox(
         if (allowNetwork) {
             logger.debug("windows-appcontainer has no network capability; net was requested but cannot be granted")
         }
+        taskRoots[root] = listOf(root) + extras
+        ExecutionSandboxes.bindTask(root, this)
         val sid = container.sid
         return spec.copy(
             environment = environment,
@@ -195,6 +221,50 @@ class WindowsAppContainerSandbox(
     }
 
     /**
+     * Revokes this task's container grants and deletes its container profile.
+     *
+     * The container SID is the identity, so a profile that outlives its task is an identity that can
+     * still read every workspace it was granted — including one a later task creates under a reused
+     * path. Dropping the grants and the profile is what makes the per-task container actually per
+     * task (2026-11-20 review, issue S2).
+     *
+     * Best effort by contract: a refused `icacls` or profile deletion is logged, never thrown.
+     */
+    override fun release(workspace: Path) {
+        if (!isWindows()) return
+        val root = workspace.toAbsolutePath().normalize()
+        val container = containers.remove(root) ?: return
+        val roots = (taskRoots.remove(root) ?: listOf(root)).distinct()
+        for (path in roots) {
+            if (!Files.exists(path)) {
+                forgetGrant(path)
+                continue
+            }
+            val result = runner.run(ContainerAceScan.removeCommand(path, container.sidString), GRANT_TIMEOUT_SECONDS)
+            if (result.ok) {
+                grantedRoots.remove(path)
+                forgetGrant(path)
+                logger.info("windows-appcontainer released the grant on {} ({})", path, container.sidString)
+            } else {
+                logger.warn(
+                    "windows-appcontainer could not revoke the grant on {} (icacls exit={}): {}",
+                    path, result.exitCode, firstLine(result.output),
+                )
+            }
+        }
+        val deleted = runCatching { deleteProfile(container.name) }.getOrDefault(false)
+        if (deleted) {
+            logger.info("windows-appcontainer deleted the task profile {} ({})", container.name, container.sidString)
+        } else {
+            logger.warn(
+                "windows-appcontainer could not delete the task profile {}; its SID {} keeps only the " +
+                    "grants that already exist, but check `icacls` on the workspace",
+                container.name, container.sidString,
+            )
+        }
+    }
+
+    /**
      * Whether the backend can run here: Windows and a container SID can be obtained.
      *
      * Deriving the SID creates the profile on first use — per-user state, no elevation — so this is a
@@ -202,7 +272,7 @@ class WindowsAppContainerSandbox(
      */
     override fun isReady(): Boolean = runCatching {
         if (!isWindows()) return false
-        container
+        probeContainer
         true
     }.getOrElse { e ->
         logger.info("windows-appcontainer is not ready: {}", e.message)
@@ -213,12 +283,31 @@ class WindowsAppContainerSandbox(
     // Container identity
     // ------------------------------------------------------------------
 
-    private class ContainerIdentity(val sid: Pointer, val sidString: String)
+    private class ContainerIdentity(val name: String, val sid: Pointer, val sidString: String)
 
-    private fun ensureContainer(): ContainerIdentity {
+    /** The container of [workspace], created on first use (per-user state, no administrator). */
+    private fun containerFor(workspace: Path): ContainerIdentity =
+        containers.computeIfAbsent(workspace.toAbsolutePath().normalize()) { ensureContainer(containerNameFor(it)) }
+
+    /**
+     * A container profile name unique to [workspace].
+     *
+     * Stable for a workspace path (a retried task reuses its profile) and different across workspaces,
+     * which is what gives each task its own SID. The digest keeps the name within the profile-name
+     * limit while an absolute path would not.
+     */
+    internal fun containerNameFor(workspace: Path): String {
+        val normalized = workspace.toAbsolutePath().normalize().toString().lowercase()
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(normalized.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        return "${Win32.APP_CONTAINER_NAME}-${digest.take(12)}"
+    }
+
+    private fun ensureContainer(name: String): ContainerIdentity {
         val ref = PointerByReference()
         val created = Win32.userenv.CreateAppContainerProfile(
-            WString(Win32.APP_CONTAINER_NAME),
+            WString(name),
             WString("Browser4 agent (browse)"),
             WString("Confines a browse-mode agent's commands to the task workspace"),
             null,
@@ -230,7 +319,7 @@ class WindowsAppContainerSandbox(
             Win32.HRESULT_ALREADY_EXISTS -> {
                 val derived = PointerByReference()
                 val hr = Win32.userenv.DeriveAppContainerSidFromAppContainerName(
-                    WString(Win32.APP_CONTAINER_NAME), derived,
+                    WString(name), derived,
                 )
                 if (hr != 0) {
                     fail("DeriveAppContainerSidFromAppContainerName failed (hr=0x${hr.toUInt().toString(16)})")
@@ -250,8 +339,8 @@ class WindowsAppContainerSandbox(
             }
         }.getOrNull() ?: fail("could not render the container SID as a string")
         // The SID itself is owned by the container profile and lives as long as the process does.
-        logger.info("windows-appcontainer ready: name={} sid={}", Win32.APP_CONTAINER_NAME, sidString)
-        return ContainerIdentity(sid, sidString)
+        logger.info("windows-appcontainer ready: name={} sid={}", name, sidString)
+        return ContainerIdentity(name, sid, sidString)
     }
 
     // ------------------------------------------------------------------
@@ -317,6 +406,13 @@ class WindowsAppContainerSandbox(
             // and what tells a stale grant from a live one.
             Files.writeString(marker, "${container.sidString}|$path")
         }.onFailure { logger.debug("could not record the container grant for {}: {}", path, it.message) }
+    }
+
+    /** Drops the grant marker of [path], so a re-granted path is recorded again from scratch. */
+    private fun forgetGrant(path: Path) {
+        val marker = markerFile(path, "grant") ?: return
+        runCatching { Files.deleteIfExists(marker) }
+            .onFailure { logger.debug("could not drop the grant marker of {}: {}", path, it.message) }
     }
 
     /** `(sid, path)` recorded in [marker]; `sid` is `null` for a legacy path-only marker. */
@@ -494,7 +590,7 @@ class WindowsAppContainerSandbox(
         extraEnv: Map<String, String> = emptyMap(),
     ): Pair<Int, String> {
         val root = verifiedRootFor(directory)
-        val container = container
+        val container = containerFor(root)
         val spec = ProcessSpec(
             command = listOf("cmd.exe", "/c", line),
             directory = directory,
