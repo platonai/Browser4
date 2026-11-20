@@ -27,6 +27,7 @@
 | `ENDPOINT_WRONG_BROWSER` | no | 409 | The endpoint answered as a browser family other than the requested `channel` (e.g. `--cdp msedge` resolved Chrome). Request the channel you meant, or pass that browser's exact endpoint. Nothing was bound — no session, driver or tab. |
 | `UPSTREAM_ERROR` | yes | 502 | An upstream service failed; retrying may help. |
 | `CONFLICT` | yes | 409 | Re-read the resource and retry. |
+| `PERMISSION_DENIED` | no | 403 | The access policy refused this call. Use a path the task allows, or ask for an operator grant (`coding.requestAccess`); the refusal text names the exact reason. |
 | `CANCELLED` | no | 499 | The task was cancelled; submit a new one if still needed. |
 | `INTERNAL` | no | 500 | Unexpected failure; check the server log for the request id. |
 
