@@ -149,11 +149,16 @@ Verification: PASSED (1/1 ran) in 43.1s — compile of module browser4-coding su
 VERDICT_JSON: {"passed":true,"module":"browser4-coding","requested":["compile"],…,"exitCode":0,…}
 ```
 
-### 4.2 F2：verify 输出被截断，`VERDICT_JSON` 无法逐字引用（未修）
+### 4.2 F2：verify 输出被截断，`VERDICT_JSON` 无法逐字引用（已修）
 
-第一次 run 里模型明确报告：工具结果中段被 `…[truncated 3275 chars]…` 截断，只能拿到 verdict 的头和尾，**无法逐字引用**——而 finish gate 正是比对这份逐字引用。成功路径的 evidence 很短（`"exit 0"`），所以第二次能完整引用；**失败路径**（evidence 塞进整段 Maven 错误）就会触发。
+第一次 run 里模型明确报告：工具结果中段被 `…[truncated 3275 chars]…` 截断，只能拿到 verdict 的头和尾，**无法逐字引用**——而 finish gate 正是比对这份逐字引用。
 
-建议：`coding.verify` 把 `VERDICT_JSON` 放在输出**第一行**（或单独一行、诊断在后），或把 `evidence` 压到若干行，或给模型一个只含 verdict 的读取入口。未在本轮修改。
+根因：失败路径把整段 Maven tail 塞进 `checks[].detail`，单行 `VERDICT_JSON` 超出工具结果的显示预算。
+
+修法（`VerificationReport`）：`detail` 与 `failureReason` 按**头+尾**裁剪（600 / 800 字符，保留首条错误与 `BUILD FAILURE`），`diagnostics` 最多 20 条并新增 `diagnosticsOmitted` 计数。verdict 于是稳定落在预算内；人读摘要仍保留全文。
+
+验证：`VerificationReportTest` 新增用例（长 detail → verdict < 2000 字符、尾部保留、`passed`/`exitCode` 仍可解析、detail 带 `…(cut)…`），11 passed。**未做端到端**：要通过一次 verify 制造失败才能触发，属于刻意构造，收益不如单测钉住契约。
+
 
 ### 4.3 A2 的实测数据
 
