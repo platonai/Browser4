@@ -665,6 +665,27 @@ class ArtifactValidatorTest {
         )
     }
 
+    @Test
+    @DisplayName("validateJs sees code inside a template expression, not the template text")
+    fun validateJsLooksInsideTemplateExpressions() {
+        // `eval(` in `${…}` is a real call; the same word in the template text around it is data.
+        val content = """
+            (function() {
+                'use strict';
+                var v = 1;
+                var s = `eval( in text`;
+                var t = `value=${'$'}{eval("v")}`;
+                return [s, t];
+            })();
+        """.trimIndent()
+
+        val result = ArtifactValidator.validateJs(content, "test.js")
+        val evalWarnings = result.issues.filter {
+            it.severity == Severity.WARNING && it.message.contains("eval(")
+        }
+        assertEquals(1, evalWarnings.size, "exactly the interpolation is code: ${result.issues}")
+    }
+
     // --- Script validation ---
 
     @Test

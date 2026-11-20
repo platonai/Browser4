@@ -986,61 +986,89 @@ object ArtifactValidator {
      * [content] with comments and literal bodies blanked to spaces, newlines kept.
      *
      * The word heuristics (`return `, `eval(`, `document.write(`, `(function`) looked at the raw
-     * text, so prose satisfied them or tripped them. Blanking comments, strings, template literals
-     * and regex bodies lets the same cheap `contains` run on code only, and preserving positions
-     * means any offset still matches the source. A `${…}` template may hold code; blanking the
-     * whole template is fine for word matching, and far more often a template is data.
+     * text, so prose satisfied them or tripped them. Blanking comments, strings, template text and
+     * regex bodies lets the same cheap `contains` run on code only, and preserving positions means
+     * any offset still matches the source.
+     *
+     * A `${…}` template expression *is* code and is kept: `eval(` inside one is a real call, while
+     * the same words in the template text around it are data. The expression is followed by brace
+     * depth, the same way [checkJsDelimiters] finds the `}` that resumes the template.
      */
     private fun jsCodeOnly(content: String): String {
         val out = StringBuilder(content.length)
+        val templateDepths = ArrayDeque<Int>()
+        var inTemplate = false
+        var braceDepth = 0
         var i = 0
 
-        fun blank(from: Int, to: Int) {
-            for (k in from until to) out.append(if (content[k] == '\n') '\n' else ' ')
+        fun blankTo(to: Int) {
+            val stop = to.coerceAtMost(content.length)
+            for (k in i until stop) out.append(if (content[k] == '\n') '\n' else ' ')
+            i = stop
         }
 
         while (i < content.length) {
             val c = content[i]
+            if (inTemplate) {
+                when {
+                    c == '\\' -> blankTo(i + 2)
+                    c == '`' -> {
+                        out.append(' ')
+                        i++
+                        inTemplate = false
+                    }
+                    c == '$' && i + 1 < content.length && content[i + 1] == '{' -> {
+                        templateDepths.addLast(braceDepth)
+                        out.append("  ")
+                        i += 2
+                        inTemplate = false
+                    }
+                    else -> blankTo(i + 1)
+                }
+                continue
+            }
             when {
                 c == '/' && i + 1 < content.length && content[i + 1] == '/' -> {
-                    val start = i
-                    while (i < content.length && content[i] != '\n') i++
-                    blank(start, i)
+                    var j = i
+                    while (j < content.length && content[j] != '\n') j++
+                    blankTo(j)
                 }
                 c == '/' && i + 1 < content.length && content[i + 1] == '*' -> {
-                    val start = i
                     val end = content.indexOf("*/", i + 2)
-                    i = if (end < 0) content.length else end + 2
-                    blank(start, i)
+                    blankTo(if (end < 0) content.length else end + 2)
                 }
                 c == '\'' || c == '"' -> {
                     val end = skipQuoted(content, i)
-                    val stop = if (end < 0) content.length else end + 1
-                    blank(i, stop)
-                    i = stop
+                    blankTo(if (end < 0) content.length else end + 1)
                 }
                 c == '`' -> {
-                    var j = i + 1
-                    while (j < content.length) {
-                        when (content[j]) {
-                            '\\' -> j += 2
-                            '`' -> {
-                                j++
-                                break
-                            }
-                            else -> j++
-                        }
-                    }
-                    val stop = j.coerceAtMost(content.length)
-                    blank(i, stop)
-                    i = stop
+                    out.append(' ')
+                    i++
+                    inTemplate = true
                 }
                 c == '/' -> {
                     val end = skipRegex(content, i)
                     if (end > 0) {
-                        blank(i, end + 1)
-                        i = end + 1
+                        blankTo(end + 1)
                     } else {
+                        out.append(c)
+                        i++
+                    }
+                }
+                c == '{' -> {
+                    braceDepth++
+                    out.append(c)
+                    i++
+                }
+                c == '}' -> {
+                    if (templateDepths.isNotEmpty() && braceDepth == templateDepths.last()) {
+                        // This `}` ends a `${…}`: blank it and resume the template text.
+                        templateDepths.removeLast()
+                        out.append(' ')
+                        i++
+                        inTemplate = true
+                    } else {
+                        braceDepth--
                         out.append(c)
                         i++
                     }
