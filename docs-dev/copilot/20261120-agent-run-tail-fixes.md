@@ -181,7 +181,7 @@ VERDICT_JSON: {"passed":true,"module":"browser4-coding","requested":["compile"],
 - `CliAgentPromptTest` 新增断言（含 `pwsh` / `BOM-less`），`ArtifactValidatorTest` 新增正反用例。
 
 
-### 4.4 一个会骗人的测试假阳性（未改 runner，记录）
+### 4.4 一个会骗人的测试假阳性（已修，2026-11-20 晚）
 
 在**编辑了后端源码但还没重建 bundle** 的状态下跑 Tier A，`A05/A06/A17` 报 FAIL：
 
@@ -197,15 +197,107 @@ Backend sources are newer than the runtime bundle; the next backend command rebu
 
 runner 把 stdout+stderr 合并后，这一行成了 payload 首行，于是 `Invoke-CliTool` 的"leading marker"判定（`Error:` / `PERMISSION_DENIED` / `✗ … FAILED`）全部落空 → `ok=True`。重建 bundle 后同一套件 **17 PASS / 0 FAIL / 4 SKIP**。
 
-建议（runner 侧一行）：判定前剥掉 CLI 自己的告警行（`Backend sources are newer` / 以 `⚠` 开头），或在前 5 行里找标记而不是只认第一行。
+修法（`run-permission-e2e.ps1`，新增 `Remove-CliAdvisoryHead`）：判定前先剥掉**开头**的 CLI 自我告警行
+（`browser4-cli: warning:` / `browser4-cli: note:` / `Backend sources are newer than the runtime bundle` / `⚠`），
+只剥开头、只认 CLI 自己的前缀——报告正文里出现的 `PERMISSION_DENIED` 仍然不算"调用被拒"，而 CLI 没有
+`browser4-cli: error:` 这种形态。自测新增 5 条（`[cli advisories]` 小节）。
+
+**验证**：在**同一个仍然过期的 bundle**（`staleness: sources_newer_than_bundle`）上重跑
+`-Case A05,A06,A17` → **3 PASS**；随后全量 `-Tier A` → **18 PASS / 0 FAIL / 4 SKIP**。
+也就是说，判定不再被告警行带偏；但"重建后再信"这条纪律仍然保留（过期 bundle 本身是另一回事）。
+
+## 5. 第五轮（同日，把 fallback 从"CWD 相对"改成"工作区锚定"，并补上用例）
+
+### 5.1 缺陷：fallback 目录是 CWD 相对，一次 `attach` 之后的下一条命令读不到它
+
+`write_state` 在 `~/.browser4` 不可写时改写到 `./.browser4-cli-state`（相对**当前目录**）。
+2026-11-20 那次 18 分钟 run 里，`attach` 写进的是 `<cwd-A>/.browser4-cli-state`，下一条 `eval` 在
+`<cwd-B>` 里读 `<cwd-B>/.browser4-cli-state` → `Session required`；`attach` 自己已经报告成功。
+`BROWSER4_CLI_STATE_DIR` 注入能绕开它，但 CLI 自身的回退仍然会造出第二个目录。
+
+### 5.2 修法：锚点 + 指针 + 迁移（`cli/browser4-cli/src/state.rs`）
+
+`resolve_fallback_dir_in(cwd)` 从工作目录向上找**锚点**，不再"就地取 CWD"：
+
+| 顺序 | 锚 | 结果 |
+|---|---|---|
+| 1 | 某级目录里的 `.browser4-cli-state/STATE_DIR_POINTER` | 文件里记的路径（迁移写下的稳定指针，单跳不回环） |
+| 2 | 最近的 `.b4scratch`（agent 工作区标记） | `<workspace>/.b4scratch/cli-state` —— **与 Java 侧 `CliStateEnv` 注入的目录完全相同** |
+| 3 | 最近的检出根（`.git`） | `<checkout>/.b4scratch/cli-state`（`.gitignore:161` 已忽略该目录） |
+| 4 | 父级已有的 `.browser4-cli-state` | 复用它（用户自己的目录树也有连续性） |
+| 5 | 以上都没有 | `./.browser4-cli-state`，与旧行为一致 |
+
+配套四条：
+
+- **读顺序**：primary → 锚定目录 → **legacy**（旧版 CLI 写过的 `./.browser4-cli-state`）。
+  legacy 放在最后，只在锚定目录没有会话时生效，所以不会让旧副本盖住新会话，也不会让
+  `close` 之后"复活"一个幽灵会话（既有回归用例
+  `test_read_state_does_not_resurrect_fallback_when_primary_exists` 仍绿）。
+- **迁移**：`write_state` 首次改道写入时把 legacy 里的文件搬进锚定目录（**目标已存在的不覆盖**、
+  搬不动就留着让读路径继续兜底），并只在真的搬动了东西时在 legacy 原位写 `STATE_DIR_POINTER`。
+- **`status` 说清楚**：`Session state: <dir> (workspace fallback, <锚> — …)`，`--json` 新增
+  `session_state_anchor`（`primary|cwd|ancestor|b4scratch|checkout|pointer`）与既有
+  `session_state_fallback`。
+- **`is_implicit_default_dir` 认开发模式命名空间**：以前只认扁平的 `~/.browser4`，于是
+  `SessionRegistry` 固定的 `~/.browser4/workspaces/<checkout>-<hash>` 被判成"显式目录 → 永不改道"，
+  沙箱里会直接抛 `PermissionDenied` 而不是改道。
+
+`close` / `close-all` 同时清锚定目录与 legacy（否则旧副本会被反复计数）。
+
+### 5.3 用例：`A20-sandbox-cli-state-anchored`（Tier A，无浏览器无 LLM）
+
+沙箱里把 `BROWSER4_CLI_STATE_DIR` **删掉**，让 CLI 自己在 `<ws>/anchor-sub-one` 与
+`<ws>/anchor-sub-two` 两个目录各跑一次 `status --json`，两次解析出的 `session_state_dir` 必须相同，
+且以 `.b4scratch\cli-state` 结尾。夹具新增两个占位符：`{cliExe}`（真实的 CLI 可执行文件——
+用例不能走 `b4w.ps1`，那会重建并写工作区外）与 runner 侧的 `Resolve-CliExePath`。
+
+实测证据（`run-20261120-223936`）：
+
+```
+✓ devshell-30 · SUCCESS · exit 0 · 1382ms
+ANCHOR OK C:\Users\pereg\.browser4\workspaces\Browser4-4.16-02e52167\app-data\agent\2026\11\20\21716e63-…\workspace\.b4scratch\cli-state
+```
+
+修复前同一探针会打印 `ANCHOR MISMATCH one=<ws>\anchor-sub-one\.browser4-cli-state two=<ws>\anchor-sub-two\.browser4-cli-state`。
+单测新增 9 条（锚点、指针、迁移不覆盖、读顺序、状态报告），`cargo test --bin browser4-cli` **2279 passed**。
+
+### 5.4 手工 e2e：沙箱内 `attach` 一次成功（本轮之前跑的那次）
+
+在沙箱化的 `coding.shell` 里用**一条命令**串起三次 CLI 调用（跨进程读状态，正是 18 分钟 run 里失败的那种形状）：
+
+```
+browser4-cli -s cdp-e2e attach --cdp 9222
+browser4-cli -s cdp-e2e eval --json location.href
+browser4-cli -s cdp-e2e tab-list
+```
+
+```
+Attached to Google Chrome 156.0.8078.96 at http://localhost:9222
+Session opened: cdp-e2e (dbab9235-c8a2-4753-b09d-e225230fe2a2)
+{"status":"ok","command":"eval","output":{"result":"https://x.com/home",…}}
+（tab-list 列出 5 个标签页）
+```
+
+三次调用都成功、没有 `Session required`，原始缺陷（写盘成功但读不回来）在真实沙箱通道上不复现。
+
+**但这次留下了一个真实事故**：9222 上跑的其实是用户自己的 ego lite 浏览器，我另外起的 headless Chrome 没抢到端口，
+于是 attach 到了用户的真实浏览器；收尾的 `disconnect` 按语义关闭了本会话驱动的标签页，用户的 `x.com/home`
+被关掉（其余标签未受影响，Ctrl+Shift+T 可恢复）。教训写进了 §5.5 第二条：任何 attach 用例必须
+**先确认端口的 `/json/version` 属于自己启动的临时 profile**，并用专用端口。
+
+### 5.5 有意不做的两件
+
+- **deny-read 单文件不回退**（决定：保持现状）：状态文件"存在但不可读"只告警 + 当作没有会话，
+  不按 mtime 去 legacy 里找更新的副本——mtime 在这类场景里是猜测，猜错就是"复活旧会话"。
+- **沙箱内 `attach` 的分层 e2e 仍缺**：手工 e2e 已通过（`attach` → `eval` → `tab-list` 全通，见 §5.4），
+  但落成用例需要**专用 CDP 端口**（不能占 9222）并在 attach 前断言 `/json/version` 属于自己启动的
+  临时 profile；否则 `disconnect` 会关掉用户真实标签页（2026-11-20 已真实发生一次）。
 
 ## 后续（未做）
 
-1. 状态文件"存在但不可读"（deny-read 单文件）不再静默（已加警告），但仍不回退——是否回退要看是否接受 mtime 比较。
-2. fallback 目录是 CWD 相对：读写已一致，但跨不同工作目录仍不连续。
-3. `A19` 已验证环境变量注入；"沙箱内 `attach` 一次成功"仍需一条带浏览器的 e2e。
-4. 测试假阳性（4.4）：runner 的 leading-marker 判定需要容忍 CLI 的告警行。
-5. 若将来确认还有别的 PowerShell 乱码路径（不是 BOM-less `.ps1`），再考虑注入 `[Console]::OutputEncoding`；本轮实测它并不解决该症状。
+1. 沙箱内 `attach` 的分层 e2e（见 §5.5 第二条）：专用端口 + 实例断言 + 只杀自己启动的 Chrome。
+2. 若将来确认还有别的 PowerShell 乱码路径（不是 BOM-less `.ps1`），再考虑注入 `[Console]::OutputEncoding`；本轮实测它并不解决该症状。
+3. junction 残留：指向**另一个检出**的链接仍是授权根（issue §5），"造链接"这类操作值得单独收口。
 
 
 
