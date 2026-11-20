@@ -50,6 +50,7 @@ browser4-cli htmlsnapshot get all text "<css-selector>"   # all matches
 |---|---|
 | Navigation / sessions | `open --headless <url>` / `goto <url>` / `close` / `reload`; multiple sessions with `-s <name>` |
 | Read page + get refs | `snapshot -v 0` (current screen) / `-v all` (full page) / `-i` (interactive-only: buttons/links/inputs/`cursor:pointer` — draggable and hover-only targets lose their refs, so fall back to `-v 0`) / `snapshot grep <pattern>` |
+| Refs → selectors | `generate-locator <ref\|css>` (best CSS selector — id, class, or nth-of-type path — for a snapshot ref, when a script or report needs a selector that outlives the ref) |
 | Interact | `click` / `dblclick` / `hover` / `drag` / `fill` / `type` / `press` / `select` / `check` / `focus` / `key` |
 | Extract | `htmlsnapshot get text\|attr\|html "<css>"` (first match) / `get all ... "<css>"` (all matches); `query --sql @f.sql` (X-SQL multi-field); `eval --json` (live DOM); `extract` (natural language, needs LLM key) |
 | Bulk / structured | `batch "goto …" "click …"` (multi-step, one client-side loop); `crawl <url> --depth N --sql @f.sql`; `swarm create/query` (parallel); `loop` (scheduled repeats) |

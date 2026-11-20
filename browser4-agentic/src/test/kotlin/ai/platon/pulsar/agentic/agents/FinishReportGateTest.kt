@@ -164,7 +164,12 @@ class FinishReportGateTest {
             concealed.violations.any { it.contains("the report does not list") },
             "${concealed.violations}",
         )
-        assertEquals(listOf(reported), concealed.unlistedFiles)
+        // `filesChanged` entries are compared in the normalized form `normalizePath` produces, which
+        // drops a leading separator (its other half is repo-relative git output). A POSIX absolute
+        // entry therefore comes back without its leading `/` — `isUnderGrantedRoot` compensates by
+        // retrying the spelled form — so the expectation has to be normalized the same way or this
+        // case only passes on Windows.
+        assertEquals(listOf(reported.removePrefix("/")), concealed.unlistedFiles)
     }
 
     @Test

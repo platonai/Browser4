@@ -85,6 +85,7 @@ browser4-cli click <ref> --no-snapshot    # interact without overwriting the dif
 browser4-cli snapshot -v 0 --auto-diff --stdout  # verify what changed vs pre-interaction page
 browser4-cli htmlsnapshot                 # snapshot metadata for the page the tab is showing
 browser4-cli htmlsnapshot get all text "<css-selector>"   # extract from the tab's fresh snapshot
+browser4-cli generate-locator <ref|css>   # best CSS selector (id/class/nth-of-type) when a ref must outlive the snapshot
 ```
 
 For quick inline viewing without opening a file, add `--stdout` to any snapshot command.
