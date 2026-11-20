@@ -1,0 +1,136 @@
+name: Permission E2E (Windows)
+
+# The permission + execution-sandbox suite (`browser4-tests/permission-e2e/`) proves that the OS
+# refuses what the policy refuses. It lives in its own workflow, not in `nightly.yml`, for one
+# concrete reason: it needs a *live Windows backend*, and the only way to get one from a source
+# checkout is the CLI's developer mode, which runs `mvn clean install` for the whole reactor before
+# the JVM starts. On a Windows runner that build alone outlived the 30-minute step budget nightly.yml
+# could afford (run 44773784975: attempt 1 was still building when the step timed out), and a nightly
+# that is red for 40 minutes of Windows build time reports nothing about the JVM and CLI suites it
+# exists to report on. Keeping the suite here means its failures are visible without holding the
+# nightly hostage — the same reason `nightly-cli.yml` exists separately.
+#
+# Why Tier A: it is deterministic and needs no LLM key. Tiers B/C drive a real `agent run` with a
+# model and are the local/release-time answer (`test.ps1 permission -Tier B -IncludeLlm`); tier C is a
+# red team and must never gate anything.
+#
+# Why Windows: the implemented backends (`windows-low-il`, `windows-acl`, `windows-appcontainer`) are
+# Windows tokens/ACLs. On Linux/macOS the OS-layer cases are SKIPped — and `SKIP` is not a pass (see
+# `browser4-tests/permission-e2e/README.md`).
+#
+# Known cost — read before changing the start step: `BROWSER4_SERVER_OPTS` pins the low-integrity
+# backend, and the CLI's first command in a checkout builds the runtime bundle (`mvn clean install`
+# + `build-runtime-bundle.ps1`, ~3-5 min warm, far more on a cold Windows runner) before it starts
+# the JVM. Once a run gets far enough to warm the Maven cache this settles; if it does not, build the
+# bundle in a cached step of its own (`./mvnw.cmd -DskipTests install -Pall-main-modules,asset-bundle`
+# then `browser4-apps/browser4-bundle/build-runtime-bundle.ps1`) instead of paying for it inside the
+# warm-up loop.
+
+on:
+  schedule:
+    # 04:00 UTC — after the nightly (00:00) and the CLI nightly (03:00), so the two do not queue
+    # against each other on the same runner pool.
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: permission-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  JAVA_VERSION: '25'
+  MAVEN_OPTS: '-Xmx3g -XX:+UseG1GC'
+  # Pin the backend the suite asserts: the OS-layer cases execute instead of silently skipping on a
+  # runner whose default resolves to `off`.
+  BROWSER4_SERVER_OPTS: '-Dbrowser4.agent.sandbox=windows-low-il'
+  BROWSER4_CLI_DISABLE_AOT_CACHE: '1'
+
+jobs:
+  permission-e2e:
+    runs-on: windows-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli/browser4-cli
+
+      - name: Build the CLI
+        timeout-minutes: 25
+        shell: pwsh
+        run: |
+          cargo build --release --manifest-path cli/browser4-cli/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "BROWSER4_E2E_CLI=$((Resolve-Path 'cli/browser4-cli/target/release/browser4-cli.exe').Path)" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Start the backend (developer mode)
+        timeout-minutes: 60
+        shell: pwsh
+        run: |
+          # `status` is READ-ONLY: with no server it prints "Backend is not running" and exits 0, so it
+          # can never start anything. The first command that needs the backend builds the runtime
+          # bundle and launches the JVM, so use the suite's own probe as that command (a "session
+          # required" refusal still means the server came up) and poll `status` until UP.
+          #
+          # Retry the warm-up: the launcher gives a freshly spawned JVM only 120 s to answer the health
+          # probe (`JAR_SERVER_READY_TIMEOUT`) and kills it when that window closes, so one attempt can
+          # lose a slow Spring Boot start even with the bundle already built. Later attempts are the
+          # cheap ones (bundle built, JVM start only).
+          $deadline = (Get-Date).AddMinutes(50)
+          $attempt = 0
+          $status = ''
+          while ((Get-Date) -lt $deadline) {
+            $attempt++
+            Write-Host "backend warm-up attempt ${attempt}:"
+            & $env:BROWSER4_E2E_CLI tool call coding_permissions --json '{}' 2>&1 | Out-String | Write-Host
+            $status = (& $env:BROWSER4_E2E_CLI status 2>&1 | Out-String)
+            if ($status -match 'Server health:\s*UP') {
+              Write-Host $status
+              Write-Host "Backend is UP (warm-up attempt ${attempt})."
+              exit 0
+            }
+            Start-Sleep -Seconds 10
+          }
+          Write-Host $status
+          Write-Host '::error::Backend never became reachable — the suite would fail its live-backend probe.'
+          exit 1
+
+      - name: Run permission-e2e (Tier A)
+        timeout-minutes: 25
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File browser4-tests/permission-e2e/run-permission-e2e.ps1 `
+            -Tier A -Cli $env:BROWSER4_E2E_CLI
+          $exit = $LASTEXITCODE
+          exit $exit
+
+      - name: Upload the run report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: permission-e2e-report
+          path: |
+            browser4-tests/permission-e2e/target/run-*/report.json
+            browser4-tests/permission-e2e/target/run-*/*.ndjson
+            browser4-tests/permission-e2e/target/run-*/*.out.txt
+          if-no-files-found: warn
+          retention-days: 14

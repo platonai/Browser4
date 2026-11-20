@@ -290,7 +290,7 @@ runner 上证明稳定，把该 job 提到 `--level=BASIC` 只是一个词的改
 | 依赖 | `RequiresServer` +（B/C 层）`RequiresAI` | A 层无 LLM；B/C 层需要后端上的 LLM key |
 | 速度 | A 层 ~3 min（`Fast` 语义）/ B 层 ~20 min / C 层每次尝试硬上限 180 s + `--token-budget` | C 层是红队，只产 finding |
 | 策略 | `E2E` + `RequiresBrowser`/`RequiresSandbox`（本套件自己的词表） | **不进** `pr.yml`/`ci.yml` 门禁 |
-| CI | `nightly.yml` 的 `permission-e2e` job（Windows runner，仅 `-Tier A`，pin `windows-low-il`） | 另可手动 `workflow_dispatch` |
+| CI | `permission-e2e.yml`（独立 workflow，Windows runner，仅 `-Tier A`，pin `windows-low-il`） | 不挂在 `nightly.yml` 上：dev 模式要在 runner 上现建 runtime bundle，会把 nightly 拖红；另可手动 `workflow_dispatch` |
 | 本地 | `pwsh bin/test.ps1 permission -Tier A`（等价于直接跑 `run-permission-e2e.ps1`） | 后端必须已启动 |
 
 判定语义（比 JUnit 更严）：`PASS` / `PASS?`（有断言未能求值，绝不算通过）/ `SKIP` / `FAIL` /

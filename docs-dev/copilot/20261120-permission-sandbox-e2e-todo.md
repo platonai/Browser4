@@ -108,11 +108,15 @@ A17 的探针在未部署修复的 `windows-low-il` 后端上**写出了区外 c
 
 ## 2. P1 — 让套件成为门禁
 
-- **P1-5 CI 接线**（DONE）：`nightly.yml` 新增独立 Windows job `permission-e2e`：构建 CLI → 用
-  `tool call coding_permissions` 拉起后端并轮询 `status` 到 `UP`（`BROWSER4_SERVER_OPTS=-Dbrowser4.agent.sandbox=windows-low-il`；
-  `status` 本身只读，`./b4w.ps1 status` 起不了后端 —— 首次接线就是因为这点空跑，见 2026-11-20 复盘）
-  → `run-permission-e2e.ps1 -Tier A` → 上传 `report.json`/ndjson/`*.out.txt`；`bin/test.ps1` 新增 `permission` 类型
-  （`-Show`/`-DryRun` 可预览，其余参数原样转发）。Tier B/C 不进 CI（需要 LLM key；C 是红队）。
+- **P1-5 CI 接线**（DONE，已从 nightly 拆出）：独立的 `permission-e2e.yml`（04:00 UTC + `workflow_dispatch`）跑 Windows
+  job：构建 CLI → 用 `tool call coding_permissions` 拉起后端并轮询 `status` 到 `UP`
+  （`BROWSER4_SERVER_OPTS=-Dbrowser4.agent.sandbox=windows-low-il`；`status` 本身只读，`./b4w.ps1 status`
+  起不了后端 —— 首次接线就是因为这点空跑，见 2026-11-20 复盘）→ `run-permission-e2e.ps1 -Tier A` → 上传
+  `report.json`/ndjson/`*.out.txt`；`bin/test.ps1` 新增 `permission` 类型（`-Show`/`-DryRun` 可预览，其余参数原样转发）。
+  Tier B/C 不进 CI（需要 LLM key；C 是红队）。
+  为什么不在 `nightly.yml`：dev 模式的首次启动要在 runner 上跑 `mvn clean install` + `build-runtime-bundle.ps1`，
+  run 44773784975 里 30 min 的 step 预算在 attempt 1 就用完了，nightly 因此连续两轮为它变红。下一步提速是把它换成
+  「Maven install + runtime bundle + `start.bat`」的缓存步骤（见 `permission-e2e.yml` 头注释的 Known cost）。
 - **P1-6 日志目录自动发现**（DONE）：`-LogDir auto` 为默认值；在 `%TEMP%\browser4\browser4-cli`、
   `<app-data>/logs`、`<app-data>/aot-cache/*/logs`、`~/.browser4/logs` 中**按内容里最新的 logback 时间戳**
   选文件（mtime 不可信：Windows 在句柄 flush 前不更新写者的 mtime），解析结果打印出来并写进
