@@ -519,7 +519,7 @@ class MavenBuildSupport(
         val result = runMavenWithSelectorFallback(
             shell, selector, timeoutSeconds, workingDir, buildEnvironment(shell),
         ) { resolved ->
-            mavenBuildCommand(launcher, resolved, goalList, skipTests, threads)
+            mavenBuildCommand(launcher, resolved, goalList, skipTests, threads, shell.sandboxId() != "off")
         }
 
         val combined = listOf(result.stdout, result.stderr)
@@ -831,10 +831,17 @@ internal fun mavenBuildCommand(
     goals: String,
     skipTests: Boolean,
     threads: String? = null,
+    sandboxed: Boolean = false,
 ): String {
     val skipFlag = if (skipTests) " -DskipTests" else ""
     val threadsFlag = threads?.takeIf { it.isNotBlank() }?.let { " -T $it" } ?: ""
-    return "$launcher$threadsFlag -pl $selector -am $goals$skipFlag -q"
+    // A confined build cannot write the shared Kotlin daemon's client marker
+    // (`%LOCALAPPDATA%\kotlin\daemon`), so kapt aborted with AccessDeniedException and
+    // `coding.verify` failed for a reason that had nothing to do with the sources
+    // (2026-11-20 agent run). Compiling in-process keeps the work inside the Maven JVM,
+    // whose temp directory the sandbox already maps to <workspace>/.b4scratch/tmp.
+    val daemonFlag = if (sandboxed) " -Dkotlin.compiler.execution.strategy=in-process" else ""
+    return "$launcher$threadsFlag -pl $selector -am $goals$skipFlag$daemonFlag -q"
 }
 
 /**

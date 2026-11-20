@@ -125,6 +125,14 @@ object CodingComponents {
             home?.resolve(".m2")?.let { entry("maven", it) },
             home?.resolve(".gradle")?.let { entry("gradle", it) },
             home?.resolve(".cache")?.let { entry("cache", it) },
+            // JVM build daemons keep their client markers and run files here, not in ~/.m2: a
+            // confined child could not write `%LOCALAPPDATA%\kotlin\daemon\kotlin-daemon-client-*.tmp`,
+            // so kapt aborted with AccessDeniedException and `coding.verify` failed on a
+            // source-clean module (2026-11-20 agent run). A cache, like ~/.m2 — granted writable.
+            System.getenv("LOCALAPPDATA")?.takeIf { it.isNotBlank() }
+                ?.let { runCatching { Path.of(it) }.getOrNull() }
+                ?.resolve("kotlin")?.let { entry("kotlin-local", it) },
+            home?.resolve(".kotlin")?.let { entry("kotlin-home", it) },
             runCatching { Path.of(System.getProperty("java.io.tmpdir")) }.getOrNull()?.let { entry("tmp", it) },
             runCatching { Path.of(System.getenv("SystemRoot") ?: "C:/Windows") }.getOrNull()?.let { entry("os-root", it) },
         )

@@ -235,6 +235,18 @@ class CodingAgentShell(
     private val additionalDirs: Set<Path> = emptySet(),
 ) {
     /**
+     * Id of the OS boundary this shell launches commands under (`off` when there is none).
+     *
+     * Callers that spawn a *toolchain* need it: a confined child cannot write the per-user
+     * scratch directories a shared build daemon keeps. A `windows-low-il` Maven build died on
+     * `%LOCALAPPDATA%\kotlin\daemon\kotlin-daemon-client-tsmarker*.tmp`
+     * (AccessDeniedException, 2026-11-20 agent run), so the build path now compiles Kotlin
+     * in-process when this is not `off`.
+     */
+    internal fun sandboxId(): String =
+        runCatching { (sandbox ?: ExecutionSandboxes.current()).id }.getOrDefault("off")
+
+    /**
      * The workspace this shell is bound to.
      *
      * Public because other tools that spawn processes must resolve relative paths the

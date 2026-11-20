@@ -191,7 +191,12 @@ data class IsolationProfile(
             .map { it.path }
 
         /** Toolchain entries that are caches (writable), as opposed to read-only toolchains. */
-        private val CACHE_ENTRY_IDS = setOf("toolchain:maven", "toolchain:gradle", "toolchain:cache", "toolchain:tmp")
+        private val CACHE_ENTRY_IDS = setOf(
+        "toolchain:maven", "toolchain:gradle", "toolchain:cache", "toolchain:tmp",
+        // Kotlin/JVM build daemons write their client markers here; without the grant `kapt`
+        // aborted with AccessDeniedException inside the sandbox (2026-11-20 agent run).
+        "toolchain:kotlin-local", "toolchain:kotlin-home",
+    )
 
         /**
          * Which enforcement backend to try, in order, for [mode] on this platform.

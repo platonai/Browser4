@@ -209,6 +209,18 @@ class MavenBuildSupportTest {
             "mvnw -pl browser4-coding -am compile -q",
             mavenBuildCommand("mvnw", "browser4-coding", "compile", skipTests = false),
         )
+        // A confined build must not use the shared Kotlin daemon: its client marker lives in
+        // the user profile, which a Low-integrity child cannot write (2026-11-20 agent run).
+        assertEquals(
+            "mvnw -pl browser4-coding -am compile -DskipTests " +
+                "-Dkotlin.compiler.execution.strategy=in-process -q",
+            mavenBuildCommand("mvnw", "browser4-coding", "compile", skipTests = true, sandboxed = true),
+        )
+        // Unconfined builds keep the daemon (it makes repeated compiles faster).
+        assertFalse(
+            mavenBuildCommand("mvnw", "browser4-coding", "compile", skipTests = true)
+                .contains("in-process"),
+        )
     }
 
     @Test
