@@ -28888,6 +28888,21 @@ async fn handle_status(
     let resolved = daemon::resolve_base_url_with_origin(server_override, session_name);
     cli_println!("  resolved from: {}", resolved.source.label());
     json_field("server_url_source", json!(resolved.source.label()));
+
+    // Where session state actually lives.  The fallback is CWD-relative, so a
+    // "missing" session is usually a session that went to another directory;
+    // name the directory here instead of at the next `Session required`.
+    let (state_dir, state_is_fallback) = crate::state::effective_state_dir();
+    if state_is_fallback {
+        cli_println!(
+            "Session state: {} (workspace fallback — set BROWSER4_CLI_STATE_DIR to pin it)",
+            state_dir.display()
+        );
+    } else {
+        cli_println!("Session state: {}", state_dir.display());
+    }
+    json_field("session_state_dir", json!(state_dir.display().to_string()));
+    json_field("session_state_fallback", json!(state_is_fallback));
     if let Some(rejected) = resolved.rejected_recorded.as_deref() {
         cli_println!(
             "  ignored recorded URL: {} (not usable — re-allocated; \

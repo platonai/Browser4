@@ -543,6 +543,25 @@ pub fn read_state(state_dir: Option<&Path>, session_name: Option<&str>) -> CliSt
     read_state_with_fallback(&dir, fallback.as_deref(), session_name)
 }
 
+/// The directory a command resolves its state to, and whether that is the
+/// workspace-relative fallback rather than the configured/default directory.
+///
+/// `status` prints this. The fallback is CWD-relative, so "my session
+/// disappeared" is usually "the state went to another directory" — the
+/// operator should see the directory instead of discovering it through the
+/// next `Session required`.
+pub fn effective_state_dir() -> (PathBuf, bool) {
+    effective_state_dir_in(&resolve_default_state_dir())
+}
+
+/// [`effective_state_dir`] over an explicit primary directory (unit-testable).
+fn effective_state_dir_in(primary: &Path) -> (PathBuf, bool) {
+    match fallback_for(None, primary) {
+        Some(fallback) => (fallback, true),
+        None => (primary.to_path_buf(), false),
+    }
+}
+
 /// Core read logic with explicit primary/fallback directories (split out so
 /// the fallback-gating behaviour is unit-testable without touching HOME/CWD).
 fn read_state_with_fallback(
@@ -2425,6 +2444,25 @@ mod tests {
         // test_default_base_url_uses_the_documented_production_port).
         assert_eq!(state.base_url, CliState::default().base_url);
         assert!(state.session_id.is_none());
+    }
+
+    #[test]
+    fn test_effective_state_dir_reports_the_fallback() {
+        // `is_implicit_default_dir` is false under an explicit override, so the
+        // fallback is never in play and the assertions below do not apply.
+        if std::env::var("BROWSER4_CLI_STATE_DIR").is_ok() {
+            return;
+        }
+
+        let tmp = test_temp_dir();
+        let (dir, fallback) = effective_state_dir_in(tmp.path());
+        assert_eq!(dir, tmp.path());
+        assert!(!fallback, "a writable primary is not the fallback");
+
+        let missing = tmp.path().join("does-not-exist");
+        let (dir, fallback) = effective_state_dir_in(&missing);
+        assert_eq!(dir, fallback_state_dir());
+        assert!(fallback, "an unusable primary resolves to the workspace fallback");
     }
 
     #[test]
