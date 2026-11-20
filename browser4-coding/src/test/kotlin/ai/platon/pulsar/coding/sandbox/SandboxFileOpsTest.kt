@@ -238,6 +238,45 @@ class SandboxFileOpsTest {
     // ==================== enforcement ====================
 
     /**
+     * The bridge stages payloads and writes its script with the backend's own (Medium) rights, so a
+     * junction at `.b4scratch` used to redirect both outside the workspace — a write the boundary is
+     * supposed to make impossible, performed by the backend itself.
+     */
+    @Test
+    @DisplayName("a scratch junction cannot redirect the bridge outside the workspace")
+    fun bridgeJunctionIsRefused() {
+        assumeTrue(isWindows, "junctions only exist on Windows")
+        val workspace = Files.createDirectories(tempDir.resolve("ws-link"))
+        val outside = Files.createDirectories(tempDir.resolve("outside-link"))
+        createJunction(workspace.resolve(".b4scratch"), outside)
+        try {
+            val ops = SandboxedFileOps(FakeBoundary(), workspace)
+
+            val error = assertThrows(IOException::class.java) {
+                ops.write(workspace.resolve("a.txt"), "x".toByteArray())
+            }
+
+            assertTrue(error.message!!.contains("bridge"), error.message!!)
+            assertFalse(
+                Files.exists(outside.resolve("fs-bridge")),
+                "the bridge must not be created outside the workspace",
+            )
+        } finally {
+            val link = workspace.resolve(".b4scratch")
+            if (Files.exists(link, java.nio.file.LinkOption.NOFOLLOW_LINKS)) link.toFile().delete()
+        }
+    }
+
+    /** `mklink /J` needs no elevation; `Files.createSymbolicLink` does. */
+    private fun createJunction(link: Path, target: Path) {
+        val process = ProcessBuilder("cmd.exe", "/c", "mklink", "/J", link.toString(), target.toString())
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.readBytes().toString(Charsets.UTF_8)
+        assertEquals(0, process.waitFor(), "mklink /J failed: $output")
+    }
+
+    /**
      * The whole point of P3-6: the child that performs the mutation runs under the Low-integrity
      * token, so the workspace label — not the path guard — is what keeps it inside.
      */

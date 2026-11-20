@@ -82,13 +82,14 @@ object WindowsTokenLauncher {
         token: Pointer,
         redirectErrorStream: Boolean,
         job: WindowsJob? = null,
+        declaredWins: Set<String> = emptySet(),
     ): Process {
         requireWindows()
         val program = spec.command.firstOrNull()
             ?: throw SandboxUnavailableException(SANDBOX_ID, "cannot launch an empty command")
         val pipes = createPipes(redirectErrorStream)
         try {
-            val environment = mergedEnvironment(token, spec.environment)
+            val environment = mergedEnvironment(token, spec.environment, declaredWins)
             val environmentMemory = buildEnvironmentBlock(environment)
             val executable = resolveProgram(program, environment)
             val commandLine = buildWindowsCommandLine(spec.command)
@@ -437,13 +438,17 @@ object WindowsTokenLauncher {
         "PROCESSOR_IDENTIFIER", "OS",
     )
 
-    private fun mergedEnvironment(token: Pointer, declared: Map<String, String>): Map<String, String> {
+    private fun mergedEnvironment(
+        token: Pointer,
+        declared: Map<String, String>,
+        declaredWins: Set<String> = emptySet(),
+    ): Map<String, String> {
         val block = PointerByReference()
         if (Win32.userenv.CreateEnvironmentBlock(block, token, false)) {
             val pointer = block.value
             if (pointer != null) {
                 try {
-                    return mergeEnvironment(readEnvironmentBlock(pointer), declared)
+                    return mergeEnvironment(readEnvironmentBlock(pointer), declared, declaredWins)
                 } finally {
                     Win32.userenv.DestroyEnvironmentBlock(pointer)
                 }
@@ -473,12 +478,41 @@ object WindowsTokenLauncher {
         return entries
     }
 
-    /** @see TOKEN_OWNED_VARIABLES */
-    internal fun mergeEnvironment(tokenEnvironment: Map<String, String>, declared: Map<String, String>): Map<String, String> {
-        val merged = LinkedHashMap(tokenEnvironment)
+    /**
+     * The child environment: the account's identity plus the declared (already whitelisted) variables.
+     *
+     * The token block is the *user's persistent environment*, not this task's environment. Copying it
+     * verbatim handed every variable the account carries to the child — including the API keys the
+     * user once set with `setx`, which bypassed [SandboxEnvironment]'s whitelist entirely and printed
+     * a live key from `cmd /c echo %DEEPSEEK_API_KEY%` in the low-integrity backend (measured
+     * 2026-11-20, `permission-e2e` A10). Only what a command needs to run survives: the token-owned
+     * identity variables ([TOKEN_OWNED_VARIABLES]) and the toolchain/OS whitelist. Everything else
+     * comes from `declared`, which the shell already filtered and audited.
+     *
+     * @param declaredWins token-owned names the caller owns after all — a backend that provisions the
+     *   directory itself (`windows-low-il` labels `.b4scratch/tmp` Low) must be able to point the
+     *   child at it, or the child inherits the user's Medium `%TEMP%` and cannot write there.
+     * @see SandboxEnvironment.isWhitelisted
+     */
+    internal fun mergeEnvironment(
+        tokenEnvironment: Map<String, String>,
+        declared: Map<String, String>,
+        declaredWins: Set<String> = emptySet(),
+    ): Map<String, String> {
+        val wins = declaredWins.map { it.uppercase() }.toSet()
+        val merged = LinkedHashMap<String, String>()
+        for ((name, value) in tokenEnvironment) {
+            if (name.uppercase() in TOKEN_OWNED_VARIABLES || SandboxEnvironment.isWhitelisted(name)) {
+                merged[name] = value
+            }
+        }
         for ((name, value) in declared) {
             val existing = merged.keys.firstOrNull { it.equals(name, ignoreCase = true) }
-            if (existing != null && existing.uppercase() in TOKEN_OWNED_VARIABLES) continue
+            if (existing != null && existing.uppercase() in TOKEN_OWNED_VARIABLES) {
+                if (existing.uppercase() !in wins) continue
+                // The declared spelling replaces the token's, so the block has no duplicate entry.
+                merged.remove(existing)
+            }
             merged[name] = value
         }
         return merged
@@ -535,6 +569,59 @@ object WindowsTokenLauncher {
     private fun environmentValue(environment: Map<String, String>, name: String): String? =
         environment.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value
 
+    /**
+     * Launcher programs whose command line is parsed by the shell itself, not by
+     * `CommandLineToArgvW`.
+     *
+     * `cmd.exe /c <text>` hands `<text>` to cmd's own parser (it only strips one outer pair of
+     * quotes, under rules documented in `cmd /?`). Escaping that text with the CRT rules therefore
+     * turns every quote into a literal `\"` the child sees, which is what broke `cmd /c "…"` and
+     * `pwsh -File "…"` (measured 2026-11-20 under `windows-low-il`: the same commands work through
+     * `ProcessBuilder`). The tail after the switch is a command-line *fragment* and must be appended
+     * verbatim.
+     */
+    private val SHELL_PROGRAMS = setOf("cmd", "cmd.exe")
+
+    /** The `cmd.exe` switches that make the rest of the line a command line. */
+    private val SHELL_TAIL_SWITCHES = setOf("/c", "/k")
+
+    /**
+     * Index of the argument after which the shell parses the rest of the line itself, or `-1`.
+     *
+     * Only a leading `cmd.exe` qualifies, and only when its `/c` / `/k` switch is present: `cmd.exe`
+     * with any other argument list is an ordinary CRT-parsed program.
+     */
+    private fun shellTailIndex(command: List<String>): Int {
+        if (command.isEmpty()) return -1
+        val program = command.first()
+            .substringAfterLast('\\')
+            .substringAfterLast('/')
+        if (!SHELL_PROGRAMS.contains(program.lowercase())) return -1
+        return command.indexOfFirst { it.lowercase() in SHELL_TAIL_SWITCHES }
+    }
+
+    /**
+     * The `lpCommandLine` for [command].
+     *
+     * Arguments are quoted with the `CommandLineToArgvW` rules `ProcessBuilder` uses — except the
+     * command-line fragment a shell (`cmd.exe /c …`) parses itself, which is appended verbatim so the
+     * quotes the caller wrote reach the child unchanged. `ProcessBuilder` does the same thing
+     * implicitly by joining the argument list with spaces; a token launch has to do it explicitly.
+     *
+     * @see shellTailIndex
+     */
+    internal fun buildWindowsCommandLine(command: List<String>): String {
+        if (command.isEmpty()) return ""
+        val tailIndex = shellTailIndex(command)
+        if (tailIndex < 0) {
+            return command.joinToString(" ") { quoteWindowsArgument(it) }
+        }
+        val head = command.subList(0, tailIndex + 1).joinToString(" ") { quoteWindowsArgument(it) }
+        val tail = command.subList(tailIndex + 1, command.size)
+        if (tail.isEmpty()) return head
+        return head + " " + tail.joinToString(" ")
+    }
+
     /** Quotes one argument with the `CommandLineToArgvW` rules `ProcessBuilder` uses. */
     internal fun quoteWindowsArgument(argument: String): String {
         if (argument.isEmpty()) return "\"\""
@@ -557,9 +644,6 @@ object WindowsTokenLauncher {
         quoted.append("\\".repeat(backslashes * 2)).append('"')
         return quoted.toString()
     }
-
-    internal fun buildWindowsCommandLine(command: List<String>): String =
-        command.joinToString(" ") { quoteWindowsArgument(it) }
 
     /** Fallback when the environment has no `PATHEXT`, matching a default Windows install. */
     private val DEFAULT_PATHEXT = listOf(".COM", ".EXE", ".BAT", ".CMD")

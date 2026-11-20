@@ -6,6 +6,8 @@ import ai.platon.pulsar.coding.IsolationProfile
 import ai.platon.pulsar.coding.MirrorRoots
 import ai.platon.pulsar.coding.PermissionAudit
 import org.slf4j.LoggerFactory
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 
@@ -478,6 +480,57 @@ object SandboxEnvironment {
         }
         return env
     }
+}
+
+/**
+ * Guards the `<workspace>/.b4scratch` tree, which the **backend** writes to with its own rights.
+ *
+ * `SandboxedFileOps` stages payloads and its bridge script there, the coding backends create and label
+ * `.b4scratch/tmp` there, and the probes write there. A link inside that tree therefore does two things
+ * the agent must not be able to do: it redirects a Medium write outside the workspace, and it makes the
+ * backend lower the mandatory label of whatever the link names — which is the whole boundary.
+ *
+ * `Files.isSymbolicLink` does not report a Windows junction, so a link is detected the only
+ * cross-platform way there is (the same test [MirrorRoots] uses): an entry whose real path is not its
+ * own absolute path. Every component from the workspace down is checked, because the link may be
+ * `.b4scratch` itself rather than one of its children.
+ */
+internal object ScratchBoundary {
+
+    /**
+     * `null` when [target] may be used as the task's scratch path, otherwise the reason it may not.
+     *
+     * A missing component is acceptable: a directory that does not exist yet cannot be a link.
+     */
+    fun refusal(workspace: Path, target: Path): String? {
+        val absoluteRoot = workspace.toAbsolutePath().normalize()
+        val realRoot = runCatching { workspace.toRealPath() }.getOrElse {
+            // A workspace that does not exist yet holds no link; the caller creates it.
+            return if (Files.exists(absoluteRoot)) "cannot resolve the workspace '$absoluteRoot': ${it.message}" else null
+        }
+        val normalized = target.toAbsolutePath().normalize()
+        if (!normalized.startsWith(absoluteRoot)) {
+            return "'$normalized' is not inside the workspace '$absoluteRoot'"
+        }
+        var cursor = absoluteRoot
+        for (part in absoluteRoot.relativize(normalized)) {
+            cursor = cursor.resolve(part)
+            if (!Files.exists(cursor, LinkOption.NOFOLLOW_LINKS)) continue
+            val real = runCatching { cursor.toRealPath() }.getOrNull()
+                ?: return "cannot resolve '$cursor'"
+            if (!samePath(real, cursor)) {
+                return "'$cursor' is a link to '$real', which leaves the task scratch tree"
+            }
+            if (!real.startsWith(realRoot)) {
+                return "'$cursor' resolves outside the workspace, to '$real'"
+            }
+        }
+        return null
+    }
+
+    /** Windows path comparison is case-insensitive; `toRealPath` returns the on-disk casing. */
+    private fun samePath(a: Path, b: Path): Boolean =
+        a.toString().equals(b.toAbsolutePath().normalize().toString(), ignoreCase = true)
 }
 
 /** Single process-launch point for both execution paths, so the sandbox spec is actually applied. */

@@ -238,12 +238,27 @@ class SandboxedFileOps(
     private fun stage(bytes: ByteArray): Path {
         val dir = bridgeDir()
         Files.createDirectories(dir)
+        // Re-check after creating it: the directory that now exists must still be the workspace's.
+        bridgeDir()
         val payload = Files.createTempFile(dir, "payload-", ".bin")
         Files.write(payload, bytes)
         return payload
     }
 
-    private fun bridgeDir(): Path = root.resolve(BRIDGE_DIR)
+    /**
+     * The bridge directory, proven not to be reachable through a link.
+     *
+     * The backend writes the staged payload and the script here with its own (Medium) rights, so a
+     * junction at `.b4scratch` or `.b4scratch/fs-bridge` would turn those writes into writes anywhere
+     * the developer can write — outside the workspace, and outside the boundary the child runs in.
+     */
+    private fun bridgeDir(): Path {
+        val dir = root.resolve(BRIDGE_DIR)
+        ScratchBoundary.refusal(root, dir)?.let {
+            throw IOException("the sandbox file bridge of '$root' is not safe to use: $it")
+        }
+        return dir
+    }
 
     /**
      * Runs one scripted operation inside the boundary.
@@ -334,6 +349,7 @@ class SandboxedFileOps(
             return script
         }
         Files.createDirectories(dir)
+        bridgeDir()
         val tmp = Files.createTempFile(dir, "b4-fs-", ".ps1")
         try {
             Files.writeString(tmp, SCRIPT)

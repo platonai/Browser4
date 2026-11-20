@@ -21,6 +21,11 @@ import org.slf4j.LoggerFactory
  * and "is a sandbox active" was read from the bare `browser4.agent.sandbox` property, which reads
  * `off` on a task whose chain selected `windows-low-il`. Both are fixed here — markers now cover the
  * localized text, and the caller passes the task's own [ExecutionSandbox] through [sandboxId].
+ *
+ * A third shape was measured on 2026-11-20 (`permission-e2e` A06): PowerShell wraps the OS refusal in
+ * `UnauthorizedAccessException`, whose text is `Access to the path 'C:\…' is denied.` — the marker
+ * list did not contain that sentence (the word `access` is not adjacent to `is denied`), so the .NET
+ * text reached the model untranslated. The .NET phrasing and its `0x80070005` HRESULT are markers now.
  */
 internal object SandboxDenials {
 
@@ -41,6 +46,15 @@ internal object SandboxDenials {
         "operation not permitted",
         "eacces",
         "eperm",
+        // .NET / PowerShell: UnauthorizedAccessException renders as
+        // "Access to the path 'C:\…' is denied." — the denial word is separated from `access` by the
+        // path, so none of the ASCII markers above match it (measured 2026-11-20, A06): the raw
+        // sentence reached the model with no `code=`.
+        "is denied",
+        "unauthorizedaccessexception",
+        // The Win32 HRESULT behind the same refusal (`E_ACCESSDENIED`), as shells and exception
+        // messages print it when the localized prose is not English.
+        "0x80070005",
         // zh-CN: 拒绝访问 / 无权限访问
         "拒绝访问",
         "无权限访问",

@@ -60,6 +60,15 @@ class WindowsLowIntegritySandboxTest {
         environment = mapOf("PATH" to "C:\\Windows\\System32"),
     )
 
+    /** `mklink /J` needs no elevation; `Files.createSymbolicLink` does. */
+    private fun createJunction(link: Path, target: Path) {
+        val process = ProcessBuilder("cmd.exe", "/c", "mklink", "/J", link.toString(), target.toString())
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.readBytes().toString(Charsets.UTF_8)
+        assertEquals(0, process.waitFor(), "mklink /J failed: $output")
+    }
+
     @Test
     @DisplayName("off Windows the backend refuses to prepare instead of degrading")
     fun refusesOffWindows() {
@@ -146,6 +155,18 @@ class WindowsLowIntegritySandboxTest {
             assertTrue(Files.exists(inside), "the inside file must exist")
             assertFalse(Files.exists(outside), "a write outside the workspace must not happen")
             assertTrue(outsideResult.first != 0, "the outside write must be refused: ${outsideResult.second}")
+
+            // The task temp is the one this backend labelled Low; the token's `%TEMP%` is Medium and
+            // would be unusable for the child (compilers and scripts write there).
+            val temp = sandbox.runAsLowWithOutput(workspace, "echo %TEMP%")
+            assertEquals(0, temp.first, temp.second)
+            assertTrue(
+                temp.second.trim().equals(
+                    workspace.resolve(".b4scratch").resolve("tmp").toString(),
+                    ignoreCase = true,
+                ),
+                "the child must get the task's own temp: ${temp.second}",
+            )
         } finally {
             // Put the labels back so the temporary tree can be deleted.
             runner.run(listOf("icacls", root.toString(), "/setintegritylevel", "(OI)(CI)Medium"), 30)
@@ -184,6 +205,39 @@ class WindowsLowIntegritySandboxTest {
             assertTrue(victim.isAlive, "the Medium process must survive the attempt")
         } finally {
             victim.destroyForcibly()
+            runCatching { root.toFile().deleteRecursively() }
+        }
+    }
+
+    /**
+     * The backend creates and labels `.b4scratch/tmp` with its own (Medium) rights, so a junction
+     * there would lower the label of a directory outside the workspace and hand the Low child a write
+     * channel into it (measured before this guard existed).
+     */
+    @Test
+    @DisplayName("a scratch path that is a junction is refused before anything is created outside")
+    fun scratchJunctionIsRefused() {
+        assumeTrue(isWindows, "junctions only exist on Windows")
+        val root = Files.createDirectories(
+            Path.of(System.getProperty("user.home"), ".browser4", "tmp", "low-il-link-${System.nanoTime()}"),
+        )
+        val workspace = Files.createDirectories(root.resolve("ws"))
+        val outside = Files.createDirectories(root.resolve("outside"))
+        createJunction(workspace.resolve(".b4scratch"), outside)
+        val sandbox = WindowsLowIntegritySandbox(
+            caches = { emptyList() },
+            protectCredentialStores = false,
+            markerDir = null,
+        )
+        try {
+            val error = assertThrows(SandboxUnavailableException::class.java) {
+                sandbox.prepare(spec(workspace), workspace, allowNetwork = false)
+            }
+            assertTrue(error.message!!.contains("scratch"), error.message!!)
+            assertFalse(Files.exists(outside.resolve("tmp")), "nothing may be created through the junction")
+        } finally {
+            val link = workspace.resolve(".b4scratch")
+            if (Files.exists(link, java.nio.file.LinkOption.NOFOLLOW_LINKS)) (link.toFile()).delete()
             runCatching { root.toFile().deleteRecursively() }
         }
     }

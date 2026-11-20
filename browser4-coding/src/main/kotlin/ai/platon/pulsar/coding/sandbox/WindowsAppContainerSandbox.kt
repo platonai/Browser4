@@ -132,6 +132,17 @@ class WindowsAppContainerSandbox(
 
     private val verifiedWorkspaces = ConcurrentHashMap<Path, Unit>()
 
+    /**
+     * Whether this backend already dropped the grants of earlier runs (see [prepare]).
+     *
+     * Cleanup runs **once per backend**, before any task of this process starts, instead of on every
+     * `prepare`: a grant can be older than the retention window while the task that owns it is still
+     * running (a build, a long browse session), and another task's `prepare` used to revoke it under
+     * that task's feet. Nothing outlives a backend process — [WindowsJob] kills its children — so
+     * "once, at the start" collects the same stale grants without ever touching a live one.
+     */
+    private val staleGrantsRevoked = java.util.concurrent.atomic.AtomicBoolean(false)
+
     override fun prepare(
         spec: ProcessSpec,
         workspace: Path,
@@ -143,15 +154,24 @@ class WindowsAppContainerSandbox(
         if (!Files.isDirectory(root)) {
             fail("workspace '$root' is not a directory")
         }
+        // The backend creates `.b4scratch` (home, temp) inside the workspace itself, so a junction
+        // there would prepare a child home outside it. Checked here, on the real workspace, because
+        // the probe also runs commands with foreign directories as their working directory.
+        ScratchBoundary.refusal(root, root.resolve(".b4scratch"))?.let {
+            fail("the task scratch directory of '$root' is not safe to use: $it")
+        }
         val container = container
         grant(root, container, required = true)
         extraWritableRoots.map { it.toAbsolutePath().normalize() }.forEach { grant(it, container, required = true) }
 
         // G9: drop grants this task does not need (older than the retention window). Cheap — the
         // marker directory holds one small file per grant — and it is what keeps a container
-        // experiment from leaving an ACE on a toolchain tree forever.
-        runCatching { revokeRecordedGrants(keep = listOf(root) + extraWritableRoots) }
-            .onFailure { logger.debug("could not revoke stale container grants: {}", it.message) }
+        // experiment from leaving an ACE on a toolchain tree forever. Once per backend: a later
+        // task must not revoke a grant an earlier, still-running task is using.
+        if (staleGrantsRevoked.compareAndSet(false, true)) {
+            runCatching { revokeRecordedGrants(keep = listOf(root) + extraWritableRoots) }
+                .onFailure { logger.debug("could not revoke stale container grants: {}", it.message) }
+        }
 
         val environment = sandboxEnvironment(spec.environment, root)
         if (!verifiedWorkspaces.contains(root)) {
@@ -427,18 +447,20 @@ class WindowsAppContainerSandbox(
      * quotes cannot survive both layers (see `windows-low-il`'s PowerShell probe for the same lesson).
      */
     private fun defaultProbe(workspace: Path): String? {
-        val inside = workspace.resolve("b4probe-in.txt")
-        runCatching { Files.deleteIfExists(inside) }
+        // Unique names: the probe must never delete a file the workspace already had.
+        val nonce = java.util.UUID.randomUUID().toString()
+        val insideName = "b4probe-in-$nonce.txt"
+        val inside = workspace.resolve(insideName)
         try {
-            val writeInside = runInContainer(workspace, "echo b4> b4probe-in.txt")
+            val writeInside = runInContainer(workspace, "echo b4> $insideName")
             if (writeInside.first != 0 || !Files.exists(inside)) {
                 return "a write inside the workspace failed (exit=${writeInside.first}): ${writeInside.second}"
             }
             val outsideDir = Path.of(System.getenv("SystemRoot") ?: "C:\\Windows", "Temp")
             if (Files.isDirectory(outsideDir)) {
-                val outside = outsideDir.resolve("b4probe-out.txt")
-                runCatching { Files.deleteIfExists(outside) }
-                val writeOutside = runInContainer(outsideDir, "echo b4> b4probe-out.txt")
+                val outsideName = "b4probe-out-$nonce.txt"
+                val outside = outsideDir.resolve(outsideName)
+                val writeOutside = runInContainer(outsideDir, "echo b4> $outsideName")
                 if (writeOutside.first == 0 || Files.exists(outside)) {
                     runCatching { Files.deleteIfExists(outside) }
                     return "a write OUTSIDE the workspace succeeded (exit=${writeOutside.first}): " +

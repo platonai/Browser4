@@ -250,7 +250,13 @@ class WindowsLowIntegritySandbox(
         return spec.copy(
             environment = environment,
             sandboxLauncher = SandboxLauncher { prepared, redirect ->
-                WindowsTokenLauncher.startWithToken(prepared, lowToken, redirect, job)
+                // The low-integrity child runs as this user, so it inherits this user's *persistent*
+                // TEMP — a Medium directory a Low child cannot write. The task temp above is labelled
+                // Low for exactly this reason, so it has to win over the token's value.
+                WindowsTokenLauncher.startWithToken(
+                    prepared, lowToken, redirect, job,
+                    declaredWins = setOf("TEMP", "TMP"),
+                )
             },
         )
     }
@@ -457,7 +463,16 @@ class WindowsLowIntegritySandbox(
      */
     private fun prepareTaskTemp(workspace: Path): Path {
         val temp = workspace.resolve(".b4scratch").resolve("tmp")
+        // The backend creates and labels this directory itself, so a junction under `.b4scratch`
+        // would lower the label of a directory outside the workspace and hand the child a write
+        // channel there. Refuse before creating anything.
+        ScratchBoundary.refusal(workspace, temp)?.let {
+            fail("the task scratch directory '$temp' is not safe to use: $it")
+        }
         runCatching { Files.createDirectories(temp) }
+        ScratchBoundary.refusal(workspace, temp)?.let {
+            fail("the task scratch directory '$temp' is not safe to use: $it")
+        }
         labelWritable(temp, deep = true)
         return temp
     }
@@ -471,11 +486,12 @@ class WindowsLowIntegritySandbox(
      * credential listing must fail.
      */
     private fun defaultProbe(workspace: Path): String? {
-        val inside = workspace.resolve(".b4probe-in.txt")
+        // Unique names: the probe must never delete a file it did not create (a leftover
+        // `.b4probe-in.txt` used to be removed before the probe even ran).
+        val nonce = java.util.UUID.randomUUID().toString()
+        val inside = workspace.resolve(".b4probe-$nonce-in.txt")
         val home = Path.of(System.getProperty("user.home"))
-        val outside = home.resolve(".b4probe-outside.txt")
-        runCatching { Files.deleteIfExists(inside) }
-        runCatching { Files.deleteIfExists(outside) }
+        val outside = home.resolve(".b4probe-$nonce-outside.txt")
         try {
             val writeInside = writeFileAsLow(workspace, inside)
             if (writeInside.first != 0 || !Files.exists(inside)) {
@@ -532,6 +548,9 @@ class WindowsLowIntegritySandbox(
     /** Writes the probe script once per workspace and returns its path. */
     private fun ensureProbeScript(workspace: Path): Path {
         val dir = workspace.resolve(".b4scratch")
+        ScratchBoundary.refusal(workspace, dir)?.let {
+            fail("the task scratch directory '$dir' is not safe to use: $it")
+        }
         runCatching { Files.createDirectories(dir) }
         val script = dir.resolve("b4-probe.ps1")
         if (!Files.isRegularFile(script)) {

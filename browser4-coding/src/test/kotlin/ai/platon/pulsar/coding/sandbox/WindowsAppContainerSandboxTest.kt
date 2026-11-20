@@ -318,6 +318,34 @@ class WindowsAppContainerSandboxTest {
     }
 
     @Test
+    @DisplayName("a task that starts later does not revoke a grant another task is still using")
+    fun laterPrepareDoesNotRevokeLiveGrants() {
+        assumeTrue(isWindows, "appcontainers only exist on Windows")
+        val markers = Files.createDirectories(tempDir.resolve("markers-live"))
+        val first = writableWorkspace("appcontainer-live-${System.nanoTime()}")
+        val runner = FakeRunner { SandboxCommandResult(0) }
+        val sandbox = WindowsAppContainerSandbox(runner = runner, probe = { null }, markerDir = markers)
+        // The first prepare of a backend is the only one allowed to clean up: nothing is running yet.
+        sandbox.prepare(spec(first), first, allowNetwork = false)
+
+        // A grant of an earlier task that is still running, older than the retention window.
+        val live = Files.createDirectories(tempDir.resolve("live-toolchain"))
+        plantGrant(sandbox, live, "$PACKAGE_SID|$live")
+        val second = writableWorkspace("appcontainer-later-${System.nanoTime()}")
+
+        sandbox.prepare(spec(second), second, allowNetwork = false)
+
+        assertFalse(
+            runner.calls.any { it.contains("/remove") },
+            "a second task must never revoke anything: ${runner.calls}",
+        )
+        assertTrue(
+            Files.exists(sandbox.markerFile(live, "grant")!!),
+            "the grant a live task is using keeps its marker",
+        )
+    }
+
+    @Test
     @DisplayName("a stale recorded grant is revoked with the SID the marker recorded")
     fun revokesStaleRecordedGrant() {
         val markers = Files.createDirectories(tempDir.resolve("markers"))
