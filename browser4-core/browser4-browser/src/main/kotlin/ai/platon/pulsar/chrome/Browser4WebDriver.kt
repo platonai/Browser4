@@ -445,12 +445,107 @@ open class Browser4WebDriver(
          * Landing on the element's exact center every single time is itself a fingerprint, so the
          * pointer is nudged the same way the drag sequence already nudges its press/release points
          * (±2 px). Explicit coordinates from `mouse-move` are never jittered — the caller asked for
-         * a specific point.
+         * a specific point (an off-viewport one is snapped clear of the edge instead, see
+         * [glidePointerTo]).
          */
         internal const val POINTER_JITTER_PX = 2.0
 
         /** Keep a jittered pointer this far inside the element box. */
         internal const val POINTER_JITTER_EDGE_INSET_PX = 1.0
+
+        /**
+         * How far outside the viewport an off-viewport pointer dispatch is pushed.
+         *
+         * Chrome rounds the dispatched CSS coordinate to an integer pixel, and a
+         * coordinate in the band just outside an edge (`-0.6` → `-1`) is delivered
+         * to the page as an in-page coordinate, while an unambiguous off-viewport
+         * point only reports the pointer leaving. `2.0` clears that band on both
+         * the integer and the fractional side.
+         */
+        internal const val OFF_VIEWPORT_MARGIN_PX = 2.0
+
+        /**
+         * One pointer move split into the dispatches an off-viewport request needs
+         * (see [Browser4WebDriver.glidePointerTo]).
+         *
+         * @property trailX in-viewport X the human-like multi-step trail may end at
+         * @property trailY in-viewport Y the human-like multi-step trail may end at
+         * @property exitX the requested X when it lies outside the viewport, snapped
+         *   clear of the edge; `null` when the request is inside on that axis
+         * @property exitY the requested Y when it lies outside the viewport, snapped
+         *   clear of the edge; `null` when the request is inside on that axis
+         * @property reenter `true` when the pointer currently rests off-viewport, so
+         *   the trail must be replaced by one single step back onto the page
+         */
+        internal data class PointerMovePlan(
+            val trailX: Double,
+            val trailY: Double,
+            val exitX: Double?,
+            val exitY: Double?,
+            val reenter: Boolean,
+        ) {
+            /** True when the requested point is not an in-page point at all. */
+            val leavesViewport: Boolean get() = exitX != null || exitY != null
+        }
+
+        /**
+         * Split a requested pointer move into the trail endpoint and the optional
+         * off-viewport exit dispatch.
+         *
+         * Kept pure so the geometry is testable without a browser. The dispatch
+         * policy is: every point this class dispatches is either clearly inside the
+         * viewport or clearly outside it — never in the fractional band where
+         * Chrome's rounding turns "outside" into a negative in-page coordinate
+         * (see [OFF_VIEWPORT_MARGIN_PX]).
+         *
+         * @param requestedX the X the caller asked for, in viewport CSS pixels
+         * @param requestedY the Y the caller asked for, in viewport CSS pixels
+         * @param currentX where the pointer rests now (may already be off-viewport)
+         * @param currentY where the pointer rests now (may already be off-viewport)
+         * @param viewportWidth viewport width in CSS pixels, or `null` when it
+         *   could not be read — only the lower bound is then enforced
+         * @param viewportHeight viewport height in CSS pixels, or `null` as above
+         */
+        internal fun pointerMovePlan(
+            requestedX: Double,
+            requestedY: Double,
+            currentX: Double,
+            currentY: Double,
+            viewportWidth: Double?,
+            viewportHeight: Double?,
+        ): PointerMovePlan {
+            // A point exactly on the last pixel is still in-page; `w - 1` keeps the
+            // rounded event coordinate at `w - 1` instead of `w`.
+            val maxX = viewportWidth?.let { (it - 1.0).coerceAtLeast(0.0) } ?: Double.MAX_VALUE
+            val maxY = viewportHeight?.let { (it - 1.0).coerceAtLeast(0.0) } ?: Double.MAX_VALUE
+            // A coordinate up to half a pixel past the last pixel still rounds into
+            // the viewport (`1279.4` → `1279`), so it is an in-page point as well. The
+            // bound is exclusive on purpose: `1279.5` rounds to `1280` — back out of
+            // the page — so exactly half a pixel past the edge is already outside.
+            val insideMaxX = maxX + 0.5
+            val insideMaxY = maxY + 0.5
+            val insideX = requestedX >= 0.0 && requestedX < insideMaxX
+            val insideY = requestedY >= 0.0 && requestedY < insideMaxY
+            val reenter = currentX < 0.0 || currentY < 0.0 ||
+                currentX >= insideMaxX || currentY >= insideMaxY
+            return PointerMovePlan(
+                trailX = if (insideX) requestedX else requestedX.coerceIn(0.0, maxX),
+                trailY = if (insideY) requestedY else requestedY.coerceIn(0.0, maxY),
+                exitX = if (insideX) null else snapOffViewportCoordinate(requestedX, maxX),
+                exitY = if (insideY) null else snapOffViewportCoordinate(requestedY, maxY),
+                reenter = reenter,
+            )
+        }
+
+        /**
+         * Push an off-viewport coordinate clear of the edge's rounding band: `-0.6`
+         * becomes `-2`; `1279.6` becomes `1281` for a `1279` (last-pixel) bound.
+         */
+        internal fun snapOffViewportCoordinate(value: Double, upperBound: Double): Double = when {
+            value < 0.0 -> minOf(value, -OFF_VIEWPORT_MARGIN_PX)
+            value > upperBound -> maxOf(value, upperBound + OFF_VIEWPORT_MARGIN_PX)
+            else -> value
+        }
 
         /**
          * The page global installed for the duration of one trusted click, see
@@ -970,6 +1065,8 @@ internal enum class DragDropPosition(val key: String) {
      */
     @Throws(WebDriverException::class)
     override suspend fun mouseWheel(selector: String, deltaX: Double, deltaY: Double) {
+        // Read outside `invokeOnElement` for the same reason as in [mouseMove].
+        val viewport = pointerViewport()
         try {
             rpc.invokeOnElement(selector, "mouseWheel", scrollIntoView = true) {
                 gap("mouseWheel")
@@ -979,7 +1076,7 @@ internal enum class DragDropPosition(val key: String) {
                     ?: throw WebDriverException("Element not found or not clickable: $selector")
                 try {
                     withTimeout(wheelTimeoutMillis(deltaX, deltaY)) {
-                        glidePointerTo(m, point.x, point.y)
+                        glidePointerTo(m, viewport, point.x, point.y)
                         m.wheel(deltaX, deltaY)
                     }
                 } catch (e: TimeoutCancellationException) {
@@ -1038,9 +1135,32 @@ internal enum class DragDropPosition(val key: String) {
                 "Mouse not available: the driver is not active (session closed or page detached)",
                 driver = this
             )
+        // Read outside `invokeOnPage`: the plan needs the viewport before the
+        // (retryable) dispatch block, and a read there would nest two retries.
+        val viewport = pointerViewport()
         rpc.invokeOnPage("mouseMove") {
-            glidePointerTo(m, x, y)
+            glidePointerTo(m, viewport, x, y)
         }
+    }
+
+    /**
+     * The page's viewport in CSS pixels, or `null` when it cannot be read
+     * (detached page, mid-navigation). The pointer plan then enforces only the
+     * lower bound, which needs no viewport knowledge.
+     */
+    private suspend fun pointerViewport(): Pair<Double, Double>? = try {
+        val raw = evaluateValue("window.innerWidth + 'x' + window.innerHeight")?.toString().orEmpty()
+        val parts = raw.split('x')
+        val width = parts.getOrNull(0)?.toDoubleOrNull()
+        val height = parts.getOrNull(1)?.toDoubleOrNull()
+        if (width != null && height != null && width > 0 && height > 0) width to height else null
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        // A detached page or a mid-navigation context: the plan falls back to the
+        // lower bound only, which is all the geometry needs to stay honest.
+        logger.debug("pointer viewport unavailable: {}", e.message)
+        null
     }
 
     /**
@@ -1052,10 +1172,42 @@ internal enum class DragDropPosition(val key: String) {
      * waits a randomized 8-16 ms; the base library bends the path itself into a
      * distance-dependent Bézier curve from 4.11.30 on, so the trajectory is
      * curved whenever it is long enough to matter.
+     *
+     * The trail may only end at a point inside the viewport, and a requested point
+     * outside the viewport is delivered as one extra, snapped dispatch (see
+     * [pointerMovePlan]). Without that split a 30-step glide to `(-20, -20)` passed
+     * through a fractional point just outside the left edge, which Chrome rounds
+     * and delivers — the page recorded `clientX = -1` while the requested point
+     * itself was never delivered (2026-11-20 nightly, reproduced 7/20 on headless
+     * Chrome; a single unambiguous off-viewport dispatch only reports the leave).
+     *
+     * The base library's curve between two in-viewport endpoints is left alone; it
+     * can still graze an edge, but only across the ~1 px rounding band instead of
+     * the guaranteed crossing every off-viewport move used to produce.
+     *
+     * Known gap: `mouseMoveAt` with an explicit `steps`/`durationMillis` is
+     * dispatched by the base class itself (`Mouse.moveTo` with that pace), so those
+     * two options do not pass through this plan — only the default pace does. See
+     * `docs-dev/copilot/20261118-human-like-browser-interaction.md` §2.6.
      */
-    private suspend fun glidePointerTo(m: Mouse, x: Double, y: Double) {
-        val distance = hypot(x - m.currentX, y - m.currentY)
-        m.moveTo(x, y, steps = pointerMoveSteps(distance), delayMillis = Random.nextLong(8, 17))
+    private suspend fun glidePointerTo(m: Mouse, viewport: Pair<Double, Double>?, x: Double, y: Double) {
+        val plan = pointerMovePlan(x, y, m.currentX, m.currentY, viewport?.first, viewport?.second)
+        if (plan.reenter) {
+            // The pointer rests outside the page: one step back in. A multi-step
+            // trail from an off-viewport point crosses the rounding band as well.
+            m.moveTo(plan.trailX, plan.trailY, steps = 1, delayMillis = Random.nextLong(8, 17))
+        } else {
+            val distance = hypot(plan.trailX - m.currentX, plan.trailY - m.currentY)
+            m.moveTo(plan.trailX, plan.trailY, steps = pointerMoveSteps(distance), delayMillis = Random.nextLong(8, 17))
+        }
+        if (plan.leavesViewport) {
+            m.moveTo(
+                plan.exitX ?: plan.trailX,
+                plan.exitY ?: plan.trailY,
+                steps = 1,
+                delayMillis = Random.nextLong(8, 17),
+            )
+        }
     }
 
     /**

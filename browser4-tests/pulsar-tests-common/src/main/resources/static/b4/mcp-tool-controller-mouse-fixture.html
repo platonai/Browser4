@@ -491,6 +491,11 @@
       last: null,
       maxClientX: -1,
       maxClientY: -1,
+      // Smallest coordinate the page received. A negative value proves an
+      // out-of-viewport point reached the page as an in-page mousemove — the
+      // point must be treated as "the pointer left", not delivered.
+      minClientX: null,
+      minClientY: null,
       leaveCount: 0,
       down: null,
       up: null,
@@ -511,6 +516,8 @@
       P.last = point;
       P.maxClientX = Math.max(P.maxClientX, point[0]);
       P.maxClientY = Math.max(P.maxClientY, point[1]);
+      P.minClientX = P.minClientX === null ? point[0] : Math.min(P.minClientX, point[0]);
+      P.minClientY = P.minClientY === null ? point[1] : Math.min(P.minClientY, point[1]);
       syncPointer();
     }, true);
 

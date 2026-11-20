@@ -722,6 +722,116 @@ class Browser4WebDriverTest {
         assertEquals(30, Browser4WebDriver.pointerMoveSteps(100_000.0))
     }
 
+    // -------------------------------------------------------------------------
+    // pointerMovePlan — the page may only receive in-viewport coordinates
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("an in-viewport move is a plain trail and touches nothing else")
+    fun pointerMovePlanKeepsAnInsideMoveUnchanged() {
+        val plan = Browser4WebDriver.pointerMovePlan(200.0, 200.0, 0.0, 0.0, 1280.0, 900.0)
+
+        assertEquals(200.0, plan.trailX)
+        assertEquals(200.0, plan.trailY)
+        assertNull(plan.exitX)
+        assertNull(plan.exitY)
+        assertFalse(plan.leavesViewport)
+        assertFalse(plan.reenter)
+    }
+
+    @Test
+    @DisplayName("a move below the viewport trails to the last pixel and exits as one dispatch")
+    fun pointerMovePlanSplitsAnOffViewportMove() {
+        // The coordinate-space scenario: `mousemove 640 1200` on a 1280x900 viewport
+        // must make the page see the pointer leave, never `clientY = 1200`.
+        val plan = Browser4WebDriver.pointerMovePlan(640.0, 1200.0, 0.0, 0.0, 1280.0, 900.0)
+
+        assertEquals(640.0, plan.trailX)
+        assertEquals(899.0, plan.trailY)
+        assertNull(plan.exitX)
+        assertEquals(1200.0, plan.exitY)
+        assertTrue(plan.leavesViewport)
+    }
+
+    @Test
+    @DisplayName("a negative coordinate is snapped clear of the edge's rounding band")
+    fun pointerMovePlanSnapsNegativeCoordinates() {
+        // `-0.6` rounds to `-1`, which Chrome delivers as an in-page coordinate; the
+        // exit dispatch must stay unambiguous.
+        val plan = Browser4WebDriver.pointerMovePlan(-0.6, -20.0, 473.0, 898.0, 1280.0, 900.0)
+
+        assertEquals(0.0, plan.trailX)
+        assertEquals(0.0, plan.trailY)
+        assertEquals(-Browser4WebDriver.OFF_VIEWPORT_MARGIN_PX, plan.exitX)
+        assertEquals(-20.0, plan.exitY)
+        assertTrue(plan.leavesViewport)
+    }
+
+    @Test
+    @DisplayName("a move past the last pixel exits above the viewport instead of landing on it")
+    fun pointerMovePlanHandlesTheUpperEdge() {
+        val plan = Browser4WebDriver.pointerMovePlan(1279.6, 899.6, 10.0, 10.0, 1280.0, 900.0)
+
+        assertEquals(1279.0, plan.trailX)
+        assertEquals(899.0, plan.trailY)
+        assertEquals(1281.0, plan.exitX)
+        assertEquals(901.0, plan.exitY)
+    }
+
+    @Test
+    @DisplayName("exactly half a pixel past the edge already rounds back out of the page")
+    fun pointerMovePlanSplitsAtTheHalfPixel() {
+        // `1279.4` rounds to the last pixel and stays in-page; `1279.5` rounds to
+        // `1280` (`w`) — an off-viewport coordinate delivered as an in-page one, the
+        // same failure the negative side had.
+        val inside = Browser4WebDriver.pointerMovePlan(1279.4, 400.0, 10.0, 10.0, 1280.0, 900.0)
+        assertEquals(1279.4, inside.trailX)
+        assertNull(inside.exitX)
+        assertFalse(inside.leavesViewport)
+
+        val outside = Browser4WebDriver.pointerMovePlan(1279.5, 400.0, 10.0, 10.0, 1280.0, 900.0)
+        assertEquals(1279.0, outside.trailX)
+        assertEquals(1281.0, outside.exitX)
+        // The other axis is inside, so it is dispatched as the caller asked.
+        assertEquals(400.0, outside.trailY)
+        assertNull(outside.exitY)
+
+        // A pointer resting exactly on the boundary is outside as well, so the trail
+        // back onto the page must be the single re-entry step.
+        assertTrue(
+            Browser4WebDriver.pointerMovePlan(200.0, 200.0, 1279.5, 400.0, 1280.0, 900.0).reenter
+        )
+    }
+
+    @Test
+    @DisplayName("an unknown viewport still keeps the trail out of the negative quadrant")
+    fun pointerMovePlanWorksWithoutTheViewportSize() {
+        val plan = Browser4WebDriver.pointerMovePlan(-20.0, 5000.0, 0.0, 0.0, null, null)
+
+        assertEquals(0.0, plan.trailX)
+        // Without a viewport height the upper bound is unknown, so a large positive
+        // coordinate is not treated as off-viewport.
+        assertEquals(5000.0, plan.trailY)
+        assertEquals(-20.0, plan.exitX)
+        assertNull(plan.exitY)
+    }
+
+    @Test
+    @DisplayName("a pointer resting off-viewport re-enters in one step")
+    fun pointerMovePlanReentersFromOutside() {
+        // A multi-step trail from (-20, -20) crosses the same rounding band, so the
+        // move back onto the page must be a single dispatch.
+        val plan = Browser4WebDriver.pointerMovePlan(200.0, 200.0, -20.0, -20.0, 1280.0, 900.0)
+
+        assertEquals(200.0, plan.trailX)
+        assertEquals(200.0, plan.trailY)
+        assertTrue(plan.reenter)
+        assertFalse(plan.leavesViewport)
+
+        val afterExit = Browser4WebDriver.pointerMovePlan(200.0, 200.0, 640.0, 1200.0, 1280.0, 900.0)
+        assertTrue(afterExit.reenter, "the exit dispatch leaves the pointer below the viewport")
+    }
+
     @Test
     @DisplayName("dragCenterJs resolves center, css path, frame residency and viewport")
     fun dragCenterJsContainsResolutionLogic() {

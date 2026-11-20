@@ -35,16 +35,17 @@
 | 项 | 值 | 位置 |
 |---|---|---|
 | 指针步数 | `round(distance/20)`，夹取 **3..30** | `Browser4WebDriver.pointerMoveSteps`（`Browser4WebDriver.kt:362`） |
-| 每步间隔 | **8–16 ms**（`Random.nextLong(8, 17)`） | `Browser4WebDriver.glidePointerTo`（`:1056`） |
+| 每步间隔 | **8–16 ms**（`Random.nextLong(8, 17)`） | `Browser4WebDriver.glidePointerTo` |
+| 越界外推 | **2 px**（`-0.6` → `-2`，避开四舍五入带） | `Browser4WebDriver.OFF_VIEWPORT_MARGIN_PX`（§2.6） |
 | 弯曲触发距离 | **≥40 px**（更短保持直线） | 基库 `Mouse.MIN_CURVE_DISTANCE` |
 | 弯曲幅度 | `min(15% × 距离, 60px)` 的垂直偏移 | 基库 `Mouse.MAX_CURVE_OFFSET_RATIO/MAX_CURVE_OFFSET_PX` |
 | 路径节奏 | smoothstep `t²(3−2t)` + 每步 **±35%** 抖动 | 基库 `Mouse.easeInOut/jitteredDelayMillis` |
 | 落点抖动 | **±2 px**，再按元素盒夹取（内缩 1 px） | `Browser4WebDriver.POINTER_JITTER_PX`（`:450`） |
-| 点击按住时长 | `click` 桶 **90–180 ms** | `clickTrusted`（`:1404`） |
-| 逐字符键入 | `type` 桶 **90–240 ms**，补充平面字符 **×2** | `typeSafe`（`:1678-1681`） |
-| 按键按住 | `press` 桶 **120–260 ms**，且 `Keyboard` 强制 ≥60 ms | `press`（`:1610`）、基库 `Keyboard.press` |
-| 拖拽点抖动 | **±2 px**；`top/bottom` 模式**不抖动** | `dragAt`（`:3220-3221`） |
-| 拖拽间隔 | **120–300 ms**（`Random.nextLong(120, 301)`） | `randomDragDelayMillis`（`:3390`） |
+| 点击按住时长 | `click` 桶 **90–180 ms** | `clickTrusted` |
+| 逐字符键入 | `type` 桶 **90–240 ms**，补充平面字符 **×2** | `typeSafe` |
+| 按键按住 | `press` 桶 **120–260 ms**，且 `Keyboard` 强制 ≥60 ms | `press`、基库 `Keyboard.press` |
+| 拖拽点抖动 | **±2 px**；`top/bottom` 模式**不抖动** | `dragAt` |
+| 拖拽间隔 | **120–300 ms**（`Random.nextLong(120, 301)`） | `randomDragDelayMillis` |
 | 中途呼吸 | `gap` 桶 **650–1100 ms** | 基库 `AbstractWebDriver.gap()` |
 
 ### 0.3 一句话原则
@@ -132,11 +133,12 @@ CLI 选项定义：`commands.rs:779`（`open`）。另一条入口是任务参�
 
 ### 2.1 步数与节拍（仓库侧）
 
-`Browser4WebDriver.mouseMove`（`:1035`）→ `glidePointerTo`（`:1056`）：
+`Browser4WebDriver.mouseMove` → `pointerViewport` → `glidePointerTo`：
 
 ```kotlin
-val distance = hypot(x - m.currentX, y - m.currentY)
-m.moveTo(x, y, steps = pointerMoveSteps(distance), delayMillis = Random.nextLong(8, 17))
+val plan = pointerMovePlan(x, y, m.currentX, m.currentY, viewport?.first, viewport?.second)
+// 轨迹只能走到视口内的最近点（越界点见 §2.6）
+m.moveTo(plan.trailX, plan.trailY, steps = pointerMoveSteps(distance), delayMillis = Random.nextLong(8, 17))
 ```
 
 - 步数 `pointerMoveSteps = (distance / 20).roundToInt().coerceIn(3, 30)`：约每 20 px 一步，短跳至少 3 步（否则短距离等于没分段），跨屏最多 30 步
@@ -163,7 +165,7 @@ m.moveTo(x, y, steps = pointerMoveSteps(distance), delayMillis = Random.nextLong
 - 只用于 click 家族；**显式坐标的 `mousemove` 永不抖动**（该命令的语义就是"把指针放在这里"）
 - 抖动是随机的、按调用变化：`jitteredPointerPositionVariesBetweenCalls`（20 次调用结果不恒定，且每次偏移都在 ±2 px 内）
 
-**关键配套**：trusted 点击必须在**hover 点**按下（`trustedClickPoint`，`:1333`），不能在元素中心按。因为 Chrome 会先把指针移到按下坐标，若按中心就会反向发一个 `mousemove` 回到正中心，抖动被抹掉、每次点同一个像素。按下前还会在**该点**重做一次命中测试（`hitAt`，`:1346`），所以"抖动"与"不许点到覆盖层"并不冲突。
+**关键配套**：trusted 点击必须在**hover 点**按下（`trustedClickPoint`），不能在元素中心按。因为 Chrome 会先把指针移到按下坐标，若按中心就会反向发一个 `mousemove` 回到正中心，抖动被抹掉、每次点同一个像素。按下前还会在**该点**重做一次命中测试（`hitAt`），所以"抖动"与"不许点到覆盖层"并不冲突。
 
 ### 2.4 显式 pacing 逃生门
 
@@ -178,13 +180,36 @@ perStepDelay = durationMillis > 0 ? max(1, durationMillis / stepCount) : 50
 
 ### 2.5 滚轮
 
-仓库覆盖了两个 `mouseWheel` 重载（`:945`、`:972`）：
+仓库覆盖了两个 `mouseWheel` 重载：
 
 1. 有元素目标时，先 `glidePointerTo` 再发 wheel——不允许"瞬移后立刻一串 wheel"，那是和点击一样的机器人轨迹
 2. 超时按滚动距离缩放：`max(5s, 5s + 1s/1000px)`，上限 30 s
 3. CDP wheel 撞上 `crbug.com/444929150` 竞态时，降级方案**先派发可取消的合成 `WheelEvent`，只有没人 `preventDefault()` 才滚动**（`wheelFallbackJs`，`Browser4WebDriverScripts.kt:216`）：
    - 真滚轮 = 先 fire 可取消 `wheel` 事件，再由默认动作滚动
    - 上游降级是 `scrollBy()` 静默滚动：页面看到"内容动了但一个 wheel 事件都没有"，这个组合没有真人能产生
+
+### 2.6 视口边界：越界点不是页内坐标
+
+`mousemove -20 -20` 的语义是"指针离开页面"，页面应该只看到 `mouseleave`，**不能收到一个坐标为负的 `mousemove`**。原来的 `glidePointerTo` 直接把 `(-20, -20)` 交给基库，基库的贝塞尔轨迹在接近左边界时会落在 `x ∈ (-1.5, -0.5)` 这个分数带上；Chrome 把该坐标四舍五入成 `-1` 后**当作页内事件派发**，于是页面记录到 `clientX = -1`。headless Chrome 实测 20 轮里泄漏 7 轮（`last = [-1, 13]`），正是 2026-11-20 nightly 的失败形态。
+
+现在由纯函数 `pointerMovePlan`（`Browser4WebDriver` companion）把一次移动拆成两段，规则只有一条：**本类派发的每一个点，要么明确在视口内，要么明确在视口外**——绝不落在四舍五入会把"越界"变成负页内坐标的分数带里。
+
+| 情形 | 派发 |
+|---|---|
+| 目标在视口内 | 一条多步轨迹（与之前一致，坐标原样不动） |
+| 目标越界（`x<0`、`x≥w−0.5`、`y<0`、`y≥h−0.5`） | 先滑到视口内最近点 `clamp(x,y)`，再用 **一次** `steps=1` 派发越界点 |
+| 指针当前停在视口外 | 先用 `steps=1` **一步回来**，再继续走轨迹（否则轨迹起点同样会穿过分数带） |
+
+边界是**半开**的：`w−1` 是最后一个像素，`w−1.4` 四舍五入仍落回 `w−1`，所以判"在内"；而 `w−0.5` 四舍五入到 `w`，已经回到页外，必须判"越界"——两边差半个像素，写错就又是同一类 bug 的镜像（`mousemove 1279.5 400` 在 1280 宽视口下会派发 `clientX = 1280`）。
+
+四个细节：
+
+- 越界点的最后一次派发会再外推 `OFF_VIEWPORT_MARGIN_PX = 2px`：`-0.6` 这种"差一点越界"的请求会被推到 `-2`，避免它自己落在四舍五入带里。页面收不到的坐标对页面没有意义，收得到的那次才会被当成页内事件。
+- 视口大小由 `window.innerWidth/Height`（CSS px，与 CDP `Input` 同一坐标系）读出；读不到（导航中、页面已分离）时只钳下限 `≥0`——那部分不需要知道视口尺寸也成立。
+- **残余风险（已量化，不在驱动控制范围）**：基库在两个视口内端点之间弯出的二次贝塞尔仍在控制点凸包内，靠近边界时**可能擦过边缘**；但窗口只有约 1 px 宽（`x ∈ (-1.5, -0.5)`），而修复前每一次越界移动都必穿过它（7/20）。要彻底消除只能自己接管整条轨迹（放弃基库的曲线/缓动），目前不做。
+- **已知缺口**：`mousemove --steps N` / `--duration D` 走的是 `mouse_move_at` → 基库 `PulsarWebDriver.mouseMoveAt` 的**显式节奏分支**，那里直接调 `Mouse.moveTo(x, y, steps, durationMillis)`，不经过 `glidePointerTo`，所以带上这两个选项的越界移动仍可能穿过分数带。`--space document`（steps/duration 都是 0）会委托回 `mouseMove`，是安全的。要补这条路径需要复刻基库的坐标空间转换 + 节奏语义，且必须先在真实浏览器上验证，故留作后续；`glidePointerTo` 的 KDoc 里也标注了。
+
+单测：`Browser4WebDriverTest.pointerMovePlan*`（视口内不变、越界拆分、负值外推、上边界、**恰好半个像素**、无尺寸、越界后回进）。e2e 侧在 `test_e2e_mouse_coordinate_spaces` 里断言**整条轨迹**的 `minClientX/minClientY ≥ 0`（fixture 新增字段），只看最后一点会漏掉中间步的泄漏；另外补了 `mousemove -0.6 -0.6` 这一例——旧实现最后一步就是 `-0.6`（必然被舍入成 `-1` 送达），新实现轨迹停在 `(0,0)`，所以断言 `last == (0,0)` 是**确定性**的回归探针，不像 `-20` 那例只有 ~35% 概率复现。
 
 ---
 
@@ -194,7 +219,7 @@ perStepDelay = durationMillis > 0 ? max(1, durationMillis / stepCount) : 50
 
 上游在 Windows 上用 `emulator.click(..., dispatchCdpMouseEvents = false)` + `dispatchDomClick`，理由是"CDP press/release 在 Windows headless 不触发 DOM click"。实测（Chrome 153 / Windows headless）`Input.dispatchMouseEvent` 的 `mousePressed+mouseReleased` 能产生 `mousedown`/`mouseup`/`click` 且 `isTrusted: true`，于是这个 workaround 已过时：**合成事件的 `isTrusted === false`，一个蜜罐按钮或反爬信标就能识破**。
 
-### 3.2 点击序列（`clickTrusted`，`:1376`）
+### 3.2 点击序列（`clickTrusted`）
 
 ```
 Input.dispatchMouseEvent(mousePressed)   ← 带 x/y、button、buttons 位域、clickCount
@@ -215,14 +240,14 @@ Input.dispatchMouseEvent(mouseReleased)  ← buttons = 0
 | 安装 | `trustedClickProbeInstallJs`（`Browser4WebDriverScripts.kt:328`）：用 `Object.defineProperty` 定义**不可枚举**的 `window.__b4_trusted_click_probe__`，以捕获阶段监听 `mousedown/mouseup/click`，只累加 `event.isTrusted` |
 | 读取 | `trustedClickProbeReadJs`（`:347`）：摘掉监听、`delete` 全局，返回 `"trusted"` / `"none"` / `"missing"` |
 
-三种结果的处理（`Browser4WebDriver.kt:1435-1457`）：
+三种结果的处理：
 
 - `trusted` → 缓存"本 session 支持"，后续不再验证
 - `none` → 缓存"不支持"，**本 session 其余点击走 DOM 路径**（绝不重复派发第二次）
 - `missing`（页面把探针删了/覆盖了）→ 视为已送达并记 warning，下次再探——"第二次点击"是更糟的失败模式
 - 探针**装不上**（`evaluate` 失败）→ 直接返回 false，走 DOM 路径，不冒险
 
-单测：`trustedClickProbeIsHiddenAndRemoved`（`Browser4WebDriverTest.kt:798`）。
+单测：`trustedClickProbeIsHiddenAndRemoved`（`Browser4WebDriverTest.kt`）。
 
 ### 3.4 按住与半途失败
 
@@ -231,10 +256,10 @@ Input.dispatchMouseEvent(mouseReleased)  ← buttons = 0
 
 ### 3.5 非左键（右键/中键/back/forward）
 
-`click(selector, count, button)`（`:855`）对非左键同样**先移动指针到抖动点再 trusted 派发**：
+`click(selector, count, button)`对非左键同样**先移动指针到抖动点再 trusted 派发**：
 
 - 只有 trusted 路径能产生完整真实序列：右键 `mousedown → contextmenu → mouseup`，中键 `auxclick`
-- 帧内元素或命中测试不通过 → `clickNonLeftOnDomPath`（`:899`）退回上游合成 `mousedown`/`mouseup`（`isTrusted:false`、且 Chrome 不会派生 `contextmenu`）——"点得中但可检测"优于"按在覆盖层上"
+- 帧内元素或命中测试不通过 → `clickNonLeftOnDomPath`退回上游合成 `mousedown`/`mouseup`（`isTrusted:false`、且 Chrome 不会派生 `contextmenu`）——"点得中但可检测"优于"按在覆盖层上"
 - 前后都做 dialog 处理（`dismissAllPending` / `drainAutoDismiss`）
 
 ### 3.6 降级矩阵（什么时候放弃拟人）
@@ -248,7 +273,7 @@ Input.dispatchMouseEvent(mouseReleased)  ← buttons = 0
 | 带修饰键（Ctrl/Shift/…） | ✅（上游本就 CDP） | —— | 修饰键位掩码无 DOM 等价物 |
 | 选择器根本解析不到 | —— | —— | 先 probe，**直接报错**，不打印成功 |
 
-表格对应实现：`canClickWithTrustedInput`（`Browser4WebDriverParsers.kt:263`）、`failIfPointerTargetMissing`（`:1194`）、`dblclick`（`:1490`）、`click(selector, modifier)`（`:1308`）。
+表格对应实现：`canClickWithTrustedInput`（`Browser4WebDriverParsers.kt:263`）、`failIfPointerTargetMissing`、`dblclick`、`click(selector, modifier)`。
 
 ### 3.7 `hover` / `focus` / `check` / `uncheck` 的存在性探针
 
@@ -260,7 +285,7 @@ Input.dispatchMouseEvent(mouseReleased)  ← buttons = 0
 
 ### 3.8 对话框不让 CLI 挂死
 
-`withDialogWatch`（`:1234`）：点击放到 `clickWatchScope` 后台执行，前台每 150 ms `peekPendingDialog()`：
+`withDialogWatch`：点击放到 `clickWatchScope` 后台执行，前台每 150 ms `peekPendingDialog()`：
 
 - 开了自动关闭 → 立刻 `acceptDialog()`，被阻塞的点击继续完成，整体成功
 - 没开 → 抛出可操作错误（"点击打开了原生 confirm 对话框并挂起，跑 `dialog-accept` 让它继续，不要重跑点击"），**但不取消**那个被 park 的点击——用户处理完对话框后，那一次点击照样落地
@@ -286,19 +311,19 @@ CLI 的 `mousedown`/`mouseup` 走基库 `PulsarWebDriver.mouseDown/mouseUp`（`P
 - **按住时长 ≥60 ms**（`press(key, delayMillis)` 内部 `coerceAtLeast(60)`），且按键按下与抬起之间不插别的动作
 - Shift 字符通过布局的 `shifted` 条目解析：按住 Shift 时 `type("a")` 得到 `A` 且 `key` 报 `A`
 
-仓库侧 `Browser4WebDriver` 补的两点（`:1574-1591`）：`keyDown`/`keyUp`/`press` 共用一个 `Keyboard` 实例——上游 `keyDown` 走无状态 JS 事件、而 `press` 读的是**另一个私有** `Keyboard` 的修饰键状态，导致按住 Control 后再 `press("a")` 不带 `ctrlKey`。
+仓库侧 `Browser4WebDriver` 补的两点：`keyDown`/`keyUp`/`press` 共用一个 `Keyboard` 实例——上游 `keyDown` 走无状态 JS 事件、而 `press` 读的是**另一个私有** `Keyboard` 的修饰键状态，导致按住 Control 后再 `press("a")` 不带 `ctrlKey`。
 
 ### 4.2 逐字符节奏与特殊字符
 
 - `type`/`fill`：每字符 `delay(randomDelayMillis("type"))` = 90–240 ms
-- 仓库 `typeSafe`（`:1659`）：按 **code point** 遍历（上游 `charAt()` 会把代理对切成半个字符，`Input.insertText` 直接失败）；**补充平面字符延迟 ×2**（emoji/CJK 扩展区），给渲染与输入法链更多时间
+- 仓库 `typeSafe`：按 **code point** 遍历（上游 `charAt()` 会把代理对切成半个字符，`Input.insertText` 直接失败）；**补充平面字符延迟 ×2**（emoji/CJK 扩展区），给渲染与输入法链更多时间
 - 工具层对非 `Browser4WebDriver` 的驱动有一份等价内联实现（`BrowserTabToolExecutor.kt:1779-1791`），保证降级路径的节奏一致
 
 ### 4.3 光标位置
 
 `DOM.focus()` + `Input.dispatchMouseEvent(click)` 可能把光标留在位置 0（`AGENTS.md` 已知坑）。仓库的处理是**按操作语义区分**：
 
-- `press(key, selector)`：仅当 `key` 是**单个可打印字符**时才 `setSelectionRange(99999, 99999)` 把光标推到末尾；`Home/End/ArrowLeft/Delete` 等导航键**保持光标位置**，所以 `Home → Delete` 这类链式操作行为正确（`:1617-1640`）
+- `press(key, selector)`：仅当 `key` 是**单个可打印字符**时才 `setSelectionRange(99999, 99999)` 把光标推到末尾；`Home/End/ArrowLeft/Delete` 等导航键**保持光标位置**，所以 `Home → Delete` 这类链式操作行为正确
 - `type`/`fill`（基库）：先 click 右侧 + `setSelectionRange(99999, 99999)`，保证追加而非前插
 
 ### 4.4 `fill` 是"逐字符键入"，不是 `value=` 赋值
@@ -311,7 +336,7 @@ CLI 的 `mousedown`/`mouseup` 走基库 `PulsarWebDriver.mouseDown/mouseUp`（`P
 
 ### 4.5 `type --method exec` 是刻意的非拟人快路
 
-`typeAuto`（`:1721`）：
+`typeAuto`：
 
 | method | 行为 | 何时用 |
 |---|---|---|
@@ -327,7 +352,7 @@ CLI 的 `mousedown`/`mouseup` 走基库 `PulsarWebDriver.mouseDown/mouseUp`（`P
 
 ## 5. 拖拽层
 
-`dragAt`（`Browser4WebDriver.kt:3171`）在页面内合成整条 `dragstart → dragenter → dragover → drop → dragend` 序列，并做人化：
+`dragAt`在页面内合成整条 `dragstart → dragenter → dragover → drop → dragend` 序列，并做人化：
 
 | 项 | 中心模式 | `top`/`bottom` 模式 |
 |---|---|---|
@@ -375,7 +400,7 @@ CLI 的 `mousedown`/`mouseup` 走基库 `PulsarWebDriver.mouseDown/mouseUp`（`P
 
 ### 6.3 导航后的等待不是固定 sleep
 
-`waitForNavigationSettled`（`:1867`）：
+`waitForNavigationSettled`：
 
 1. 200 ms 观察窗
 2. URL 已变 → 等 `body` 出现（上限 10 s）+ 1 s settle
@@ -392,7 +417,7 @@ CLI 的 `mousedown`/`mouseup` 走基库 `PulsarWebDriver.mouseDown/mouseUp`（`P
 | **UA 削减** | `Browser4UserAgent.kt:61/76/124` | **仅 headless** 加 `--user-agent`，把 `HeadlessChrome/<v>` 换成 `Chrome/<major>.0.0.0`（与 UA 缩减后的真实 Chrome 不可区分）；headed 原生就是削减形式，硬加会让 `userAgentData.getHighEntropyValues(['fullVersionList'])` 变空，反而被判"无法识别版本"。显式 `browser.launch.user.agent` 优先，其中的 `Headless` 会被修复而不是信任 |
 | **`navigator.webdriver`** | 基库启动参数 | 强制 `--disable-blink-features=AutomationControlled` → 报告 `false` |
 | **条件 stealth 载荷** | `browser4-core/.../resources/js/stealth.js:74` | 仓库用同名资源**阴影**基库的 puppeteer-extra 规避包，整体包在 `if (navigator.webdriver === true) { … }` 里；`PageWorldStealthPayloadTest` 钉死 "必须以此为开头"。理由：规避手法（`Function.prototype.toString` Proxy、`iframe.contentWindow` 规避）本身是 native-tampering 检测的 1.0 级证据；真浏览器（`webdriver=false`）没打过补丁就不可能被抓 tampering，CDP 场景下隐藏 `webdriver` 值这个代价 |
-| **焦点/可见性** | `Browser4WebDriver.ensureFocusEmulation`（`:2363`） | 每 tab **一次** `Emulation.setFocusEmulationEnabled{enabled:true}`（Playwright 同款）：CDP 建的 tab 从不成为窗口选中页，会报 `hasFocus=false` / `hidden` / `hidden=true`（ipfighter 的 `windowFocus` 规则正是 `document.hasFocus()`）。**不激活 tab**，所以池化浏览器里并发 session 不互相抢焦点；传输层不支持时记一次 warning 并保留真实状态 |
+| **焦点/可见性** | `Browser4WebDriver.ensureFocusEmulation` | 每 tab **一次** `Emulation.setFocusEmulationEnabled{enabled:true}`（Playwright 同款）：CDP 建的 tab 从不成为窗口选中页，会报 `hasFocus=false` / `hidden` / `hidden=true`（ipfighter 的 `windowFocus` 规则正是 `document.hasFocus()`）。**不激活 tab**，所以池化浏览器里并发 session 不互相抢焦点；传输层不支持时记一次 warning 并保留真实状态 |
 | **WebRTC** | `browser4-core/browser4-protocol/.../browser/impl/EgoLiteBrowserLauncher.kt` | 托管 ego 启动时写 profile 的 `webrtc.ip_handling_policy=disable_non_proxied_udp`，候选地址不漏宿主真实 IP（Chromium 156 已忽略 `--force-webrtc-ip-handling-policy`，只有 preference 生效） |
 | **指纹浏览器让位** | `B4Constants.stealthAppliesTo`（`B4Constants.kt:132`） | `ego-lite` 通道（别名 `egolite`/`ego lite`/`ego`）**自动跳过**整个 stealth 层：它自己管指纹，叠上去只增加脚印。**拟人输入照旧** |
 | **控制台抓取** | `browser.console.capture`（`B4Constants.kt:30`） | 优先走 CDP `Console` 域，**不替换页面 `console.*`**——页面用 `String(console.log)` 一眼看穿的补丁只在传输层不支持时兜底 |
@@ -421,7 +446,7 @@ CLI 的 `mousedown`/`mouseup` 走基库 `PulsarWebDriver.mouseDown/mouseUp`（`P
 | `AGENTS.md` §"Direct CDP methods: mandatory review gates" | 四条硬门禁：① 反检测（`isTrusted`、延迟随机化、坐标抖动、完整 trusted 事件上下文）② 负向影响（不静默失败、错误暴露真因、重试幂等、别 regression 上游错误语义）③ 跨平台（headless/GUI/Docker/CI、异步布局、CDP 版本差异要有兜底或显式报错）④ 真实网页验证（必须加 fixture + 跑 e2e，mock 不算） |
 | `browser4-coding/CdpTrapCheck.kt` | 把三个 CDP 坑编码成关键词→建议：`insertText`→用 `randomDelayMillis("type")`；`DOM.focus`→`setSelectionRange`；`mouseWheel`/`dispatchMouseEvent`→被动 wheel 监听器。**关键词只放危险构造**，修好后不会持续误报（`CdpTrapCheckTest` 钉住这一点） |
 | 单测 `Browser4WebDriverTest.kt` | 抖动：盒内 / 小元素收缩 / 盒未知保中心 / 20 次调用不恒定（`:632/644/656/666/692`）；步数：距离缩放与夹取（`:711/718`）；探针：不可枚举且用完删除（`:798`）；拖拽中心解析、命中位、frame 标记 |
-| e2e `browser.rs` | `test_e2e_mouse_pointer_jitter`（`:4468`）：连点同一元素——指针位置必须变、按压点必须等于 hover 点（±1 px）、抖动范围 ≤±2 px；`test_e2e_mouse_trusted_click`（`:4581`）：click / dblclick / contextmenu / auxclick 全部 `isTrusted=true` |
+| e2e `browser.rs` | `test_e2e_mouse_pointer_jitter`：连点同一元素——指针位置必须变、按压点必须等于 hover 点（±1 px）、抖动范围 ≤±2 px；`test_e2e_mouse_trusted_click`：click / dblclick / contextmenu / auxclick 全部 `isTrusted=true` |
 | e2e `stealth.rs` | `test_e2e_stealth_navigator_invariants`（`:170`）：UA 无 `Headless`、client hints 一致、焦点/可见性读数；`test_e2e_stealth_detector_sweep`（`:323`）：第三方检测站裁决。二者需 `--enable-stealth-scenario` 显式开启（`scenarios/mod.rs:3234` 注释），`--enable-all` 不会顺带打开，避免 nightly 反复打第三方服务 |
 | fixture | `browser4-tests/pulsar-tests-common/src/main/resources/static/b4/mcp-tool-controller-mouse-fixture.html`：记录 `isTrusted`、每次 `mousemove` 坐标、按下坐标、`contextmenu`/`auxclick` 次数 |
 
@@ -516,6 +541,9 @@ cargo test --test e2e -- --scenario=test_e2e_mouse_pointer_jitter
 
 # trusted 点击：click/dblclick/contextmenu/auxclick 全为 isTrusted=true
 cargo test --test e2e -- --scenario=test_e2e_mouse_trusted_click
+
+# 视口边界：越界/负坐标不得作为页内坐标送达（整条轨迹的 minClient* ≥ 0）
+cargo test --test e2e -- --scenario=test_e2e_mouse_coordinate_spaces
 
 # 环境层：UA / client hints / 焦点·可见性（需公网 + 显式开启；--group=stealth 等价）
 cargo test --test e2e -- --scenario=test_e2e_stealth_navigator_invariants --enable-stealth-scenario

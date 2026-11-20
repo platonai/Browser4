@@ -2678,9 +2678,11 @@ pub(super) fn test_mouse_coordinate_spaces(ctx: &mut E2ECtx) {
     let viewport_height = after_outside["viewport"][1].as_i64().unwrap_or(0);
     let max_client_y = after_outside["maxClientY"].as_i64().unwrap_or(-1);
     assert!(
-        max_client_y <= viewport_height,
-        "the requested y=1200 must never appear as an event coordinate \
-         (viewport height {viewport_height}): {after_outside}"
+        max_client_y < viewport_height,
+        "an in-page mousemove may reach the last pixel ({}) but never the viewport \
+         height itself, and the requested y=1200 must never appear as an event \
+         coordinate: {after_outside}",
+        viewport_height - 1
     );
     assert!(
         max_client_y < 1200,
@@ -2704,6 +2706,49 @@ pub(super) fn test_mouse_coordinate_spaces(ctx: &mut E2ECtx) {
     assert!(
         after_negative["last"][1].as_i64().unwrap_or(-1) >= 0,
         "a negative y cannot be delivered as an in-page coordinate: {after_negative}"
+    );
+    // The glide to the requested point passes through many intermediate points; the
+    // page must never receive *any* of them as a negative in-page coordinate. The
+    // last point alone is not enough: the trail's final in-viewport step is what
+    // leaked `clientX = -1` first (2026-11-20 nightly).
+    assert!(
+        after_negative["minClientX"].as_i64().unwrap_or(-1) >= 0,
+        "no mousemove in the trail may carry a negative x: {after_negative}"
+    );
+    assert!(
+        after_negative["minClientY"].as_i64().unwrap_or(-1) >= 0,
+        "no mousemove in the trail may carry a negative y: {after_negative}"
+    );
+
+    // ── 3b. A fractional coordinate just outside the edge is snapped out ──
+    // `-0.6` used to be dispatched verbatim as the trail's last point; Chrome rounds
+    // it to `-1` and delivers it as an in-page mousemove. Now the trail stops at
+    // `(0,0)` and the exit dispatch is pushed clear of the rounding band, so this is
+    // a deterministic probe of the fix (unlike the -20 case, where the old trail only
+    // leaked sometimes): the last point the page may see is the edge.
+    run_command(
+        ctx,
+        &[
+            "mousemove",
+            "-0.6",
+            "-0.6",
+            "--no-snapshot",
+            "--allow-outside",
+        ],
+    );
+    let after_fractional = wait_for_pointer_or_abort(
+        ctx,
+        |pointer| pointer["last"][0].as_i64() == Some(0) && pointer["last"][1].as_i64() == Some(0),
+        2_000,
+        "a fractional off-viewport point must stop the trail at the viewport edge",
+    );
+    assert!(
+        after_fractional["minClientX"].as_i64().unwrap_or(-1) >= 0,
+        "a `-0.6` request may not reach the page as a negative x: {after_fractional}"
+    );
+    assert!(
+        after_fractional["minClientY"].as_i64().unwrap_or(-1) >= 0,
+        "a `-0.6` request may not reach the page as a negative y: {after_fractional}"
     );
 
     // ── 4. A viewport coordinate is independent of the page scroll ──
