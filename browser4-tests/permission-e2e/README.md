@@ -45,7 +45,10 @@ pwsh browser4-tests/permission-e2e/run-permission-e2e.ps1 -Tier C -IncludeLlm
 
 # The anti-vacuity run: with the boundary OFF, only the twins can execute — and they must
 # succeed and create the canary. Do this once per backend change.
-BROWSER4_SERVER_OPTS="-Dbrowser4.agent.sandbox=off" ./b4w.ps1 status   # restart the backend
+# `-Dbrowser4.agent.sandbox` is a START-UP property, so the backend has to be restarted:
+# `status` only reports, it never starts anything — the first command that needs the server does.
+pwsh bin/tools/kill-browser4-processes.ps1
+BROWSER4_SERVER_OPTS="-Dbrowser4.agent.sandbox=off" ./b4w.ps1 open about:blank
 pwsh browser4-tests/permission-e2e/run-permission-e2e.ps1 -Tier A
 ```
 

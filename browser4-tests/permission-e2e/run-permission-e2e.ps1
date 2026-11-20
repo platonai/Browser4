@@ -1107,7 +1107,7 @@ if (-not $List -and -not $Plan) {
     Write-Host "probe: asking the live backend for its effective sandbox ..." -ForegroundColor DarkGray
     $live = Get-LiveBackend -Cli $cliCommand
     if (-not $live.Id) {
-        Write-Host 'ERROR: cannot read `coding_permissions` from the backend. Start it once (e.g. `./b4w.ps1 status`) and re-run.' -ForegroundColor Red
+        Write-Host 'ERROR: cannot read `coding_permissions` from the backend. Start it (the first command that needs the server does, e.g. `./b4w.ps1 open about:blank`; `status` only reports) and re-run.' -ForegroundColor Red
         Write-Host ($live.Evidence | Select-Object -First 20) -ForegroundColor DarkGray
         exit 2
     }

@@ -4915,7 +4915,7 @@ function Invoke-PermissionTests([string[]]$additionalArgs) {
     & pwsh -NoProfile -File $runnerScript @runnerArgs
     $runnerExit = $LASTEXITCODE
     if ($runnerExit -eq 2) {
-        Write-CommandBanner -Label 'permission-e2e could not read the live backend (start it first, e.g. ./b4w.ps1 status)' -Icon '[FAIL]'
+        Write-CommandBanner -Label 'permission-e2e could not read the live backend (start it first with a command that needs the server, e.g. ./b4w.ps1 open about:blank; status only reports)' -Icon '[FAIL]'
         exit 2
     }
     if ($runnerExit -ne 0) {

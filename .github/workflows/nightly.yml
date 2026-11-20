@@ -578,10 +578,31 @@ jobs:
         timeout-minutes: 30
         shell: pwsh
         run: |
-          # The dev wrapper builds the runtime bundle on the first call (~3-5 min on a cold runner)
-          # and then starts Spring Boot. `status` exits non-zero when the backend never answers.
-          ./b4w.ps1 status
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # `status` is READ-ONLY: with no server it prints "Backend is not running" and exits 0, so
+          # the previous form of this step proved nothing. Run 44760333819 walked straight past it
+          # with no backend and every Tier A case then failed "cannot read coding_permissions" after
+          # the suite's own 180 s live-backend probe — shorter than a cold runtime-bundle build.
+          #
+          # The first command that needs the backend builds the runtime bundle (~3-5 min on a cold
+          # runner) and launches the JVM, so use the suite's own probe as that command (a "session
+          # required" refusal still means the server came up) and then poll `status` until UP.
+          & $env:BROWSER4_E2E_CLI tool call coding_permissions --json '{}'
+          Write-Host "warm-up exit: $LASTEXITCODE (session refusal is expected and harmless here)"
+
+          $deadline = (Get-Date).AddMinutes(10)
+          $status = ''
+          while ((Get-Date) -lt $deadline) {
+            $status = (& $env:BROWSER4_E2E_CLI status 2>&1 | Out-String)
+            if ($status -match 'Server health:\s*UP') {
+              Write-Host $status
+              Write-Host 'Backend is UP.'
+              exit 0
+            }
+            Start-Sleep -Seconds 10
+          }
+          Write-Host $status
+          Write-Host '::error::Backend never became reachable — the suite would fail its live-backend probe.'
+          exit 1
 
       - name: Run permission-e2e (Tier A)
         timeout-minutes: 20
