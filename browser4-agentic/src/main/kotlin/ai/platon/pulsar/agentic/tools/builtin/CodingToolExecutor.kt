@@ -3,6 +3,7 @@ package ai.platon.pulsar.agentic.tools.builtin
 import ai.platon.pulsar.coding.AccessApprovals
 import ai.platon.pulsar.coding.AccessPreset
 import ai.platon.pulsar.coding.AccessRequest
+import ai.platon.pulsar.coding.AccessState
 import ai.platon.pulsar.coding.AdditionalDirs
 import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.coding.ArtifactScaffolds
@@ -1036,9 +1037,6 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     functionName,
                 )
                 val approvals = receiver.approvals
-                    ?: return "No approval channel is attached to this task: an operator cannot " +
-                        "approve a request here. Continue with the tools this preset grants, or re-run " +
-                        "with a wider --access preset."
                 val rawEffect = paramString(args, "effect", functionName)!!
                 val effect = Effect.parse(rawEffect)
                     ?: throw IllegalArgumentException(
@@ -1052,6 +1050,14 @@ class CodingToolExecutor : AbstractToolExecutor() {
                         val lexical = Path.of(rawTarget)
                         CodingTarget.PathTarget(if (lexical.isAbsolute) lexical else fs.workspaceRoot.resolve(lexical))
                     }
+                }
+                if (approvals == null) {
+                    // No approval channel is attached (a task-less `tool call coding_request_access`,
+                    // or a run without an operator). A request nobody could decide is not a useful
+                    // answer, so say that — but a target the rails forbid is still a *decision*:
+                    // answer it with the rail's code, because "no channel" reads as "retry with a
+                    // wider preset" to the model.
+                    return renderDeniedRequestWithoutChannel(effect, target, policy, fs.workspaceRoot)
                 }
                 val request = approvals.request(
                     effect = effect,
@@ -2291,7 +2297,16 @@ class CodingToolExecutor : AbstractToolExecutor() {
             appendLine("Files:")
             appendLine("  read workspace           : $yes")
             appendLine("  write workspace          : ${if (policy.allowsFileMutation()) yes else no}")
-            appendLine("  paths outside workspace  : ${if (policy.allowExternalAccess) yes else no}")
+            // "Outside the workspace" is NOT the whole story: the declared toolchain/cache roots
+            // (`~/.m2`, `~/.gradle`, `%TEMP%`, the JDK, SystemRoot) are writable by design, and a
+            // report that reads like an absolute fence made a redirect into `%TEMP%` look like a
+            // hole (measured 2026-11-20, permission-e2e A04/A15). Name the exception here.
+            appendLine(
+                "  paths outside workspace  : ${if (policy.allowExternalAccess) yes else no}" +
+                    if (policy.allowExternalAccess) "" else
+                        " (except the declared toolchain/cache roots — `~/.m2`, `~/.gradle`, `%TEMP%`, the JDK " +
+                            "and SystemRoot — which stay writable so a build can run)"
+            )
             appendLine("  delete/copy/move         : ${if (policy.allowDestructive) yes else no}")
             appendLine("Build and execution:")
             // Ask the policy, not the preset: an operator grant can unlock the build under `read`,
@@ -2412,17 +2427,56 @@ class CodingToolExecutor : AbstractToolExecutor() {
         }.trimEnd()
     }
 
+    /**
+     * Answer `coding.requestAccess` when no operator channel is attached.
+     *
+     * Two very different situations share that shape: the target *is* requestable (nobody can decide
+     * it here — say so) and the target crosses a rail (it **is** decided, and the decision is
+     * `ACCESS_DENIED`). Returning the "no channel" text for the second case told the model to retry
+     * with a wider preset, so the rail decision is answered with its code and reason.
+     */
+    private fun renderDeniedRequestWithoutChannel(
+        effect: Effect,
+        target: CodingTarget,
+        policy: AgentAccessPolicy,
+        workspaceRoot: Path,
+    ): String {
+        val probe = AccessApprovals("no-task", { policy }, { workspaceRoot })
+        if (probe.guardrailViolation(effect, target) != null) {
+            // `request` applies the rails and audits both the request and the refusal.
+            return renderAccessRequest(probe.request(effect, target))
+        }
+        return "No approval channel is attached to this task: an operator cannot approve a request " +
+            "here. Continue with the tools this preset grants, or re-run with a wider --access preset."
+    }
+
     /** Renders one `coding.requestAccess` answer: id, state, what is needed and what still works. */
     private fun renderAccessRequest(request: AccessRequest): String = buildString {
         append("{")
         append("\"requestId\":").append(jsonLiteral(request.id)).append(",")
         append("\"state\":").append(jsonLiteral(request.state.name.lowercase())).append(",")
+        // The machine-readable half of the decision: a rail refuses at request time, so a `denied`
+        // state must name its code and reason instead of looking like a pending item whose operator
+        // channel is missing.
+        append("\"code\":").append(jsonLiteral(accessDecisionCode(request))).append(",")
+        append("\"decisionReason\":").append(request.decisionReason?.let { jsonLiteral(it) } ?: "null").append(",")
         append("\"effect\":").append(jsonLiteral(request.effect.id)).append(",")
         append("\"target\":").append(jsonLiteral(request.target.describe())).append(",")
         append("\"needed\":").append(jsonLiteral(request.effect.id)).append(",")
         append("\"expiresAt\":").append(request.expiresAt?.let { jsonLiteral(it.toString()) } ?: "null").append(",")
         append("\"alternatives\":").append(jsonLiteral(alternativesFor(request.effect)))
         append("}")
+    }
+
+    /**
+     * The decision code of [request] in the same `PermissionAudit` vocabulary the rest of the report
+     * uses: `ACCESS_DENIED` once a rail (or an operator) refused it, `ACCESS_APPROVED` once granted,
+     * `null` while it is still pending.
+     */
+    private fun accessDecisionCode(request: AccessRequest): String = when (request.state) {
+        AccessState.DENIED -> PermissionAudit.CODE_ACCESS_DENIED
+        AccessState.APPROVED -> PermissionAudit.CODE_ACCESS_APPROVED
+        else -> ""
     }
 
     private fun alternativesFor(effect: Effect): String = when (effect) {

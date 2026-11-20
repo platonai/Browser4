@@ -39,6 +39,18 @@ internal data class FinishEvidence(
     val actualVerdictJson: String? = null,
     /** Repository-relative paths git reports as deleted; null when git is unavailable. */
     val gitDeletedFiles: Set<String>? = null,
+    /**
+     * Folders the operator granted for this task (`agent run --add-dir`), as absolute normalised
+     * paths, plus the README of the grant convention: a path under one of them is a legitimate
+     * deliverable that git can never corroborate — it usually lives outside the checkout.
+     *
+     * Without this, a granted write made the report *fail* for being honest: `filesChanged` listed
+     * the file, `git status` could not see it, and the finish gate rejected the task
+     * (`statusCode=417`, issue `20261120-0156`). The incentive that created — list the file and
+     * fail, hide it and pass — is worse than the false negative, so a granted root is accepted as
+     * evidence of its own and its writes stay *material* (rule 7 still requires them to be listed).
+     */
+    val grantedRoots: List<Path> = emptyList(),
 )
 
 /**
@@ -165,7 +177,9 @@ internal object FinishReportGate {
             val traced = tracedMutationPaths(evidence)
             val normalized = reported.map { normalizePath(it) }
             val phantom = normalized.filterNot { path ->
-                matchesAnyPath(changed, path) || matchesAnyPath(traced, path)
+                matchesAnyPath(changed, path) ||
+                    matchesAnyPath(traced, path) ||
+                    isUnderGrantedRoot(path, evidence)
             }
             if (phantom.isNotEmpty()) {
                 violations += "filesChanged lists ${phantom.size} file(s) neither git nor this run's " +
@@ -310,14 +324,42 @@ internal object FinishReportGate {
         paths.any { p -> p == path || p.endsWith("/$path") || path.endsWith("/$p") }
 
     /**
-     * Whether a mutated path is material to the checkout: a path git reports as
-     * changed, or (when git is unavailable) any path outside the tool's own
-     * `.browser4/` state directory.
+     * Whether a mutated path is material to the checkout: a path git reports as changed, a path
+     * under a folder the operator granted for this task (`--add-dir`), or (when git is unavailable)
+     * any path outside the tool's own `.browser4/` state directory.
+     *
+     * A granted write is material **on purpose**: the grant exists so the task can deliver into
+     * that folder, so a report that omits it is as incomplete as one that omits a workspace file.
+     * Treating it as immaterial would reward concealment — the exact defect behind issue
+     * `20261120-0156`.
      */
     private fun isMaterialPath(path: String, evidence: FinishEvidence): Boolean {
         if (path.startsWith(".browser4/")) return false
+        if (isUnderGrantedRoot(path, evidence)) return true
         val changed = evidence.gitChangedFiles ?: return true
         return changed.any { c -> c == path || c.endsWith("/$path") || path.endsWith("/$c") }
+    }
+
+    /**
+     * Whether [path] names a file under one of the task's granted roots.
+     *
+     * Only an absolute entry can be attributed to a granted root: a relative entry is
+     * workspace-relative by definition, and the git/trace halves already own those. `Path.startsWith`
+     * compares path components (case-insensitively on Windows), so `C:\granted\a.txt` cannot be
+     * confused with `C:\granted-other\a.txt`.
+     */
+    private fun isUnderGrantedRoot(path: String, evidence: FinishEvidence): Boolean {
+        if (evidence.grantedRoots.isEmpty()) return false
+        // [normalizePath] drops a leading separator (it exists for repo-relative git output), so a
+        // POSIX absolute entry arrives here without it; test the spelled form too.
+        val candidates = listOf(path, "/$path").mapNotNull { raw ->
+            val candidate = runCatching { Path.of(raw).normalize() }.getOrNull()
+            candidate?.takeIf { it.isAbsolute }
+        }
+        if (candidates.isEmpty()) return false
+        return evidence.grantedRoots.any { root ->
+            candidates.any { candidate -> runCatching { candidate.startsWith(root) }.getOrDefault(false) }
+        }
     }
 
     private fun normalizePath(raw: String): String =

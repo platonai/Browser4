@@ -565,7 +565,13 @@ class MCPToolController(
             // One span per call, carrying the same facts as the log lines. Tracing is
             // optional: without the SDK this is a no-op span, never a failure.
             ToolTracing.withSpan(request.tool, CHANNEL, sessionId) { outcome ->
-                val response = ToolInvocationLogger.withRequestContext(requestId) { dispatchToolCall(request) }
+                val response = ToolInvocationLogger.withRequestContext(requestId) {
+                    // A policy refusal comes back as a *value*, not an exception
+                    // (`PermissionAudit`'s contract is "returned, never thrown"), so
+                    // the envelope would otherwise still say "success" — see
+                    // [withRefusalEnvelope].
+                    withRefusalEnvelope(dispatchToolCall(request))
+                }
                 outcome.record(response.body?.errorCode?.takeIf { it.isNotBlank() } ?: "OK")
                 response
             }
@@ -583,7 +589,11 @@ class MCPToolController(
         val errorCode = body?.errorCode?.toErrorCode()
         val durationMs = (System.nanoTime() - startedAt) / 1_000_000
         ToolMetrics.activeToolCallsCount.decrementAndGet()
-        ToolMetrics.recordToolCall(request.tool, errorCode == null, durationMs, errorCode?.wire)
+        // `isError` is the authoritative signal: a permission refusal carries a code that is
+        // deliberately *not* one of the transport codes, so deriving success from
+        // "no ToolErrorCode" would count it as a success (P0-3).
+        val succeeded = body?.isError != true
+        ToolMetrics.recordToolCall(request.tool, succeeded, durationMs, body?.errorCode?.takeIf { !succeeded })
         ToolInvocationLogger.logFinished(
             requestId, CHANNEL, request.tool, durationMs, errorCode,
             body?.content?.sumOf { it.text.length } ?: 0,
@@ -1294,7 +1304,18 @@ class MCPToolController(
 
         val text = executeAgentToolText(tool, arguments)
 
-        return BatchExecutor.BatchStepResult(ok = true, text = text.ifBlank { null })
+        // Same rule as the single-call envelope ([withRefusalEnvelope]): a leading policy refusal is
+        // a failed step even though the executor returned it as a value.
+        val permissionCode = permissionRefusalCode(text)
+        return if (permissionCode != null) {
+            BatchExecutor.BatchStepResult(
+                ok = false,
+                text = text.ifBlank { null },
+                errorCode = ToolErrorCode.PERMISSION_DENIED.wire,
+            )
+        } else {
+            BatchExecutor.BatchStepResult(ok = true, text = text.ifBlank { null })
+        }
     }
 
     private suspend fun handleBatchSnapshot(
@@ -2249,6 +2270,41 @@ class MCPToolController(
 
     private fun textResponse(text: String, pagination: PaginationMeta?): MCPToolCallResponse =
         MCPToolCallResponse(content = listOf(MCPContent(text = text)), pagination = pagination)
+
+    /**
+     * Turn a policy refusal that arrived as a *successful* tool result into a failed envelope.
+     *
+     * `PermissionAudit.denied()` returns the refusal as a string and never throws — deliberately,
+     * because a refused step must not fail the agent loop. At the transport layer that made a
+     * refusal indistinguishable from a success: `tool call coding_write --json '…outside…'
+     * --fail-on-error` printed `Error: PERMISSION_DENIED | code=PATH_DENIED …` and still exited `0`
+     * (issue `20261120-0145`, measured 2026-11-20).
+     *
+     * The text is kept **byte for byte** (the model and every existing client read it), and the
+     * envelope gains the machine-readable half:
+     *
+     * - `isError = true`, so `--fail-on-error` and any `isError`-branching client see the failure;
+     * - `errorCode = PERMISSION_DENIED` (a [ToolErrorCode]), so metrics/logs/status classify it;
+     * - `structuredContent.permissionCode = <PATH_DENIED | PROTECTED_PATH | SANDBOX_DENIED | …>`,
+     *   the specific reason, for callers that want the rails-level attribution.
+     *
+     * Only a *leading* refusal counts: `coding.permissions` legitimately mentions `PERMISSION_DENIED`
+     * while describing what it refuses, and `memory.read` can return JSON that quotes an older
+     * refusal.
+     */
+    private fun withRefusalEnvelope(response: ResponseEntity<MCPToolCallResponse>): ResponseEntity<MCPToolCallResponse> {
+        val body = response.body ?: return response
+        if (body.isError) return response
+        val permissionCode = permissionRefusalCode(body.content.firstOrNull()?.text) ?: return response
+        return ResponseEntity.ok(
+            body.copy(
+                isError = true,
+                errorCode = ToolErrorCode.PERMISSION_DENIED.wire,
+                structuredContent = (body.structuredContent ?: emptyMap()) +
+                    ("permissionCode" to permissionCode),
+            )
+        )
+    }
 
     /**
      * Build an error response carrying a stable code.
@@ -3601,4 +3657,29 @@ internal fun isExtensionTransportFlag(extensionArg: Any?): Boolean = when (exten
                 "together with channel=\"$extensionArg\" to select a browser channel"
         )
     }
+}
+
+/**
+ * The policy code of a refusal that *leads* [text], or `null` when it is not one.
+ *
+ * Two producers write the envelope: `coding.shell` returns it directly and `coding.fs` prefixes it
+ * with `Error: ` (see `ToolOutcome.isRefusal`), so both prefixes are accepted. Anything else — a
+ * report that merely *mentions* `PERMISSION_DENIED`, JSON that quotes an older refusal — is data,
+ * not a refusal of this call.
+ *
+ * @return the code (`PATH_DENIED`, `PROTECTED_PATH`, `SANDBOX_DENIED`, …), or `null`
+ */
+internal fun permissionRefusalCode(text: String?): String? {
+    if (text.isNullOrBlank()) return null
+    val firstLine = text.lineSequence().firstOrNull { it.isNotBlank() }?.trimStart() ?: return null
+    val candidate = firstLine.removePrefix("Error: ").trimStart()
+    if (!candidate.startsWith("PERMISSION_DENIED")) return null
+    if (!candidate.contains("| code=")) return null
+    val code = candidate.split('|')
+        .map { it.trim() }
+        .firstOrNull { it.startsWith("code=") }
+        ?.removePrefix("code=")
+        ?.substringBefore(' ')
+        ?.trim()
+    return code?.takeIf { it.isNotEmpty() }
 }

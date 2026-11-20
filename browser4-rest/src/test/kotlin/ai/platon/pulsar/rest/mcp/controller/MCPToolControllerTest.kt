@@ -1491,6 +1491,65 @@ class MCPToolControllerTest {
     }
 
     // =========================================================================
+    // Policy refusals: a refusal returned as a value is a failed call
+    // =========================================================================
+
+    /**
+     * Issue `20261120-0145`: `PermissionAudit` returns `PERMISSION_DENIED | code=…` as a *string*, so
+     * the envelope said success and `tool call --fail-on-error` exited 0. The text must stay byte for
+     * byte, and the envelope must carry `isError`/`errorCode`/`permissionCode`.
+     */
+    @Test
+    @DisplayName("a policy refusal returned as a value becomes a failed envelope")
+    fun permissionRefusalBecomesAFailedEnvelope() = runBlocking {
+        val refusal =
+            "Error: PERMISSION_DENIED | code=PATH_DENIED | tool=coding.fs | detail=path 'D:\\x' is outside the workspace"
+        `when`(agentToolManager.execute(any())).thenReturn(toolCallResult(refusal))
+
+        val result = controller.callTool(
+            MCPToolCallRequest(tool = "page_title", arguments = mapOf("sessionId" to sessionId)),
+            response,
+        )
+
+        val body = result.body!!
+        assertEquals(refusal, body.content[0].text, "the refusal text is what the model reads")
+        assertTrue(body.isError, "a refused call must not be reported as success")
+        assertEquals(ToolErrorCode.PERMISSION_DENIED.wire, body.errorCode)
+        assertEquals("PATH_DENIED", body.structuredContent?.get("permissionCode"))
+        Unit
+    }
+
+    @Test
+    @DisplayName("a report that merely mentions the refusal prefix stays a success")
+    fun refusalMentionIsNotARefusal() = runBlocking {
+        val report = "Access preset: full\npaths outside workspace : NO (refused with PERMISSION_DENIED)"
+        `when`(agentToolManager.execute(any())).thenReturn(toolCallResult(report))
+
+        val result = controller.callTool(
+            MCPToolCallRequest(tool = "page_title", arguments = mapOf("sessionId" to sessionId)),
+            response,
+        )
+
+        assertFalse(result.body!!.isError, "a report is not a refusal of this call")
+        assertNull(result.body!!.errorCode)
+        Unit
+    }
+
+    @Test
+    @DisplayName("the refusal parser requires the leading envelope and a code")
+    fun refusalParserIsStrict() {
+        assertEquals("SANDBOX_DENIED", permissionRefusalCode("PERMISSION_DENIED | code=SANDBOX_DENIED | tool=x"))
+        assertEquals(
+            "PATH_OUTSIDE_WORKSPACE",
+            permissionRefusalCode("  Error: PERMISSION_DENIED | code=PATH_OUTSIDE_WORKSPACE | tool=x"),
+        )
+        assertNull(permissionRefusalCode("PERMISSION_DENIED without a code | tool=x"))
+        assertNull(permissionRefusalCode("the report says PERMISSION_DENIED | code=PATH_DENIED was seen"))
+        assertNull(permissionRefusalCode(""))
+        assertNull(permissionRefusalCode(null))
+    }
+
+    // =========================================================================
     // Built-in contract validation: shadow first, enforce later
     // =========================================================================
 

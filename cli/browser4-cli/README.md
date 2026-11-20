@@ -467,7 +467,7 @@ Any other command is forwarded verbatim to `scent-miner.jar` (e.g. `webminer enc
 | `plugin <domain> <method>` | Run one plugin tool, e.g. `plugin media detectVideos` |
 | `plugin <domain> --help` | The methods of one plugin domain (also `--help plugin-<domain>`) |
 | `tool list [--filter <substr>]` | Every MCP tool name the backend advertises (or `GET /mcp/tools`) |
-| `tool call <name> [--json '{…}']` | Invoke any advertised tool by name; `--fail-on-error` exits non-zero when the payload reports `success:false` (a failure is otherwise reported on stderr with exit 0) |
+| `tool call <name> [--json '{…}']` | Invoke any advertised tool by name; `--fail-on-error` exits non-zero when the payload reports a failure (`success:false`, `isError:true`, a non-empty `error`, or a leading `PERMISSION_DENIED` refusal — the backend flags a policy refusal in the envelope, and an older backend's text-only refusal is recognized too) |
 
 A development runtime bundle ships the first-party plugins the checkout builds (`swarm`, `images`,
 `markdown`, `media`, `seo`); `captcha`, `pptx`, `profile-import` and `summary-demo` are installed on

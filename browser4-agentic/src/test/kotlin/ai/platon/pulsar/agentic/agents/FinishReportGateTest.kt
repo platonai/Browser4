@@ -15,6 +15,9 @@ import java.nio.file.Path
  */
 class FinishReportGateTest {
 
+    @TempDir
+    lateinit var tempDir: Path
+
     private fun evidence(
         executedToolCalls: Int = 3,
         executedToolNames: Set<String> = setOf("coding.mvnBuild", "coding.validate"),
@@ -27,6 +30,7 @@ class FinishReportGateTest {
         claimedVerdictJson: String? = null,
         actualVerdictJson: String? = null,
         gitDeletedFiles: Set<String>? = null,
+        grantedRoots: List<Path> = emptyList(),
     ) = FinishEvidence(
         executedToolCalls = executedToolCalls,
         executedToolNames = executedToolNames,
@@ -39,6 +43,7 @@ class FinishReportGateTest {
         claimedVerdictJson = claimedVerdictJson,
         actualVerdictJson = actualVerdictJson,
         gitDeletedFiles = gitDeletedFiles,
+        grantedRoots = grantedRoots,
     )
 
     private fun gate(name: String, ran: Boolean, ok: Boolean = ran, detail: String? = null): Map<String, Any?> =
@@ -117,6 +122,80 @@ class FinishReportGateTest {
             verdict.violations.any { it.contains("neither git nor this run's file trace shows") },
             "${verdict.violations}",
         )
+    }
+
+    /**
+     * Issue `20261120-0156`: `--add-dir` grants a folder outside the checkout, so a write there is
+     * real and the report can list it honestly — but git can never show it. Failing the task for
+     * that made the only passing strategy "hide the file you wrote".
+     */
+    @Test
+    @DisplayName("rule 4/7: a file under a granted root is accepted and its write stays material")
+    fun grantedRootFileIsBackedByTheGrant() {
+        val granted = tempDir.resolve("granted")
+        Files.createDirectories(granted)
+        val grantFile = granted.resolve("grant.txt")
+        Files.writeString(grantFile, "ok")
+        val reported = grantFile.toString().replace('\\', '/')
+
+        // The write is real and the report lists it: accepted although git has no such change.
+        val listed = FinishReportGate.evaluate(
+            evidence(
+                filesChanged = listOf(reported),
+                gitChangedFiles = emptySet(),
+                recordedMutations = listOf("write $reported"),
+                grantedRoots = listOf(granted.toAbsolutePath().normalize()),
+            )
+        )
+        assertTrue(listed.passed, "violations: ${listed.violations}")
+
+        // The same write, hidden from the report: the grant does not make it immaterial, so the
+        // run is asked to list the deliverable instead of being rewarded for concealing it.
+        val concealed = FinishReportGate.evaluate(
+            evidence(
+                filesChanged = emptyList(),
+                gitChangedFiles = emptySet(),
+                recordedMutations = listOf("write $reported"),
+                grantedRoots = listOf(granted.toAbsolutePath().normalize()),
+            )
+        )
+        assertFalse(concealed.passed)
+        assertTrue(
+            concealed.violations.any { it.contains("the report does not list") },
+            "${concealed.violations}",
+        )
+        assertEquals(listOf(reported), concealed.unlistedFiles)
+    }
+
+    @Test
+    @DisplayName("rule 4: a sibling with a granted-root prefix is not the granted root")
+    fun grantedRootPrefixIsNotTheRoot() {
+        val granted = tempDir.resolve("granted")
+        Files.createDirectories(granted)
+        val sibling = tempDir.resolve("granted-other").resolve("not-granted.txt")
+        Files.createDirectories(sibling.parent)
+        Files.writeString(sibling, "no")
+
+        val verdict = FinishReportGate.evaluate(
+            evidence(
+                filesChanged = listOf(sibling.toString().replace('\\', '/')),
+                gitChangedFiles = emptySet(),
+                recordedMutations = listOf("write ${sibling.toString().replace('\\', '/')}"),
+                grantedRoots = listOf(granted.toAbsolutePath().normalize()),
+            )
+        )
+        // The trace still backs it (the run wrote it), so rule 4 passes; this asserts the *grant*
+        // check is component-wise, i.e. no false positive. Without the trace it must be a phantom.
+        assertTrue(verdict.passed, "violations: ${verdict.violations}")
+
+        val untraced = FinishReportGate.evaluate(
+            evidence(
+                filesChanged = listOf(sibling.toString().replace('\\', '/')),
+                gitChangedFiles = emptySet(),
+                grantedRoots = listOf(granted.toAbsolutePath().normalize()),
+            )
+        )
+        assertFalse(untraced.passed, "a sibling of a granted root must not inherit the grant")
     }
 
     /**

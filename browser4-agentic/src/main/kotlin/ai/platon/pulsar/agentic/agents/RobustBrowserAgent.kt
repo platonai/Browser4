@@ -2495,6 +2495,12 @@ open class RobustBrowserAgent(
                 claimedVerdictJson = extractVerdictJson(action.summary),
                 actualVerdictJson = (lastVerificationVerdict?.toJson() ?: lastInnerVerdictJson),
                 gitDeletedFiles = workspace?.let { gitDeletedFiles(it) },
+                // Folders the operator granted for THIS task (`agent run --add-dir`). A file under
+                // one of them is a legitimate deliverable git can never corroborate (it lives
+                // outside the checkout), so the gate must accept the grant as evidence — otherwise
+                // an honest report fails while hiding the file passes (issue 20261120-0156).
+                grantedRoots = agentToolManager.accessPolicy.additionalDirs
+                    .map { it.toAbsolutePath().normalize() },
             )
         )
     }

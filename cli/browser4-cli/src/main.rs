@@ -26792,9 +26792,58 @@ fn tool_name_matches_filter(name: &str, filter: Option<&str>) -> bool {
 /// exiting 0 makes a failed tool look like a success to any script that checks
 /// `$?`, so the failure is surfaced on stderr and can be turned into a non-zero
 /// exit with `--fail-on-error`.
+///
+/// A policy refusal is the same shape: `PermissionAudit` returns
+/// `PERMISSION_DENIED | code=…` as *text*, and a backend that predates the
+/// refusal envelope (issue `20261120-0145`) reports it as `success:true`. The
+/// refusal is therefore also looked for in the result text, and only when it
+/// **leads** the text — a `coding.permissions` report legitimately mentions the
+/// prefix while describing what it refuses.
 fn tool_call_failure_summary(tool_name: &str, result: &str) -> Option<String> {
-    let parsed: Value = serde_json::from_str(result).ok()?;
-    tool_call_failure_summary_from_json(tool_name, &parsed)
+    if let Ok(parsed) = serde_json::from_str::<Value>(result) {
+        if let Some(summary) = tool_call_failure_summary_from_json(tool_name, &parsed) {
+            return Some(summary);
+        }
+        let text = tool_call_payload_text(&parsed)?;
+        return tool_call_refusal_reason(text)
+            .map(|reason| format!("{tool_name} reported a failure: {reason}"));
+    }
+    tool_call_refusal_reason(result).map(|reason| format!("{tool_name} reported a failure: {reason}"))
+}
+
+/// The human-readable text of a tool payload, for a refusal that arrived as a value.
+///
+/// Three shapes reach this function: the MCP envelope (`content[].text`), a bare
+/// tool payload (`text`), and the CLI's own envelope (`output` wrapping either).
+fn tool_call_payload_text(parsed: &Value) -> Option<&str> {
+    let payload = parsed.get("output").unwrap_or(parsed);
+    if let Some(text) = payload.get("text").and_then(Value::as_str) {
+        return Some(text);
+    }
+    payload
+        .get("content")
+        .and_then(Value::as_array)
+        .and_then(|items| items.iter().find_map(|item| item.get("text").and_then(Value::as_str)))
+}
+
+/// The reason of a `PERMISSION_DENIED | code=…` refusal that leads `text`, or `None`.
+///
+/// The refusal may carry the `Error: ` prefix `coding.fs` adds; both producers are
+/// accepted, and anything after the first line is data (file content, a report).
+fn tool_call_refusal_reason(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim_start).find(|line| !line.is_empty())?;
+    let candidate = line.strip_prefix("Error: ").unwrap_or(line).trim_start();
+    if !candidate.starts_with("PERMISSION_DENIED") || !candidate.contains("| code=") {
+        return None;
+    }
+    let code = candidate
+        .split('|')
+        .map(str::trim)
+        .find_map(|segment| segment.strip_prefix("code="))
+        .map(|value| value.split_whitespace().next().unwrap_or(value))
+        .filter(|value| !value.is_empty())
+        .unwrap_or("PERMISSION_DENIED");
+    Some(format!("the access policy refused the call (code={code})"))
 }
 
 /// [tool_call_failure_summary] over an already-parsed payload.
@@ -26809,16 +26858,26 @@ fn tool_call_failure_summary_from_json(tool_name: &str, parsed: &Value) -> Optio
         .and_then(|v| v.as_bool())
         .map(|ok| !ok)
         .unwrap_or(false);
+    // A failed MCP envelope is a failure even when it carries no `success` field:
+    // this is the half the backend adds for a policy refusal (P0-3).
+    let flagged = payload
+        .get("isError")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let error = payload
         .get("error")
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|e| !e.is_empty() && !e.eq_ignore_ascii_case("null"));
 
-    if !failed && error.is_none() {
+    if !failed && !flagged && error.is_none() {
         return None;
     }
-    let reason = error.unwrap_or("the tool reported success:false");
+    let reason = error.unwrap_or(if flagged {
+        "the tool reported isError:true"
+    } else {
+        "the tool reported success:false"
+    });
     Some(format!("{tool_name} reported a failure: {reason}"))
 }
 
@@ -41612,6 +41671,53 @@ linkGroups:
         }
         // A non-empty error without a success flag is still a failure.
         assert!(tool_call_failure_summary("x", r#"{"error":"boom"}"#).is_some());
+    }
+
+    /// Issue `20261120-0145`: `PermissionAudit` returns a refusal as text, so `tool call`
+    /// printed `Error: PERMISSION_DENIED | code=…` and still exited 0. The backend now flags
+    /// the envelope, but an older backend still reports `success:true` — the text must be
+    /// recognized by itself.
+    #[test]
+    fn tool_call_permission_refusal_is_a_failure() {
+        let refusal = "Error: PERMISSION_DENIED | code=PATH_DENIED | tool=coding.fs | detail=path 'D:\\x' is outside the workspace";
+        assert_eq!(
+            tool_call_refusal_reason(refusal).as_deref(),
+            Some("the access policy refused the call (code=PATH_DENIED)")
+        );
+        // A refusal without the `Error: ` prefix (`coding.shell`) is the same shape.
+        let shell_refusal = "PERMISSION_DENIED | code=SANDBOX_DENIED | tool=coding.shell | detail=the OS denied it";
+        assert_eq!(
+            tool_call_refusal_reason(shell_refusal).as_deref(),
+            Some("the access policy refused the call (code=SANDBOX_DENIED)")
+        );
+        // `success:true` plus a refusal text is the pre-envelope backend shape.
+        for (payload, code) in [
+            (refusal.to_string(), "PATH_DENIED"),
+            (shell_refusal.to_string(), "SANDBOX_DENIED"),
+            (
+                format!(r#"{{"content":[{{"type":"text","text":{}}}]}}"#, json!(refusal)),
+                "PATH_DENIED",
+            ),
+            (format!(r#"{{"success":true,"text":{}}}"#, json!(refusal)), "PATH_DENIED"),
+        ] {
+            let summary = tool_call_failure_summary("coding_write", &payload)
+                .unwrap_or_else(|| panic!("{payload} must be reported as a failure"));
+            assert!(summary.contains(&format!("code={code}")), "{summary}");
+        }
+        // A report that merely mentions the prefix is data, not a refusal of this call.
+        for payload in [
+            "Access preset: full\npaths outside workspace : NO (refused with PERMISSION_DENIED)",
+            r#"{"success":true,"result":"PERMISSION_DENIED | code=PATH_DENIED was the last refusal"}"#,
+            "PERMISSION_DENIED but no code",
+        ] {
+            assert!(
+                tool_call_failure_summary("coding_permissions", payload).is_none(),
+                "{payload} must not be reported as a failure"
+            );
+        }
+        // The MCP envelope half the backend adds: isError:true without any `success` field.
+        let flagged = r#"{"isError":true,"errorCode":"PERMISSION_DENIED","content":[{"text":"PERMISSION_DENIED | code=PATH_DENIED"}]}"#;
+        assert!(tool_call_failure_summary("coding_write", flagged).is_some());
     }
 
     #[test]

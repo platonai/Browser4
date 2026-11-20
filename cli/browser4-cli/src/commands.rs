@@ -2671,7 +2671,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "json", description: "Tool arguments as a JSON object string, e.g. '{\"type\": \"RECAPTCHA_V2\", \"siteKey\": \"...\"}'", is_bool: false, short: None },
-                OptionDef { name: "fail-on-error", description: "Exit non-zero when the tool reports a failure in its payload (success:false or a non-empty error field), so shell scripts can branch on the exit code", is_bool: true, short: None },
+                OptionDef { name: "fail-on-error", description: "Exit non-zero when the tool reports a failure in its payload (success:false, isError:true, a non-empty error field, or a leading PERMISSION_DENIED refusal), so shell scripts can branch on the exit code", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |args| get_str(args, "name").unwrap_or_default().to_string(),
