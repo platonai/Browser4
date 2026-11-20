@@ -470,6 +470,27 @@ fn probe_state_dir_writable(dir: &Path) -> bool {
     }
 }
 
+/// Once-per-process guard for the "state file exists but cannot be read" warning.
+static UNREADABLE_STATE_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// Read one state file, keeping "there is no file" apart from "it cannot be read".
+///
+/// `None` means the file does not exist (the normal state after `close`);
+/// `Some((path, Err(_)))` means it exists but the read failed (ACL, lock, a
+/// directory in its place). Collapsing the two used to turn a permissions
+/// problem into "no session" — and then into `Session required`.
+fn read_state_file(
+    dir: &Path,
+    session_name: Option<&str>,
+) -> Option<(PathBuf, std::io::Result<CliState>)> {
+    let path = state_file(dir, session_name);
+    match fs::read_to_string(&path) {
+        Ok(raw) => Some((path, Ok(parse_state(&raw)))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => Some((path, Err(e))),
+    }
+}
+
 /// Read the persisted CLI state from disk, falling back to defaults.
 /// Auto-migrates old state files that lack the `kind` field by inferring it
 /// from the legacy `is_attached` / `attach_type` fields.
@@ -478,10 +499,35 @@ fn probe_state_dir_writable(dir: &Path) -> bool {
 /// never be created, or the readable-but-not-writable `~/.browser4` of an
 /// agent sandbox — the workspace-relative fallback is read too, so a session
 /// written there survives across invocations.
+///
+/// A state file that exists but cannot be read is reported on stderr: the
+/// command still continues with the default state, but the failure that
+/// follows (`Session required`) is no longer the first hint the operator gets.
 pub fn read_state(state_dir: Option<&Path>, session_name: Option<&str>) -> CliState {
     let dir = state_dir
         .map(|p| p.to_path_buf())
         .unwrap_or_else(resolve_default_state_dir);
+
+    match read_state_file(&dir, session_name) {
+        Some((_, Ok(state))) => return state,
+        Some((path, Err(e))) => {
+            if UNREADABLE_STATE_WARNED
+                .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                // A stable English reason, like the write warning: the raw OS
+                // text is localized and would produce a mixed-language message.
+                eprintln!(
+                    "browser4-cli: warning: cannot read CLI state {} ({}); \
+                     treating the session as missing — fix its permissions or set \
+                     BROWSER4_CLI_STATE_DIR to a readable location",
+                    path.display(),
+                    e.kind(),
+                );
+            }
+        }
+        None => {}
+    }
 
     // Read where the write path would have written: a stale CWD-relative
     // fallback must not be resurrected when the primary merely lacks the file
@@ -2379,6 +2425,25 @@ mod tests {
         // test_default_base_url_uses_the_documented_production_port).
         assert_eq!(state.base_url, CliState::default().base_url);
         assert!(state.session_id.is_none());
+    }
+
+    #[test]
+    fn test_read_state_file_separates_missing_from_unreadable() {
+        let tmp = test_temp_dir();
+        // No file at all is "no state", not an error.
+        assert!(read_state_file(tmp.path(), None).is_none());
+
+        // A state path that exists but cannot be read must not look like "no
+        // session": that used to surface one command later as Session required.
+        fs::create_dir_all(state_file(tmp.path(), None)).unwrap();
+        match read_state_file(tmp.path(), None) {
+            Some((path, Err(_))) => assert_eq!(path, state_file(tmp.path(), None)),
+            other => panic!("an unreadable state path must be reported, got {other:?}"),
+        }
+
+        // The production path still answers with the default state (and warns
+        // once) instead of panicking or pretending the session exists.
+        assert!(read_state(Some(tmp.path()), None).session_id.is_none());
     }
 
     #[test]
