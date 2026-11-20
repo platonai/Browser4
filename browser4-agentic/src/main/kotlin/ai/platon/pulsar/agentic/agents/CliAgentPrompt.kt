@@ -63,7 +63,10 @@ internal object CliAgentPrompt {
         val shell = if (windows) {
             "coding.shell runs through cmd.exe (use `dir`, `type`, `findstr`, `more`; " +
                 "POSIX tools such as `head`, `sed`, `grep` are NOT available) and each call " +
-                "starts in a fresh process — pass `workingDir` instead of a `cd /d … &&` prefix."
+                "starts in a fresh process — pass `workingDir` instead of a `cd /d … &&` prefix. " +
+                "Do NOT wrap a command in `powershell -Command …`: PowerShell decodes the child's " +
+                "UTF-8 output with the ANSI code page (gb2312 on a Chinese Windows), so the text " +
+                "arrives as mojibake — run the tool directly, or have it write a file and read that."
         } else {
             "coding.shell runs through sh -c and each call starts in a fresh process — " +
                 "pass `workingDir` instead of a `cd … &&` prefix."
