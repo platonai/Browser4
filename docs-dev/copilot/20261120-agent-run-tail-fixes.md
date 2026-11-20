@@ -160,15 +160,26 @@ VERDICT_JSON: {"passed":true,"module":"browser4-coding","requested":["compile"],
 验证：`VerificationReportTest` 新增用例（长 detail → verdict < 2000 字符、尾部保留、`passed`/`exitCode` 仍可解析、detail 带 `…(cut)…`），11 passed。**未做端到端**：要通过一次 verify 制造失败才能触发，属于刻意构造，收益不如单测钉住契约。
 
 
-### 4.3 A2 的实测数据
+### 4.3 A2：实测把"注入 `[Console]::OutputEncoding`"这条路否掉了
 
-沙箱化 `coding.shell` 里直接问 PowerShell：
+原本的判断：沙箱里 `powershell` 报 `default=gb2312 out=gb2312 in=gb2312`，所以它把子进程的 UTF-8 输出按 GBK 解码。**这个判断被实验推翻**：
 
-```
-default=gb2312  out=gb2312  in=gb2312
-```
+| 实验 | 结果 |
+|---|---|
+| `powershell -Command "& node -e '...中文...'"`（不注入） | **中文**（正确） |
+| 同上，`-Command` 里先 `[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)` | 中文（无差别） |
+| `powershell -File probe.ps1`，脚本**无 BOM**、含 `'中文'` 字面量 | **涓枃**（乱码） |
+| 同一个脚本，**加 UTF-8 BOM** | **中文**（正确） |
+| 同一个无 BOM 脚本，改用 `pwsh -File` | **中文**（正确） |
 
-所以 `powershell -Command "node x.js"` 会把子进程的 UTF-8 按 GB2312 解码再以 GBK 写出，采集层无法还原。代码级修法（注入 `[Console]::OutputEncoding` / 后端切码页）需要定方案；本轮先在**编码提示**里告诉模型不要这样包（`CliAgentPrompt.kt`，`CliAgentPromptTest` 15 passed）。
+结论：`-Command` 路径下 PowerShell 本来就能正确解码子进程的 UTF-8，**注入是无用功**（还会带来改写命令行的引号风险，因此没有实现）。真正的坑是 **Windows PowerShell 5.1 把无 BOM 的 `.ps1` 按 ANSI 读**——脚本里的中文字面量在运行前就已经坏了；而 `coding.write` 写的是无 BOM UTF-8。仓库里 9393 个 `.ps1` 只有 7 个带 BOM，所以不给 `coding.write` 自动加 BOM。
+
+落地（`48e9b08d02`）：
+
+- 编码提示改成实测结论：写 `.ps1` 要用 `pwsh`；必须用 5.1 时保持 ASCII 或加 BOM；
+- `coding.validate(type=script)` 对含非 ASCII 的 `.ps1` 给 WARNING（点名原因与修法）；
+- `CliAgentPromptTest` 新增断言（含 `pwsh` / `BOM-less`），`ArtifactValidatorTest` 新增正反用例。
+
 
 ### 4.4 一个会骗人的测试假阳性（未改 runner，记录）
 
@@ -190,11 +201,11 @@ runner 把 stdout+stderr 合并后，这一行成了 payload 首行，于是 `In
 
 ## 后续（未做）
 
-1. PowerShell 的 `[Console]::OutputEncoding`：没有对应的环境变量可设，只能给后端进程切控制台码页（`SetConsoleOutputCP`）或在命令前注入初始化语句；两者都需要在真实 GBK 控制台上实测。
-2. 状态文件"存在但不可读"（deny-read 单文件）不再静默（已加警告），但仍不回退——是否回退要看是否接受 mtime 比较。
-3. fallback 目录是 CWD 相对：读写已一致，但跨不同工作目录仍不连续。
-4. `A19` 已验证环境变量注入；"沙箱内 `attach` 一次成功"仍需一条带浏览器的 e2e。
-5. 测试假阳性（4.4）：runner 的 leading-marker 判定需要容忍 CLI 的告警行。
+1. 状态文件"存在但不可读"（deny-read 单文件）不再静默（已加警告），但仍不回退——是否回退要看是否接受 mtime 比较。
+2. fallback 目录是 CWD 相对：读写已一致，但跨不同工作目录仍不连续。
+3. `A19` 已验证环境变量注入；"沙箱内 `attach` 一次成功"仍需一条带浏览器的 e2e。
+4. 测试假阳性（4.4）：runner 的 leading-marker 判定需要容忍 CLI 的告警行。
+5. 若将来确认还有别的 PowerShell 乱码路径（不是 BOM-less `.ps1`），再考虑注入 `[Console]::OutputEncoding`；本轮实测它并不解决该症状。
 
 
 
