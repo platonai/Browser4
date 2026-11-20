@@ -2675,14 +2675,26 @@ pub(super) fn test_mouse_coordinate_spaces(ctx: &mut E2ECtx) {
         3_000,
         "an out-of-viewport move should make the page see mouseleave",
     );
-    let viewport_height = after_outside["viewport"][1].as_i64().unwrap_or(0);
+    // The fixture's `viewport` field is captured when the page loads, i.e. before
+    // `resize 1280 900`, so it is not the height the dispatch sees (the 2026-11-20
+    // control run logged 1920x1080 while the real viewport was 1280x900). Ask the
+    // page for the live height — "the last pixel is h-1" only means something
+    // against the height the mousemove was clamped to.
+    let live_height = eval_text(ctx, "window.innerHeight")
+        .trim()
+        .parse::<i64>()
+        .unwrap_or(0);
     let max_client_y = after_outside["maxClientY"].as_i64().unwrap_or(-1);
     assert!(
-        max_client_y < viewport_height,
+        live_height > 0,
+        "the page must report its viewport height: {after_outside}"
+    );
+    assert!(
+        max_client_y < live_height,
         "an in-page mousemove may reach the last pixel ({}) but never the viewport \
-         height itself, and the requested y=1200 must never appear as an event \
-         coordinate: {after_outside}",
-        viewport_height - 1
+         height itself ({live_height}), and the requested y=1200 must never appear \
+         as an event coordinate: {after_outside}",
+        live_height - 1
     );
     assert!(
         max_client_y < 1200,
