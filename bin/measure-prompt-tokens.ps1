@@ -84,11 +84,11 @@ $BrowsingTaskCodingMethods = @(
 )
 
 # The recorded baseline (characters). -Check compares against these.
-# Measured 2026-11-16 on 4.16.x; see the doc for the methodology and for what to do
+# Measured 2026-11-20 on 4.16.x; see the doc for the methodology and for what to do
 # when a change here is intentional.
 $Baseline = @{
-    CodingPromptChars           = 4480   # role + hygiene + workspace-boundary block
-    CodingPromptRestrictedChars = 5436   # role + hygiene + permissions block (write preset)
+    CodingPromptChars           = 5133   # role + hygiene + workspace-boundary block
+    CodingPromptRestrictedChars = 6063   # role + hygiene + permissions block (write preset)
     CodingTaskToolChars         = 22547  # 39 tools + the two disclosure meta tools
     BrowsingTaskToolChars       = 16528  # 29 tools + the two disclosure meta tools
     CodingTaskToolCount         = 39

@@ -4,7 +4,8 @@
 > `ToolSpec` 声明里，改动它不会让任何测试变红，却会让每一次运行、每一轮请求都多付钱。
 > 这份文档把开销变成两个可比较的数字，并给出一个可复跑的测量脚本。
 >
-> 基线测量日期：2026-11-15，重测 2026-11-16（4.16.x，含 `b4.batch`；见 §8）
+> 基线测量日期：2026-11-15，重测 2026-11-16（4.16.x，含 `b4.batch`）、2026-11-20（coding 提示词加入
+> PowerShell 编码警告；见 §8）
 > 测量脚本：`bin/measure-prompt-tokens.ps1`
 > 回归测试：`bin/measure-prompt-tokens.tests.ps1`（`pwsh bin/test.ps1 ps` 会带上它）
 
@@ -16,21 +17,21 @@
 
 | 项 | 字符 | token @4.0 | token @3.5 |
 |---|---:|---:|---:|
-| **系统提示词，coding**（默认 `full` + 无外部访问） | 4,480 | 1,120 | 1,280 |
-| 系统提示词，coding（受限预设，如 `write`）† | 5,436 | 1,359 | 1,553 |
-| 系统提示词，coding（`full` + 允许外部访问） | 3,709 | 927 | 1,060 |
-| 系统提示词，browsing（常驻 `quickstart.md`） | 22,190 | 5,548 | 6,340 |
+| **系统提示词，coding**（默认 `full` + 无外部访问） | 5,133 | 1,283 | 1,467 |
+| 系统提示词，coding（受限预设，如 `write`）† | 6,063 | 1,516 | 1,732 |
+| 系统提示词，coding（`full` + 允许外部访问） | 4,336 | 1,084 | 1,239 |
+| 系统提示词，browsing（常驻 `quickstart.md`） | 22,216 | 5,554 | 6,347 |
 | **工具披露，coding 任务**（39 个工具 + 2 个元工具） | 22,547 | 5,637 | 6,442 |
 | 工具披露，browsing 任务（29 个工具 + 2 个元工具） | 16,528 | 4,132 | 4,722 |
 | 全量 CLI 注册表，关闭披露（78 个工具） | 38,907 | 9,727 | 11,116 |
-| **固定开销合计，coding**（提示词 + 工具） | **27,027** | **6,757** | **7,722** |
+| **固定开销合计，coding**（提示词 + 工具） | **27,680** | **6,920** | **7,909** |
 
 † 权限块按"受限预设分支的全部字面量"计，是上界：实际下发的是其中一个分支（依赖 `denyTools`、
 `allowExternalAccess`、`unrestricted`）。
 
 两条设计不变量：
 
-1. **coding 的系统提示词约为 browsing 的 1/5**（4,480 vs 22,190 字符）——因为 `quickstart.md`
+1. **coding 的系统提示词不到 browsing 的 1/4**（5,133 vs 22,216 字符）——因为 `quickstart.md`
    （14,977 字符）只在浏览模式下常驻
    （`RobustBrowserAgent.cliAgentSystemPrompt()`：`if (!codingMode)`）。编码任务按需用
    `system.skillDoc(...)` 分页取。
@@ -42,9 +43,9 @@
 
 | 片段 | 字符 | 来源 |
 |---|---:|---|
-| `role`（coding 分支，含工作树与 shell 变体） | 1,980 | `CliAgentPrompt.codingRole()` |
+| `role`（coding 分支，含工作树与 shell 变体） | 2,607 | `CliAgentPrompt.codingRole()` |
 | `hygiene`（coding 分支） | 1,727 | `CliAgentPrompt.hygiene()` |
-| 工作区边界块（默认 `full` + `allowExternalAccess=false`） | 771 | `CliAgentPrompt.permissionsBlock()` |
+| 工作区边界块（默认 `full` + `allowExternalAccess=false`） | 797 | `CliAgentPrompt.permissionsBlock()` |
 | 受限预设的 `### Permissions` 块（`read`/`write` 等） | 1,727 | 同上 |
 | `quickstart.md`（仅 browsing） | 14,977 | `skills/browser4-cli/references/quickstart.md` |
 
@@ -52,9 +53,9 @@
 
 | 变体 | 字符 | 组合后的 `role` 总长 |
 |---|---:|---:|
-| 工作树：mirror（无 `.git`） | 307 | 1,980（Windows + mirror） |
-| 工作树：隔离 worktree（有 `.git`） | 709 | 2,382（Windows + worktree） |
-| shell：Windows `cmd.exe` 说明 | 257 | 1,867（POSIX + mirror） |
+| 工作树：mirror（无 `.git`） | 307 | 2,607（Windows + mirror） |
+| 工作树：隔离 worktree（有 `.git`） | 709 | 3,009（Windows + worktree） |
+| shell：Windows `cmd.exe` 说明 | 884 | 1,867（POSIX + mirror） |
 | shell：POSIX `sh -c` 说明 | 144 | — |
 
 ---
@@ -179,3 +180,4 @@ pwsh bin/measure-prompt-tokens.tests.ps1
 |---|---|
 | 2026-11-15 | 建立基线：coding 提示词 4,480 字符、工具披露 19,591 字符（38 工具）、固定开销 ≈6.0k token；新增 `bin/measure-prompt-tokens.ps1` + 回归测试 |
 | 2026-11-16 | 重测：新增 `b4.batch` 使 `b4.*` 从 3,609 → 6,058 字符（6 → 7 个工具），披露 19,591 → 22,547（39 工具，+15%）、browsing 13,572 → 16,528（+22%），固定开销 ≈6.8k token；提示词两块不变。`b4.run` 描述同期随 stdin 载荷文档涨到 2,309 字符（单工具最大）。同步更新脚本 `$Baseline`、回归测试断言与本文 §1/§3/§7 |
+| 2026-11-20 | 重测：coding 提示词的 Windows shell 分支加入 PowerShell 编码警告（BOM-less `.ps1` 被 5.1 按 ANSI 读，见 `48e9b08d02`），`role` 1,980 → 2,607（Windows 分支 257 → 884），coding 提示词 4,480 → 5,133（+14.6%）、受限预设 5,436 → 6,063（+11.5%），固定开销 27,027 → 27,680（+2.4%）；browsing 提示词 22,190 → 22,216，工具披露不变。这次增长让 `-Check` 的 10% 阈值报警（4.16.x nightly 的 ps1-tests 因此变红），确认是有意加的行为后同步 `$Baseline` 与本文 §1/§2 |
