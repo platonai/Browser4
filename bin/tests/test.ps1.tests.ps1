@@ -450,6 +450,7 @@ $testTypeMap = @{
     'mocksiteboot'  = 'server'
     'rws'           = 'rws'
     'ps'            = 'ps'
+    'permission'    = 'permission'
     'resume'        = 'resume'
     'session'       = 'session'
 }
@@ -491,6 +492,7 @@ Assert-Returns -Label 'Map: verify → verify' -Actual $testTypeMap['verify'] -E
 Assert-Returns -Label 'Map: main → maven-expand' -Actual $testTypeMap['main'] -Expected 'maven-expand'
 Assert-Returns -Label 'Map: cli → cli' -Actual $testTypeMap['cli'] -Expected 'cli'
 Assert-Returns -Label 'Map: rws → rws' -Actual $testTypeMap['rws'] -Expected 'rws'
+Assert-Returns -Label 'Map: permission → permission' -Actual $testTypeMap['permission'] -Expected 'permission'
 Assert-Returns -Label 'Map: resume → resume' -Actual $testTypeMap['resume'] -Expected 'resume'
 
 Write-Host "━━━ Test type map: aliases ━━━" -ForegroundColor Cyan
@@ -601,7 +603,7 @@ $expectedTypes = @(
     'fast', 'it', 'e2e', 'rest', 'skills', 'mcp', 'mcp-contract', 'verify', 'main',
     'cli', 'browser4-cli',
     'server', 'mock-site', 'mocksite', 'mocksiteboot',
-    'rws', 'ps', 'resume', 'session'
+    'rws', 'ps', 'permission', 'resume', 'session'
 )
 
 foreach ($type in $expectedTypes) {
@@ -618,7 +620,7 @@ Assert-Returns -Label 'Map: no extra keys beyond expected' -Actual $extraKeys.Co
 
 # Verify all categories are covered
 $categories = $testTypeMap.Values | Select-Object -Unique | Sort-Object
-$expectedCategories = @('cli', 'maven', 'maven-expand', 'ps', 'resume', 'rws', 'server', 'session', 'verify')
+$expectedCategories = @('cli', 'maven', 'maven-expand', 'permission', 'ps', 'resume', 'rws', 'server', 'session', 'verify')
 $missingCategories = $expectedCategories | Where-Object { $_ -notin $categories }
 $extraCategories = $categories | Where-Object { $_ -notin $expectedCategories }
 Assert-Returns -Label 'Map: all categories covered' -Actual $missingCategories.Count -Expected 0

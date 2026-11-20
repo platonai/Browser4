@@ -559,6 +559,9 @@ function Print-Usage {
     Write-Host "              forwards -Fast (default), -Strict, -NoBuild, -Json, -Probe=<id,...>"
     Write-Host "  ps          Run all PowerShell *.tests.ps1 files in the project"
     Write-Host "              (+ skills/ document conformance, methodology M1-M8)"
+    Write-Host "  permission  Run the permission + execution-sandbox e2e suite (needs a live backend)"
+    Write-Host "              forwards every run-permission-e2e.ps1 switch: -Tier A|B|C, -Plan, -List,"
+    Write-Host "              -IncludeLlm, -Case <ids>, -LogDir auto|<dir>, -Keep N, -AllowInvalid"
     Write-Host "  rws         Run real-world scenario tests (requires a mode)"
     Write-Host "              sc, scenarios <names...>  run named tasks via run-tests.ps1"
     Write-Host "              sc add <name> <url>       create a scenario from template"
@@ -614,6 +617,8 @@ function Print-Usage {
     Write-Host "  test.ps1 mcp                        # Run MCP-focused agentic tests"
     Write-Host "  test.ps1 mcp-contract               # Contract gate: matrix + docs + lint + validators"
     Write-Host "  test.ps1 ps                         # PowerShell tests + the skills/ conformance lint CI runs next"
+    Write-Host "  test.ps1 permission -Tier A         # Permission/sandbox e2e, deterministic tier (live backend)"
+    Write-Host "  test.ps1 permission -Plan -Tier A   # Print the resolved tool calls and their expectations"
     Write-Host "  test.ps1 ps -Quiet                  # Run PowerShell tests with -Quiet flag"
     Write-Host "  test.ps1 -Show ps                   # List the discovered PowerShell test files"
     Write-Host "                                      # (any other ps argument is rejected, not ignored)"
@@ -645,7 +650,7 @@ function Print-Usage {
 }
 
 function Exit-UnknownTestType([string]$testType) {
-    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, browser4-cli, main, mock-site, server, rest, skills, mcp, verify, ps, rws, resume, session."
+    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, browser4-cli, main, mock-site, server, rest, skills, mcp, verify, ps, permission, rws, resume, session."
     exit 1
 }
 
@@ -4863,6 +4868,63 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
 # binding, the CLI argument contract, `--verify` semantics, determinism and the
 # read-only guarantee. It needs a live backend (the dev wrapper builds/starts
 # it) and it measures latency, so it runs alone.
+function Invoke-PermissionTests([string[]]$additionalArgs) {
+    <#
+    .SYNOPSIS
+        Run the permission + execution-sandbox end-to-end suite.
+
+    .DESCRIPTION
+        Thin wrapper around `browser4-tests/permission-e2e/run-permission-e2e.ps1`, the same script
+        the nightly workflow runs on a Windows runner. The suite needs a LIVE backend (it probes
+        `coding.permissions` for the effective sandbox) and, for tiers B/C, an LLM key — so it is
+        never part of the PR quality gate.
+
+        Arguments are forwarded untouched, so every runner switch works:
+            test.ps1 permission -Tier A
+            test.ps1 permission -Plan -Tier A
+            test.ps1 permission -List
+            test.ps1 permission -Tier B -IncludeLlm
+            test.ps1 permission -Case A05-os-env-composed-path,A06-os-script-body
+            test.ps1 permission -LogDir auto -Keep 5
+
+        Exit code: the runner's own (0 pass/skip, 1 FAIL/INVALID, 2 harness error).
+
+    .PARAMETER additionalArgs
+        Arguments forwarded to run-permission-e2e.ps1.
+    #>
+    $runnerScript = Join-Path $repoRoot 'browser4-tests' 'permission-e2e' 'run-permission-e2e.ps1'
+    if (-not (Test-Path -LiteralPath $runnerScript -PathType Leaf)) {
+        Write-CommandBanner -Label "permission-e2e runner not found at $runnerScript" -Icon '[FAIL]'
+        exit 1
+    }
+
+    $runnerArgs = @()
+    if ($additionalArgs.Count -gt 0) { $runnerArgs = $additionalArgs }
+    $display = "  pwsh $runnerScript $($runnerArgs -join ' ')"
+
+    if ($script:Show) {
+        Write-CommandBanner -Label '[SHOW] Would execute:' -Subtitle $display
+        return
+    }
+    if ($script:DryRun) {
+        Write-CommandBanner -Label '[DRY RUN] Executing:' -Subtitle $display
+        return
+    }
+
+    Write-CommandBanner -Label 'Running permission + sandbox e2e suite...' -Subtitle $display
+    & pwsh -NoProfile -File $runnerScript @runnerArgs
+    $runnerExit = $LASTEXITCODE
+    if ($runnerExit -eq 2) {
+        Write-CommandBanner -Label 'permission-e2e could not read the live backend (start it first, e.g. ./b4w.ps1 status)' -Icon '[FAIL]'
+        exit 2
+    }
+    if ($runnerExit -ne 0) {
+        Write-CommandBanner -Label "permission-e2e failed (exit $runnerExit; INVALID counts as failure)" -Icon '[FAIL]'
+        exit $runnerExit
+    }
+    Write-CommandBanner -Label 'permission-e2e passed' -Icon '[PASS]'
+}
+
 function Invoke-VerifyGate([string[]]$additionalArgs) {
     $evalScript = Join-Path $repoRoot 'bin' 'eval-devtask.ps1'
     Write-CommandBanner -Label 'Running code devtask plan-quality evaluation...'
@@ -4932,6 +4994,7 @@ $testTypeMap = @{
     'mocksiteboot'  = 'server'
     'rws'           = 'rws'
     'ps'            = 'ps'
+    'permission'    = 'permission'
     'resume'        = 'resume'
     'session'       = 'session'
 }
@@ -5084,6 +5147,7 @@ $mavenTests  = @($testTypes | Where-Object { $testTypeMap[$_] -in 'maven', 'mave
 $cliTests    = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'cli' })
 $rwsTests    = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'rws' })
 $psTests     = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'ps' })
+$permissionTests = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'permission' })
 $launchTargets = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'server' })
 $verifyTests = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'verify' })
 
@@ -5101,11 +5165,12 @@ $mavenTests = $expandedMaven | Select-Object -Unique
 $cliTests = $cliTests | Select-Object -Unique
 $rwsTests = $rwsTests | Select-Object -Unique
 $psTests  = $psTests | Select-Object -Unique
+$permissionTests = $permissionTests | Select-Object -Unique
 $launchTargets = $launchTargets | Select-Object -Unique
 $verifyTests = $verifyTests | Select-Object -Unique
 
 # Validate: server must be run by itself
-if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($rwsTests.Count -gt 0) -or ($psTests.Count -gt 0) -or ($verifyTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
+if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($rwsTests.Count -gt 0) -or ($psTests.Count -gt 0) -or ($permissionTests.Count -gt 0) -or ($verifyTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
     Write-Error "mock-site (or server) must be run by itself. Pass any Maven properties after it, for example: test.ps1 mock-site -Dmock.site.port=18080"
     exit 1
 }
@@ -5148,8 +5213,15 @@ if ($psTests.Count -gt 0) {
     # sole owner of the command line, so an unknown flag is a user error rather
     # than a pass-through meant for another suite.
     $psIsSoleTarget = ($mavenTests.Count -eq 0 -and $cliTests.Count -eq 0 -and
-                       $rwsTests.Count -eq 0 -and $launchTargets.Count -eq 0)
+                       $rwsTests.Count -eq 0 -and $launchTargets.Count -eq 0 -and
+                       $permissionTests.Count -eq 0)
     Invoke-PowerShellTests -additionalArgs $additionalArgs -StrictArgs:$psIsSoleTarget
+}
+
+if ($permissionTests.Count -gt 0) {
+    # The permission suite owns its own switches (-Tier/-Case/-Plan/...), so the tokens are
+    # forwarded verbatim; `permission` is meant to be run alone (it needs a live backend).
+    Invoke-PermissionTests -additionalArgs $additionalArgs
 }
 
 if ($verifyTests.Count -gt 0) {
