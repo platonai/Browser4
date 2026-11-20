@@ -138,9 +138,39 @@ class CodingAgentShellTest {
     }
 
     @Test
+    @DisplayName("one platform-encoded line does not turn the UTF-8 lines into mojibake")
+    fun mixedEncodingsDecodePerLine() {
+        // 2026-11-20 run: the whole capture was decoded as GBK because one line was GBK, so
+        // every Chinese line the tool had written as UTF-8 arrived garbled.
+        val native = Charset.forName(System.getProperty("native.encoding") ?: "UTF-8")
+        val utf8Line = "构建成功: 12 个文件"
+        // `文件` is CE C4 BC FE in GBK — not valid UTF-8, so the capture is detectably mixed
+        // (a GBK line whose bytes happen to be valid UTF-8 is covered by the test below).
+        val nativeLine = " 文件: 12 个"
+        val bytes = (utf8Line + "\n").toByteArray(Charsets.UTF_8) +
+            (nativeLine + "\n").toByteArray(native) +
+            utf8Line.toByteArray(Charsets.UTF_8)
+
+        assertEquals(
+            "$utf8Line\n$nativeLine\n$utf8Line",
+            CodingAgentShell.decodeProcessOutput(bytes),
+        )
+    }
+
+    @Test
+    @DisplayName("a GBK line that happens to be valid UTF-8 keeps its native reading")
+    fun gbkThatLooksLikeUtf8KeepsNativeReading() {
+        // `目录` is C4 BF C2 BC in GBK — also valid UTF-8 for U+013F U+00BC (`Ŀ¼`), so a plain
+        // "strict UTF-8 first" decoder silently replaced the word. Real UTF-8 non-ASCII is 3+
+        // bytes, which is what tells the two apart.
+        val gbk = Charset.forName("GBK")
+        val line = " 目录: C:\\workspace"
+        assertEquals(line, CodingAgentShell.decodeLine(line.toByteArray(gbk), gbk))
+    }
+
+    @Test
     @DisplayName("a leading UTF-8 BOM is stripped")
-    fun utf8BomIsStripped() {
-        val bom = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())
+    fun utf8BomIsStripped() {        val bom = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())
         assertEquals("hello", CodingAgentShell.decodeProcessOutput(bom + "hello".toByteArray(Charsets.UTF_8)))
     }
 

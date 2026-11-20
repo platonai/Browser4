@@ -419,23 +419,92 @@ class CodingAgentShell(
         }.getOrElse { StandardCharsets.UTF_8 }
 
         /**
-         * Decode a child process's stdout/stderr bytes.
+         * Decode one line of child-process output.
          *
-         * Strict UTF-8 when the bytes decode cleanly (Maven, git, python), and
-         * the platform native encoding otherwise (cmd.exe built-ins on a
-         * localized Windows). A leading UTF-8 BOM is stripped.
+         * Strict UTF-8 is attempted first, but a line that decodes is not automatically UTF-8:
+         * GBK text can be *valid* UTF-8 (`目录` is `C4 BF C2 BC`, i.e. `U+013F U+00BC`). Real
+         * non-ASCII UTF-8 is 3 or 4 bytes (CJK, emoji), so a line whose non-ASCII characters are
+         * all 2-byte sequences is far more likely native text that happens to decode — it is
+         * decoded with [fallback] instead. Everything else falls back only when UTF-8 cannot
+         * decode the bits at all. A trailing CR is dropped.
+         *
+         * Shared with `b4.run`'s reader (`CliProcessManager.decodeLine`), which needs exactly
+         * these semantics; keeping one implementation is what stops the two channels from
+         * drifting apart again.
+         */
+        fun decodeLine(bytes: ByteArray, fallback: Charset = NATIVE_OUTPUT_CHARSET): String {
+            if (bytes.isEmpty()) return ""
+            val utf8 = strictUtf8(bytes)
+            val text = when {
+                utf8 == null -> String(bytes, fallback)
+                isProbablyNativeMisread(utf8) -> String(bytes, fallback)
+                else -> utf8
+            }
+            return text.removeSuffix("\r")
+        }
+
+        /**
+         * Decode a child process's stdout/stderr bytes, line by line.
+         *
+         * One line in the OEM codepage must not turn the UTF-8 output around it into mojibake: a
+         * single capture can mix `mvn`/`git`/`python` output (UTF-8) with a localized `cmd.exe`
+         * built-in message (GBK on a zh-CN host), and decoding the whole buffer as GBK because of
+         * that one line garbled everything the model then had to read. A stream that is valid
+         * UTF-8 end to end is taken as UTF-8 wholesale, so the per-line heuristic only runs on
+         * output that really mixes encodings; a GBK line whose bytes happen to be valid UTF-8,
+         * with no invalid byte anywhere else in the capture, is indistinguishable from UTF-8
+         * text and keeps the UTF-8 reading. A leading UTF-8 BOM is stripped.
          */
         fun decodeProcessOutput(bytes: ByteArray): String {
             if (bytes.isEmpty()) return ""
-            val utf8 = runCatching {
-                StandardCharsets.UTF_8.newDecoder()
-                    .onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT)
-                    .decode(ByteBuffer.wrap(bytes))
-                    .toString()
-            }.getOrNull()
-            val text = utf8 ?: String(bytes, NATIVE_OUTPUT_CHARSET)
+            val text = strictUtf8(bytes) ?: buildString(bytes.size) {
+                var start = 0
+                while (start < bytes.size) {
+                    val newline = indexOfNewline(bytes, start)
+                    if (newline < 0) {
+                        append(decodeLine(bytes.copyOfRange(start, bytes.size)))
+                        break
+                    }
+                    append(decodeLine(bytes.copyOfRange(start, newline)))
+                    append('\n')
+                    start = newline + 1
+                }
+            }
             return if (text.startsWith('\uFEFF')) text.substring(1) else text
+        }
+
+        /** The whole buffer as strict UTF-8, or `null` when any byte sequence is not valid UTF-8. */
+        private fun strictUtf8(bytes: ByteArray): String? = runCatching {
+            StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(bytes))
+                .toString()
+        }.getOrNull()
+
+        /**
+         * True when a valid-UTF-8 line is more likely OEM bytes read as UTF-8.
+         *
+         * Only 2-byte UTF-8 sequences (U+0080…U+07FF) are ambiguous with a 2-byte GBK pair; a
+         * CJK ideograph, an emoji or any other 3/4-byte sequence is unambiguous UTF-8, so a line
+         * containing one keeps its UTF-8 reading. A Latin-only accented line inside an otherwise
+         * native stream is the accepted casualty of this rule.
+         */
+        private fun isProbablyNativeMisread(text: String): Boolean {
+            var sawNonAscii = false
+            for (ch in text) {
+                if (ch.code < 0x80) continue
+                if (ch.code >= 0x0800) return false
+                sawNonAscii = true
+            }
+            return sawNonAscii
+        }
+
+        private fun indexOfNewline(bytes: ByteArray, from: Int): Int {
+            for (i in from until bytes.size) {
+                if (bytes[i] == '\n'.code.toByte()) return i
+            }
+            return -1
         }
 
         // ------------------------------------------------------------------
