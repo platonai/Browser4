@@ -170,14 +170,32 @@ default=gb2312  out=gb2312  in=gb2312
 
 所以 `powershell -Command "node x.js"` 会把子进程的 UTF-8 按 GB2312 解码再以 GBK 写出，采集层无法还原。代码级修法（注入 `[Console]::OutputEncoding` / 后端切码页）需要定方案；本轮先在**编码提示**里告诉模型不要这样包（`CliAgentPrompt.kt`，`CliAgentPromptTest` 15 passed）。
 
+### 4.4 一个会骗人的测试假阳性（未改 runner，记录）
+
+在**编辑了后端源码但还没重建 bundle** 的状态下跑 Tier A，`A05/A06/A17` 报 FAIL：
+
+```
+✗ [coding_shell] ok: expected=False actual=True exit=0
+```
+
+但 `.out.txt` 里沙箱**确实拒绝了**（`code=SANDBOX_DENIED`，canary 也没生成）。原因：查看到期 bundle 时 CLI 每次调用都会往 stderr 打一行
+
+```
+Backend sources are newer than the runtime bundle; the next backend command rebuilds it automatically (a few minutes).
+```
+
+runner 把 stdout+stderr 合并后，这一行成了 payload 首行，于是 `Invoke-CliTool` 的"leading marker"判定（`Error:` / `PERMISSION_DENIED` / `✗ … FAILED`）全部落空 → `ok=True`。重建 bundle 后同一套件 **17 PASS / 0 FAIL / 4 SKIP**。
+
+建议（runner 侧一行）：判定前剥掉 CLI 自己的告警行（`Backend sources are newer` / 以 `⚠` 开头），或在前 5 行里找标记而不是只认第一行。
+
 ## 后续（未做）
 
 1. PowerShell 的 `[Console]::OutputEncoding`：没有对应的环境变量可设，只能给后端进程切控制台码页（`SetConsoleOutputCP`）或在命令前注入初始化语句；两者都需要在真实 GBK 控制台上实测。
-2. `coding.verify` 的 `VERDICT_JSON` 截断（F2，见 4.2）：失败路径的 evidence 太长，模型引不到逐字 verdict。
-3. 状态文件"存在但不可读"（deny-read 单文件）不再静默（已加警告），但仍不回退——是否回退要看是否接受 mtime 比较。
-4. fallback 目录是 CWD 相对：读写已一致，但跨不同工作目录仍不连续。
-5. `A19` 已验证环境变量注入；"沙箱内 `attach` 一次成功"仍需一条带浏览器的 e2e。
-6. `jsCodeOnly` 已保留 `${…}` 里的代码（第三轮），仅模板文本仍置空——这是刻意的。
+2. 状态文件"存在但不可读"（deny-read 单文件）不再静默（已加警告），但仍不回退——是否回退要看是否接受 mtime 比较。
+3. fallback 目录是 CWD 相对：读写已一致，但跨不同工作目录仍不连续。
+4. `A19` 已验证环境变量注入；"沙箱内 `attach` 一次成功"仍需一条带浏览器的 e2e。
+5. 测试假阳性（4.4）：runner 的 leading-marker 判定需要容忍 CLI 的告警行。
+
 
 
 
