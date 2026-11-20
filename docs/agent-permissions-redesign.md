@@ -287,7 +287,7 @@ skill scripts, git/worktree/merge, LSP/ripgrep.
 | 环节 | 实现 |
 |---|---|
 | 边界 | 新增 `sandbox` / `workspace` 供应商（`AgentToolManager` 用 `CodingComponents.sandbox(accessPolicy)` 与 `workspaceRoot` 注入）；有边界且不是 `off` 时，`ProcessLauncher.start(prepare(...))` |
-| CLI 状态 | CLI 需要写 `~/.browser4`（Medium，沙箱内不可写）。启动时显式设 `BROWSER4_CLI_STATE_DIR=<workspace>/.b4scratch/cli-state`——CLI 本来就有这个开关，且它在 `PermissionDenied` 时也会回退到 CWD 下的 `./.browser4-cli-state`，所以这是同一条既有机制的显式写法 |
+| CLI 状态 | CLI 需要写 `~/.browser4`（Medium，沙箱内不可写）。两条沙箱通道（`b4.run` 与 `coding.shell`/技能脚本）都经 `CliStateEnv`（`browser4-agentic/cli/CliStateEnv.kt`）解析 `BROWSER4_CLI_STATE_DIR=<workspace>/.b4scratch/cli-state`：操作员显式设定时优先，否则仅在有边界时改指工作区（无边界保持扁平 `~/.browser4`，与用户终端共享会话）。2026-11-20 之前只有 `b4.run` 注入了它，`coding.shell` 只透传操作员的值，于是同一 run 里两条通道的 CLI 状态不一致 |
 | stdin | 令牌启动把 stdin 接成管道；无 payload 时启动后立即 `close()`，让子进程马上看到 EOF（否则会重演 2026-10-29 那个"读 stdin 卡到超时"） |
 | 回退 | 无边界/无工作区 → 保留历史 `ProcessBuilder`；有边界时 `prepare` 失败会抛错，绝不裸启动 |
 | 进程树 | 与 shell 一致：子进程进入同一个 Job Object（§11.1），backend 退出时一起清理 |

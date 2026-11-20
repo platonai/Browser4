@@ -3,6 +3,7 @@ package ai.platon.pulsar.agentic.cli
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.agentic.observability.CliMetrics
+import ai.platon.pulsar.coding.CodingAgentShell
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -17,9 +18,7 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
-import java.nio.ByteBuffer
 import java.nio.charset.Charset
-import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.time.Duration
@@ -380,9 +379,11 @@ class CliProcessManager(
         taskWorkspace: Path,
         legacy: ProcessBuilder? = null,
     ): ProcessSpec {
-        val stateDir = taskWorkspace.resolve(".b4scratch").resolve("cli-state")
         val env = LinkedHashMap(spec.env).apply {
-            put("BROWSER4_CLI_STATE_DIR", stateDir.toString())
+            // One definition of the sandbox state dir, shared with `coding.shell` (see CliStateEnv):
+            // a Low-integrity child can read the Medium `~/.browser4` but cannot write it, so
+            // `attach` would persist its session to a directory the next invocation never reads.
+            put("BROWSER4_CLI_STATE_DIR", CliStateEnv.dirInWorkspace(taskWorkspace))
         }
         val directory = spec.workingDir
             ?: legacy?.directory()?.toPath()
@@ -480,21 +481,14 @@ class CliProcessManager(
     /**
      * Decode one line of child-process output.
      *
-     * UTF-8 is attempted strictly; only bytes that are not valid UTF-8 are decoded
-     * with [fallback] (the platform charset), so a GBK/cp1252 error message becomes
-     * readable instead of `Դ�ı����޷�ʶ��`. A trailing CR is dropped.
+     * Delegates to [CodingAgentShell.decodeLine] so `b4.run` and `coding.shell` cannot drift
+     * apart: strict UTF-8 first, the platform charset only for bits UTF-8 cannot decode, and a
+     * trailing CR dropped. A GBK/cp1252 error message becomes readable instead of
+     * `Դ�ı����޷�ʶ��`, while UTF-8 output from the tool that did the work is never
+     * re-decoded as GBK.
      */
-    internal fun decodeLine(bytes: ByteArray, fallback: Charset = StandardCharsets.UTF_8): String {
-        if (bytes.isEmpty()) return ""
-        val utf8 = runCatching {
-            StandardCharsets.UTF_8.newDecoder()
-                .onMalformedInput(CodingErrorAction.REPORT)
-                .onUnmappableCharacter(CodingErrorAction.REPORT)
-                .decode(ByteBuffer.wrap(bytes))
-                .toString()
-        }.getOrNull()
-        return (utf8 ?: String(bytes, fallback)).removeSuffix("\r")
-    }
+    internal fun decodeLine(bytes: ByteArray, fallback: Charset = StandardCharsets.UTF_8): String =
+        CodingAgentShell.decodeLine(bytes, fallback)
 
     /**
      * The charset a Windows console program writes when its output is not UTF-8.
