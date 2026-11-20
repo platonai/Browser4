@@ -275,6 +275,40 @@ runner 上证明稳定，把该 job 提到 `--level=BASIC` 只是一个词的改
   `cargo test --test e2e -- --nocapture --level EXTENDED --scenario=test_e2e_experience_web_roundtrip`
   （真实网站变体加 `--enable-all`）。
 
+### 权限 / 沙箱端到端套件（`browser4-tests/permission-e2e/`）
+
+回答两个问题：`agent run` 在 coding / browse 两种模式下**还能不能用**，以及威胁模型里每条逃逸路线是否
+被**该拒绝的那一层**拒绝（设计文档
+[20261120-permission-sandbox-e2e-plan.md](../docs-dev/copilot/20261120-permission-sandbox-e2e-plan.md)）。
+它不是 Maven 测试、也不在 JUnit tag 体系里：运行器是 PowerShell，断言对象是 canary 文件 + ndjson 工具结果 +
+后端日志增量。
+
+| 维度 | 值 | 说明 |
+| --- | --- | --- |
+| 层级 | E2E | 真后端 + 真 OS 账户；不看 model 自述，只看 canary 与工具结果 |
+| 平台 | **Windows**（`windows-low-il` / `windows-acl` / `windows-appcontainer`） | Linux/macOS 没有已实现的 POSIX 后端（issue 629），OS 层用例 `SKIP` |
+| 依赖 | `RequiresServer` +（B/C 层）`RequiresAI` | A 层无 LLM；B/C 层需要后端上的 LLM key |
+| 速度 | A 层 ~3 min（`Fast` 语义）/ B 层 ~20 min / C 层每次尝试硬上限 180 s + `--token-budget` | C 层是红队，只产 finding |
+| 策略 | `E2E` + `RequiresBrowser`/`RequiresSandbox`（本套件自己的词表） | **不进** `pr.yml`/`ci.yml` 门禁 |
+| CI | `nightly.yml` 的 `permission-e2e` job（Windows runner，仅 `-Tier A`，pin `windows-low-il`） | 另可手动 `workflow_dispatch` |
+| 本地 | `pwsh bin/test.ps1 permission -Tier A`（等价于直接跑 `run-permission-e2e.ps1`） | 后端必须已启动 |
+
+判定语义（比 JUnit 更严）：`PASS` / `PASS?`（有断言未能求值，绝不算通过）/ `SKIP` / `FAIL` /
+`INVALID`（用例证明不了它声称的事：策略层抢先，或孪生没复现）——`INVALID` **默认算失败**。
+配套两条方法论规则：**配对控制**（每条门禁型 deny 都有一个"把边界显式拿掉必须成功"的孪生；策略层只读边界
+无法按调用移除的用例改用 `control` 字段做同工具正向对照）与**层归因**（期望 OS 拒绝的用例必须对策略层拒绝码
+做 `forbidResultContains`）。
+
+日志断言的读者是**每次**拒绝都会写的那行 `sandbox denied: sandbox=… tool=… command=… evidence=…`，
+不是按 `tool:code` 形态去重的 `coding access denied` —— 后者在同一次后端生命周期里只写一次，第二次跑断言就
+求值不出（历史缺口 P2-11）。
+
+`ok` 由**首行**标记判定（`Error:` / `PERMISSION_DENIED` / `✗ … FAILED`），所以运行器会先剥掉 CLI 自己的告警行
+（`Backend sources are newer than the runtime bundle…`、`browser4-cli: warning:` / `note:`、`⚠`）：
+stdout 与 stderr 是合并读的，一行"bundle 过期"插在首行会让沙箱**已经拒绝**的调用读成 `ok=True`
+（2026-11-20 在"改了源码没重建"的 bundle 上实测，A05/A06/A17 三例假 FAIL）。修好判定后同类运行不再骗人，
+但那仍不是"不需要重建"——重建之后再信一次结果。
+
 ### 通过/失败语义（重要）
 
 * **Maven 退出码是权威**：`.github/actions/run-tests/action.yml` 的 `reconcile-status` 不再把
