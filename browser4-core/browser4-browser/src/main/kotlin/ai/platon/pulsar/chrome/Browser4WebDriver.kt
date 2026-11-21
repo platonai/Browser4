@@ -49,6 +49,7 @@ import kotlinx.coroutines.withTimeout
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import kotlin.random.Random
@@ -545,6 +546,42 @@ open class Browser4WebDriver(
             value < 0.0 -> minOf(value, -OFF_VIEWPORT_MARGIN_PX)
             value > upperBound -> maxOf(value, upperBound + OFF_VIEWPORT_MARGIN_PX)
             else -> value
+        }
+
+        /**
+         * The page's scroll offsets as `"scrollX,scrollY"`, the input `mouseMoveAt`'s
+         * `document` space needs.
+         *
+         * The base library keeps the same expression `private`, and this driver's
+         * override must read the offsets the base reads — two formulas would park the
+         * pointer at two different points depending on which branch ran.
+         */
+        internal const val SCROLL_POSITION_JS =
+            """(()=>{const s=document.scrollingElement||document.documentElement;const x=window.scrollX||(s&&s.scrollLeft)||0;const y=window.scrollY||(s&&s.scrollTop)||0;return x+','+y;})()"""
+
+        /** Spaces [mouseMoveAt] converts from page coordinates instead of using as-is. */
+        internal fun spaceNeedsScrollOffset(space: String): Boolean =
+            space.trim().lowercase() in setOf("document", "page", "absolute")
+
+        /**
+         * The viewport point [mouseMoveAt] dispatches for ([x], [y]) in [space], or
+         * `null` for a space this driver does not resolve — the base reports it with
+         * its own message, so an unknown name keeps exactly one wording.
+         *
+         * `viewport` (also `""` and `client`) is CDP's native space and passes through
+         * unchanged; `document` (also `page` and `absolute`) is the space of snapshot
+         * boxes and subtracts the scroll offsets.
+         */
+        internal fun viewportPointForSpace(
+            x: Double,
+            y: Double,
+            space: String,
+            scrollX: Double,
+            scrollY: Double,
+        ): Pair<Double, Double>? = when (space.trim().lowercase()) {
+            "", "viewport", "client" -> x to y
+            "document", "page", "absolute" -> (x - scrollX) to (y - scrollY)
+            else -> null
         }
 
         /**
@@ -1144,6 +1181,90 @@ internal enum class DragDropPosition(val key: String) {
     }
 
     /**
+     * [mouseMove] in an explicit coordinate space and with an explicit pace: the base
+     * contract plus the off-viewport plan.
+     *
+     * The base implementation dispatches its `steps`/`durationMillis` branch itself
+     * (`Mouse.moveTo` with exactly that pace), so `mousemove --steps` / `--duration`
+     * used to bypass [glidePointerTo] — and the plan with it: a `--steps 4` move to
+     * `-0.6` still delivered `clientX = -1`. This override resolves the viewport point
+     * with the same conversion the base uses and hands an off-viewport (or
+     * re-entering) request to the shared glide, which applies the requested pace to
+     * the trail. Everything else — no explicit pace, an in-page point, an unknown
+     * space, an unreadable scroll offset — is delegated to the base, so the pacing
+     * defaults and the error wording stay in one place.
+     *
+     * @param space `viewport` (also `""` and `client`) or `document` (also `page` and
+     *   `absolute`, the space of snapshot boxes)
+     * @param steps explicit step count; `0` derives one from the distance
+     * @param durationMillis total movement duration; `0` uses the base's 50 ms per step
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun mouseMoveAt(
+        x: Double,
+        y: Double,
+        space: String,
+        steps: Int,
+        durationMillis: Long,
+    ) {
+        // Without an explicit pace the base forwards this to [mouseMove], which already
+        // runs the plan — there is nothing to intercept.
+        if (steps <= 0 && durationMillis <= 0) {
+            super.mouseMoveAt(x, y, space, steps, durationMillis)
+            return
+        }
+        val point = resolveViewportPoint(x, y, space)
+        val m = page.mouse.takeIf { isActive }
+        if (point == null || m == null) {
+            // Unknown space, unreadable scroll offset, inactive driver: let the base
+            // report it (or move) with its own wording instead of a second copy here.
+            super.mouseMoveAt(x, y, space, steps, durationMillis)
+            return
+        }
+        // Read outside `invokeOnPage` for the same reason as in [mouseMove].
+        val viewport = pointerViewport()
+        val plan = pointerMovePlan(
+            point.first, point.second, m.currentX, m.currentY, viewport?.first, viewport?.second
+        )
+        if (!plan.leavesViewport && !plan.reenter) {
+            // Pointer and target both on the page: the base's own dispatch already has
+            // the right geometry, so it keeps both the pacing and the step defaults.
+            super.mouseMoveAt(x, y, space, steps, durationMillis)
+            return
+        }
+        rpc.invokeOnPage("mouseMoveAt") {
+            glidePointerTo(m, viewport, point.first, point.second, steps, durationMillis)
+        }
+    }
+
+    /**
+     * Resolve the viewport point [mouseMoveAt] should dispatch, or `null` when the
+     * space is unknown or the scroll offset it needs cannot be read (the caller then
+     * lets the base report it).
+     *
+     * Mirrors the base library's conversion exactly — `document`/`page`/`absolute`
+     * subtract the offsets the engine reads immediately before the move — because two
+     * readings of the same space would park the pointer at two different points
+     * depending on which branch ran.
+     */
+    private suspend fun resolveViewportPoint(x: Double, y: Double, space: String): Pair<Double, Double>? {
+        if (!spaceNeedsScrollOffset(space)) return viewportPointForSpace(x, y, space, 0.0, 0.0)
+        val raw = try {
+            evaluateValue(SCROLL_POSITION_JS)?.toString()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.debug("mouseMoveAt scroll offset unavailable: {}", e.message)
+            null
+        }
+        val parts = raw?.split(',')
+        val scrollX = parts?.getOrNull(0)?.trim()?.toDoubleOrNull()
+        val scrollY = parts?.getOrNull(1)?.trim()?.toDoubleOrNull()
+        if (scrollX == null || scrollY == null) return null
+        return viewportPointForSpace(x, y, space, scrollX, scrollY)
+    }
+
+    /**
      * The page's viewport in CSS pixels, or `null` when it cannot be read
      * (detached page, mid-navigation). The pointer plan then enforces only the
      * lower bound, which needs no viewport knowledge.
@@ -1185,20 +1306,40 @@ internal enum class DragDropPosition(val key: String) {
      * can still graze an edge, but only across the ~1 px rounding band instead of
      * the guaranteed crossing every off-viewport move used to produce.
      *
-     * Known gap: `mouseMoveAt` with an explicit `steps`/`durationMillis` is
-     * dispatched by the base class itself (`Mouse.moveTo` with that pace), so those
-     * two options do not pass through this plan — only the default pace does. See
-     * `docs-dev/copilot/20261118-human-like-browser-interaction.md` §2.6.
+     * [steps] and [durationMillis] are the explicit pace `mouseMoveAt` promises; the
+     * default `0`/`0` keeps the human-like pace this class uses everywhere else, so
+     * both entry points share one dispatch policy.
      */
-    private suspend fun glidePointerTo(m: Mouse, viewport: Pair<Double, Double>?, x: Double, y: Double) {
+    private suspend fun glidePointerTo(
+        m: Mouse,
+        viewport: Pair<Double, Double>?,
+        x: Double,
+        y: Double,
+        steps: Int = 0,
+        durationMillis: Long = 0,
+    ) {
         val plan = pointerMovePlan(x, y, m.currentX, m.currentY, viewport?.first, viewport?.second)
+        val explicitPace = steps > 0 || durationMillis > 0
+        val trailDistance = hypot(plan.trailX - m.currentX, plan.trailY - m.currentY)
+        val trailSteps = when {
+            // A step back onto the page is one dispatch no matter the requested pace:
+            // a multi-step trail from an off-viewport point crosses the band as well.
+            plan.reenter -> 1
+            !explicitPace -> pointerMoveSteps(trailDistance)
+            // A duration-only request derives its step count from the distance — the
+            // base's formula, so `--duration` keeps the cadence it always had.
+            steps > 0 -> steps
+            else -> max(1, min(30, (trailDistance / 20.0).toInt()))
+        }
+        val trailDelay = when {
+            explicitPace && durationMillis > 0 -> (durationMillis / trailSteps).coerceAtLeast(1)
+            explicitPace -> 50L
+            else -> Random.nextLong(8, 17)
+        }
         if (plan.reenter) {
-            // The pointer rests outside the page: one step back in. A multi-step
-            // trail from an off-viewport point crosses the rounding band as well.
-            m.moveTo(plan.trailX, plan.trailY, steps = 1, delayMillis = Random.nextLong(8, 17))
+            m.moveTo(plan.trailX, plan.trailY, steps = 1, delayMillis = trailDelay)
         } else {
-            val distance = hypot(plan.trailX - m.currentX, plan.trailY - m.currentY)
-            m.moveTo(plan.trailX, plan.trailY, steps = pointerMoveSteps(distance), delayMillis = Random.nextLong(8, 17))
+            m.moveTo(plan.trailX, plan.trailY, steps = trailSteps, delayMillis = trailDelay)
         }
         if (plan.leavesViewport) {
             m.moveTo(

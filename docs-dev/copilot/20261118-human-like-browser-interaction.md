@@ -207,9 +207,9 @@ perStepDelay = durationMillis > 0 ? max(1, durationMillis / stepCount) : 50
 - 越界点的最后一次派发会再外推 `OFF_VIEWPORT_MARGIN_PX = 2px`：`-0.6` 这种"差一点越界"的请求会被推到 `-2`，避免它自己落在四舍五入带里。页面收不到的坐标对页面没有意义，收得到的那次才会被当成页内事件。
 - 视口大小由 `window.innerWidth/Height`（CSS px，与 CDP `Input` 同一坐标系）读出；读不到（导航中、页面已分离）时只钳下限 `≥0`——那部分不需要知道视口尺寸也成立。
 - **残余风险（已量化，不在驱动控制范围）**：基库在两个视口内端点之间弯出的二次贝塞尔仍在控制点凸包内，靠近边界时**可能擦过边缘**；但窗口只有约 1 px 宽（`x ∈ (-1.5, -0.5)`），而修复前每一次越界移动都必穿过它（7/20）。要彻底消除只能自己接管整条轨迹（放弃基库的曲线/缓动），目前不做。
-- **已知缺口**：`mousemove --steps N` / `--duration D` 走的是 `mouse_move_at` → 基库 `PulsarWebDriver.mouseMoveAt` 的**显式节奏分支**，那里直接调 `Mouse.moveTo(x, y, steps, durationMillis)`，不经过 `glidePointerTo`，所以带上这两个选项的越界移动仍可能穿过分数带。`--space document`（steps/duration 都是 0）会委托回 `mouseMove`，是安全的。要补这条路径需要复刻基库的坐标空间转换 + 节奏语义，且必须先在真实浏览器上验证，故留作后续；`glidePointerTo` 的 KDoc 里也标注了。
+- **显式节奏也已纳入（2026-11-21）**：`mousemove --steps N` / `--duration D` 走 `mouse_move_at` → 基库 `PulsarWebDriver.mouseMoveAt`，其显式节奏分支自己调 `Mouse.moveTo(x, y, steps, durationMillis)`，原先绕过 `glidePointerTo`，所以带这两个选项的 `-0.6` 请求仍会泄漏 `clientX = -1`。现在 `Browser4WebDriver.mouseMoveAt` 覆盖它：用与基库**同一套**坐标空间换算（`viewport`/`""`/`client` 原样；`document`/`page`/`absolute` 减去滚动偏移，JS 与基库同源，因为基库那个常量是 `private`）算出视口点，只在"越界或指针当前在视口外"时接管派发，并复用 `glidePointerTo(steps, durationMillis)`——轨迹步数与每步延迟按基库公式（`--steps` 用给定步数、`--duration` 按距离推导步数、默认 50 ms/步），越界那一次仍是 `steps=1` 的外推派发。视口内、无显式节奏、未知空间、滚动读不到、驱动不活跃这几种情况一律 `super` 委托，节奏默认值与报错文案仍只有一份。e2e 侧 `3c` 用 `--steps 4` 和 `--duration 40` 各跑一遍 `-0.6 -0.6`，断言轨迹同样停在 `(0,0)`。
 
-单测：`Browser4WebDriverTest.pointerMovePlan*`（视口内不变、越界拆分、负值外推、上边界、**恰好半个像素**、无尺寸、越界后回进）。e2e 侧在 `test_e2e_mouse_coordinate_spaces` 里断言**整条轨迹**的 `minClientX/minClientY ≥ 0`（fixture 新增字段），只看最后一点会漏掉中间步的泄漏；另外补了 `mousemove -0.6 -0.6` 这一例——旧实现最后一步就是 `-0.6`（必然被舍入成 `-1` 送达），新实现轨迹停在 `(0,0)`，所以断言 `last == (0,0)` 是**确定性**的回归探针，不像 `-20` 那例只有 ~35% 概率复现。
+单测：`Browser4WebDriverTest.pointerMovePlan*`（视口内不变、越界拆分、负值外推、上边界、**恰好半个像素**、无尺寸、越界后回进）与 `viewportPointForSpaceMirrorsTheBaseConversion`（`viewport`/`""`/`client` 原样、`document`/`page`/`absolute` 减滚动、未知空间交给基库报错）。e2e 侧在 `test_e2e_mouse_coordinate_spaces` 里断言**整条轨迹**的 `minClientX/minClientY ≥ 0`（fixture 新增字段），只看最后一点会漏掉中间步的泄漏；另外补了 `mousemove -0.6 -0.6` 这一例——旧实现最后一步就是 `-0.6`（必然被舍入成 `-1` 送达），新实现轨迹停在 `(0,0)`，所以断言 `last == (0,0)` 是**确定性**的回归探针，不像 `-20` 那例只有 ~35% 概率复现。
 
 ---
 

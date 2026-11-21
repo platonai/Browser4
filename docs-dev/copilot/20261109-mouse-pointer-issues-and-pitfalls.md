@@ -167,7 +167,7 @@
 - **2026-11-20 追记（负坐标会作为页内坐标泄漏，已修）**：上面"请求坐标从未出现"只对**单次派发**成立。多步轨迹（`glidePointerTo`，3–30 步、基库二次贝塞尔）到 `(-20, -20)` 时，轨迹中会有点落在左边界外的**分数带** `x ∈ (-1.5, -0.5)`；Chrome 把它四舍五入成 `-1` 并**当作页内 mousemove 派发**，页面记录到 `clientX = -1`（e2e 实测 `last = [-1, 13]`，headless Chrome 20 轮泄漏 7 轮）。nightly `test_e2e_mouse_coordinate_spaces` 因此变成 ~20% 的假失败。
   - 修法（`pointerMovePlan`，见 `20261118-human-like-browser-interaction.md` §2.6）：轨迹只走到视口内最近点，越界点用**一次** `steps=1` 派发并再外推 2 px；指针当前停在视口外时先用一步回到视口内。这样"页面能收到的点"永远是视口内坐标。边界取**半开**：`w−1.4` 舍入仍落在最后一像素（在内），`w−0.5` 舍入回 `w`（越界），否则就是同一类 bug 在右/下边的镜像。
   - 顺带结论：**判断越界要看整条轨迹**，`last` 一个点不够——e2e fixture 已加 `minClientX/minClientY` 并在场景里断言 `≥ 0`；另加 `mousemove -0.6 -0.6` 一例（旧实现最后一步必然被舍入成 `-1`，新实现停在 `(0,0)`），是**确定性**的回归探针，不依赖 7/20 那个概率。
-  - 已知缺口：`mousemove --steps/--duration` 走基库 `mouseMoveAt` 的显式节奏分支，不经过本 plan（详见 §2.6 最后一条）。
+  - **2026-11-21 补记**：`mousemove --steps` / `--duration` 走基库 `mouseMoveAt` 的显式节奏分支，原先绕过本 plan；现已由 `Browser4WebDriver.mouseMoveAt` 覆盖（同一套坐标空间换算 + 复用 glide，显式节奏只作用于轨迹），e2e 用 `--steps 4` / `--duration 40` 各验证一遍（见 §2.6 最后一条）。
 
 ### M9 "快速移动"不可控
 

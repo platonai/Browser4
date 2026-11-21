@@ -2763,6 +2763,43 @@ pub(super) fn test_mouse_coordinate_spaces(ctx: &mut E2ECtx) {
         "a `-0.6` request may not reach the page as a negative y: {after_fractional}"
     );
 
+    // ── 3c. The same edge, with an explicit pace ────────────────────
+    // `--steps`/`--duration` select `mouse_move_at`, whose base implementation
+    // dispatched the requested point itself (`Mouse.moveTo` with that pace) and so
+    // bypassed the plan: `--steps 4 -0.6 -0.6` leaked `clientX = -1` exactly like the
+    // default pace did. The driver's override routes that branch through the same
+    // glide, so the trail must still stop at the edge whatever the requested cadence.
+    for pace in [["--steps", "4"], ["--duration", "40"]] {
+        run_command(
+            ctx,
+            &[
+                "mousemove",
+                "-0.6",
+                "-0.6",
+                "--no-snapshot",
+                "--allow-outside",
+                pace[0],
+                pace[1],
+            ],
+        );
+        let after_pace = wait_for_pointer_or_abort(
+            ctx,
+            |pointer| {
+                pointer["last"][0].as_i64() == Some(0) && pointer["last"][1].as_i64() == Some(0)
+            },
+            2_000,
+            "an explicit pace must still stop an off-viewport trail at the viewport edge",
+        );
+        assert!(
+            after_pace["minClientX"].as_i64().unwrap_or(-1) >= 0,
+            "an explicit pace may not leak a negative x: {after_pace}"
+        );
+        assert!(
+            after_pace["minClientY"].as_i64().unwrap_or(-1) >= 0,
+            "an explicit pace may not leak a negative y: {after_pace}"
+        );
+    }
+
     // ── 4. A viewport coordinate is independent of the page scroll ──
     run_command(ctx, &["scroll", "down", "800"]);
     wait_for_pointer_or_abort(

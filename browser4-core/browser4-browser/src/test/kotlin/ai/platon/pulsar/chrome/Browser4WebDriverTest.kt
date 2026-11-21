@@ -832,6 +832,31 @@ class Browser4WebDriverTest {
         assertTrue(afterExit.reenter, "the exit dispatch leaves the pointer below the viewport")
     }
 
+    // -------------------------------------------------------------------------
+    // mouseMoveAt space conversion — mirrors the base library
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("viewport spaces pass through and document spaces subtract the scroll offset")
+    fun viewportPointForSpaceMirrorsTheBaseConversion() {
+        for (space in listOf("viewport", "VIEWPORT", " viewport ", "", "client")) {
+            assertEquals(120.0 to 240.0, Browser4WebDriver.viewportPointForSpace(120.0, 240.0, space, 30.0, 50.0), space)
+            assertFalse(Browser4WebDriver.spaceNeedsScrollOffset(space), space)
+        }
+        for (space in listOf("document", "Page", " absolute ")) {
+            assertEquals(
+                -30.0 to 190.0,
+                Browser4WebDriver.viewportPointForSpace(0.0, 240.0, space, 30.0, 50.0),
+                space
+            )
+            assertTrue(Browser4WebDriver.spaceNeedsScrollOffset(space), space)
+        }
+        // An unknown space is the base's to report, so the driver resolves nothing and
+        // does not invent a second error message.
+        assertNull(Browser4WebDriver.viewportPointForSpace(10.0, 10.0, "device", 0.0, 0.0))
+        assertFalse(Browser4WebDriver.spaceNeedsScrollOffset("device"))
+    }
+
     @Test
     @DisplayName("dragCenterJs resolves center, css path, frame residency and viewport")
     fun dragCenterJsContainsResolutionLogic() {
