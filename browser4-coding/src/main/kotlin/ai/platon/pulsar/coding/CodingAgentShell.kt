@@ -291,6 +291,32 @@ class CodingAgentShell(
                 "leave the workspace; "
         }
 
+    /**
+     * The remediation appended to an "outside the workspace" refusal.
+     *
+     * Chrome's default download folder is the OS `~/Downloads`, which is outside the task
+     * workspace, so "use a workspace-relative path" is not actionable for an agent asked to check
+     * what a page downloaded: it cannot make the files appear inside the workspace that way. The
+     * 2026-11-21 run spent three rounds on exactly this (and then went looking for the files
+     * through `chrome://downloads`), so a path under the download folder answers with the command
+     * that moves the download target instead.
+     */
+    private fun outsideWorkspaceHint(resolved: Path): String {
+        val downloads = userDownloadsDir()
+        if (downloads != null && resolved.startsWith(downloads)) {
+            return "the browser's downloads land in that folder by default — point it at the " +
+                "workspace first with `download --dir <workspace>/downloads` (the default is " +
+                "./downloads inside the task workspace), then verify with a workspace-relative read"
+        }
+        return "use a workspace-relative path or copy the input into the workspace"
+    }
+
+    /** The OS download folder the browser writes to by default, when it can be named. */
+    private fun userDownloadsDir(): Path? {
+        val home = System.getProperty("user.home")?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return runCatching { Path.of(home, "Downloads").toAbsolutePath().normalize() }.getOrNull()
+    }
+
     companion object {
         const val MAX_TIMEOUT_SECONDS = 600L
         const val MAX_OUTPUT_CHARS = 200_000
@@ -1732,7 +1758,7 @@ class CodingAgentShell(
                     return null
                 }
                 return PATH_GUARD_PREFIX + "'$token' resolves outside the workspace ($resolved); " +
-                    advisoryNote() + "use a workspace-relative path or copy the input into the workspace"
+                    advisoryNote() + outsideWorkspaceHint(resolved)
             }
         }
         return null
