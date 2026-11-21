@@ -328,6 +328,12 @@ stdout 与 stderr 是合并读的，一行"bundle 过期"插在首行会让沙�
   被容忍的失败会打印通过率，并在 GitHub Actions 上产生 `::warning::` 注解。
 * `nightly.yml` 的门禁判定集中在最后的 `Enforce Nightly Gate`：JVM 阶段失败不再跳过 CLI e2e 阶段，
   一夜之内两边都能拿到结论。
+* **nightly 给失败用例一次重跑**（`-Dsurefire.rerunFailingTestsCount=1`）：`browser4-rest-tests` 的
+  page-visit 集成用例对负载敏感（run 44792486359 第一次 4 个一起红、同一提交第二次全绿）。只重跑
+  失败用例，第一次通过即记为 `flakyFailure`、门禁算绿；两次都失败仍然算失败，所以它区分的是
+  "抖动"和"真失败"，不会把确定性失败藏起来。底层的 `The object is already closed` 竞态在
+  `XSqlExecutor` 里已修（池化连接被关闭时丢弃并在新连接上重跑只读语句），这条重跑只是给剩余
+  时间窗口上保险。
 
 ### 已知覆盖缺口（尚未修，需要决策）
 
