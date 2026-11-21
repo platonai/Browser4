@@ -6,7 +6,9 @@ import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.ql.h2.utils.ResultSetUtils
 import ai.platon.pulsar.skeleton.session.PulsarSession
+import org.h2.api.ErrorCode
 import org.h2.jdbc.JdbcSQLException
+import java.sql.Connection
 import java.sql.ResultSet
 
 /**
@@ -42,6 +44,9 @@ data class XSqlResult(
  * */
 object XSqlExecutor {
 
+    /** How many dead pooled connections one borrow may discard before falling back to a new one. */
+    private const val MAX_STALE_CONNECTIONS = 8
+
     private val logger = getLogger(this)
 
     /**
@@ -60,7 +65,29 @@ object XSqlExecutor {
 
         return try {
             XSqlResult(select(sqlContext, normSQL.sql))
-        } catch (e: JdbcSQLException) {
+        } catch (e: Throwable) {
+            if (!e.isClosedObject()) {
+                describe(e)
+            } else {
+                // The connection was closed under the statement. A pooled connection is returned
+                // while the session that owns it may still be closing, so one that was open when it
+                // was offered can be closed when it is used — measured on a slow fixture page, where
+                // the visit (10 s) outlives the session that fetched it, and the whole result set was
+                // lost to `The object is already closed` (90007). The statement is sealed read-only,
+                // so a retry on a freshly created connection cannot double-apply anything.
+                logger.info("Retrying X-SQL on a fresh connection after: {}", e.message)
+                try {
+                    XSqlResult(select(sqlContext, normSQL.sql, freshConnection = true))
+                } catch (retry: Throwable) {
+                    describe(retry)
+                }
+            }
+        }
+    }
+
+    /** Map an engine failure onto the outcome its caller should publish. */
+    private fun describe(e: Throwable): XSqlResult = when (e) {
+        is JdbcSQLException -> {
             val message = e.toString()
             if (message.contains("Syntax error in SQL statement")) {
                 logger.warn("Syntax error in X-SQL statement>>>\n{}\n<<<", e.sql)
@@ -69,7 +96,9 @@ object XSqlExecutor {
                 logger.warn("Failed to execute X-SQL\n{}", e.brief())
                 XSqlResult(null, e.message ?: message, ResourceStatus.SC_EXPECTATION_FAILED)
             }
-        } catch (e: Throwable) {
+        }
+
+        else -> {
             logger.warn("[Unexpected] Failed to execute X-SQL\n{}", e.brief())
             XSqlResult(
                 null,
@@ -79,13 +108,25 @@ object XSqlExecutor {
         }
     }
 
+    /** H2's `The object is already closed` (90007): the session behind the connection ended. */
+    private fun Throwable.isClosedObject(): Boolean =
+        this is JdbcSQLException &&
+            (errorCode == ErrorCode.OBJECT_CLOSED || message?.contains("already closed") == true)
+
     /**
      * Run [sql] on a pooled connection and read the result while that connection is still held: the
      * connection goes back to the pool in the `finally`, and a result set that outlived it would be
      * read through a connection somebody else is already using.
+     *
+     * @param freshConnection create the connection instead of borrowing one — the single retry after
+     *   a borrowed connection turned out to be dead inside
      * */
-    private fun select(sqlContext: AbstractBrowser4SQLContext, sql: String): List<Map<String, Any?>> {
-        val connection = sqlContext.connectionPool.poll() ?: sqlContext.randomConnection
+    private fun select(
+        sqlContext: AbstractBrowser4SQLContext,
+        sql: String,
+        freshConnection: Boolean = false,
+    ): List<Map<String, Any?>> {
+        val connection = if (freshConnection) sqlContext.randomConnection else borrow(sqlContext)
         return try {
             connection.createStatement(ResultSet.TYPE_SCROLL_SENSITIVE, ResultSet.CONCUR_READ_ONLY)?.use { st ->
                 st.executeQuery(sql)?.use { rs ->
@@ -93,8 +134,26 @@ object XSqlExecutor {
                 }
             } ?: emptyList()
         } finally {
+            // A closed connection must never go back: the next poll would hand a dead one to a query
+            // that cannot tell.
             connection.takeUnless { it.isClosed }?.let { sqlContext.connectionPool.offer(it) }
         }
+    }
+
+    /**
+     * Take a pooled connection that can still run a statement.
+     *
+     * `run`/`runQuery` on the context already skip closed connections; this is the same rule for the
+     * one consumer that used to trust the pool outright. A connection is returned to the pool while
+     * the session that owns it may still be closing, so open-at-offer does not imply open-at-use.
+     * */
+    private fun borrow(sqlContext: AbstractBrowser4SQLContext): Connection {
+        repeat(MAX_STALE_CONNECTIONS) {
+            val connection = sqlContext.connectionPool.poll() ?: return sqlContext.randomConnection
+            if (!connection.isClosed) return connection
+            runCatching { connection.close() }
+        }
+        return sqlContext.randomConnection
     }
 
     /**
