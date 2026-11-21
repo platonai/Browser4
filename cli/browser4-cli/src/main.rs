@@ -9645,6 +9645,30 @@ fn is_partial_download_name(name: &str) -> bool {
         || name.ends_with(".download")
 }
 
+/// The confirmation line for a completed `download` command.
+///
+/// The CDP call answers with an empty object, so the one useful fact — where the browser will
+/// write — is not in the result and has to be reported here. The folder alone is not enough: the
+/// caller also needs to know how to wait for the file, and the 2026-11-21 run spent a round on
+/// `help download` to find `wait --download` after being told only the path.
+///
+/// `behavior=deny` must not reuse the "saving to" wording: the command then saves nothing, and a
+/// line reading "denied: saving to <dir>" contradicts itself.
+fn download_configured_message(behavior: &str, dir: &str) -> String {
+    match (behavior, dir.is_empty()) {
+        ("allow", false) => format!(
+            "✓ Downloads allowed: saving to {dir} (files land there when the page triggers a \
+             download) — watch it with `wait --download --dir {dir}`"
+        ),
+        ("allow", true) => "✓ Download behavior set: allow".to_string(),
+        (_, true) => format!("✓ Download behavior set: {behavior}"),
+        (behavior, false) => format!(
+            "✓ Downloads {behavior}: the browser will not save any file (the previously \
+             configured folder was {dir})"
+        ),
+    }
+}
+
 /// Files present in `dir` right now (name -> size + modification time).
 fn snapshot_download_dir(dir: &Path) -> DownloadDirSnapshot {
     let mut snapshot = DownloadDirSnapshot::new();
@@ -32271,7 +32295,8 @@ fn prepare_batch_eval_params(
         if !stdin_available {
             return Err(
                 "Batch --json mode reads the command list from stdin, so 'eval --stdin' cannot \
-                 read an expression. Use 'eval --file <path>' or an inline expression instead."
+                 read an expression. Write the script to a workspace file and use \
+                 'eval --file .b4scratch/x.js', or pass the expression inline as a quoted argument."
                     .to_string(),
             );
         }
@@ -32403,8 +32428,18 @@ fn compile_batch_step(
     })?;
 
     if !cmd_def.batch_supported {
+        // A refusal the caller cannot act on costs a whole round: name the shape of a batch
+        // step (page/DOM action plus `goto`) and, for the commands whose standalone form is a
+        // prerequisite rather than an alternative, the exact command to run first.
+        let alternative = match cmd_def.name {
+            "download" => "run `download --dir <workspace dir>` as its own command first (it sets \
+                           the browser's download folder — it is browser configuration, not a DOM \
+                           action), then batch the page steps",
+            _ => "run it as its own `browser4-cli <command>` call",
+        };
         return Err(format!(
-            "Command '{}' is not supported in batch mode. Batch mode only supports DOM operations.",
+            "Command '{}' is not supported in batch mode (a batch step is a DOM action plus \
+             `goto`). Instead, {alternative}.",
             public_command_name(cmd_def.name)
         ));
     }
@@ -32746,6 +32781,43 @@ fn resolve_batch_commands(
     Ok((batch_args.bail, commands, stdin_available))
 }
 
+/// Compile every batch step up front, before the first one runs, keeping the command order.
+///
+/// Two things come out of doing this in one pass:
+///
+/// - **Every** unbuildable step is reported before the first step runs, instead of one per
+///   attempt. The errors are client-side refusals (unknown command, a command batch mode does
+///   not support, a missing required argument, `eval --stdin` with stdin already claimed by the
+///   command list) and they are all known before any page action happens, so a single round can
+///   report all of them — observed on a run that spent three rounds discovering one refused step
+///   at a time.
+/// - The compiled plan of a step is what the executor runs, so a step never compiles twice.
+///
+/// A step that cannot be compiled is reported and skipped; the steps that do compile still run,
+/// and the batch still continues past a *runtime* failure unless `--bail` was given. That is the
+/// documented batch contract (`AGENTS.md`, `help batch`, and the e2e batch scenarios), so this
+/// function deliberately does not turn a compile error into "nothing runs".
+fn compile_batch_steps(
+    commands: &[BatchCommandSpec],
+    command_map: &HashMap<String, commands::CommandDef>,
+    stdin_available: bool,
+) -> Vec<Result<BatchStepPlan, String>> {
+    commands
+        .iter()
+        .enumerate()
+        .map(|(index, spec)| {
+            compile_batch_step(spec, command_map, stdin_available).map_err(|error| {
+                format!(
+                    "Batch command {} failed ({}): {}",
+                    index + 1,
+                    spec.display,
+                    error
+                )
+            })
+        })
+        .collect()
+}
+
 async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
     let (bail, commands, stdin_available) = resolve_batch_commands(global)?;
     let base_url = resolve_base_url(global.server_url.as_deref(), global.session_name.as_deref());
@@ -32764,33 +32836,34 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
     let client = make_client();
     let command_map = commands_map();
 
-    // The batch runs on the client: every step is compiled and executed on its
-    // own, through the same executor the equivalent standalone command uses.
-    // A failing step is reported and — unless --bail was given — the batch
-    // continues with the next command.
-    let mut failures: Vec<String> = Vec::new();
+    // Every step is compiled before the first one runs (see [compile_batch_steps]). Report all
+    // unbuildable steps first: a step that cannot be compiled is never attempted, and one round
+    // carries the whole diagnosis instead of one refusal per attempt.
+    let compiled = compile_batch_steps(&commands, &command_map, stdin_available);
 
-    for (index, spec) in commands.iter().enumerate() {
-        let plan = match compile_batch_step(spec, &command_map, stdin_available) {
-            Ok(plan) => plan,
-            Err(error) => {
-                let failure = format!(
-                    "Batch command {} failed ({}): {}",
-                    index + 1,
-                    spec.display,
-                    error
-                );
-                eprintln!("{failure}");
-                failures.push(failure);
-                if bail {
-                    break;
-                }
-                continue;
-            }
-        };
+    let mut failures: Vec<String> = Vec::new();
+    for failure in compiled.iter().filter_map(|step| step.as_ref().err()) {
+        eprintln!("{failure}");
+        failures.push(failure.clone());
+    }
+    if bail && !failures.is_empty() {
+        // --bail stops before the first *runnable* step too: the caller asked to stop at the
+        // first failure, and every compile failure is already known.
+        return Err(CliError(
+            ExitCode::BatchPartial,
+            format!("{} batch command(s) failed.", failures.len()),
+        ));
+    }
+
+    // The batch runs on the client, one compiled step at a time, through the same executor the
+    // equivalent standalone command uses. A failing step is reported and — unless --bail was
+    // given — the batch continues with the next command.
+    for (index, step) in compiled.iter().enumerate() {
+        // An unbuildable step was reported above; nothing to execute.
+        let Ok(plan) = step else { continue };
 
         if let Err(error) =
-            execute_batch_step(&client, &base_url, &plan, global.session_name.as_deref()).await
+            execute_batch_step(&client, &base_url, plan, global.session_name.as_deref()).await
         {
             let failure = format!(
                 "Batch command {} failed ({}): {}",
@@ -35330,15 +35403,7 @@ async fn run(
             .await?;
             json_field("result", json!(&raw));
             if !json_active() && !quiet_active() {
-                if dir.is_empty() {
-                    cli_println!("✓ Download behavior set: {}", behavior);
-                } else {
-                    cli_println!(
-                        "✓ Downloads {}: saving to {} (files land there when the page triggers a download)",
-                        if behavior == "deny" { "denied" } else { "allowed" },
-                        dir
-                    );
-                }
+                cli_println!("{}", download_configured_message(&behavior, &dir));
             }
         }
         "upload" => {
@@ -46534,6 +46599,119 @@ linkGroups:
         assert!(
             error.contains("eval --stdin"),
             "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn compile_batch_step_refusal_names_where_a_download_step_belongs() {
+        // `download` configures the browser (Browser.setDownloadBehavior) instead of touching
+        // the page, so a batch cannot run it — but "not supported" alone sent a real agent run
+        // through three rounds of retries (2026-11-21). The refusal has to name the standalone
+        // form and why it is standalone.
+        let spec = BatchCommandSpec {
+            display: "download --dir ./imgs".to_string(),
+            tokens: vec![
+                "download".to_string(),
+                "--dir".to_string(),
+                "./imgs".to_string(),
+            ],
+        };
+
+        let error = compile_batch_step(&spec, &commands_map(), true).unwrap_err();
+        assert!(
+            error.contains("run `download --dir") && error.contains("browser configuration"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn compile_batch_step_refusal_points_other_commands_at_a_standalone_call() {
+        let spec = BatchCommandSpec {
+            display: "open https://example.com".to_string(),
+            tokens: vec!["open".to_string(), "https://example.com".to_string()],
+        };
+
+        let error = compile_batch_step(&spec, &commands_map(), true).unwrap_err();
+        assert!(
+            error.contains("run it as its own `browser4-cli"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// One batch step built from its command line (`"goto https://example.com"`), split the way
+    /// the CLI splits a quoted batch command.
+    fn batch_spec(command: &str) -> BatchCommandSpec {
+        BatchCommandSpec {
+            display: command.to_string(),
+            tokens: command.split_whitespace().map(str::to_string).collect(),
+        }
+    }
+
+    #[test]
+    fn compile_batch_steps_reports_every_unbuildable_step() {
+        // Every bad step is known before the first step runs, so the whole diagnosis belongs in
+        // one round — retrying one refused step per round is what the 2026-11-21 run paid for.
+        let commands = [
+            batch_spec("tab select 0"),
+            batch_spec("download --dir ./imgs"),
+            batch_spec("eval --stdin"),
+        ];
+
+        let compiled = compile_batch_steps(&commands, &commands_map(), false);
+        assert_eq!(
+            compiled.len(),
+            3,
+            "one entry per command, in declaration order"
+        );
+        assert!(compiled[0].is_ok(), "step 1 compiles");
+        let second = compiled[1].as_ref().unwrap_err();
+        assert!(
+            second.starts_with("Batch command 2 failed (download --dir ./imgs): "),
+            "unexpected second entry: {second}"
+        );
+        let third = compiled[2].as_ref().unwrap_err();
+        assert!(
+            third.starts_with("Batch command 3 failed (eval --stdin): "),
+            "unexpected third entry: {third}"
+        );
+    }
+
+    #[test]
+    fn compile_batch_steps_keeps_the_command_order() {
+        let commands = [
+            batch_spec("goto https://example.com"),
+            batch_spec("snapshot"),
+        ];
+
+        let compiled = compile_batch_steps(&commands, &commands_map(), true);
+        let names: Vec<&str> = compiled
+            .iter()
+            .map(|step| step.as_ref().expect("every step compiles").command.as_str())
+            .collect();
+        assert_eq!(names, vec!["goto", "snapshot"]);
+    }
+
+    #[test]
+    fn download_confirmation_names_the_folder_and_the_watch_command() {
+        // The folder alone is not actionable: the caller also has to know how to wait for the
+        // file (2026-11-21: one round went to `help download` just to find `wait --download`).
+        let line = download_configured_message("allow", "C:/ws/downloads");
+
+        assert!(line.contains("C:/ws/downloads"), "{line}");
+        assert!(
+            line.contains("wait --download --dir C:/ws/downloads"),
+            "the confirmation must say how to wait for the file: {line}"
+        );
+    }
+
+    #[test]
+    fn download_denial_does_not_claim_files_are_saved() {
+        let line = download_configured_message("deny", "C:/ws/downloads");
+
+        assert!(line.contains("will not save any file"), "{line}");
+        assert!(
+            !line.contains("saving to"),
+            "a denied download must not read as if files are saved: {line}"
         );
     }
 

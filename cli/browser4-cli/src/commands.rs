@@ -142,7 +142,12 @@ pub struct CommandDef {
     pub category: Category,
     pub hidden: bool,
     /// Whether this command can be used in batch mode.
-    /// Only commands in Core, Navigation, Keyboard, Export, and Tabs categories are supported.
+    ///
+    /// Decided per command, not per category: a batch step is a page/DOM action plus `goto`, so
+    /// a command whose effect outlives the tab (a browser-level CDP call such as `download`, a
+    /// session, harness or install command) stays `false` even when its category looks
+    /// DOM-shaped. The same category can hold both (Core and Snapshot do); new commands default
+    /// to `false` and are enabled only once the batch tests cover them.
     pub batch_supported: bool,
     /// Ordered list of positional argument definitions.
     pub args: &'static [ArgDef],
@@ -2335,7 +2340,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "eval",
-            description: "Evaluate JavaScript expression on page or element. The result goes to stdout: there is NO --output option, so write it to a file with the shell (`eval --file x.js > out.json`) when it is large. Prefer --file or --stdin on Windows to avoid shell quoting issues. Use --await for async code (fetch, Promises). Use --wait-selector for pages that render content asynchronously (React/SPA). Objects and arrays are serialized as JSON; use --json to JSON-wrap scalar results.",
+            description: "Evaluate JavaScript expression on page or element. The result goes to stdout: there is NO --output option, so write it to a file with the shell (`eval --file x.js > out.json`) when it is large. Prefer --file or --stdin on Windows to avoid shell quoting issues. Use --await for async code (fetch, Promises) — one evaluate cannot exceed the driver's fixed 30s page-evaluate deadline (--timeout does not widen it; use `wait --fn` or `wait <ms>` for a longer wait). Use --wait-selector for pages that render content asynchronously (React/SPA). Objects and arrays are serialized as JSON; use --json to JSON-wrap scalar results.",
             category: Category::Core,
             hidden: false,
             batch_supported: true,
@@ -2350,7 +2355,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "js", description: "Shorthand for --stdin: read JavaScript expression from stdin", is_bool: true, short: None },
                 OptionDef { name: "base64", description: "Decode the expression argument as base64 before execution (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "json", description: "Serialize the result as JSON with native types: strings stay quoted strings; numbers/booleans/null/objects/arrays keep their JSON types", is_bool: true, short: None },
-                OptionDef { name: "await", description: "Wait for the evaluated expression's Promise to resolve before returning the result", is_bool: true, short: None },
+                OptionDef { name: "await", description: "Wait for the evaluated expression's Promise to resolve before returning the result (one evaluate cannot exceed the driver's fixed 30s page-evaluate deadline — --timeout does not widen it; use `wait --fn`/`wait <ms>` for longer waits)", is_bool: true, short: None },
                 OptionDef { name: "wait-selector", description: "Wait for a CSS selector to appear in the DOM before evaluating (use for async-rendered content like React/SPA pages)", is_bool: false, short: None },
                 OptionDef { name: "wait-timeout", description: "Max time in ms to wait for --wait-selector (default: 30000)", is_bool: false, short: None },
                 OptionDef { name: "world", description: "JavaScript world to evaluate in: main (default) = the page's own world, where page-defined globals like window.myApp resolve; isolated = the driver's runtime world (__browser4_runtime__), which page scripts cannot see or modify", is_bool: false, short: None },

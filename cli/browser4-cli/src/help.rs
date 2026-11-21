@@ -1460,7 +1460,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(
             "    stdin is then consumed by the command list, so 'eval --stdin' is not".to_string(),
         );
-        lines.push("    available inside a --json batch — use an inline expression instead.".to_string());
+        lines.push(
+            "    available inside a --json batch — use 'eval --file .b4scratch/x.js' or an".to_string(),
+        );
+        lines.push("    inline expression instead.".to_string());
         lines.push(
             "  - Batch mode only supports DOM operations (navigation, keyboard, mouse,".to_string(),
         );
@@ -1468,6 +1471,20 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    core interactions, export, and tabs). Session lifecycle commands".to_string(),
         );
         lines.push("    (open, close) must be executed separately.".to_string());
+        lines.push(
+            "  - Browser-configuration commands must run first as their own command: a batch".to_string(),
+        );
+        lines.push(
+            "    cannot set the download folder — run 'download --dir <folder>' first, then".to_string(),
+        );
+        lines.push("    batch the page steps that trigger the downloads.".to_string());
+        lines.push(
+            "  - Every step is compiled before the first one runs: unbuildable steps are all".to_string(),
+        );
+        lines.push(
+            "    reported up front and skipped, the steps that do compile still run (stop at".to_string(),
+        );
+        lines.push("    the first failure of either kind with --bail).".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli batch \"goto https://browser4.io\" \"snapshot\"".to_string());
