@@ -160,7 +160,9 @@ by the file system, the shell, the tool registry and the MCP direct-call path:
   target="src/Foo.kt", reason="…")` returns immediately with a pending request (it never blocks the
   task), the task keeps working with what the preset grants, and an operator approves it through
   `POST /api/agent/<taskId>/access/<requestId>/approve`. The same `effect + target` is deduplicated;
-  a grant is effect-level and lazily expires. `denyTools`, protected directories/files, credential
+  a grant is effect-level at the method gate and target-scoped where the target is known (the file
+  system refuses a sibling path, the shell an unapproved program, `runCode` an uncovered
+  interpreter), and it lazily expires. `denyTools`, protected directories/files, credential
   paths, the workspace boundary and the shell whitelist are never approved — they are rails, not
   capabilities. Each step is audited `REQUESTED`/`APPROVED`/`DENIED`/`EXPIRED` with its source.
 - Strategy file: an unattended job can pre-approve grants with

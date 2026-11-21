@@ -314,7 +314,13 @@ class AccessApprovals(
         return request
     }
 
-    /** Denies [requestId]; [reason] defaults to the model's own stated reason. */
+    /**
+     * Denies [requestId]; [reason] is the operator's decision reason, recorded for the model.
+     *
+     * Omitting it leaves [AccessRequest.decisionReason] `null` — the request's own
+     * [AccessRequest.reason] says what the model asked for, so echoing it here would present the
+     * model's words as the operator's justification.
+     */
     fun deny(requestId: String, source: AccessSource, reason: String? = null): AccessRequest? {
         val request = requests[requestId] ?: return null
         if (request.state == AccessState.DENIED) return request
