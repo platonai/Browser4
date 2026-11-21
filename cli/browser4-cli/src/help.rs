@@ -2319,16 +2319,25 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    what the payload left open - so type the number, or your own task.".to_string(),
         );
         lines.push(
-            "  - Every task of a session inherits a compacted `## Session context` block (the".to_string(),
+            "  - Every task of a session inherits the ACTUAL conversation of the earlier ones".to_string(),
         );
         lines.push(
-            "    earlier tasks, their files, open problems and your corrections - a revised goal".to_string(),
+            "    (instructions, model messages, tool calls and results, your steering lines) as a".to_string(),
         );
         lines.push(
-            "    wins), so /new is only for a deliberately".to_string(),
+            "    `## Session context` block; over `browser4.agent.session.contextTokens` the model".to_string(),
         );
         lines.push(
-            "    fresh context. --ndjson stays machine-only and is unaffected.".to_string(),
+            "    compacts it with a compression instruction that keeps the goal, corrections,".to_string(),
+        );
+        lines.push(
+            "    files and open problems. It survives a backend restart, and an unnamed -i uses".to_string(),
+        );
+        lines.push(
+            "    its own interactive-<hash> session, not the shared DEFAULT pool. /new is only".to_string(),
+        );
+        lines.push(
+            "    for a deliberately fresh context. --ndjson stays machine-only and is unaffected.".to_string(),
         );
         lines.push(
             "  - -i, --follow and --wait end with the same line: `✔ Agent completed in 41.3s ·".to_string(),

@@ -274,41 +274,40 @@ browser4-cli (Rust)                       browser4-rest (Kotlin)                
 
 ## 9. 多轮会话上下文与下一步预测（2026-11-12 新增）
 
-### 9.1 跨任务会话上下文（`SessionConversation`）
+### 9.1 跨任务会话上下文：完整对话继承 + 压缩指令（2026-11-21 改版）
 
 问题：`agent.run(instruction)` 每次都是**全新对话**，所以 `-i` 中第 N 个任务完全不知道第
-N-1 个任务做过什么——用户必须反复复述背景，只有 `--resume`（进程已死）才有连续性。
+N-1 个任务做过什么。按「每个任务一条摘要 bullet」的做法能补一点背景，却答不了"我们最后用的是哪个
+选择器""工具到底返回了什么""那次运行写了哪个文件"。
 
-实现（`browser4-agent-tools/.../advanced/agent/SessionConversation.kt` + `StatefulAgentRunner`）：
+现在的策略：**第二个任务直接继承第一个任务的真实对话**。会话保留最近若干任务的完整转录（任务指令、
+模型每次发言、每次工具调用与参数/结果、用户插话、任务终态与其文件/工作区），下一个任务把这段转录
+整体作为 `## Session context` 附加在指令后发给模型；超预算时用**压缩指令**让模型把较老的转录折成
+会话记忆。实现：
+`browser4-agent-tools/.../advanced/agent/SessionConversation.kt` + `StatefulAgentRunner` +
+`RobustBrowserAgent.compressSessionMemory`。
 
 | 环节 | 位置 | 说明 |
 |---|---|---|
-| 记录 | `StatefulAgentRunner.executeSerialized` 的 `finally` | 每个进入终态的任务追加一条 `SessionTaskRecord`：指令单行 120 字、终态词、summary 240 字、keyFindings/ filesChanged / problems（各取前 3/5/3 条，单条 100/80 字）、耗时。环形上限 `MAX_RECORDS=12`。数据来自 `status.agentHistory.finalResult`；中止的任务回退到 `status.deliverables`。 |
-| 注入 | 同上，`instruction` 之后 | 拼成 `## Session context` 块附在指令末尾（resume 块之后），随 `agent.run(instruction)` 进入模型；首任务为空 ⇒ 单次 `agent run` 行为不变。 |
-| 剥离 | `executeAgentCommand` | `status.submittedTask = stripResumeBlock(stripSessionBlock(plainCommand))`——两个块都是 runner 追加的，不属于用户提交的文本；不剥离会在再次 resume 时嵌套、并让 `agent status` 误报任务。 |
-| 压缩 | `SessionConversation.renderBlock()` | 块随每次 prompt 发送，因此按 `browser4.agent.session.contextTokens`（默认 1200 token ≈ 4.8KB）**自动压缩**：最新 3 个任务保留明细，更早的折成一行 `N earlier task(s), compacted: "…" (done), …`；仍超预算则减少明细条数（最老的先折），最后退化为 digest 形态；再有最小形态 `minimal()`。 |
-
-**失焦（忘记原始任务）防护** —— 朴素的"越旧越先丢"策略一定会先丢掉会话的原始目标（第一条记录就是立项目的），因此有三条硬约束：
-
-1. **目标锚定**：`goal` 取「第一条记录的任务指令」，`record()` 只在 `goal == null` 时设置，之后不再改写；`renderBlock()` 在首个任务不再处于明细区（`older.isNotEmpty()`）起，每块都以 `Session goal (set by the first task; later corrections supersede it)` 原样输出，**不参与折叠、不被 MAX_RECORDS 淘汰**。只有 1–3 个任务时明细 bullet 已承载该指令，不重复输出。
-2. **未解决遗留问题不被折掉**：被折出明细区的任务，其 `problems` 会以 `Problems earlier tasks reported as unresolved` 单独重列（最多 3 条、每条 120 字）；仍在明细区的任务只在自己的 bullet 里列出（不重复）。
-3. **降级绝不"保陈旧、丢最新"**：`renderBlock` 的降级链是 `明细减少 → digest → minimal()`；`minimal()` = 标题 + 2 行提示 + **最新方向** + 最新任务（不含 summary）。旧实现用的是"从顶部按行截断"，会保留 header 与陈旧 rollup、恰好切掉最新那条 bullet——已删除。`budgetChars` 有 600 字符下限：低于此值无法同时容纳目标与最新任务，宁可抬高预算也不产出"看似压缩实则丢焦"的块。
-
-**目标可被中途修正（对称风险）** —— 只锚定不修改是另一种失焦：用户改方向后，块还在复述旧目标，等于对抗当前指令。因此：
-
-| 环节 | 行为 |
-|---|---|
-| 判定 | `looksLikeCorrection()`：小型保守线索表（`actually` / `instead` / `no longer` / `forget about` / `改用` / `改成` / `不要` / `先不` / `重新定义` …）。假阳性无害（该行本来就是用户指示，只占 1 行预算），假阴性只意味着修正停留在"当前指令"这个天然最优位置。 |
-| 采集 | ① `record()`：第 2 个任务起，指令命中线索 → `Correction(afterTask=N)`；② `noteUserInput()`：`steeringSource` 抽出的每一行（用户在任务运行中键入）→ `Correction(duringTask=N)`。这条路径原先**完全丢失**（drain 完就没了）。 |
-| 顺序 | 渲染在 goal **上方**：`User corrections (they supersede the goal below where they conflict):` + `- task 3: "actually, …"` / `- during task 4: "no, CSV not XLSX"`；块头声明 "The instruction … is the task to perform NOW — if it contradicts anything below, it wins."；goal 行不再声称自己是当前目标。 |
-| 边界 | 最多 3 条、每条 160 字，按文本去重；`minimal()` 在极小预算下优先保留**最新修正**而非旧 goal。 |
-
-刻意**不**携带：超出 12 条记录窗口的任务明细（仅目标锚点保留其意图）、以及第 4 条以后的历史修正。
+| 转录 | `StatefulAgentRunner` 的 `runEventListener` → `SessionConversation.noteEvent` | `model.text` / `tool.call` / `tool.result` / `steer` 逐条记录（单条 600/300/300/300 字上限）；`round.start` 与 `run.usage` 是统计不是上下文，丢弃。 |
+| 任务边界 | `executeSerialized` 开头 `beginTask(instruction)`、终态 `endTask(status)`  | 任务行 `#N <用户指令>`；终态行 `→ done in 2m 13s · files: a, b · workspace: <绝对路径>`（工作区目录已不存在则不写，避免死路径）。指令用用户原文，绝不包含块本身。 |
+| 注入 | 同上，`instruction` 之后 | 渲染成 `## Session context` 块（块头声明"下面是本会话已发生任务的真实转录，当前指令最优先"），随 `agent.run(instruction)` 进入模型；首任务为空 ⇒ 单次 `agent run` 行为不变。 |
+| 压缩触发 | `sessionBlockFor()`（下一个任务开始前） | `needsCompression()` = 渲染转录超过 `browser4.agent.session.contextTokens`（默认 24000 token ≈ 96KB）。压缩放在**任务开始**而不是终态 finally：那里是正常 suspend 上下文（取消中的任务不需要跑压缩），且新任务的第一次模型请求就能看到压缩结果。 |
+| 压缩指令 | `SessionConversation.compressionSystemInstruction()` | 明确要求保留：①会话目标（第一条指令）与所有修正/插话（逐字引用）；②已作决策与后续依赖的事实（URL/选择器/id/格式/账号，绝不含密钥）；③新建/修改的文件及所在工作区；④约束后续工作的工具结果与未解决问题。明确丢弃：页面快照、重复工具噪声、无果推理。输出仅记忆块，约 `browser4.agent.session.memoryTokens`（默认 2000 token）。 |
+| 压缩执行 | `RobustBrowserAgent.compressSessionMemory()` | `cta.chatModel.callUmSm(transcript, instruction)`；失败返回 null ⇒ runner 记 warn 并**发送未压缩转录**（丢上下文的代价高于长 prompt）；取消照常向上传播。 |
+| 落盘 | `SessionConversationStore`（`agent-session-context.jsonl`） | 任务开始/结束与迟到插话各追加一行快照（`sessionId`/`updatedAt`/`taskCount`/`currentTaskStart`/`compressed`/`turns`），读取取该 session 最后一行；超过 TTL（`contextTtlMinutes`，默认 720min）忽略；文件 >4MB 时 restore 折叠成每 session 一行。**DEFAULT session 不落盘**（`open` 返回 null），避免无关的一次性任务跨重启互相继承。 |
+| 折叠边界 | `adoptCompressed()` | 只折 `currentTaskStart` 之前的 turn，**最新任务永远保留原文**；新的压缩输入包含上一次的 `compressed`，因此多轮折叠不丢信息。 |
+| 剥离 | `executeSerialized` 开头 | `status.submittedTask = stripResumeBlock(stripSessionBlock(effectiveInstruction))`——两个块都是 runner 追加的，不属于用户提交的文本；不剥离会让 `agent status` 误报任务。 |
+| 迟到插话 | `drainUndeliveredSteering`（终态 `status.done()` 之后） | 最后一轮之后再来的 steering 永远送不进模型：drain 后作为"未送达"user turn 写进转录（下一任务仍会遵守），并按 `steering.undelivered` 事件回显（`⚠ steering not delivered — the task ended first: …`）；`enqueueInput` 在锁内二次检查 `isDone`，避免任务结束后残留无人 drain 的队列。 |
+| 早期失败 | `executeSerialized` 开头 | `status.submittedTask` 在 run 之前赋值：access-policy/workspace rebind 阶段抛出时任务仍会被记录（原先 `submittedTask` 为 null ⇒ 跳过），`endTask` 也照常写入失败原因。 |
 
 配置：`browser4.agent.session.contextEnabled`（默认 true）、`browser4.agent.session.contextTokens`
-（默认 1200，`0`/负值即关闭）。作用域是 **session**：`-i` 的 `/new` 递增 generation 得到新
-sessionId ⇒ 新 runner ⇒ 新上下文，语义正好对齐。
-
+（默认 24000，`0`/负值即关闭；含义已从"摘要块预算"变为"转录预算"）、
+`browser4.agent.session.memoryTokens`（默认 2000，压缩记忆大小）、
+`browser4.agent.session.contextTtlMinutes`（默认 720，`0`/负值 ⇒ 只放在内存）。作用域是
+**session**：`-i` 的 `/new` 递增 generation 得到新 sessionId ⇒ 新 runner ⇒ 新上下文，语义正好对齐。
+不带 `-s` 的 `-i` 用**本进程自己的** `interactive-<hash>`（CLI 侧 `interactive_session_base()`，由
+pid+启动时间派生），不再落到后端 DEFAULT 池——否则两个无关的 `-i` 会互相继承上下文并互相排队。
 ### 9.2 下一步预测（`nextSuggestions` → 编号菜单）
 
 旧行为是三个内部指令（`/result --json`、`/stats`、`/new`）。现在换成**用户可能想做的后续任务**：

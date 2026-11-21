@@ -137,7 +137,12 @@ class UserCommandExecutor(
                 // Confine the agent run to the bounded dispatcher: MAX_CONCURRENT_COMMANDS
                 // only gated page visits before — agent tasks ran on unbounded
                 // Dispatchers.IO, so "10 concurrent commands" silently did not cover them.
-                runDispatcher = commandDispatcher
+                runDispatcher = commandDispatcher,
+                // The cross-task conversation is persisted under this id, so a backend
+                // restart does not silently wipe the context of a live session. The
+                // runner itself keeps the anonymous DEFAULT pool in memory (see its
+                // `persistableContextKey`).
+                contextKey = sessionId,
             )
         }
     }

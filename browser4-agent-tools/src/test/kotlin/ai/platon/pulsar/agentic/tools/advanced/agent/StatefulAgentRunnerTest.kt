@@ -10,12 +10,14 @@ import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.api.model.BrowserUseState
 import ai.platon.pulsar.common.ResourceStatus
+import ai.platon.pulsar.common.config.VolatileConfig
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.Runs
 import io.mockk.slot
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -799,6 +801,87 @@ class StatefulAgentRunnerTest {
         } finally {
             runner.close()
         }
+    }
+
+    @Test
+    @DisplayName("steering that arrives after the last model round is reported, not dropped")
+    fun undeliveredSteeringIsReported() = runBlocking {
+        // The mock agent never drains (a real one does on every model round), so the
+        // line typed while the task runs is exactly the "typed too late" case: the CLI
+        // already answered "steering queued", and dropping it silently would report a
+        // success the model never saw.
+        val agent = mockAgent(AgentHistory(), null)
+        val gate = CompletableDeferred<Unit>()
+        coEvery { agent.run(any<String>()) } coAnswers {
+            gate.await()
+            AgentHistory()
+        }
+        val runner = StatefulAgentRunner(mockSession(agent))
+        try {
+            val status = runner.create()
+            runner.submit("do something", status)
+            withTimeout(5_000) {
+                while (status.startedTime == null) delay(10)
+            }
+            assertTrue(runner.enqueueInput(status.id, "no, use CSV not XLSX"))
+
+            gate.complete(Unit)
+            withTimeout(5_000) {
+                while (!status.isDone) delay(10)
+            }
+            // The terminal steps are appended right after `done()`; give them a moment
+            // and then report exactly what the log holds if the warning is missing.
+            delay(200)
+            val events = runner.events(status.id)
+            val reported = events.singleOrNull { it.type == AgentTaskEvent.TYPE_STEER_UNDELIVERED }
+            assertNotNull(reported, "events=${events.map { it.type }} failure=${status.failureReason}")
+            assertTrue(reported.text!!.contains("use CSV"), "the line itself must be reported: $reported")
+            // The warning is a step of the task, not a replacement for its terminal step
+            // (the mocked run carries no page content, so the task itself ends `failed`).
+            assertTrue(
+                events.last().type == AgentTaskEvent.TYPE_DONE || events.last().type == AgentTaskEvent.TYPE_FAILED,
+                "events=${events.map { it.type }}",
+            )
+            assertEquals(AgentTaskEvent.TYPE_STEER_UNDELIVERED, events[events.size - 2].type, "events=${events.map { it.type }}")
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("a backend restart keeps the session's context when the runner serves a named session")
+    fun theConversationSurvivesARunnerRebuild() = runBlocking {
+        val instructions = mutableListOf<String>()
+        fun scriptedAgent() = mockAgent(AgentHistory(), "run-1").also { agent ->
+            coEvery { agent.run(capture(instructions)) } returns AgentHistory()
+        }
+
+        val firstAgent = scriptedAgent()
+        val firstSession = mockSession(firstAgent)
+        every { firstSession.sessionConfig } returns VolatileConfig(true)
+        val first = StatefulAgentRunner(firstSession, contextKey = "work")
+        try {
+            first.execute("add the CSV export")
+        } finally {
+            first.close()
+        }
+
+        // The backend restarts: a brand new runner (and companion agent) for the same
+        // session id must hand the NEXT task what the session already did.
+        val restartedAgent = scriptedAgent()
+        val restartedSession = mockSession(restartedAgent)
+        every { restartedSession.sessionConfig } returns VolatileConfig(true)
+        val restarted = StatefulAgentRunner(restartedSession, contextKey = "work")
+        try {
+            restarted.execute("now add the enterprise sheet")
+        } finally {
+            restarted.close()
+        }
+
+        val prompt = instructions.last()
+        assertTrue(prompt.startsWith("now add the enterprise sheet"), prompt)
+        assertTrue(prompt.contains("## Session context"), prompt)
+        assertTrue(prompt.contains("add the CSV export"), "the earlier task must be remembered: $prompt")
     }
 
     @Test

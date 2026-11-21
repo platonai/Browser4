@@ -880,6 +880,21 @@ impl Renderer {
                         .join("\n"),
                 )
             }
+            "steering.undelivered" => {
+                // The backend drains whatever was typed after the last model round:
+                // it can never be injected, but it is kept as a session correction for
+                // the next task. The prompt already answered "steering queued", so
+                // saying nothing here would report success for an unread instruction.
+                let text = event.text.as_deref().unwrap_or_default();
+                let gutter = format!(
+                    "{}   ⚠ steering not delivered — the task ended first: ",
+                    self.time_prefix()
+                );
+                Some(
+                    wrap_with_gutter(&truncate(text, MODEL_TEXT_PREVIEW), &gutter, self.width)
+                        .join("\n"),
+                )
+            }
             "run.usage" => self.format_usage(event),
             _ => None,
         }
@@ -2652,6 +2667,37 @@ fn format_pending_summary(task_id: &str, view: &Value) -> Option<String> {
 // Interactive session
 // ---------------------------------------------------------------------------
 
+/// The base session id of this process's interactive session.
+///
+/// `agent run -i` without `-s` and without a recorded session used to submit **no**
+/// `sessionId`, which the backend resolves to its shared DEFAULT session: two
+/// unrelated interactive sessions (or a session-less `agent run`) then inherited each
+/// other's `## Session context` block and queued behind each other. A per-process base
+/// keeps them isolated, is short enough to read in the banner and to pass back as
+/// `-s`, and is the key the backend persists the session's context under.
+///
+/// Derived from the process id and the start time with the `sha2` dependency the CLI
+/// already has (no new crates), so a restarted CLI gets a fresh session instead of
+/// inheriting a dead one — pid reuse alone cannot alias it.
+fn interactive_session_base() -> &'static str {
+    use sha2::{Digest, Sha256};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static BASE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    BASE.get_or_init(|| {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let mut hasher = Sha256::new();
+        hasher.update(std::process::id().to_le_bytes());
+        hasher.update(nanos.to_le_bytes());
+        let digest = hasher.finalize();
+        let suffix: String = digest.iter().take(3).map(|byte| format!("{byte:02x}")).collect();
+        format!("interactive-{suffix}")
+    })
+}
+
 /// The interactive session state: the task in flight (if any) plus the
 /// per-session knobs `/coding` and `/noop-limit` change.
 struct Repl {
@@ -2799,7 +2845,12 @@ impl Repl {
     }
 
     /// The session this turn submits to: the CLI's recorded session id for the
-    /// first generation, else the user's `-s` name or a derived one after `/new`.
+    /// first generation, else the user's `-s` name or this session's own base id.
+    ///
+    /// It is never `None` — see [`interactive_session_base`]: a session-less
+    /// submission lands in the backend's shared DEFAULT session, where unrelated
+    /// interactive sessions would inherit each other's context and queue behind
+    /// each other.
     fn session_id(&self) -> Option<String> {
         if self.generation == 0 {
             if let Some(id) = &self.initial_session_id {
@@ -2809,8 +2860,8 @@ impl Repl {
         match &self.session_name {
             Some(name) if self.generation == 0 => Some(name.clone()),
             Some(name) => Some(format!("{name}-{}", self.generation)),
-            None if self.generation == 0 => None,
-            None => Some(format!("interactive-{}", self.generation)),
+            None if self.generation == 0 => Some(interactive_session_base().to_string()),
+            None => Some(format!("{}-{}", interactive_session_base(), self.generation)),
         }
     }
 
@@ -4237,17 +4288,25 @@ mod tests {
         // `/new` derives a fresh generation name instead of reusing the attached
         // session, so the original browser is never overwritten.
         repl.new_session();
-        assert_eq!(repl.session_id().as_deref(), Some("interactive-1"));
+        assert_eq!(
+            repl.session_id(),
+            Some(format!("{}-1", interactive_session_base()))
+        );
     }
 
-    /// Without a recorded session the interactive form keeps its old behaviour:
-    /// generation 0 submits session-less, and `-s <name>` submits the name.
+    /// Without a recorded session the interactive form submits its OWN session id:
+    /// the backend's DEFAULT pool is shared with every session-less caller, so an
+    /// unnamed `-i` used to inherit (and be inherited by) unrelated tasks.
     #[test]
     fn interactive_session_keeps_the_previous_behaviour_without_state() {
         let client = Client::new();
         let params = serde_json::json!({});
         let anonymous = Repl::new(&client, "http://127.0.0.1:1", &params, None);
-        assert_eq!(anonymous.session_id(), None);
+        let id = anonymous.session_id().expect("an unnamed -i gets a session id");
+        assert!(id.starts_with("interactive-"), "{id}");
+        assert_ne!(id, "DEFAULT");
+        // Stable for every task of the session (that is what carries the context).
+        assert_eq!(anonymous.session_id().as_deref(), Some(id.as_str()));
 
         let named = Repl::new(&client, "http://127.0.0.1:1", &params, Some("work"));
         assert_eq!(named.session_id().as_deref(), Some("work"));
@@ -4440,6 +4499,23 @@ mod tests {
         assert!(renderer.format(&result).is_none());
     }
 
+    /// A line typed just before the task ended was never delivered; the CLI had
+    /// already answered "steering queued", so the follower has to say so instead of
+    /// leaving the user to believe the agent read it.
+    #[test]
+    fn renderer_reports_steering_that_arrived_too_late() {
+        let mut renderer = Renderer::new(Instant::now(), false, false);
+        renderer.width = 200;
+        let mut late = event("steering.undelivered");
+        late.text = Some("no, use CSV not XLSX".to_string());
+
+        let line = renderer.format(&late).expect("undelivered steering renders");
+        assert!(line.contains("steering not delivered"), "{line}");
+        assert!(line.contains("no, use CSV not XLSX"), "{line}");
+        // Not the delivered marker: `steer` means the model actually saw it.
+        assert!(!line.contains("steering delivered"), "{line}");
+    }
+
     /// P1-1/P1-2: prose wraps under its marker, and the emoji that is a tofu box
     /// on conhost is gone.
     #[test]
@@ -4610,9 +4686,10 @@ mod tests {
         assert_eq!(repl.session_id().as_deref(), Some("work-1"));
 
         let mut unnamed = Repl::new(&client, "http://localhost:1", &params, None);
-        assert_eq!(unnamed.session_id(), None);
+        let base = unnamed.session_id().expect("an unnamed -i gets a session id");
+        assert!(base.starts_with("interactive-"), "{base}");
         unnamed.new_session();
-        assert_eq!(unnamed.session_id().as_deref(), Some("interactive-1"));
+        assert_eq!(unnamed.session_id(), Some(format!("{base}-1")));
     }
 
     #[test]
@@ -5342,7 +5419,12 @@ mod tests {
         let default_repl = Repl::new(&client, "http://localhost:1", &json!({}), None);
         let lines = default_repl.banner_lines();
         assert_eq!(lines.len(), 2, "{lines:?}");
-        assert!(lines[0].contains("session=default"), "{lines:?}");
+        // An unnamed session names its own id: it is not the backend's DEFAULT pool
+        // any more, so the banner must say what the session is bound to.
+        assert!(
+            lines[0].contains(&format!("session={}", interactive_session_base())),
+            "{lines:?}"
+        );
         // `engine=` is gone from the banner entirely: the CLI tool loop is the only
         // engine left, so there is nothing for the reader to choose or compare.
         for knob in ["engine=", "coding=", "access=", "budget=", "quiet"] {

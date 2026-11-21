@@ -52,6 +52,17 @@ open class StatefulAgentRunner(
      * task does.
      */
     private val runDispatcher: CoroutineDispatcher? = null,
+    /**
+     * The transport session id this runner serves (`command.run`'s `sessionId`):
+     * the CLI's `-s <name>`, the attached browser's session, or the interactive
+     * session's own id.
+     *
+     * It is the key the cross-task conversation is persisted under, so a backend
+     * restart does not silently wipe the context of a live session. `null` keeps the
+     * conversation in memory only, and so does the backend's anonymous DEFAULT pool
+     * (no durable home: [SessionConversationStore.open] returns `null` for it).
+     */
+    private val contextKey: String? = null,
 ) : Closeable {
     private val logger = getLogger(StatefulAgentRunner::class)
 
@@ -143,7 +154,7 @@ open class StatefulAgentRunner(
      * `null` when `browser4.agent.session.contextEnabled=false`.
      */
     private val conversation: SessionConversation? =
-        runCatching { SessionConversation.fromConf(session.sessionConfig) }
+        runCatching { SessionConversation.fromConf(session.sessionConfig, contextKey) }
             .onFailure { logger.warn("session conversation disabled: {}", it.message) }
             .getOrNull()
 
@@ -432,6 +443,12 @@ open class StatefulAgentRunner(
         // Enqueue and drain take the same lock: an `add` racing a drain could land
         // on a queue the drain had already detached, losing the message.
         synchronized(inputLock) {
+            // Re-checked INSIDE the lock: the task may have ended between the check
+            // above and this add, in which case the terminal drain already ran and
+            // `pendingInputs` has no entry — adding one here would leak a queue that
+            // nobody ever drains (and silently swallow the line). The terminal path
+            // sets `isDone` before it drains, so one of the two orderings always wins.
+            if (status.isDone) return false
             pendingInputs.computeIfAbsent(id) { ConcurrentLinkedQueue() }.add(message)
         }
         logger.info(
@@ -459,6 +476,81 @@ open class StatefulAgentRunner(
             if (queue.isEmpty()) pendingInputs.remove(id, queue)
         }
         return drained
+    }
+
+    /**
+     * Drain the steering lines that arrived after the task's LAST model round.
+     *
+     * The agent loop is over, so these lines can never be injected. Dropping them is
+     * what the runner used to do (the CLI had already printed "steering queued" — a
+     * success report for a message nobody read). Instead:
+     *
+     * 1. they are remembered as session corrections, so the next task's
+     *    `## Session context` block carries the instruction the user typed;
+     * 2. each one (bounded by [MAX_UNDELIVERED_EVENTS]) is recorded as a
+     *    [AgentTaskEvent.TYPE_STEER_UNDELIVERED] step, so a follower can say it out loud;
+     * 3. the task's queue is removed under the same lock [enqueueInput] uses, so a
+     *    racing enqueue either lands before this drain (and is kept) or is rejected by
+     *    the `isDone` check — it can never leave an orphaned queue behind.
+     *
+     * Must run AFTER the status is terminal (no new line passes the `isDone` check)
+     * and BEFORE `conversation.endTask(status)`, so the undelivered line lands inside
+     * the task's turns, where the next task reads it.
+     */
+    private fun drainUndeliveredSteering(status: AgentTaskStatus) {
+        val leftover = synchronized(inputLock) {
+            val queue = pendingInputs.remove(status.id) ?: return@synchronized emptyList<String>()
+            val lines = ArrayList<String>()
+            while (true) {
+                val next = queue.poll() ?: break
+                lines += next
+            }
+            lines
+        }
+        if (leftover.isEmpty()) return
+        logger.info(
+            "Agent task {}: {} steering message(s) arrived after the last model round — kept as session corrections",
+            status.id, leftover.size
+        )
+        leftover.take(MAX_UNDELIVERED_EVENTS).forEach {
+            recordLifecycle(status, AgentTaskEvent.TYPE_STEER_UNDELIVERED, it)
+        }
+        conversation?.noteUserInput(leftover)
+    }
+
+    /**
+     * The `## Session context` block for this task, compacting the transcript first when
+     * it crossed the budget.
+     *
+     * The compaction is a model call with the session-memory instruction
+     * ([SessionConversation.compressionSystemInstruction]). It runs at TASK START rather
+     * than in the terminal path for two reasons: it needs a normal suspend context (a
+     * cancellation mid-task must never have to run it), and the next task's first model
+     * request already sees the compacted memory. A failed compaction is logged and the
+     * transcript is sent as it is — losing the session's memory is worse than a long
+     * prompt, and the failure has to be visible to an operator.
+     */
+    private suspend fun sessionBlockFor(agent: PerceptiveAgent, status: AgentTaskStatus): String {
+        val conversation = conversation ?: return ""
+        if (conversation.needsCompression()) {
+            val memory = (agent as? RobustBrowserAgent)?.compressSessionMemory(
+                conversation.compressionSystemInstruction(),
+                conversation.compressionInput(),
+            )
+            if (memory != null) {
+                logger.info(
+                    "Agent task {} (session={}): session transcript compacted into {} chars",
+                    status.id, session.uuid, memory.length
+                )
+                conversation.adoptCompressed(memory)
+            } else {
+                logger.warn(
+                    "Agent task {}: session transcript over budget and the compaction call failed — sending it uncompressed",
+                    status.id
+                )
+            }
+        }
+        return conversation.renderForPrompt()
     }
 
     private fun onStatusChanged(status: AgentTaskStatus) {
@@ -897,12 +989,21 @@ open class StatefulAgentRunner(
             }
         }
         val instruction = resume?.let { resumeInstruction(plainCommand, it) } ?: plainCommand
-        // What this session already did, as a compacted `## Session context` block.
-        // Empty for the first task of a session (so a one-shot `agent run` is
-        // byte-identical to before) and whenever the feature is switched off.
-        val sessionBlock = conversation?.renderBlock().orEmpty()
+        // What this session already did, as the ACTUAL conversation of its earlier
+        // tasks (`## Session context`): what was asked, the model's messages, every
+        // tool call with its result, and the steering lines typed into them. Empty for
+        // the first task of a session (so a one-shot `agent run` is byte-identical to
+        // before) and whenever the feature is switched off. Over budget the older turns
+        // are first compacted by the model with the session-memory instruction, so the
+        // next prompt inherits the context without growing without bound.
+        val sessionBlock = sessionBlockFor(agent, status)
         val effectiveInstruction =
             if (sessionBlock.isEmpty()) instruction else "$instruction\n\n$sessionBlock"
+        // Record the task boundary only now: the block above must contain the earlier
+        // tasks, not this one. The user's own text is what the transcript carries — the
+        // appended `## Session context` block (and a `## Resume context` block) are ours,
+        // and recording them would nest blocks in the next task's prompt.
+        conversation?.beginTask(plainCommand.ifBlank { resume?.let { "resume ${it.taskId}" }.orEmpty() })
         val codingMode = coding ?: resume?.codingMode ?: false
         val accessPreset = access ?: resume?.accessPreset?.let { AccessPreset.parse(it) }
         // Extra folders granted to THIS task (`agent run --add-dir`). Explicit values win; an
@@ -948,6 +1049,14 @@ open class StatefulAgentRunner(
 
         try {
             status.refresh(ResourceStatus.SC_PROCESSING)
+            // Record the submitted instruction HERE, before anything can fail: the
+            // terminal path remembers cancelled and failed runs (they are exactly the
+            // context the next task needs), and it skips a task whose instruction is
+            // unknown. Set only in `executeAgentCommand` it was still null when a setup
+            // step threw (access policy, workspace rebind), so those attempts vanished
+            // from the session instead of being remembered. Neither appended block is
+            // part of what the user submitted.
+            status.submittedTask = stripResumeBlock(stripSessionBlock(effectiveInstruction))
             // Record what this run is: the effective flags decide a later resume's
             // inheritance, and `resumedFrom` links the two task ids.
             status.codingMode = codingMode
@@ -1116,17 +1225,15 @@ open class StatefulAgentRunner(
                 // Live step feed and steering for THIS task. Cleared in the finally
                 // below: the companion agent outlives the task and is shared by
                 // every other caller of the session.
-                it.runEventListener = { event -> recordRunEvent(status.id, event) }
-                it.steeringSource = {
-                    val drained = drainInputs(status.id)
-                    // A line typed into a running task is a user instruction — often a
-                    // correction ("no, use CSV not XLSX"). It used to die with the run it
-                    // steered; the session keeps it so later tasks still honour it.
-                    if (drained.isNotEmpty()) {
-                        conversation?.noteUserInput(drained)
-                    }
-                    drained
+                it.runEventListener = { event ->
+                    recordRunEvent(status.id, event)
+                    // The same events are the session's conversation: every model
+                    // message, tool call and tool result is remembered for the next
+                    // task. Steering arrives as a STEER event, so it is recorded once.
+                    runCatching { conversation?.noteEvent(event) }
+                        .onFailure { error -> logger.warn("Recording a session turn failed: {}", error.message) }
                 }
+                it.steeringSource = { drainInputs(status.id) }
             }
 
             // Create and wire up ServerSideAgentEventHandlers for this command
@@ -1337,26 +1444,31 @@ open class StatefulAgentRunner(
                 null
             }
             status.done()
+            // Close the live feed: the terminal step is what makes a follower
+            // stop. Steering that arrived after the last model round is drained HERE,
+            // immediately after `done()` (so no new line passes `enqueueInput`'s
+            // `isDone` check) and before the rest of the terminal bookkeeping: the
+            // follower must still be able to read the warning step of a task that just
+            // finished. A line the CLI already answered with "steering queued" must not
+            // disappear silently.
+            drainUndeliveredSteering(status)
             // The record must not carry the prompt prelude: the session block that ran
             // is a few KB and would otherwise multiply into every published snapshot.
             runCatching { stripSessionBlockFromHistory(status.agentHistory) }
                 .onFailure { logger.debug("stripping the session block failed for {}: {}", status.id, it.message) }
             onStatusChanged(status)
-            // Close the live feed: the terminal step is what makes a follower
-            // stop, and the steering queue can never be drained after this point.
-            pendingInputs.remove(status.id)
             if (status.cancelled || status.failureReason != null) {
                 recordFailure(status)
             } else {
                 recordLifecycle(status, AgentTaskEvent.TYPE_DONE, status.message)
             }
-            // Remember this task for the rest of the session: the next task's
-            // instruction carries a compacted version of it (see [SessionConversation]),
-            // so a multi-task session builds on what it already did instead of
-            // restarting from zero. Recorded here, in the terminal path, so cancelled
-            // and failed runs are remembered too — "that attempt failed this way" is
-            // exactly the context the next task needs.
-            runCatching { conversation?.record(status) }
+            // Close the task in the session's conversation: the next instruction
+            // inherits its transcript (see [SessionConversation]), so a multi-task
+            // session builds on what it already did instead of restarting from zero.
+            // Recorded here, in the terminal path, so cancelled and failed runs are
+            // remembered too — "that attempt failed this way" is exactly the context
+            // the next task needs.
+            runCatching { conversation?.endTask(status) }
                 .onFailure { logger.warn("Recording the session conversation failed for {}: {}", status.id, it.message) }
         }
     }
@@ -1410,13 +1522,8 @@ open class StatefulAgentRunner(
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
     ) {
-        // Record the submitted instruction so callers can verify they're
-        // getting results for the right task (prevents cross-talk confusion).
-        // The prompt may carry blocks this runner appended — a `## Resume context`
-        // block and/or this session's `## Session context` — and neither is part of
-        // what the user submitted: storing them would nest blocks on a later resume
-        // and misreport the task in `agent status`.
-        status.submittedTask = stripResumeBlock(stripSessionBlock(plainCommand))
+        // `status.submittedTask` is already set by `executeSerialized` (the terminal
+        // path needs it even when this method never runs).
 
         // Record where this task's tools may write, so a finished task can point its
         // caller at the deliverables instead of leaving them to search app-data.
@@ -1624,6 +1731,15 @@ open class StatefulAgentRunner(
 
         /** Idle minutes after which a task's step log is dropped. */
         const val EVENT_LOG_TTL_MINUTES = 120L
+
+        /**
+         * How many undelivered steering lines get a live step of their own.
+         *
+         * The corrections themselves are bounded by the conversation
+         * ([SessionConversation.CORRECTION_ENTRIES]); this only bounds the warning
+         * lines a follower prints, and a human types one or two at most.
+         */
+        const val MAX_UNDELIVERED_EVENTS = 3
 
         /**
          * Persistence file size above which the 5-minute maintenance pass rewrites

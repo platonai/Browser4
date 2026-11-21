@@ -2846,6 +2846,48 @@ open class RobustBrowserAgent(
             )
         }
     }
+
+    /**
+     * Compact a session's transcript into a memory block, using [systemInstruction].
+     *
+     * The interactive session inherits the ACTUAL conversation of its earlier tasks
+     * (`command.run`'s `## Session context` block). That block rides in every prompt, so
+     * once it crosses `browser4.agent.session.contextTokens` the runner asks the model —
+     * with the session-memory instruction built by `SessionConversation` — to fold the
+     * older turns into a bounded memory that keeps the goal, the corrections, the facts
+     * and the open problems. The result is stored by the caller and replaces those turns.
+     *
+     * A failed call returns `null` and is logged: the caller then sends the transcript
+     * uncompressed, because losing the session's memory is worse than a long prompt.
+     * Cancellation propagates — a cancelled task must not leave a compaction running.
+     *
+     * @param systemInstruction the compression instruction (what to keep, what to drop)
+     * @param transcript the rendered transcript (older turns plus any earlier memory)
+     * @return the memory block, or `null` when the model produced nothing usable
+     */
+    suspend fun compressSessionMemory(systemInstruction: String, transcript: String): String? {
+        if (transcript.isBlank()) return null
+        return try {
+            val started = Instant.now()
+            val response = cta.chatModel.callUmSm(transcript, systemInstruction)
+            val memory = response.content?.trim().orEmpty()
+            if (memory.isBlank()) {
+                logger.warn("🧠❌ session.memory.compacted returned no text")
+                null
+            } else {
+                logger.info(
+                    "🧠 session.memory.compacted chars={} elapsed={} ms",
+                    memory.length, java.time.Duration.between(started, Instant.now()).toMillis(),
+                )
+                memory
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("🧠❌ session.memory.compaction failed: {}", e.message)
+            null
+        }
+    }
 }
 
 /**

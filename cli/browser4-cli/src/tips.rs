@@ -330,7 +330,13 @@ const TIPS_AGENT: &[Tip] = &[
         text: "After every task `-i` predicts 2-3 next steps as numbered TASKS — the model's own `nextSuggestions` first, then the files/problems it left behind — so type the number instead of reconstructing the next task",
     },
     Tip {
-        text: "Tasks of one `-i` session are not independent: each new task carries a compacted `## Session context` block (earlier tasks, their files, open problems, and any mid-session correction), auto-compressed under `browser4.agent.session.contextTokens`; `/new` starts a deliberately fresh context",
+        text: "Tasks of one `-i` session are not independent: each new task inherits the ACTUAL conversation of the earlier ones (model messages, tool calls and results, your steering lines, each task's outcome with its files and workspace) as a `## Session context` block — over `browser4.agent.session.contextTokens` (24000 by default) the model compacts it with a compression instruction that keeps the goal, corrections, files and open problems, and the conversation is persisted per session so a backend restart keeps it; `/new` starts a deliberately fresh context",
+    },
+    Tip {
+        text: "`agent run -i` without `-s` gets its own `interactive-<hash>` session (printed in the banner, reusable as `-s`), so two interactive sessions never share the backend DEFAULT pool — their context and their queued tasks stay separate",
+    },
+    Tip {
+        text: "A steering line typed just before a task ends can no longer reach the model: `-i` prints `⚠ steering not delivered — the task ended first` and appends the line to the next task's inherited context",
     },
     Tip {
         text: "Every task runs in its own workspace — artifacts of an earlier run never show up in this run's `filesChanged`. `--resume <id>` reuses the interrupted task's workspace; `--shared-workspace` opts into the old shared directory",
