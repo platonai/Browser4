@@ -361,8 +361,11 @@ if ($ShouldPreStartServer) {
 
         # Open a trivial session to trigger server download/start.
         $preTimeout = 120
-        $tmpOut = Join-Path $env:TEMP "b4_multi_prestart_stdout_${pid}.txt"
-        $tmpErr = Join-Path $env:TEMP "b4_multi_prestart_stderr_${pid}.txt"
+        # $env:TEMP is Windows-only; POSIX hosts expose TMPDIR (GetTempPath() as a last resort).
+        # A bare `Join-Path $env:TEMP ...` throws on Linux instead of degrading.
+        $preTempDir = if ($env:TEMP) { $env:TEMP } elseif ($env:TMPDIR) { $env:TMPDIR } else { [System.IO.Path]::GetTempPath() }
+        $tmpOut = Join-Path $preTempDir "b4_multi_prestart_stdout_${pid}.txt"
+        $tmpErr = Join-Path $preTempDir "b4_multi_prestart_stderr_${pid}.txt"
         Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
 
         $preProc = Start-Process -FilePath $BinaryPath `

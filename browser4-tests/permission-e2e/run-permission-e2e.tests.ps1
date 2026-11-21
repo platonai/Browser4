@@ -312,12 +312,38 @@ try {
     $selected = Select-NewestLogFile -Files @((Get-Item $staleContent), (Get-Item $appLog))
     Assert-Equal -Expected $appLog -Actual $selected.File -Name 'the newest content wins over a newer mtime'
 
+    # `$env:TEMP` does not exist on the Linux/macOS runners. A `Join-Path $env:TEMP ...` in the
+    # candidate scan threw "Cannot bind argument to parameter 'Path' because it is null" and took
+    # the whole self-test down before the retention checks ever ran. The fixture lives in its own
+    # root so the newer-stamped log it plants cannot win a later assertion.
+    $previousTemp = $env:TEMP
+    $previousTmpDir = $env:TMPDIR
+    $captureRoot = Join-Path ([IO.Path]::GetTempPath()) ("b4-perm-e2e-cap-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    try {
+        $captureDir = Join-Path (Join-Path $captureRoot 'browser4') 'browser4-cli'
+        New-Item -ItemType Directory -Path $captureDir -Force | Out-Null
+        $captureLog = Join-Path $captureDir 'browser4-server-port18182-test.log'
+        @('12:00:00.000 [main] INFO started') | Set-Content -LiteralPath $captureLog -Encoding utf8
+        $env:TEMP = $null
+        $env:TMPDIR = $captureRoot
+        $discovered = @(Find-BackendLogFiles -RepoRoot $captureRoot)
+        Assert-True -Condition ($discovered -contains $captureLog) -Name 'the log scan falls back to TMPDIR when TEMP is unset'
+    } finally {
+        if ($null -eq $previousTemp) { Remove-Item env:TEMP -ErrorAction SilentlyContinue } else { $env:TEMP = $previousTemp }
+        if ($null -eq $previousTmpDir) { Remove-Item env:TMPDIR -ErrorAction SilentlyContinue } else { $env:TMPDIR = $previousTmpDir }
+        Remove-Item -LiteralPath $captureRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     $previous = $env:BROWSER4_SERVER_LOG_DIR
     try {
         $env:BROWSER4_SERVER_LOG_DIR = $logTemp
         $resolved = Resolve-LogDir -Requested 'auto' -RepoRoot $logTemp -Fallback $logTemp
         Assert-Equal -Expected 'auto' -Actual $resolved.Source -Name 'auto discovery reports its source'
-        Assert-Equal -Expected $logTemp -Actual $resolved.Directory -Name 'BROWSER4_SERVER_LOG_DIR participates in discovery'
+        # The env var's directory has to be scanned. Asserting that it *wins* the content-based
+        # selection only holds on a host with no other backend log - a developer machine keeps
+        # `%TEMP%\browser4\browser4-cli` captures that can carry a newer stamp than this fixture.
+        $fromEnvDir = @($resolved.Files | Where-Object { $_ -and (Split-Path -Parent $_) -eq $logTemp })
+        Assert-True -Condition ($fromEnvDir -contains $appLog) -Name 'BROWSER4_SERVER_LOG_DIR participates in discovery'
         $explicit = Resolve-LogDir -Requested $logTemp -RepoRoot $logTemp -Fallback 'C:\nope'
         Assert-Equal -Expected 'explicit' -Actual $explicit.Source -Name 'an explicit -LogDir is not second-guessed'
     } finally {

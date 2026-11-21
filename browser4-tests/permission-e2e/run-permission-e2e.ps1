@@ -371,6 +371,17 @@ function Get-LogFileTimestamp {
     }
 }
 
+function Get-TempRoot {
+    # `$env:TEMP` is Windows-only; POSIX hosts expose `$env:TMPDIR` (and GetTempPath() as the
+    # last resort). Passing a null root to Join-Path does not degrade gracefully - it throws
+    # "Cannot bind argument to parameter 'Path' because it is null", which is how this harness
+    # self-test died on the Linux runner.
+    foreach ($candidate in @($env:TEMP, $env:TMPDIR)) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate)) { return $candidate }
+    }
+    try { return [IO.Path]::GetTempPath() } catch { return $null }
+}
+
 function Find-BackendLogFiles {
     param([string]$RepoRoot)
 
@@ -386,14 +397,23 @@ function Find-BackendLogFiles {
 
     # 1) The launcher's capture of the backend's stdout/stderr (`doctor log` uses this directory).
     if ($env:BROWSER4_SERVER_LOG_DIR) { & $add $env:BROWSER4_SERVER_LOG_DIR '*.log' 0 }
-    & $add (Join-Path $env:TEMP 'browser4\browser4-cli') 'browser4-server-*.log' 4
+    $tempRoot = Get-TempRoot
+    if ($tempRoot) {
+        & $add (Join-Path (Join-Path $tempRoot 'browser4') 'browser4-cli') 'browser4-server-*.log' 4
+    }
     # 2) The workspace app data: `logs/` and the AOT-cache log directory the JVM may run from.
-    & $add (Join-Path $HOME '.browser4\logs') '*.log' 0
-    & $add (Join-Path $RepoRoot '.browser4\logs') '*.log' 0
-    $workspaces = Join-Path $HOME '.browser4\workspaces'
-    if (Test-Path -LiteralPath $workspaces) {
+    #    Nested Join-Path, not '.browser4\logs': a literal backslash is a filename character on
+    #    POSIX, so the single-segment form silently inventoried a directory that cannot exist.
+    if ($HOME) {
+        & $add (Join-Path (Join-Path $HOME '.browser4') 'logs') '*.log' 0
+    }
+    if ($RepoRoot) {
+        & $add (Join-Path (Join-Path $RepoRoot '.browser4') 'logs') '*.log' 0
+    }
+    $workspaces = if ($HOME) { Join-Path (Join-Path $HOME '.browser4') 'workspaces' } else { '' }
+    if ($workspaces -and (Test-Path -LiteralPath $workspaces)) {
         Get-ChildItem -LiteralPath $workspaces -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-            & $add (Join-Path $_.FullName 'app-data\logs') '*.log' 0
+            & $add (Join-Path (Join-Path $_.FullName 'app-data') 'logs') '*.log' 0
             & $add (Join-Path $_.FullName 'aot-cache') 'pulsar*.log' 2
         }
     }
