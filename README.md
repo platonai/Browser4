@@ -314,7 +314,7 @@ command, option and platform note. This table is the day-to-day subset.
 | Automation at scale | `batch`, `loop`, `swarm`, `crawl`, `webminer` |
 | Network | `network requests`, `network request`, `network har`, `network route`, `network unroute` |
 | Plugins, tools & skills | `plugin`, `tool list`, `tool call`, `skills`, `skill-*` |
-| Experience memory | `experience save`, `experience query`, `experience list`, `experience deep-learn` |
+| Experience memory | `experience save`, `experience query`, `experience list`, `experience deep learn` |
 
 Interaction commands take a `snapshot` ref (`e15`) or a CSS selector, and most of them
 support `--no-snapshot` to skip the automatic post-action snapshot.

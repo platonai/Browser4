@@ -321,7 +321,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 | 规模化自动化 | `batch`、`loop`、`swarm`、`crawl`、`webminer` |
 | 网络 | `network requests`、`network request`、`network har`、`network route`、`network unroute` |
 | 插件、工具与 skills | `plugin`、`tool list`、`tool call`、`skills`、`skill-*` |
-| 经验记忆 | `experience save`、`experience query`、`experience list`、`experience deep-learn` |
+| 经验记忆 | `experience save`、`experience query`、`experience list`、`experience deep learn` |
 
 交互命令接受 `snapshot` ref（如 `e15`）或 CSS 选择器，多数还支持 `--no-snapshot` 跳过动作后的自动快照。
 
