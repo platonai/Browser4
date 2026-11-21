@@ -2,6 +2,8 @@ package ai.platon.pulsar.coding
 
 import ai.platon.pulsar.coding.sandbox.ExecutionSandbox
 import ai.platon.pulsar.coding.sandbox.ExecutionSandboxes
+import ai.platon.pulsar.coding.sandbox.SandboxFileOps
+import ai.platon.pulsar.coding.sandbox.SandboxedFileOps
 import org.slf4j.LoggerFactory
 import java.nio.file.Path
 
@@ -46,9 +48,13 @@ object CodingComponents {
         }
         if (System.getProperty(AgentAccessPolicy.PROP_ALLOW_EXTERNAL_ACCESS, "false").toBoolean()) {
             logger.warn(
-                "{} is deprecated and advisory only: prefer browser4.agent.access; the OS sandbox " +
-                    "still enforces what a process may reach",
+                "{} is deprecated and advisory only: prefer browser4.agent.access; {}",
                 "browser4.agent.allowExternalAccess=true",
+                // Deliberately neutral: this runs at domain construction, before any task exists, so
+                // there is no per-task backend to name — and the bare property reads `off` even when
+                // a mode chain will select `windows-low-il` (run 4125acaa, 2026-11-19). The tool
+                // refusals name the resolved backend; `coding.permissions` reports it per task.
+                "see coding.permissions for the layer actually in force",
             )
         }
     }
@@ -119,6 +125,14 @@ object CodingComponents {
             home?.resolve(".m2")?.let { entry("maven", it) },
             home?.resolve(".gradle")?.let { entry("gradle", it) },
             home?.resolve(".cache")?.let { entry("cache", it) },
+            // JVM build daemons keep their client markers and run files here, not in ~/.m2: a
+            // confined child could not write `%LOCALAPPDATA%\kotlin\daemon\kotlin-daemon-client-*.tmp`,
+            // so kapt aborted with AccessDeniedException and `coding.verify` failed on a
+            // source-clean module (2026-11-20 agent run). A cache, like ~/.m2 — granted writable.
+            System.getenv("LOCALAPPDATA")?.takeIf { it.isNotBlank() }
+                ?.let { runCatching { Path.of(it) }.getOrNull() }
+                ?.resolve("kotlin")?.let { entry("kotlin-local", it) },
+            home?.resolve(".kotlin")?.let { entry("kotlin-home", it) },
             runCatching { Path.of(System.getProperty("java.io.tmpdir")) }.getOrNull()?.let { entry("tmp", it) },
             runCatching { Path.of(System.getenv("SystemRoot") ?: "C:/Windows") }.getOrNull()?.let { entry("os-root", it) },
         )
@@ -408,8 +422,58 @@ object CodingComponents {
             boundaryAuthorizer = boundary,
             readableRoots = ReadablePaths.roots().toSet(),
             additionalDirs = policy.additionalDirs,
+            // Plan P3-6: the write side of the same boundary the shell gets. Provider, not instance:
+            // the backend follows the task's mode, and an installation without a usable backend
+            // silently keeping the in-process path is exactly the drift this seam must not have —
+            // so the provider answers `null` only for a backend that *cannot* execute file ops.
+            mutationOpsProvider = { fileOps(policy, root) },
+            // The refusals must name the layer this task actually runs under, not the bare
+            // `browser4.agent.sandbox` property (which reads `off` while the coding chain runs
+            // windows-low-il — run 4125acaa, 2026-11-19). Lazy: resolving instantiates/probes the
+            // backend, and a refusal is rare compared with a tool call.
+            sandboxIdProvider = { sandbox(policy).id },
         )
     }
+
+    /**
+     * The write-side OS boundary for [policy] in [root], or `null` when this task has none.
+     *
+     * `null` means the historical in-process write path and only two things produce it: an
+     * `--unrestricted` task (which asks for the operator's own permissions) and a backend that
+     * cannot execute file operations inside its boundary ([ExecutionSandbox.executesFileOps]).
+     * `coding.permissions` reports which of the two applies, because "no boundary" and "boundary that
+     * does not cover this channel" are different facts.
+     *
+     * A backend that *can* but fails to start is not `null`: [SandboxFileOps] throws and the tool call
+     * is refused. Falling back to an unconfined write there would silently undo the whole point.
+     */
+    fun fileOps(policy: AgentAccessPolicy, root: Path): SandboxFileOps? {
+        if (policy.unrestricted) return null
+        val sandbox = sandbox(policy)
+        return SandboxedFileOps.forSandbox(sandbox, root, policy.additionalDirs.toList())
+    }
+
+    /**
+     * The boundary a `b4.run` (`browser4-cli`) launch must use, or `null` to keep it in the backend.
+     *
+     * `b4.run` is a *product* channel: the CLI is installed under the operator profile and talks to
+     * this backend over `127.0.0.1`. A backend that cannot host that (the AppContainer: profile
+     * unreachable, loopback refused — measured 2026-11-17) would make `b4.run` fail outright, so the
+     * channel keeps the historical launch and `coding.permissions` names it as outside the boundary.
+     * That is deliberately **not** a silent fallback: the resolve is a declared backend capability
+     * ([ExecutionSandbox.executesProductCommands]) and the report follows it (design §14.2.1).
+     */
+    fun b4RunSandbox(policy: AgentAccessPolicy): ExecutionSandbox? =
+        productCommandSandbox(policy, sandbox(policy))
+
+    /**
+     * The decision behind [b4RunSandbox], split out so it can be pinned without resolving a real
+     * backend: unrestricted, and a backend that cannot host the CLI, both mean `null`.
+     */
+    internal fun productCommandSandbox(
+        policy: AgentAccessPolicy,
+        sandbox: ExecutionSandbox,
+    ): ExecutionSandbox? = if (policy.unrestricted || !sandbox.executesProductCommands) null else sandbox
 
     /**
      * The boundary this policy's file system and shell must enforce.
@@ -429,7 +493,36 @@ object CodingComponents {
      * the build-only shell and `coding.runCode`: an unrestricted task has to be unsandboxed on all
      * of them, or "the OS sandbox is not applied" would hold for one path and not for another.
      */
-    fun sandbox(policy: AgentAccessPolicy): ExecutionSandbox? =
-        if (policy.unrestricted) ExecutionSandboxes.of("off") else null
+    fun sandbox(policy: AgentAccessPolicy): ExecutionSandbox =
+        if (policy.unrestricted) {
+            ExecutionSandboxes.of("off")
+        } else {
+            ExecutionSandboxes.resolveForMode(policy.mode)
+        }
+
+    /**
+     * One line for `coding.permissions`: which OS boundary this task actually has.
+     *
+     * Goals and enforcement are two different facts (2026-11-16: refusals claimed an OS boundary that
+     * did not exist), so the line names the backend, the mode's goals, and whether a `net=off` request
+     * is enforceable at all.
+     */
+    fun isolationSummary(policy: AgentAccessPolicy): String {
+        val profile = IsolationProfile.forMode(policy.mode)
+        val sandbox = runCatching { sandbox(policy) }.getOrNull()
+        val backend = sandbox?.id ?: "off"
+        val network = when {
+            sandbox == null || backend == "off" -> "NOT enforced (no OS backend)"
+            sandbox.enforcesNetwork -> "enforced"
+            else -> "NOT enforced by this backend (it cannot refuse a socket)"
+        }
+        // Plan G9: an installation-level reason this backend's children will fail, e.g. a stale
+        // AppContainer grant that makes a toolchain tree unreadable to a low-integrity token. The
+        // note is informational — it never turns the line into a failure — but it is the only place
+        // an operator looking at `coding.permissions` would otherwise not see it.
+        val notes = runCatching { sandbox?.advisoryNotes().orEmpty() }.getOrDefault(emptyList())
+        val summary = "OS sandbox: $backend — ${profile.describe()}; network: $network"
+        return if (notes.isEmpty()) summary else summary + notes.joinToString("") { "\n" + it }
+    }
 
 }

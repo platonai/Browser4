@@ -1,5 +1,7 @@
 package ai.platon.pulsar.coding
 
+import ai.platon.pulsar.coding.sandbox.ProcessSpec
+import ai.platon.pulsar.coding.sandbox.WindowsLowIntegritySandbox
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Assumptions.assumeTrue
@@ -24,14 +26,23 @@ class WorkspaceIsolationTest {
     @TempDir
     lateinit var tempDir: Path
 
-    private fun git(vararg args: String): Pair<Int, String> {
-        val process = ProcessBuilder(listOf("git") + args)
-            .directory(tempDir.toFile())
-            .redirectErrorStream(true)
-            .start()
-        assertTrue(process.waitFor(60, TimeUnit.SECONDS), "git ${args.joinToString(" ")} timed out")
+    /** Runs [program] in [dir] (when given) and returns `(exit code, output)`. */
+    private fun runCommand(program: String, vararg args: String, dir: Path? = null): Pair<Int, String> {
+        val builder = ProcessBuilder(listOf(program) + args).redirectErrorStream(true)
+        if (dir != null) builder.directory(dir.toFile())
+        val process = builder.start()
+        assertTrue(
+            process.waitFor(60, TimeUnit.SECONDS),
+            "$program ${args.joinToString(" ")} timed out",
+        )
         return process.exitValue() to process.inputStream.bufferedReader().use { it.readText() }
     }
+
+    private fun git(vararg args: String): Pair<Int, String> = runCommand("git", *args, dir = tempDir)
+
+    private val isWindows = System.getProperty("os.name", "").lowercase().contains("win")
+
+    private fun icacls(vararg args: String): Pair<Int, String> = runCommand("icacls", *args)
 
     @BeforeEach
     fun initRepo() {
@@ -526,5 +537,58 @@ class WorkspaceIsolationTest {
         } finally {
             isolation.rollback()
         }
+    }
+
+    // ==================== sandbox provisioning ====================
+
+    @Test
+    @DisplayName("a new worktree can be labelled Low even under a Modify-only parent")
+    fun newWorktreeIsLabelable() = runBlocking {
+        assumeTrue(isWindows, "mandatory labels only exist on Windows")
+        // The temp root is where the bug reproduces on a real machine: it inherits Modify only,
+        // so a worktree that inherits from it cannot lower its own label. The creation-time
+        // OWNER RIGHTS grant is what makes this work (docs/agent-permissions.md §10).
+        val isolation = WorkspaceIsolation.begin(tempDir, "run-label")
+        try {
+            val label = icacls(isolation.isolatedRoot.toString(), "/setintegritylevel", "(OI)(CI)Low")
+            assertEquals(0, label.first, "the worktree must accept a Low label: ${label.second}")
+        } finally {
+            // Put the label back so the worktree deletes cleanly on every host.
+            icacls(isolation.isolatedRoot.toString(), "/setintegritylevel", "(OI)(CI)Medium")
+            isolation.rollback()
+        }
+    }
+
+    @Test
+    @DisplayName("a task worktree in a Modify-only checkout prepares under the real Low-IL sandbox")
+    fun worktreePreparesUnderTheRealSandbox() = runBlocking {
+        assumeTrue(isWindows, "mandatory labels only exist on Windows")
+        // The "new user, first task" scenario in the strictest location: this temp root inherits
+        // Modify only (no WRITE_OWNER), like `D:\` or a shared folder. `begin` grants the worktree
+        // its owner rights, then the real backend labels it and passes its own probe.
+        val isolation = WorkspaceIsolation.begin(tempDir, "run-prepare")
+        val sandbox = WindowsLowIntegritySandbox(
+            caches = { emptyList() },
+            protectCredentialStores = false,
+            markerDir = null,
+        )
+        try {
+            sandbox.prepare(
+                ProcessSpec(
+                    command = listOf("cmd.exe", "/c", "echo hi"),
+                    directory = isolation.isolatedRoot,
+                    environment = mapOf("PATH" to "C:\\Windows\\System32"),
+                ),
+                isolation.isolatedRoot,
+                allowNetwork = false,
+            )
+        } finally {
+            // Put the label back so the worktree deletes cleanly on every host.
+            icacls(isolation.isolatedRoot.toString(), "/setintegritylevel", "(OI)(CI)Medium")
+            isolation.rollback()
+        }
+        // `prepare` returns the prepared spec; the test asserts by not throwing, so keep the
+        // `runBlocking` result `Unit` instead of leaking a `ProcessSpec` as the test's value.
+        Unit
     }
 }

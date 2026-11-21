@@ -39,6 +39,18 @@ internal data class FinishEvidence(
     val actualVerdictJson: String? = null,
     /** Repository-relative paths git reports as deleted; null when git is unavailable. */
     val gitDeletedFiles: Set<String>? = null,
+    /**
+     * Folders the operator granted for this task (`agent run --add-dir`), as absolute normalised
+     * paths, plus the README of the grant convention: a path under one of them is a legitimate
+     * deliverable that git can never corroborate — it usually lives outside the checkout.
+     *
+     * Without this, a granted write made the report *fail* for being honest: `filesChanged` listed
+     * the file, `git status` could not see it, and the finish gate rejected the task
+     * (`statusCode=417`, issue `20261120-0156`). The incentive that created — list the file and
+     * fail, hide it and pass — is worse than the false negative, so a granted root is accepted as
+     * evidence of its own and its writes stay *material* (rule 7 still requires them to be listed).
+     */
+    val grantedRoots: List<Path> = emptyList(),
 )
 
 /**
@@ -52,7 +64,9 @@ internal data class FinishEvidence(
  *    gate.
  * 3. **a gate that did not run and carries no `detail`** — a silent gate that
  *    reads as a pass.
- * 4. **`filesChanged` entries git does not show** — an invented change.
+ * 4. **`filesChanged` entries neither git nor the run's own trace shows** — an
+ *    invented change. (Git alone is not enough: an untracked file the run created
+ *    and then deleted leaves no trace in `git status` — run `4125acaa`, 2026-11-19.)
  * 5. **a configured required gate missing or `ok:false`** — an unsupported
  *    success claim.
  *
@@ -141,22 +155,35 @@ internal object FinishReportGate {
             }
         }
 
-        // 4. Reported changes must exist in git's view of the work tree.
+        // 4. Reported changes must exist in git's view of the work tree — or in the
+        //    run's own mutation trace when git cannot see them.
         //
-        // One direction only: reported ⊆ git-changed. The reverse ("git shows a
-        // change the report omits") is NOT checked, because the working tree may
-        // legitimately carry unrelated changes from before the task and the agent
-        // has no run-start baseline to subtract them.
+        // One direction only: reported ⊆ git-changed ∪ traced. The reverse ("git shows
+        // a change the report omits") is NOT checked, because the working tree may
+        // legitimately carry unrelated changes from before the task and the agent has
+        // no run-start baseline to subtract them.
+        //
+        // The trace half exists because `git status` cannot see an **untracked file's
+        // lifecycle**: it never listed the file, so deleting it again is equally
+        // invisible. Run `4125acaa` (2026-11-19) wrote 23 `.b4scratch/*` helpers,
+        // deleted them before finishing, listed them honestly in `filesChanged` — and
+        // this rule failed the whole task (`Invalid state: step 0 - Finish report
+        // rejected`) although `coding.verify` had passed and the deliverable was
+        // written. The rule's intent (no *invented* change) is preserved: an entry
+        // backed by neither git nor the run's own trace is still a violation.
         val reported = evidence.filesChanged.map { it.trim() }.filter { it.isNotEmpty() }
         val changed = evidence.gitChangedFiles
         if (reported.isNotEmpty() && changed != null) {
+            val traced = tracedMutationPaths(evidence)
             val normalized = reported.map { normalizePath(it) }
             val phantom = normalized.filterNot { path ->
-                changed.any { c -> c == path || c.endsWith("/$path") || path.endsWith("/$c") }
+                matchesAnyPath(changed, path) ||
+                    matchesAnyPath(traced, path) ||
+                    isUnderGrantedRoot(path, evidence)
             }
             if (phantom.isNotEmpty()) {
-                violations += "filesChanged lists ${phantom.size} file(s) git does not show as changed: " +
-                    phantom.take(5).joinToString(", ")
+                violations += "filesChanged lists ${phantom.size} file(s) neither git nor this run's " +
+                    "file trace shows: " + phantom.take(5).joinToString(", ")
             }
         }
 
@@ -281,14 +308,58 @@ internal object FinishReportGate {
     }
 
     /**
-     * Whether a mutated path is material to the checkout: a path git reports as
-     * changed, or (when git is unavailable) any path outside the tool's own
-     * `.browser4/` state directory.
+     * Every path the run's own file-system trace mentions, `write` and `delete` alike.
+     *
+     * A path only appears here because this run handed it to `coding.*` — so a report that
+     * lists it is describing what actually happened, even when git cannot corroborate it
+     * (an untracked file that the run deleted again leaves no trace in `git status`).
+     */
+    private fun tracedMutationPaths(evidence: FinishEvidence): Set<String> =
+        evidence.recordedMutations.mapNotNull { entry ->
+            normalizePath(entry.substringAfter(' ', "")).takeIf { it.isNotEmpty() }
+        }.toSet()
+
+    /** Path equality that tolerates a repo-relative/absolute-prefix mismatch either way. */
+    private fun matchesAnyPath(paths: Collection<String>, path: String): Boolean =
+        paths.any { p -> p == path || p.endsWith("/$path") || path.endsWith("/$p") }
+
+    /**
+     * Whether a mutated path is material to the checkout: a path git reports as changed, a path
+     * under a folder the operator granted for this task (`--add-dir`), or (when git is unavailable)
+     * any path outside the tool's own `.browser4/` state directory.
+     *
+     * A granted write is material **on purpose**: the grant exists so the task can deliver into
+     * that folder, so a report that omits it is as incomplete as one that omits a workspace file.
+     * Treating it as immaterial would reward concealment — the exact defect behind issue
+     * `20261120-0156`.
      */
     private fun isMaterialPath(path: String, evidence: FinishEvidence): Boolean {
         if (path.startsWith(".browser4/")) return false
+        if (isUnderGrantedRoot(path, evidence)) return true
         val changed = evidence.gitChangedFiles ?: return true
         return changed.any { c -> c == path || c.endsWith("/$path") || path.endsWith("/$c") }
+    }
+
+    /**
+     * Whether [path] names a file under one of the task's granted roots.
+     *
+     * Only an absolute entry can be attributed to a granted root: a relative entry is
+     * workspace-relative by definition, and the git/trace halves already own those. `Path.startsWith`
+     * compares path components (case-insensitively on Windows), so `C:\granted\a.txt` cannot be
+     * confused with `C:\granted-other\a.txt`.
+     */
+    private fun isUnderGrantedRoot(path: String, evidence: FinishEvidence): Boolean {
+        if (evidence.grantedRoots.isEmpty()) return false
+        // [normalizePath] drops a leading separator (it exists for repo-relative git output), so a
+        // POSIX absolute entry arrives here without it; test the spelled form too.
+        val candidates = listOf(path, "/$path").mapNotNull { raw ->
+            val candidate = runCatching { Path.of(raw).normalize() }.getOrNull()
+            candidate?.takeIf { it.isAbsolute }
+        }
+        if (candidates.isEmpty()) return false
+        return evidence.grantedRoots.any { root ->
+            candidates.any { candidate -> runCatching { candidate.startsWith(root) }.getOrDefault(false) }
+        }
     }
 
     private fun normalizePath(raw: String): String =

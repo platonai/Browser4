@@ -103,6 +103,36 @@ class CodingAgentShellWorkspaceBoundaryTest {
         assertTrue(boundaryOff.isAllowed(command), boundaryOff.explain(command))
     }
 
+    @Test
+    @DisplayName("a Downloads path is refused with the workspace download-dir hint")
+    fun downloadsPathRefusedWithTheWorkspaceHint() {
+        // Chrome saves downloads to the OS folder by default, so the generic "use a
+        // workspace-relative path" answer leaves an agent with no way to check what landed —
+        // the 2026-11-21 run answered it by reading chrome://downloads instead.
+        val home = System.getProperty("user.home")?.takeIf { it.isNotBlank() }
+        assumeTrue(home != null, "user.home is not set")
+        val downloads = Path.of(home!!, "Downloads")
+        val shell = shell()
+        val command = "dir /b \"$downloads\""
+
+        val text = shell.explain(command)
+        assertFalse(shell.isAllowed(command), text)
+        assertTrue(text.contains("outside the workspace"), text)
+        assertTrue(text.contains("download --dir"), "the refusal must name the fix: $text")
+    }
+
+    @Test
+    @DisplayName("an unrelated outside path keeps the generic workspace hint")
+    fun unrelatedOutsidePathKeepsTheGenericHint() {
+        val shell = shell()
+        val command = "type \"${outsideFile()}\""
+
+        val text = shell.explain(command)
+        assertFalse(shell.isAllowed(command), text)
+        assertTrue(text.contains("workspace-relative path"), text)
+        assertFalse(text.contains("download --dir"), "the download hint must stay targeted: $text")
+    }
+
     // ==================== working directories (2026-11-14 self-development run) ============
 
     private fun link(linkPath: Path, target: Path) {
@@ -131,6 +161,9 @@ class CodingAgentShellWorkspaceBoundaryTest {
         Files.writeString(module.resolve("pom.xml"), "<project/>")
         val ws = Files.createDirectories(workspace.resolve("ws"))
         link(ws.resolve("browser4-coding"), module)
+        // The boundary learns the mirrored checkout from the backend's manifest, not from the link
+        // (review S1): the shell accepts `<checkout>` as a working directory because of this record.
+        MirrorRoots.writeManifest(ws, checkout, mapOf("browser4-coding" to module))
 
         val shell = CodingAgentShell(baseDir = ws)
         val output = shell.execute("echo ok", workingDir = checkout.toString())

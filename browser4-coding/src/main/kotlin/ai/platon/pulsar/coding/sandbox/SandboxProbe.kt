@@ -83,13 +83,10 @@ internal object SandboxProbe {
     )
 
     /**
-     * Runs the probe with both halves under the timeout: the output is drained on a daemon thread
-     * while the caller waits for the child.
+     * Runs the probe.
      *
-     * Draining on the calling thread first (the historical shape) blocks on EOF, and a child or
-     * grandchild that keeps stdout open would make that wait permanent — the timeout and the
-     * `destroyForcibly` were unreachable. Reading concurrently keeps the "drain or the pipe fills"
-     * intent, while the wait, the kill and the post-kill drain all stay bounded.
+     * The child is awaited by [await], which keeps both the wait and the output drain bounded: see
+     * the note there for why draining on the calling thread was a bug.
      */
     internal fun launch(
         spec: ProcessSpec,
@@ -99,27 +96,48 @@ internal object SandboxProbe {
         },
         timeoutSeconds: Long = TIMEOUT_SECONDS,
         drainTimeoutSeconds: Long = DRAIN_TIMEOUT_SECONDS,
+    ): Outcome = await(start(spec), timeoutSeconds, drainTimeoutSeconds)
+
+    /**
+     * Waits for an already-started child under both bounds, then returns its exit code and output.
+     *
+     * Draining on the calling thread first (the historical shape) blocks on EOF, and a child or
+     * grandchild that keeps stdout open would make that wait permanent — the timeout and the
+     * `destroyForcibly` were unreachable. Reading concurrently keeps the "drain or the pipe fills"
+     * intent, while the wait, the kill and the post-kill drain all stay bounded.
+     *
+     * Split out of [launch] so the file bridge ([SandboxedFileOps]) gets the identical guarantee
+     * rather than a second copy of this drain.
+     */
+    internal fun await(
+        process: Process,
+        timeoutSeconds: Long = TIMEOUT_SECONDS,
+        drainTimeoutSeconds: Long = DRAIN_TIMEOUT_SECONDS,
     ): Outcome {
-        val process = start(spec)
         val output = AtomicReference("")
         val drained = CountDownLatch(1)
         val reader = Thread({
             try {
                 process.inputStream.bufferedReader().use { output.set(it.readText()) }
             } catch (e: Exception) {
-                logger.debug("sandbox probe output reader stopped: {}", e.message)
+                logger.debug("sandboxed command output reader stopped: {}", e.message)
             } finally {
                 drained.countDown()
             }
-        }, "sandbox-probe-reader")
+        }, "sandbox-command-reader")
         reader.isDaemon = true
         reader.start()
 
         if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
             process.destroyForcibly()
+            // Give the kill a bounded moment to settle so the process handle and the stdin pipe are
+            // closed by the child's exit path (the file bridge runs one child per operation, so a
+            // leaked handle per timeout would accumulate for the life of the backend).
+            runCatching { process.waitFor(drainTimeoutSeconds, TimeUnit.SECONDS) }
+            runCatching { process.outputStream.close() }
             // A grandchild can still hold the pipe open, so the drain gets a short window only.
             drained.await(drainTimeoutSeconds, TimeUnit.SECONDS)
-            return Outcome(-1, "probe timed out after ${timeoutSeconds}s")
+            return Outcome(-1, "the sandboxed command timed out after ${timeoutSeconds}s")
         }
         // The child exited; wait for EOF, but bounded in case a lingering descendant holds it.
         drained.await(drainTimeoutSeconds, TimeUnit.SECONDS)

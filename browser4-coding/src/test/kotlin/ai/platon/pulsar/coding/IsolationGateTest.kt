@@ -29,6 +29,24 @@ class IsolationGateTest {
         durationMs = 10,
     ).toJson()
 
+    /** A verdict from a module-less check (`checks="repo-consistency"`). */
+    private fun treeVerdict(): String = VerificationReport(
+        checks = listOf(VerificationCheck(name = "repo-consistency", target = "repo", ran = true, ok = true)),
+        module = null,
+        requested = listOf("repo-consistency"),
+        durationMs = 10,
+    ).toJson()
+
+    /** A module-less verdict fingerprinted over [changed] in [worktree]. */
+    private fun treeDigestVerdict(worktree: Path, changed: List<String>): String = VerificationReport(
+        checks = listOf(VerificationCheck(name = "repo-consistency", target = "repo", ran = true, ok = true)),
+        module = null,
+        requested = listOf("repo-consistency"),
+        durationMs = 10,
+        verifiedAt = Instant.now(),
+        contentDigest = WorkspaceDigest.of(worktree, changed),
+    ).toJson()
+
     /** A verdict whose content fingerprint was taken over [changed] in [worktree]. */
     private fun digestVerdict(worktree: Path, module: String, changed: List<String>): String = VerificationReport(
         checks = listOf(VerificationCheck(name = "compile", target = module, ran = true, ok = true)),
@@ -96,6 +114,73 @@ class IsolationGateTest {
     }
 
     @Test
+    @DisplayName("a file nested inside a module is covered by that module's verdict")
+    fun nestedFileCoveredByOwningModule() {
+        // The 2026-11-19 stranded run: examples/scripts/weibo-ego-lite.mjs was attributed to a
+        // phantom module "scripts", so the passing module="examples" verdict was ignored and the
+        // refusal demanded `mvn -pl scripts -am`, which Maven rejects before compiling anything.
+        val decision = IsolationGate.evaluate(
+            listOf("examples/scripts/weibo-ego-lite.mjs"),
+            verdict("examples", passed = true),
+        )
+        assertTrue(decision.allow, decision.reason)
+        assertEquals(setOf("examples"), decision.requiredModules)
+    }
+
+    @Test
+    @DisplayName("a change outside every module asks for a tree check, not for a module that cannot exist")
+    fun unownedChangeNeverDemandsAPhantomModule() {
+        val changed = listOf("bin/test.ps1")
+
+        val refused = IsolationGate.evaluate(changed, null)
+        assertFalse(refused.allow)
+        assertTrue(refused.requiredModules.isEmpty(), refused.requiredModules.toString())
+        assertTrue(refused.reason.contains("repo-consistency"), refused.reason)
+        assertFalse(refused.reason.contains("mvn -pl bin"), refused.reason)
+
+        val allowed = IsolationGate.evaluate(changed, treeVerdict())
+        assertTrue(allowed.allow, allowed.reason)
+        assertTrue(allowed.reason.contains("nothing to compile"), allowed.reason)
+    }
+
+    @Test
+    @DisplayName("an unowned path does not hide the coverage a real module still needs")
+    fun unownedPathKeepsTheModuleRequirement() {
+        val decision = IsolationGate.evaluate(
+            listOf("bin/test.ps1", "browser4-coding/src/main/kotlin/X.kt"),
+            verdict("browser4-agentic", passed = true),
+        )
+        assertTrue(decision.allow, decision.reason)
+        assertEquals(setOf("browser4-coding"), decision.requiredModules)
+
+        val refused = IsolationGate.evaluate(
+            listOf("bin/test.ps1", "browser4-coding/src/main/kotlin/X.kt"),
+            verdict("browser4-core/browser4-common", passed = true),
+        )
+        assertFalse(refused.allow, "an upstream module does not compile browser4-coding")
+        assertTrue(refused.reason.contains("did not cover browser4-coding"), refused.reason)
+    }
+
+    @Test
+    @DisplayName("a documentation path never becomes a module requirement, whatever it is called")
+    fun documentationIsNotAModuleRequirement() {
+        // `docs-dev/examples/**` contains the name of a real Maven module (`examples`) and
+        // `skills/browser4-coding/SKILL.md` contains another, so containment alone attributed them
+        // to those modules and demanded their `-am` build for a note. Documentation cannot break a
+        // build, so it must not add a requirement.
+        val changed = listOf(
+            "browser4-coding/src/main/kotlin/X.kt",
+            "docs-dev/examples/weibo-aikeke-hourly/run_weibo_hourly.ps1",
+            "skills/browser4-coding/SKILL.md",
+        )
+
+        val decision = IsolationGate.evaluate(changed, verdict("browser4-coding", passed = true))
+
+        assertTrue(decision.allow, decision.reason)
+        assertEquals(setOf("browser4-coding"), decision.requiredModules)
+    }
+
+    @Test
     @DisplayName("an upstream verifier does not cover a downstream change")
     fun upstreamVerifierDoesNotCoverDownstreamModule() {
         val decision = IsolationGate.evaluate(
@@ -104,6 +189,60 @@ class IsolationGateTest {
         )
         assertFalse(decision.allow)
         assertTrue(decision.reason.contains("did not cover"), decision.reason)
+    }
+
+    @Test
+    @DisplayName("a coverage refusal names the module whose -am build covers every changed module")
+    fun coverageRefusalNamesTheVerifier() {
+        // The 2026-11-18 run: two files in browser4-coding plus one in browser4-agentic, verified
+        // browser4-coding only. The run then reasoned "verify every changed module" without being
+        // told which module's build contains the other, guessed the upstream one, and the merge was
+        // refused. The refusal must name the module that actually covers the change set.
+        val decision = IsolationGate.evaluate(
+            listOf(
+                "browser4-coding/src/main/kotlin/ai/platon/pulsar/coding/sandbox/WindowsNativeApi.kt",
+                "browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/tools/builtin/B4CliToolExecutor.kt",
+            ),
+            verdict("browser4-coding", passed = true),
+        )
+
+        assertFalse(decision.allow)
+        assertEquals(setOf("browser4-coding", "browser4-agentic"), decision.requiredModules)
+        assertTrue(decision.reason.contains("did not cover browser4-agentic"), decision.reason)
+        assertTrue(decision.reason.contains("module=\"browser4-agentic\""), decision.reason)
+    }
+
+    @Test
+    @DisplayName("the coverage hint still names the Rust crate when the change spans ecosystems")
+    fun coverageHintNamesBothEcosystems() {
+        val decision = IsolationGate.evaluate(
+            listOf("cli/browser4-cli/src/main.rs", "browser4-coding/src/main/kotlin/X.kt"),
+            verdict(ModuleMap.CLI_CRATE, passed = true),
+        )
+
+        assertFalse(decision.allow)
+        assertTrue(decision.reason.contains("did not cover browser4-coding"), decision.reason)
+        assertTrue(decision.reason.contains("module=\"browser4-coding\""), decision.reason)
+        assertTrue(decision.reason.contains("module=\"${ModuleMap.CLI_CRATE}\""), decision.reason)
+    }
+
+    @Test
+    @DisplayName("a refusal no single module can satisfy says so instead of naming an unbuildable module")
+    fun coverageHintStaysSilentWithoutACoveringModule() {
+        // Neither browser4-rest nor browser4-plugins/browser4-seo has an `-am` build that compiles
+        // the other, so there is no verifier to name. Proposing one anyway is what produced
+        // `mvn -pl scripts -am` on 2026-11-19: a repair that fails before compiling anything.
+        val decision = IsolationGate.evaluate(
+            listOf(
+                "browser4-plugins/browser4-seo/src/main/kotlin/A.kt",
+                "browser4-rest/src/main/kotlin/B.kt",
+            ),
+            verdict("browser4-plugins/browser4-seo", passed = true),
+        )
+
+        assertFalse(decision.allow)
+        assertTrue(decision.reason.contains("no single module"), decision.reason)
+        assertFalse(decision.reason.contains("mvn -pl"), decision.reason)
     }
 
     @Test
@@ -226,6 +365,41 @@ class IsolationGateTest {
 
         assertFalse(decision.allow)
         assertTrue(decision.reason.contains("was last written"), decision.reason)
+    }
+
+    @Test
+    @DisplayName("a module-less change set with a verdict for the current tree merges")
+    fun moduleLessChangeWithFreshVerdictMerges(@TempDir tmp: Path) {
+        val changed = listOf("bin/test.ps1")
+        val file = tmp.resolve(changed.first())
+        Files.createDirectories(file.parent)
+        Files.writeString(file, "Write-Host 'a'\n")
+
+        val decision = IsolationGate.evaluate(changed, treeDigestVerdict(tmp, changed), worktree = tmp)
+
+        assertTrue(decision.allow, decision.reason)
+        assertTrue(decision.reason.contains("nothing to compile"), decision.reason)
+    }
+
+    @Test
+    @DisplayName("a module-less change set still has to be verified after its last edit")
+    fun moduleLessChangeNeedsAFreshVerdict(@TempDir tmp: Path) {
+        // `bin/` is no Maven module, so no verdict can cover it — but every verdict fingerprints
+        // the whole change set all the same, and "verify, keep editing, merge on the old verdict"
+        // must not become legal just because nothing can be compiled.
+        val changed = listOf("bin/test.ps1")
+        val file = tmp.resolve(changed.first())
+        Files.createDirectories(file.parent)
+        Files.writeString(file, "Write-Host 'a'\n")
+        val recorded = treeDigestVerdict(tmp, changed)
+
+        // The agent keeps editing after the verdict.
+        Files.writeString(file, "Write-Host 'b'\n")
+
+        val decision = IsolationGate.evaluate(changed, recorded, worktree = tmp)
+
+        assertFalse(decision.allow, "a stale verdict must never merge, module or no module")
+        assertTrue(decision.reason.contains("different change set"), decision.reason)
     }
 
     @Test

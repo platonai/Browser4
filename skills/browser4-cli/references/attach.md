@@ -29,7 +29,7 @@ browser4-cli snapshot
 browser4-cli screenshot --filename current-state.png
 
 # 4. Save state for future headless sessions
-browser4-cli state-save auth.json
+browser4-cli state save auth.json
 ```
 
 > **Which transport?** `--extension` is the only one that reuses your everyday Chrome profile:
@@ -480,7 +480,7 @@ browser4-cli close       # or: browser4-cli disconnect
 
 > **Keep the page you were working on:** `close` on an attached session closes the
 > tab the session was driving (the browser process itself survives, kept alive by a
-> fresh `about:blank` tab). Save the URL first (`page-info`) if you need to reopen
+> fresh `about:blank` tab). Save the URL first (`page info`) if you need to reopen
 > it after re-attaching.
 >
 > **Exceptions where the browser can still exit:** WebSocket-only endpoints (the

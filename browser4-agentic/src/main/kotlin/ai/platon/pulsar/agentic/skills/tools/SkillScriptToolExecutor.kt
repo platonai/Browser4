@@ -7,12 +7,23 @@ import ai.platon.pulsar.agentic.skills.execution.SkillExecutionSupport
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationProvider
 import ai.platon.pulsar.coding.Effect
+import ai.platon.pulsar.coding.sandbox.ExecutionSandbox
+import ai.platon.pulsar.coding.sandbox.ProcessLauncher
+import ai.platon.pulsar.coding.sandbox.ProcessSpec
+import ai.platon.pulsar.coding.sandbox.SandboxEnvironment
 import ai.platon.pulsar.common.getLogger
 import java.nio.file.Files
+import java.nio.file.Path
 import kotlin.reflect.KClass
 
 class SkillScriptToolExecutor(
     private val registry: SkillRegistry = SkillRegistry.instance,
+    /** Workspace of the running task; `null` keeps the historical unsandboxed launch. */
+    private val workspace: () -> Path? = { null },
+    /** The task's OS boundary; `null` (or an `off` backend) keeps the historical launch. */
+    private val sandbox: () -> ExecutionSandbox? = { null },
+    /** Variables the CLI needs (session pinning), merged into the sandboxed child's environment. */
+    private val sessionEnv: () -> Map<String, String> = { emptyMap() },
 ) : AbstractToolExecutor(), ToolCallSpecificationProvider {
     private val logger = getLogger(this)
     override val domain: String = "skill"
@@ -101,6 +112,35 @@ class SkillScriptToolExecutor(
         require(Files.exists(p) && Files.isRegularFile(p)) { "Reference file not found: $relativePath" }
         return Files.readString(p)
     }
+    /**
+     * Starts the script inside the task's OS boundary when there is one.
+     *
+     * A skill script is agent-reachable code, so it belongs on the same seam as `coding.shell`:
+     * `ExecutionSandbox.prepare` decides the writable roots and the launcher applies the token. The
+     * fallback is the historical `ProcessBuilder` (inherited environment, no boundary) and is used
+     * only when no workspace or no backend is available — never as a silent downgrade of a sandboxed
+     * task, because `prepare` throws instead of returning an unwrapped launch.
+     */
+    private fun startScript(command: List<String>, root: Path): Process {
+        val boundary = sandbox()
+        val taskWorkspace = workspace()
+        if (boundary == null || boundary.id == "off" || taskWorkspace == null) {
+            logger.debug("skill script runs without an OS boundary (sandbox={})", boundary?.id ?: "none")
+            return ProcessBuilder(command)
+                .directory(root.toFile())
+                .redirectErrorStream(true)
+                .start()
+        }
+        val spec = ProcessSpec(
+            command = command,
+            directory = root,
+            environment = SandboxEnvironment.build(System.getenv(), sessionEnv()),
+        )
+        val prepared = boundary.prepare(spec, taskWorkspace, allowNetwork = false)
+        logger.info("skill script runs inside the OS boundary: backend={}", boundary.id)
+        return ProcessLauncher.start(prepared, redirectErrorStream = true)
+    }
+
     private fun runScript(
         skillId: String,
         relativePath: String,
@@ -126,10 +166,7 @@ class SkillScriptToolExecutor(
         val command = mutableListOf("python", normalizedRel)
         command.addAll(args)
         logger.info("Running skill script: {} {}", skillId, normalizedRel)
-        val pb = ProcessBuilder(command)
-            .directory(root.toFile())
-            .redirectErrorStream(true)
-        val process = pb.start()
+        val process = startScript(command, root)
         val outputBuilder = StringBuilder()
         val reader = process.inputStream.bufferedReader()
         val startNanos = System.nanoTime()

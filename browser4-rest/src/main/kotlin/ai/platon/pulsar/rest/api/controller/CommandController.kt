@@ -402,15 +402,16 @@ class CommandController(
                 .body(CommandInputResponse(id, accepted = false, message = "text must not be blank"))
         }
 
-        val accepted = commandExecutor.sendInput(id, text)
+        val accepted = commandExecutor.sendInput(id, text, request.deliverAs)
+        val followUp = request.deliverAs.trim().lowercase().replace("_", "").replace("-", "") == "followup"
         return ResponseEntity.ok(
             CommandInputResponse(
                 taskId = id,
                 accepted = accepted,
-                message = if (accepted) {
-                    "queued: the agent sees it at its next model round"
-                } else {
-                    "task is not running or does not accept input"
+                message = when {
+                    !accepted -> "task is not running or does not accept input"
+                    followUp -> "queued: the agent continues with it when the current step finishes"
+                    else -> "queued: the agent sees it at its next model round"
                 },
             )
         )

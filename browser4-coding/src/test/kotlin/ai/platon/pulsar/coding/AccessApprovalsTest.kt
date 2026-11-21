@@ -173,6 +173,48 @@ class AccessApprovalsTest {
     }
 
     @Test
+    @DisplayName("a request the rails forbid is refused immediately instead of waiting for an operator")
+    fun testRailsRefuseAtRequestTime(@TempDir root: Path) {
+        PermissionAudit.reset()
+        val approvals = approvals(root)
+        val credential = Path.of(System.getProperty("user.home"), ".ssh", "id_rsa")
+
+        val request = approvals.request(Effect.SECRET_READ, Target.PathTarget(credential))
+
+        assertEquals(AccessState.DENIED, request.state, "a rail must not wait for an operator")
+        assertEquals("credential locations are never approved", request.decisionReason)
+        assertNull(request.capability)
+        assertTrue(approvals.pending().isEmpty(), "a rail-refused request must not enter the queue")
+        assertTrue(
+            PermissionAudit.snapshot().containsKey("coding.requestAccess:${PermissionAudit.CODE_ACCESS_DENIED}"),
+            "the rail refusal must be audited like an operator denial",
+        )
+
+        // The same target with the effect that names a credential read: still refused, still with the
+        // credential reason (not the weaker "outside the workspace" one, which invites an --add-dir).
+        val writeRequest = approvals.request(Effect.FS_WRITE, Target.PathTarget(credential))
+        assertEquals(AccessState.DENIED, writeRequest.state)
+        assertNotNull(writeRequest.decisionReason)
+        assertTrue(writeRequest.decisionReason!!.contains("credential"), writeRequest.decisionReason!!)
+    }
+
+    @Test
+    @DisplayName("a file policy entry a rail forbids is reported rather than pretended approved")
+    fun testPolicyFileEntryCannotCrossRails(@TempDir root: Path) {
+        val approvals = approvals(root)
+        val credential = Path.of(System.getProperty("user.home"), ".ssh", "id_rsa")
+        val policyFile = root.resolve(AccessPolicyFile.RELATIVE_PATH)
+        Files.createDirectories(policyFile.parent)
+        Files.writeString(
+            policyFile,
+            """{"grants":[{"effect":"secret.read","target":"${credential.toString().replace("\\", "\\\\")}"}]}""",
+        )
+
+        assertEquals(0, approvals.loadPolicyFile(policyFile), "a rail-refused entry must not be granted")
+        assertTrue(approvals.activeCapabilities().isEmpty())
+    }
+
+    @Test
     @DisplayName("a denial issues nothing and is audited with its channel")
     fun testDenyIssuesNothing(@TempDir root: Path) {
         PermissionAudit.reset()

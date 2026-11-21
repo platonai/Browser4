@@ -88,7 +88,7 @@ object ShadowBoot {
     fun shouldRun(changedFiles: Collection<String>, mode: String = modeFromConfig()): Boolean = when (mode) {
         "off" -> false
         "always" -> changedFiles.isNotEmpty()
-        "auto" -> ModuleResolver.modulesOf(changedFiles).any { module ->
+        "auto" -> ModuleResolver.knownModulesOf(changedFiles).any { module ->
             BOOT_CHAIN_PREFIXES.any { module == it || module.startsWith(it) }
         }
         else -> {
@@ -115,7 +115,9 @@ object ShadowBoot {
         if (!shouldRun(changedFiles, mode)) {
             return Outcome(true, true, "shadow boot not required (mode=$mode)")
         }
-        val modules = ModuleResolver.modulesOf(changedFiles).filter { it.isNotBlank() }
+        // Known modules only: `mvn -pl <phantom>` fails before compiling, which would read as a
+        // boot failure of a change that has no module to boot in the first place.
+        val modules = ModuleResolver.knownModulesOf(changedFiles).filter { it.isNotBlank() }
         if (modules.isEmpty()) {
             return Outcome(true, true, "shadow boot skipped: no module owns the changed files")
         }

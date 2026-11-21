@@ -135,7 +135,7 @@ Have HTML files and want structured data — without tokens?
 | `webminer update` | Update to the latest release |
 | `webminer version` | Show installed and latest versions |
 | `webminer uninstall` | Remove the installed release |
-| `webminer run-example` | Download the sample dataset and run the full pipeline (needs 7-Zip) |
+| `webminer run example` | Download the sample dataset and run the full pipeline (needs 7-Zip) |
 | `webminer all <html-dir>` | Full pipeline: encode → cluster → views (`--max-files` default **40** — raise it or the corpus is silently truncated, `--output` for the clustering results, `--resume`) |
 | `webminer views <result-dir>` | Rebuild the interactive views from an existing run |
 

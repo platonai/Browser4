@@ -139,6 +139,33 @@ class CodingAccessEnforcementTest {
     }
 
     @Test
+    @DisplayName("requestAccess answers a rail refusal even when no operator channel is attached")
+    fun testRequestAccessAnswersRailsWithoutOperator(@TempDir root: Path) {
+        // A task-less call (`tool call coding_request_access`) has no approval queue. A target the
+        // rails forbid still gets a *decision*: returning "no channel" made the model retry with a
+        // wider preset, which the rails refuse just as firmly (permission-e2e A18, 2026-11-20).
+        val denied = call(
+            target(root, AccessPreset.READ),
+            "requestAccess",
+            mapOf("effect" to "secret.read", "target" to root.resolve("id_rsa").toString()),
+        )
+        val text = valueOf(denied)
+        assertTrue(text.contains(""""state":"denied""""), text)
+        assertTrue(text.contains("ACCESS_DENIED"), text)
+        assertTrue(text.contains("credential locations are never approved"), text)
+
+        // A requestable target keeps the historic answer: nobody can decide it here.
+        val requestable = call(
+            target(root, AccessPreset.READ),
+            "requestAccess",
+            mapOf("effect" to "fs.write", "target" to root.resolve("a.txt").toString()),
+        )
+        val requestableText = valueOf(requestable)
+        assertTrue(requestableText.contains("No approval channel"), requestableText)
+        assertFalse(requestableText.contains("ACCESS_DENIED"), requestableText)
+    }
+
+    @Test
     @DisplayName("a workspace strategy file pre-approves grants for an unattended task (P4-4)")
     fun testStrategyFilePreApproves(@TempDir root: Path) {
         val policy = AgentAccessPolicy(preset = AccessPreset.READ)

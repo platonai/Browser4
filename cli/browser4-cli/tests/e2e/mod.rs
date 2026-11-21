@@ -4198,7 +4198,9 @@ fn read_interactive_state(ctx: &mut E2ECtx) -> serde_json::Value {
 ///
 /// Unlike `#state-log` (which only records events inside `#mouse-track-area`),
 /// this log covers every pointer event the page received: `last`/`first`
-/// (client coordinates), `moves`, `maxClientX`/`maxClientY`, `leaveCount`,
+/// (client coordinates), `moves`, `maxClientX`/`maxClientY`,
+/// `minClientX`/`minClientY` (the extremes of the whole trail, which is what
+/// proves an out-of-viewport point never reached the page), `leaveCount`,
 /// `down`/`up` (coordinates + target id), `viewport` and `scroll`.
 ///
 /// It is what the coordinate-space and pointer-state scenarios assert against,

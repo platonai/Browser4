@@ -174,7 +174,7 @@ printed (the logged lines are readable with `browser4-cli console`).
 | `--stdin` / `--js` | Read the expression from stdin (`--js` is an alias) — best for heredocs and complex quoting |
 | `--base64 <b64>` | Quoting-proof inline form (Windows: `[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('expr'))`) |
 | `--json` | Wrap the result in the CLI's JSON envelope |
-| `--await` | Wait for the expression's Promise to resolve before returning the result — for `fetch`/async work (`eval --await "fetch('/api').then(r => r.json())"`) |
+| `--await` | Wait for the expression's Promise to resolve before returning the result — for `fetch`/async work (`eval --await "fetch('/api').then(r => r.json())"`). One evaluate cannot exceed the driver's fixed 30s page-evaluate deadline (`--timeout` does not widen it) — use `wait --fn`/`wait <ms>` for a longer page-side wait |
 | `--wait-selector <css>` | Wait for a CSS selector to appear before evaluating — for SPA/React pages that render asynchronously |
 | `--wait-timeout <ms>` | Max time to wait for `--wait-selector` (default: 30000) |
 | `--ref <ref>` | Evaluate against one element; the expression receives it as its first argument and must be an arrow function |

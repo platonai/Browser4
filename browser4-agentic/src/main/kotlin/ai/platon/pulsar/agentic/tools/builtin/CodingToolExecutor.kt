@@ -3,6 +3,7 @@ package ai.platon.pulsar.agentic.tools.builtin
 import ai.platon.pulsar.coding.AccessApprovals
 import ai.platon.pulsar.coding.AccessPreset
 import ai.platon.pulsar.coding.AccessRequest
+import ai.platon.pulsar.coding.AccessState
 import ai.platon.pulsar.coding.AdditionalDirs
 import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.coding.ArtifactScaffolds
@@ -1036,9 +1037,6 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     functionName,
                 )
                 val approvals = receiver.approvals
-                    ?: return "No approval channel is attached to this task: an operator cannot " +
-                        "approve a request here. Continue with the tools this preset grants, or re-run " +
-                        "with a wider --access preset."
                 val rawEffect = paramString(args, "effect", functionName)!!
                 val effect = Effect.parse(rawEffect)
                     ?: throw IllegalArgumentException(
@@ -1052,6 +1050,14 @@ class CodingToolExecutor : AbstractToolExecutor() {
                         val lexical = Path.of(rawTarget)
                         CodingTarget.PathTarget(if (lexical.isAbsolute) lexical else fs.workspaceRoot.resolve(lexical))
                     }
+                }
+                if (approvals == null) {
+                    // No approval channel is attached (a task-less `tool call coding_request_access`,
+                    // or a run without an operator). A request nobody could decide is not a useful
+                    // answer, so say that — but a target the rails forbid is still a *decision*:
+                    // answer it with the rail's code, because "no channel" reads as "retry with a
+                    // wider preset" to the model.
+                    return renderDeniedRequestWithoutChannel(effect, target, policy, fs.workspaceRoot)
                 }
                 val request = approvals.request(
                     effect = effect,
@@ -1075,21 +1081,25 @@ class CodingToolExecutor : AbstractToolExecutor() {
                 val startLine = paramInt(args, "startLine", functionName, required = false, default = null)
                 val endLine = paramInt(args, "endLine", functionName, required = false, default = null)
                 if (startLine != null || endLine != null) {
-                    fs.readFileLines(
-                        path = path,
-                        startLine = startLine ?: 1,
-                        endLine = endLine ?: -1,
+                    withEncodingNote(
+                        fs.readFileLinesText(
+                            path = path,
+                            startLine = startLine ?: 1,
+                            endLine = endLine ?: -1,
+                        )
                     )
                 } else {
-                    fs.readFile(path)
+                    withEncodingNote(fs.readFileText(path))
                 }
             }
             "readLines" -> {
                 validateArgs(args, allowed = setOf("path", "startLine", "endLine"), required = setOf("path"), functionName)
-                fs.readFileLines(
-                    path = paramString(args, "path", functionName)!!,
-                    startLine = paramInt(args, "startLine", functionName, required = false, default = 1) ?: 1,
-                    endLine = paramInt(args, "endLine", functionName, required = false, default = -1) ?: -1,
+                withEncodingNote(
+                    fs.readFileLinesText(
+                        path = paramString(args, "path", functionName)!!,
+                        startLine = paramInt(args, "startLine", functionName, required = false, default = 1) ?: 1,
+                        endLine = paramInt(args, "endLine", functionName, required = false, default = -1) ?: -1,
+                    )
                 )
             }
             "readFiles" -> {
@@ -2224,6 +2234,50 @@ class CodingToolExecutor : AbstractToolExecutor() {
                         (WorkspaceMirror.defaultSourceRepo()?.let { "(mirror of $it)" } ?: "(no source checkout detected)")
             }
             appendLine("Isolation: $isolationLine")
+            // Goals vs enforcement: the mode's profile and the backend that actually exists for it.
+            // A refusal is only actionable when the model can tell which layer spoke.
+            appendLine(CodingComponents.isolationSummary(policy))
+            // Which channels the OS boundary covers. `coding.shell` / `runCode` / the build shell go
+            // through the sandbox seam; since P3-6 the **file mutations** do too (a sandboxed child
+            // performs the change, so the kernel judges it), while reads stay in the backend by design
+            // (coding reads inherit the user; browse reads are workspace-scoped). The report is built
+            // from the backend's declared capabilities, so a channel that genuinely cannot run inside
+            // the boundary (b4.run in the AppContainer, §14.2.1) is named as uncovered instead of
+            // being counted — a refusal is only actionable when the model can tell which layer spoke.
+            val sandbox = runCatching { CodingComponents.sandbox(policy) }.getOrNull()
+            val sandboxId = sandbox?.id ?: "off"
+            val fileMutationsInBoundary = sandbox != null && sandbox.executesFileOps
+            val b4RunInBoundary = sandbox != null && sandbox.executesProductCommands
+            if (sandboxId == "off") {
+                appendLine(
+                    "OS boundary: none — every channel (shell, code, file tools, b4.run, skill scripts) " +
+                        "is governed by the policy layer only."
+                )
+            } else {
+                val covered = buildList {
+                    add("coding.shell")
+                    add("coding.runCode")
+                    add("coding.mvnBuild/verify")
+                    add("skill scripts")
+                    if (b4RunInBoundary) add("b4.run")
+                    if (fileMutationsInBoundary) {
+                        add(
+                            "every file mutation (coding.write/append/replace/editLines/delete/mkdir/" +
+                                "copy/move/revert is executed by a child inside the boundary)"
+                        )
+                    }
+                }
+                val outside = buildList {
+                    add("coding.read/glob/grep")
+                    if (!b4RunInBoundary) add("b4.run (this backend cannot host browser4-cli)")
+                    add("git/worktree/merge")
+                    add("LSP/ripgrep")
+                }
+                appendLine(
+                    "OS boundary ($sandboxId) covers: ${covered.joinToString(", ")}. " +
+                        "NOT covered (backend process, policy layer only): ${outside.joinToString(", ")}."
+                )
+            }
             // Reads are not limited by the preset: the readable roots are where Browser4's own
             // data/temp/checkout live, and a model that was refused a workspace write needs to
             // know it can still read them (and where the list comes from).
@@ -2243,7 +2297,16 @@ class CodingToolExecutor : AbstractToolExecutor() {
             appendLine("Files:")
             appendLine("  read workspace           : $yes")
             appendLine("  write workspace          : ${if (policy.allowsFileMutation()) yes else no}")
-            appendLine("  paths outside workspace  : ${if (policy.allowExternalAccess) yes else no}")
+            // "Outside the workspace" is NOT the whole story: the declared toolchain/cache roots
+            // (`~/.m2`, `~/.gradle`, `%TEMP%`, the JDK, SystemRoot) are writable by design, and a
+            // report that reads like an absolute fence made a redirect into `%TEMP%` look like a
+            // hole (measured 2026-11-20, permission-e2e A04/A15). Name the exception here.
+            appendLine(
+                "  paths outside workspace  : ${if (policy.allowExternalAccess) yes else no}" +
+                    if (policy.allowExternalAccess) "" else
+                        " (except the declared toolchain/cache roots — `~/.m2`, `~/.gradle`, `%TEMP%`, the JDK " +
+                            "and SystemRoot — which stay writable so a build can run)"
+            )
             appendLine("  delete/copy/move         : ${if (policy.allowDestructive) yes else no}")
             appendLine("Build and execution:")
             // Ask the policy, not the preset: an operator grant can unlock the build under `read`,
@@ -2364,17 +2427,56 @@ class CodingToolExecutor : AbstractToolExecutor() {
         }.trimEnd()
     }
 
+    /**
+     * Answer `coding.requestAccess` when no operator channel is attached.
+     *
+     * Two very different situations share that shape: the target *is* requestable (nobody can decide
+     * it here — say so) and the target crosses a rail (it **is** decided, and the decision is
+     * `ACCESS_DENIED`). Returning the "no channel" text for the second case told the model to retry
+     * with a wider preset, so the rail decision is answered with its code and reason.
+     */
+    private fun renderDeniedRequestWithoutChannel(
+        effect: Effect,
+        target: CodingTarget,
+        policy: AgentAccessPolicy,
+        workspaceRoot: Path,
+    ): String {
+        val probe = AccessApprovals("no-task", { policy }, { workspaceRoot })
+        if (probe.guardrailViolation(effect, target) != null) {
+            // `request` applies the rails and audits both the request and the refusal.
+            return renderAccessRequest(probe.request(effect, target))
+        }
+        return "No approval channel is attached to this task: an operator cannot approve a request " +
+            "here. Continue with the tools this preset grants, or re-run with a wider --access preset."
+    }
+
     /** Renders one `coding.requestAccess` answer: id, state, what is needed and what still works. */
     private fun renderAccessRequest(request: AccessRequest): String = buildString {
         append("{")
         append("\"requestId\":").append(jsonLiteral(request.id)).append(",")
         append("\"state\":").append(jsonLiteral(request.state.name.lowercase())).append(",")
+        // The machine-readable half of the decision: a rail refuses at request time, so a `denied`
+        // state must name its code and reason instead of looking like a pending item whose operator
+        // channel is missing.
+        append("\"code\":").append(jsonLiteral(accessDecisionCode(request))).append(",")
+        append("\"decisionReason\":").append(request.decisionReason?.let { jsonLiteral(it) } ?: "null").append(",")
         append("\"effect\":").append(jsonLiteral(request.effect.id)).append(",")
         append("\"target\":").append(jsonLiteral(request.target.describe())).append(",")
         append("\"needed\":").append(jsonLiteral(request.effect.id)).append(",")
         append("\"expiresAt\":").append(request.expiresAt?.let { jsonLiteral(it.toString()) } ?: "null").append(",")
         append("\"alternatives\":").append(jsonLiteral(alternativesFor(request.effect)))
         append("}")
+    }
+
+    /**
+     * The decision code of [request] in the same `PermissionAudit` vocabulary the rest of the report
+     * uses: `ACCESS_DENIED` once a rail (or an operator) refused it, `ACCESS_APPROVED` once granted,
+     * `null` while it is still pending.
+     */
+    private fun accessDecisionCode(request: AccessRequest): String = when (request.state) {
+        AccessState.DENIED -> PermissionAudit.CODE_ACCESS_DENIED
+        AccessState.APPROVED -> PermissionAudit.CODE_ACCESS_APPROVED
+        else -> ""
     }
 
     private fun alternativesFor(effect: Effect): String = when (effect) {
@@ -2538,6 +2640,24 @@ class CodingToolExecutor : AbstractToolExecutor() {
     }
 
     /**
+     * Announce a **lenient decode** in the tool output, not in the file content.
+     *
+     * A GBK build log (or `cmd.exe` output) used to fail the whole read with `Input length = 1`;
+     * it is now decoded leniently, and the model has to know the non-ASCII part may be re-coded.
+     * The note cannot be prepended inside [CodingAgentFileSystem.readFile]: that entry point also
+     * feeds parsers (`RepoConsistencyReporter` reads `VERSION` / `pom.xml`, `coding.verify`'s trap
+     * check reads source files), where a leading note would corrupt the value. So the file system
+     * reports the fact ([CodingAgentFileSystem.TextRead.recoded]) and this layer phrases it.
+     */
+    private fun withEncodingNote(read: CodingAgentFileSystem.TextRead): String =
+        if (read.recoded) {
+            "[note] the file is not valid UTF-8; decoded leniently (GB18030 when it decodes cleanly)\n" +
+                read.text
+        } else {
+            read.text
+        }
+
+    /**
      * Read several files in one tool call (plan N1).
      *
      * Why this exists: a measured coding round costs ~0.6-0.9 s of fixed latency before any
@@ -2558,8 +2678,7 @@ class CodingToolExecutor : AbstractToolExecutor() {
         startLine: Int,
         maxLinesPerFile: Int,
         maxTotalChars: Int,
-    ): String {
-        val requested = paths.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    ): String {        val requested = paths.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
         if (requested.isEmpty()) {
             return "No files requested: pass paths=[\"a.kt\", \"b.kt\"] (a comma-separated string is accepted too)."
         }

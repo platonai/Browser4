@@ -273,7 +273,9 @@ open class ContextToAction(
         toolSpecifications: List<dev.langchain4j.agent.tool.ToolSpecification>,
     ): String {
         val request = ChatRequest.builder()
-            .messages(prefix + UserMessage.from(ToolLoopCompressor.COMPACTION_INSTRUCTION))
+            // A prefix that already carries a checkpoint gets the incremental merge
+            // instruction (pi's update prompt), so a second fold keeps the older facts.
+            .messages(prefix + UserMessage.from(ToolLoopCompressor.compactionInstructionFor(prefix)))
             .toolSpecifications(toolSpecifications)
             .maxOutputTokens(toolLoopSummarizationMaxTokens)
             .build()

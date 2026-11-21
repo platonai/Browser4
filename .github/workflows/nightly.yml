@@ -95,7 +95,15 @@ jobs:
           # nightly breadth run does not control which subset it executes.  The
           # 0.20 INSTRUCTION floor stays enforced by pr.yml.
           maven_profiles: 'all-main-modules,all-test-modules,quality-gate'
-          maven_args: '-Djacoco.check.skip=true'
+          # `rerunFailingTestsCount=1` is surefire's own bounded retry, and it is here on purpose:
+          # browser4-rest-tests' page-visit integration cases are load-sensitive (run 44792486359:
+          # four failed together on attempt 1, the same commit's attempt 2 was green). One retry
+          # separates that from a real failure — a test that fails twice still fails the gate, and
+          # surefire records the retry as a flaky failure rather than hiding it. The underlying race
+          # is fixed in XSqlExecutor (a pooled connection that closed under the statement is dropped
+          # and the read-only statement retried on a fresh connection); this keeps a slow runner from
+          # turning the remaining timing windows into a red night.
+          maven_args: '-Djacoco.check.skip=true -Dsurefire.rerunFailingTestsCount=1'
           # E2E/E2ETest are deliberately NOT excluded here — this is the only place
           # they run (pr.yml and ci.yml still drop both tags, because those gates are
           # merge/release gates and the heavy classes among them are minutes each).

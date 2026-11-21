@@ -1233,19 +1233,24 @@ pub async fn get_command_stats_with_timeout(
     send_rest_response(client.get(url).timeout(timeout)).await
 }
 
-/// Queue a steering message for a running agent task:
+/// Queue a user message for a running agent task:
 /// `POST /api/commands/{id}/input`.
+///
+/// `deliver_as` is `steer` (injected at the agent's next model round-trip) or
+/// `followUp` (delivered when the agent would stop, so the same conversation
+/// continues with the new instruction).
 pub async fn send_command_input(
     client: &Client,
     base_url: &str,
     task_id: &str,
     text: &str,
+    deliver_as: &str,
 ) -> Result<RestResponse, String> {
     let url = build_endpoint_url(base_url, &format!("/api/commands/{task_id}/input"));
     send_rest_response(
         client
             .post(url)
-            .json(&serde_json::json!({ "text": text }))
+            .json(&serde_json::json!({ "text": text, "deliverAs": deliver_as }))
             .timeout(std::time::Duration::from_secs(30)),
     )
     .await

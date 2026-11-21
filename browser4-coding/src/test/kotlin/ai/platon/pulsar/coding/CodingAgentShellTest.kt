@@ -118,6 +118,27 @@ class CodingAgentShellTest {
         assertDenied(s, "totally-unknown-tool.exe --version", "not allowed")
     }
 
+    @Test
+    @DisplayName("a version-pinned interpreter is the same dev tool whatever the host installs")
+    fun versionPinnedInterpreterIsTheSameDevTool() {
+        // The Ubuntu 26.04 nightly runner installs Python 3.14 and no `python3.12`, so
+        // the PATH fallback made the verdict a statement about the runner image rather
+        // than about the command (2026-11-17 nightly). The pin is part of the spelling,
+        // not of the tool.
+        val s = shell()
+        assertTrueAllowed(s, "python3.13 --version")
+        assertTrueAllowed(s, "python2.7 --version")
+        assertTrueAllowed(s, "pip3.13 --version")
+        // Only a known interpreter family borrows the unpinned name; a lookalike keeps its
+        // own and stays refused.
+        assertDenied(s, "pythonista3.12 --version", "not allowed")
+
+        assertEquals("python3", s.normalizeCommandName("python3.12.exe"))
+        assertEquals("python", s.normalizeCommandName("python2.7"))
+        assertEquals("pip3", s.normalizeCommandName("/usr/bin/pip3.13"))
+        assertEquals("pythonista3.12", s.normalizeCommandName("pythonista3.12"))
+    }
+
     // --- Child-process output decoding (localized Windows) -------------------
 
     @Test
@@ -138,9 +159,39 @@ class CodingAgentShellTest {
     }
 
     @Test
+    @DisplayName("one platform-encoded line does not turn the UTF-8 lines into mojibake")
+    fun mixedEncodingsDecodePerLine() {
+        // 2026-11-20 run: the whole capture was decoded as GBK because one line was GBK, so
+        // every Chinese line the tool had written as UTF-8 arrived garbled.
+        val native = Charset.forName(System.getProperty("native.encoding") ?: "UTF-8")
+        val utf8Line = "构建成功: 12 个文件"
+        // `文件` is CE C4 BC FE in GBK — not valid UTF-8, so the capture is detectably mixed
+        // (a GBK line whose bytes happen to be valid UTF-8 is covered by the test below).
+        val nativeLine = " 文件: 12 个"
+        val bytes = (utf8Line + "\n").toByteArray(Charsets.UTF_8) +
+            (nativeLine + "\n").toByteArray(native) +
+            utf8Line.toByteArray(Charsets.UTF_8)
+
+        assertEquals(
+            "$utf8Line\n$nativeLine\n$utf8Line",
+            CodingAgentShell.decodeProcessOutput(bytes),
+        )
+    }
+
+    @Test
+    @DisplayName("a GBK line that happens to be valid UTF-8 keeps its native reading")
+    fun gbkThatLooksLikeUtf8KeepsNativeReading() {
+        // `目录` is C4 BF C2 BC in GBK — also valid UTF-8 for U+013F U+00BC (`Ŀ¼`), so a plain
+        // "strict UTF-8 first" decoder silently replaced the word. Real UTF-8 non-ASCII is 3+
+        // bytes, which is what tells the two apart.
+        val gbk = Charset.forName("GBK")
+        val line = " 目录: C:\\workspace"
+        assertEquals(line, CodingAgentShell.decodeLine(line.toByteArray(gbk), gbk))
+    }
+
+    @Test
     @DisplayName("a leading UTF-8 BOM is stripped")
-    fun utf8BomIsStripped() {
-        val bom = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())
+    fun utf8BomIsStripped() {        val bom = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())
         assertEquals("hello", CodingAgentShell.decodeProcessOutput(bom + "hello".toByteArray(Charsets.UTF_8)))
     }
 

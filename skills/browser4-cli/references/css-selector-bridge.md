@@ -34,7 +34,7 @@ Pick a tier by how much information the snapshot gives you:
 
 - [Tier 1: Construct selector from snapshot info](#tier-1-construct-selector-from-snapshot-info) — enough text/attributes on the ref line
 - [Tier 2: Extract identifying attributes from the ref](#tier-2-extract-identifying-attributes-from-the-ref) — need extra attributes from the element
-- [Tier 3: Generate unique selector via generate-locator](#tier-3-generate-unique-selector-via-generate-locator) — fastest reliable path when available
+- [Tier 3: Generate unique selector via generate locator](#tier-3-generate-unique-selector-via-generate-locator) — fastest reliable path when available
 
 ## Flags
 
@@ -170,15 +170,15 @@ echo "$TITLE costs $PRICE"
 
 ---
 
-### Tier 3: Generate Unique Selector via generate-locator
+### Tier 3: Generate Unique Selector via generate locator
 
 **Best for:** Complex pages where the element has no `id`, no unique class, and you need a guaranteed-unique, fully-qualified CSS selector.
 
-Use the built-in `generate-locator` command:
+Use the built-in `generate locator` command:
 
 ```bash
 # Generate a unique CSS selector for element e5
-SELECTOR=$(browser4-cli generate-locator e5)
+SELECTOR=$(browser4-cli generate locator e5)
 
 # SELECTOR is now something like:
 # "#main-content > div.product-card:nth-child(3) > div.price-container > span.price"
@@ -197,11 +197,11 @@ browser4-cli htmlsnapshot get html "$SELECTOR"
 5. Stops when it reaches an element with an `id` or the document root
 6. Returns a single CSS selector string
 
-`generate-locator` also accepts CSS selectors — pass one to get a fully-qualified path to that element:
+`generate locator` also accepts CSS selectors — pass one to get a fully-qualified path to that element:
 
 ```bash
 # Resolve a CSS selector to a unique path
-browser4-cli generate-locator ".price"
+browser4-cli generate locator ".price"
 # → "body > div.search-results > div.product-card:nth-child(1) > span.price"
 ```
 
@@ -242,7 +242,7 @@ browser4-cli htmlsnapshot query --sql "
 #    {"price": "$2,499", "title": "MacBook Pro"}]
 
 # 3. Option C (Tier 3): Get a guaranteed-unique selector for a specific element
-SELECTOR=$(browser4-cli generate-locator e13)
+SELECTOR=$(browser4-cli generate locator e13)
 browser4-cli htmlsnapshot get text "$SELECTOR"
 # → "$1,299"
 ```

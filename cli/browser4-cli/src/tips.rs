@@ -120,7 +120,7 @@ const TIPS_INTERACTION: &[Tip] = &[
         text: "Use `press Enter` after `fill` to submit forms — `fill` alone does not trigger submission",
     },
     Tip {
-        text: "Use `generate-locator <ref>` to get a robust CSS selector from a snapshot ref for repeated use",
+        text: "Use `generate locator <ref>` to get a robust CSS selector from a snapshot ref for repeated use",
     },
 ];
 
@@ -330,7 +330,13 @@ const TIPS_AGENT: &[Tip] = &[
         text: "After every task `-i` predicts 2-3 next steps as numbered TASKS — the model's own `nextSuggestions` first, then the files/problems it left behind — so type the number instead of reconstructing the next task",
     },
     Tip {
-        text: "Tasks of one `-i` session are not independent: each new task carries a compacted `## Session context` block (earlier tasks, their files, open problems, and any mid-session correction), auto-compressed under `browser4.agent.session.contextTokens`; `/new` starts a deliberately fresh context",
+        text: "Tasks of one `-i` session are not independent: each new task inherits the ACTUAL conversation of the earlier ones (model messages, tool calls and results, your steering lines, each task's outcome with its files and workspace) as a `## Session context` block — over `browser4.agent.session.contextTokens` (24000 by default) the model compacts it with a compression instruction that keeps the goal, corrections, files and open problems, and the conversation is persisted per session so a backend restart keeps it; `/new` starts a deliberately fresh context",
+    },
+    Tip {
+        text: "`agent run -i` without `-s` gets its own `interactive-<hash>` session (printed in the banner, reusable as `-s`), so two interactive sessions never share the backend DEFAULT pool — their context and their queued tasks stay separate",
+    },
+    Tip {
+        text: "A steering line typed just before a task ends can no longer reach the model: `-i` prints `⚠ steering not delivered — the task ended first` and appends the line to the next task's inherited context",
     },
     Tip {
         text: "Every task runs in its own workspace — artifacts of an earlier run never show up in this run's `filesChanged`. `--resume <id>` reuses the interrupted task's workspace; `--shared-workspace` opts into the old shared directory",
@@ -347,11 +353,14 @@ const TIPS_AGENT: &[Tip] = &[
     Tip {
         text: "`agent result <id>` exits non-zero for a failed task — read `errorCode` and the `resume:` line, or pass `--allow-failed` to exit 0 while still seeing the failed payload",
     },
+    Tip {
+        text: "Ctrl+C asks the backend to cancel the task in every wait mode (`-i`, `--follow`, `--wait`) — the run lives on the server, so interrupt it instead of killing the CLI; a force-killed CLI leaves the task running and `agent status <id>` is how you find it again",
+    },
 ];
 
 const TIPS_WEBMINER: &[Tip] = &[
     Tip {
-        text: "webminer clusters downloaded HTML pages into interactive views — start with `webminer install`, then `webminer run-example`",
+        text: "webminer clusters downloaded HTML pages into interactive views — start with `webminer install`, then `webminer run example`",
     },
     Tip {
         text: "Use `webminer all <html-dir>` to run the full pipeline (encode → cluster → views) with cluster counts auto-detected",
@@ -387,10 +396,10 @@ const TIPS_ATTACH: &[Tip] = &[
 
 const TIPS_COOKIE: &[Tip] = &[
     Tip {
-        text: "Use `state-save` and `state-load` to persist/restore cookies and localStorage across sessions",
+        text: "Use `state save` and `state load` to persist/restore cookies and localStorage across sessions",
     },
     Tip {
-        text: "Use `cookie-list` to inspect all cookies set by the current page",
+        text: "Use `cookie list` to inspect all cookies set by the current page",
     },
 ];
 
@@ -420,16 +429,16 @@ const TIPS_INSPECT: &[Tip] = &[
 
 const TIPS_TABS: &[Tip] = &[
     Tip {
-        text: "Use `tab-select <index>` or `tab-select --guid <guid>` to switch between tabs — then re-snapshot to get fresh refs for the new tab",
+        text: "Use `tab select <index>` or `tab select --guid <guid>` to switch between tabs — then re-snapshot to get fresh refs for the new tab",
     },
     Tip {
-        text: "Use `tab-new [url]` to open a page in a new tab without losing the current page state",
+        text: "Use `tab new [url]` to open a page in a new tab without losing the current page state",
     },
     Tip {
-        text: "Use `tab-close [index]` or `tab-close --guid <guid>` to close a tab by its index or stable GUID from tab-list output",
+        text: "Use `tab close [index]` or `tab close --guid <guid>` to close a tab by its index or stable GUID from tab list output",
     },
     Tip {
-        text: "Use `tab-list` to see all tabs with their index, GUID, title, and URL — the GUID is stable even when tabs are reordered",
+        text: "Use `tab list` to see all tabs with their index, GUID, title, and URL — the GUID is stable even when tabs are reordered",
     },
 ];
 
@@ -450,10 +459,10 @@ const TIPS_FRAME: &[Tip] = &[
 
 const TIPS_STORAGE: &[Tip] = &[
     Tip {
-        text: "Use `localstorage-get` and `sessionstorage-get` to extract client-side stored data",
+        text: "Use `localstorage get` and `sessionstorage get` to extract client-side stored data",
     },
     Tip {
-        text: "Use `state-save` before and `state-load` after to checkpoint browser state across sessions",
+        text: "Use `state save` before and `state load` after to checkpoint browser state across sessions",
     },
 ];
 
@@ -508,7 +517,7 @@ const TIPS_GENERAL: &[Tip] = &[
         text: "Use `star` to star the Browser4 repository as yourself — it goes through your signed-in GitHub CLI (`gh`) after one confirmation (`--gh` skips the prompt), or opens the page in the browser you are already logged into",
     },
     Tip {
-        text: "Set BROWSER4_CLI_STATE_DIR to a writable path in sandboxed environments — the CLI falls back to ./.browser4-cli-state when ~/.browser4 is not writable",
+        text: "Set BROWSER4_CLI_STATE_DIR to a writable path in sandboxed environments — reads and writes resolve the same directory (anchored at <workspace>/.b4scratch/cli-state, or ./.browser4-cli-state outside a workspace, when ~/.browser4 is not writable), and an agent sandbox injects it",
     },
 ];
 

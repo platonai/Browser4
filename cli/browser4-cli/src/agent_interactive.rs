@@ -17,11 +17,17 @@
 //! Nothing here is allowed to change the default `agent run` behaviour: adding
 //! events must be invisible unless `--follow` / `--ndjson` / `-i` is passed.
 
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::io::{self, BufRead, IsTerminal, Read};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use reqwest::Client;
 use serde_json::{json, Value};
+
+#[path = "line_editor.rs"]
+mod line_editor;
+
+use line_editor::Editor;
 
 use crate::http::{
     cancel_command_task, get_agent_access_view, get_command_events, get_command_result,
@@ -875,6 +881,42 @@ impl Renderer {
             "steer" => {
                 let text = event.text.as_deref().unwrap_or_default();
                 let gutter = format!("{}   ↪ steering delivered: ", self.time_prefix());
+                Some(
+                    wrap_with_gutter(&truncate(text, MODEL_TEXT_PREVIEW), &gutter, self.width)
+                        .join("\n"),
+                )
+            }
+            "steering.undelivered" => {
+                // The backend drains whatever was typed after the last model round:
+                // it can never be injected, but it is kept as a session correction for
+                // the next task. The prompt already answered "steering queued", so
+                // saying nothing here would report success for an unread instruction.
+                let text = event.text.as_deref().unwrap_or_default();
+                let gutter = format!(
+                    "{}   ⚠ steering not delivered — the task ended first: ",
+                    self.time_prefix()
+                );
+                Some(
+                    wrap_with_gutter(&truncate(text, MODEL_TEXT_PREVIEW), &gutter, self.width)
+                        .join("\n"),
+                )
+            }
+            "follow_up" => {
+                // Delivered at the stop point: the task did not end, it continues with
+                // this message in the same conversation.
+                let text = event.text.as_deref().unwrap_or_default();
+                let gutter = format!("{}   ↪ follow-up delivered: ", self.time_prefix());
+                Some(
+                    wrap_with_gutter(&truncate(text, MODEL_TEXT_PREVIEW), &gutter, self.width)
+                        .join("\n"),
+                )
+            }
+            "follow_up.undelivered" => {
+                let text = event.text.as_deref().unwrap_or_default();
+                let gutter = format!(
+                    "{}   ⚠ follow-up not delivered — the task ended first: ",
+                    self.time_prefix()
+                );
                 Some(
                     wrap_with_gutter(&truncate(text, MODEL_TEXT_PREVIEW), &gutter, self.width)
                         .join("\n"),
@@ -2382,7 +2424,9 @@ pub async fn follow_task(
                         follower.renderer.time_prefix()
                     ));
                 }
-                return Ok(());
+                // Exit 130 (via the sentinel), not 0: the wait was interrupted, so it produced no
+                // result. The outcome line above is already printed, so the code travels alone.
+                return Err(crate::AGENT_RUN_INTERRUPTED.to_string());
             }
         }
     }
@@ -2561,7 +2605,11 @@ fn terminal_failure_event(
 }
 
 /// Cancel a task and describe the outcome in one line.
-async fn cancel_task(client: &Client, base_url: &str, task_id: &str) -> String {
+///
+/// Shared by every wait path (`-i`, `--follow`, `--wait`) so an interrupt produces the same
+/// request and the same wording: the task lives in the backend, so a local exit alone would leave
+/// it running (observed 2026-11-19: a killed CLI kept burning model rounds to completion).
+pub(crate) async fn cancel_task(client: &Client, base_url: &str, task_id: &str) -> String {
     match cancel_command_task(client, base_url, task_id).await {
         Ok(response) if response.is_success() => {
             let parsed: Value = serde_json::from_str(&response.body).unwrap_or(Value::Null);
@@ -2646,6 +2694,37 @@ fn format_pending_summary(task_id: &str, view: &Value) -> Option<String> {
 // Interactive session
 // ---------------------------------------------------------------------------
 
+/// The base session id of this process's interactive session.
+///
+/// `agent run -i` without `-s` and without a recorded session used to submit **no**
+/// `sessionId`, which the backend resolves to its shared DEFAULT session: two
+/// unrelated interactive sessions (or a session-less `agent run`) then inherited each
+/// other's `## Session context` block and queued behind each other. A per-process base
+/// keeps them isolated, is short enough to read in the banner and to pass back as
+/// `-s`, and is the key the backend persists the session's context under.
+///
+/// Derived from the process id and the start time with the `sha2` dependency the CLI
+/// already has (no new crates), so a restarted CLI gets a fresh session instead of
+/// inheriting a dead one — pid reuse alone cannot alias it.
+fn interactive_session_base() -> &'static str {
+    use sha2::{Digest, Sha256};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static BASE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    BASE.get_or_init(|| {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let mut hasher = Sha256::new();
+        hasher.update(std::process::id().to_le_bytes());
+        hasher.update(nanos.to_le_bytes());
+        let digest = hasher.finalize();
+        let suffix: String = digest.iter().take(3).map(|byte| format!("{byte:02x}")).collect();
+        format!("interactive-{suffix}")
+    })
+}
+
 /// The interactive session state: the task in flight (if any) plus the
 /// per-session knobs `/coding` and `/noop-limit` change.
 struct Repl {
@@ -2713,6 +2792,10 @@ struct Repl {
     /// What the last task's payload said (files, findings, problems, the model's own
     /// suggested next steps) — the evidence the follow-up block is predicted from.
     last_digest: crate::agent_result::ResultDigest,
+    /// `/rewind <task-id>`: the next task continues the session's conversation from the
+    /// point where that task began. Consumed by [`Repl::start_task`], so it applies to
+    /// exactly one submission.
+    pending_rewind: Option<String>,
 }
 
 impl Repl {
@@ -2780,6 +2863,7 @@ impl Repl {
             last_task_text: None,
             last_task_coding: false,
             last_digest: crate::agent_result::ResultDigest::default(),
+            pending_rewind: None,
         }
     }
 
@@ -2793,7 +2877,12 @@ impl Repl {
     }
 
     /// The session this turn submits to: the CLI's recorded session id for the
-    /// first generation, else the user's `-s` name or a derived one after `/new`.
+    /// first generation, else the user's `-s` name or this session's own base id.
+    ///
+    /// It is never `None` — see [`interactive_session_base`]: a session-less
+    /// submission lands in the backend's shared DEFAULT session, where unrelated
+    /// interactive sessions would inherit each other's context and queue behind
+    /// each other.
     fn session_id(&self) -> Option<String> {
         if self.generation == 0 {
             if let Some(id) = &self.initial_session_id {
@@ -2803,8 +2892,8 @@ impl Repl {
         match &self.session_name {
             Some(name) if self.generation == 0 => Some(name.clone()),
             Some(name) => Some(format!("{name}-{}", self.generation)),
-            None if self.generation == 0 => None,
-            None => Some(format!("interactive-{}", self.generation)),
+            None if self.generation == 0 => Some(interactive_session_base().to_string()),
+            None => Some(format!("{}-{}", interactive_session_base(), self.generation)),
         }
     }
 
@@ -2857,14 +2946,14 @@ impl Repl {
         ]
     }
 
-    fn prompt(&mut self) {
+    fn prompt(&mut self, editor: &Editor) {
         if !self.tty || !human_output_enabled(self.quiet) {
             self.prompt_pending = false;
             return;
         }
-        let mut stdout = io::stdout();
-        let _ = write!(stdout, "agent> ");
-        let _ = stdout.flush();
+        // The line editor owns the prompt line in a TTY: it redraws the text the
+        // user is typing (and puts the caret back where it belongs).
+        editor.redraw();
         self.prompt_pending = false;
     }
 
@@ -2891,14 +2980,19 @@ impl Repl {
             }
         }
 
-        let mut lines = spawn_stdin_reader();
+        // The line editor only takes over the terminal when this session actually
+        // draws the prompt line. Under `--quiet` / `--json` stdout belongs to the
+        // machine, so the terminal keeps its own (cooked) line editing — exactly
+        // the behaviour those modes had before the editor existed.
+        let owns_prompt = self.tty && human_output_enabled(self.quiet);
+        let (mut lines, editor) = spawn_stdin_reader(line_editor::PROMPT, owns_prompt);
         let mut ctrl_c = Box::pin(tokio::signal::ctrl_c());
         let mut ticker = tokio::time::interval(EVENT_POLL_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             if self.prompt_pending && self.current.is_none() {
-                self.prompt();
+                self.prompt(&editor);
             }
 
             tokio::select! {
@@ -3153,8 +3247,66 @@ impl Repl {
         ));
     }
 
+    /// `/followup <text>`: queue a message that is delivered when the task would
+    /// finish, continuing the SAME task with it (pi's follow-up queue).
+    ///
+    /// A line typed bare at the prompt is steering: it interrupts the running step and
+    /// the model sees it at its next round. A follow-up is for "one more thing" that
+    /// must not disturb the step in flight; it is appended to the conversation at the
+    /// stop point and the run continues, so the task id, the workspace and the whole
+    /// conversation stay the same. With no task running there is nothing to continue, so
+    /// the text is submitted as a normal task.
+    async fn follow_up(&mut self, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            self.out("usage: /followup <text> (delivered when the running task would finish)");
+            return;
+        }
+        let running = match self.current.as_ref().map(|follower| follower.task_id.clone()) {
+            Some(task_id) => Some(task_id),
+            None => self.running_task().await,
+        };
+        let Some(task_id) = running else {
+            self.out("no task is running — submitting it as a task instead");
+            if let Err(error) = self.start_task(text.to_string()).await {
+                self.out(&format!("✖ {error}"));
+                self.prompt_pending = true;
+            }
+            return;
+        };
+
+        match send_command_input(&self.client, &self.base_url, &task_id, text, "followUp").await {
+            Ok(response) if response.is_success() => {
+                let parsed: Value = serde_json::from_str(&response.body).unwrap_or(Value::Null);
+                if parsed.get("accepted").and_then(|v| v.as_bool()) == Some(true) {
+                    self.out(
+                        "↪ follow-up queued — the task continues with it when the current step \
+                         finishes (no new task)",
+                    );
+                    self.attach_if_detached(&task_id);
+                } else {
+                    let reason = parsed
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("the task is no longer accepting input");
+                    self.out(&format!("⚠ not delivered: {reason}"));
+                }
+            }
+            Ok(response) if response.is_missing_endpoint() => self.out(
+                "⚠ this backend cannot accept follow-ups; the line was ignored \
+                 (upgrade the backend to deliver messages into a running task)",
+            ),
+            Ok(response) => self.out(&format!(
+                "⚠ follow-up failed: HTTP {} {}",
+                response.status,
+                truncate(response.body.trim(), 200)
+            )),
+            Err(error) => self.out(&format!("⚠ follow-up failed: {error}")),
+        }
+    }
+
     async fn steer(&mut self, task_id: &str, text: &str) {
-        match send_command_input(&self.client, &self.base_url, task_id, text).await {
+        match send_command_input(&self.client, &self.base_url, task_id, text, "steer").await {
             Ok(response) if response.is_success() => {
                 let parsed: Value = serde_json::from_str(&response.body).unwrap_or(Value::Null);
                 if parsed.get("accepted").and_then(|v| v.as_bool()) == Some(true) {
@@ -3182,6 +3334,13 @@ impl Repl {
     }
 
     async fn start_task(&mut self, task: String) -> Result<(), String> {
+        // A task is user text too: a pasted line can carry the same terminal
+        // escapes as a typed one. Sanitizing here also keeps the label and the
+        // tracked title free of control noise.
+        let task = sanitize_task_text(&task);
+        if task.is_empty() {
+            return Ok(());
+        }
         self.next_actions.clear();
         // A new task starts from a clean slate: the previous task's evidence must not
         // shape the follow-ups offered after THIS one. (Set only once the task is
@@ -3189,6 +3348,9 @@ impl Repl {
         self.last_digest = crate::agent_result::ResultDigest::default();
         let extra = self.payload();
         let task_id = crate::submit_agent_task(&self.client, &self.base_url, &task, extra).await?;
+        // A rewind applies to exactly one submission: the next task continues the
+        // conversation from wherever this one ends.
+        self.pending_rewind = None;
         // The follow-up menu describes THIS task, so its text and coding flag have
         // to travel with the submission: left at their defaults, a `--coding`
         // session offered browse-shaped follow-ups and a non-resumable failure
@@ -3235,7 +3397,15 @@ impl Repl {
     /// applies; without a TTY nobody can answer an approval, so the backend's
     /// unattended default takes over (see plan P4-1).
     fn payload(&self) -> Value {
-        self.payload_with(self.token_budget)
+        let mut payload = self.payload_with(self.token_budget);
+        // `/rewind <task-id>`: the NEXT task continues the session's conversation from
+        // where that task began (the abandoned branch is summarized by the backend).
+        // Set only for this submission; `start_task` clears it once the task is accepted,
+        // so a second task is not silently rewound again.
+        if let Some(task_id) = self.pending_rewind.as_deref().map(str::trim).filter(|id| !id.is_empty()) {
+            payload["rewindTaskId"] = json!(task_id);
+        }
+        payload
     }
 
     /// [`Self::payload`] with an explicit token budget, so `/resume --budget N`
@@ -3261,10 +3431,47 @@ impl Repl {
         extra
     }
 
+    /// `/rewind [<task-id>|off]`: make the NEXT task continue the session's conversation
+    /// from the point where that task began (pi's navigateTree).
+    ///
+    /// The backend installs that conversation checkpoint, summarizes the branch the
+    /// session leaves, and runs the next task from there — so "that approach did not
+    /// work, go back and try this instead" does not need a new session (and does not
+    /// lose what the abandoned branch learned). With no argument it reports the armed
+    /// rewind; `off` cancels it.
+    fn set_rewind(&mut self, argument: &str) {
+        let argument = argument.trim();
+        match argument {
+            "" => match self.pending_rewind.as_deref() {
+                Some(task_id) => self.out(&format!(
+                    "rewind armed: the next task continues the conversation from before {task_id} \
+                     (/rewind off cancels)"
+                )),
+                None => self.out(
+                    "usage: /rewind <task-id> — the next task continues the conversation from where \
+                     that task began (the abandoned branch is summarized); /rewind off cancels",
+                ),
+            },
+            "off" | "none" | "cancel" => {
+                if self.pending_rewind.take().is_some() {
+                    self.out("rewind cancelled — the next task continues the current conversation");
+                } else {
+                    self.out("no rewind was armed");
+                }
+            }
+            task_id => {
+                self.pending_rewind = Some(task_id.to_string());
+                self.out(&format!(
+                    "rewind armed: the next task continues the conversation from before task {task_id}"
+                ));
+                self.out("  (the branch this session leaves is summarized and carried along)");
+            }
+        }
+    }
+
     /// `/resume [--budget <tokens>] [task-id]`: continue the last (or named) task
     /// with the workspace and files the interrupted run already produced.
-    async fn resume_command(&mut self, argument: &str) {
-        let (task_id, budget) = match parse_resume_args(argument) {
+    async fn resume_command(&mut self, argument: &str) {        let (task_id, budget) = match parse_resume_args(argument) {
             Ok(parsed) => parsed,
             Err(error) => {
                 self.out(&format!("✖ {error}"));
@@ -3535,10 +3742,16 @@ impl Repl {
             // `/resume [--budget <tokens>] [task-id]`: continue an interrupted
             // (or budget-aborted) task with its workspace and files.
             "resume" => self.resume_command(argument).await,
+            // `/rewind <task-id>`: arm the next task to continue the conversation from
+            // that task's start; the abandoned branch is summarized.
+            "rewind" => self.set_rewind(argument),
             "new" => self.new_session(),
             "coding" => self.set_coding(argument),
             "add-dir" => self.add_dir(argument),
             "dirs" => self.print_dirs(argument),
+            // `/followup <text>`: delivered when the task would stop; it continues the
+            // SAME task instead of interrupting it (bare text is steering).
+            "followup" | "follow-up" => self.follow_up(argument).await,
             "quiet" => self.set_quiet(argument),
             "verbose" => self.set_verbose(argument),
             "noop-limit" => self.set_noop_limit(argument),
@@ -3740,10 +3953,13 @@ impl Repl {
         self.out("                     re-print the last finished task's result (--json: pretty envelope, --full: everything)");
         self.out("  /resume [--budget <n>] [task-id]");
         self.out("                     continue an interrupted/stalled task (a budget abort needs a bigger --budget)");
+        self.out("  /rewind <task-id>  continue this session's CONVERSATION from where that task began");
+        self.out("                     (the abandoned branch is summarized); /rewind off cancels");
         self.out("  /cancel            cancel the running task (same as Ctrl+C)");
         self.out("  /new               start a new session (fresh agent context)");
         self.out("  /session           print the current session id");
         self.out("  /coding [on|off]   treat following tasks as coding tasks");
+        self.out("  /followup <text>   deliver it when the running task would finish (same task, not a new one)");
         self.out("  /add-dir <dir>     grant the following tasks an extra folder (no argument: list)");
         self.out("  /dirs [clear]      list the folders granted in this session, or drop them all");
         self.out("  /quiet [on|off]    silence the session's human lines (like -q)");
@@ -4160,19 +4376,183 @@ impl Repl {
     }
 }
 
+/// Strip terminal control noise from a line read from stdin.
+///
+/// On Windows the console line editor consumes arrow keys before the CLI ever
+/// sees them. On a Unix cooked terminal it does not: arrow keys arrive as CSI
+/// sequences (`ESC [ A` …), function keys as SS3 sequences (`ESC O P` …), and
+/// Ctrl+Space as a NUL byte. Those bytes used to be forwarded to
+/// `POST /api/commands/{id}/input` verbatim and became part of the prompt the
+/// model saw. Drop them here, at the single point where interactive user input
+/// enters the session.
+///
+/// String-valued escapes matter as much as key escapes: an OSC title change is
+/// `ESC ] 0 ; title BEL`, and stripping only the two introducer bytes turned the
+/// payload (`0;title`) into prompt text. OSC/DCS/SOS/PM/APC and their C1 forms
+/// are skipped up to their terminator instead.
+fn sanitize_stdin_line(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\x1b' => skip_escape(&mut chars),
+            // C1 controls are the 8-bit spelling of the same escapes.
+            '\u{9b}' => skip_csi(&mut chars),
+            '\u{9d}' => skip_string_escape(&mut chars, true),
+            '\u{90}' | '\u{98}' | '\u{9e}' | '\u{9f}' => skip_string_escape(&mut chars, false),
+            // A literal tab is harmless; every other control character is
+            // terminal noise (DEL, stray CR, non-introducer C1 controls …).
+            '\t' => out.push('\t'),
+            // NUL (Ctrl+Space) separates words instead of gluing them together.
+            '\0' => out.push(' '),
+            c if c.is_control() => {}
+            // U+FFFD is what lossy UTF-8 decoding leaves for a byte the input
+            // stream could not carry; it is noise, not user text.
+            '\u{fffd}' => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Sanitize task text submitted to the backend.
+///
+/// Unlike a single stdin line this keeps the line structure: a multi-line task
+/// must not be flattened into one paragraph. Both the interactive session and
+/// the one-shot `agent run` form submit through this function, so a task built
+/// from a pasted line cannot smuggle terminal escapes into the model prompt.
+pub(crate) fn sanitize_task_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for (index, line) in text.split('\n').enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        out.push_str(&sanitize_stdin_line(line));
+    }
+    out.trim().to_string()
+}
+
+/// Skip one escape sequence whose introducer (`ESC`) was just consumed.
+fn skip_escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    match chars.peek().copied() {
+        // CSI: parameters/intermediates, then a final byte in 0x40..=0x7E
+        // (arrows, Home/End, Del, bracketed paste …).
+        Some('[') => {
+            chars.next();
+            skip_csi(chars);
+        }
+        // OSC: a string command terminated by BEL or ST (`ESC \`).
+        Some(']') => {
+            chars.next();
+            skip_string_escape(chars, true);
+        }
+        // DCS, SOS, PM, APC: string commands terminated by ST only.
+        Some('P') | Some('X') | Some('^') | Some('_') => {
+            chars.next();
+            skip_string_escape(chars, false);
+        }
+        // SS3: ESC 'O' and one final byte (F1–F4, keypad, arrows).
+        Some('O') => {
+            chars.next();
+            let _ = chars.next();
+        }
+        // Any other two-byte escape (Alt+key) — or a lone ESC.
+        Some(_) => {
+            chars.next();
+        }
+        None => {}
+    }
+}
+
+/// Skip the rest of a CSI sequence: parameters/intermediates up to the final
+/// byte in 0x40..=0x7E.
+fn skip_csi(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    for next in chars.by_ref() {
+        if ('@'..='~').contains(&next) {
+            break;
+        }
+    }
+}
+
+/// Skip a string-valued escape (OSC, DCS, SOS, PM, APC) up to its terminator.
+///
+/// `bel_terminates` is true for OSC, which some terminals close with BEL; DCS and
+/// friends are only closed by ST (`ESC \`, or the C1 form U+009C). An unterminated
+/// string is dropped to the end of the line rather than leaked as text.
+fn skip_string_escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, bel_terminates: bool) {
+    while let Some(next) = chars.next() {
+        match next {
+            '\u{9c}' => break,
+            '\x07' if bel_terminates => break,
+            '\x1b' => {
+                if chars.peek() == Some(&'\\') {
+                    chars.next();
+                }
+                break;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Decode and sanitize one raw stdin line.
+///
+/// `read_until` hands back bytes: a single invalid UTF-8 byte used to make
+/// `lines()` return `Err`, which killed the reader thread and ended the session.
+/// Lossy decoding keeps the session alive, and the sanitizer drops the U+FFFD
+/// markers, so the bad byte is lost instead of the whole line.
+fn sanitize_stdin_bytes(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    sanitize_stdin_line(text.trim_end_matches(['\n', '\r']))
+}
+
 /// Read stdin lines on a dedicated thread and forward them to the async loop.
 ///
 /// A plain thread (not `spawn_blocking`) because the read is blocking for the
 /// whole session: the thread exits at EOF, and the process exits when the
 /// session ends, so a pending read can never leak past the CLI.
-fn spawn_stdin_reader() -> tokio::sync::mpsc::UnboundedReceiver<String> {
+///
+/// `owns_prompt` says the REPL draws the prompt line: only then does the
+/// returned [`Editor`] put the terminal into cbreak mode and turn key bytes
+/// into line edits. Piped stdin, and the machine-output modes, keep the
+/// line-oriented reader.
+fn spawn_stdin_reader(
+    prompt: &str,
+    owns_prompt: bool,
+) -> (tokio::sync::mpsc::UnboundedReceiver<String>, Arc<Editor>) {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let editor = Editor::new(prompt, owns_prompt && io::stdin().is_terminal());
+    let thread_editor = Arc::clone(&editor);
     std::thread::spawn(move || {
-        let stdin = io::stdin();
-        for line in stdin.lock().lines() {
-            match line {
-                Ok(line) => {
-                    if tx.send(line).is_err() {
+        let mut stdin = io::stdin().lock();
+        // A TTY hands us the bytes of special keys: read them one key at a time
+        // and let the editor turn ←/→/Home/Del/Shift+Space into line edits.
+        // Piped input has no keys, so keep the line-oriented reader (and its
+        // sanitiser) there.
+        if let Some(_cbreak) = thread_editor.enabled().then(line_editor::RawMode::enable).flatten() {
+            thread_editor.redraw();
+            let mut buffer = [0u8; 256];
+            loop {
+                match stdin.read(&mut buffer) {
+                    Ok(0) => return,
+                    Ok(read) => {
+                        for line in thread_editor.feed(&buffer[..read]) {
+                            if tx.send(line).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                    Err(_) => return,
+                }
+            }
+        }
+        let mut buffer = Vec::new();
+        loop {
+            buffer.clear();
+            match stdin.read_until(b'\n', &mut buffer) {
+                Ok(0) => return,
+                Ok(_) => {
+                    if tx.send(sanitize_stdin_bytes(&buffer)).is_err() {
                         return;
                     }
                 }
@@ -4180,7 +4560,7 @@ fn spawn_stdin_reader() -> tokio::sync::mpsc::UnboundedReceiver<String> {
             }
         }
     });
-    rx
+    (rx, editor)
 }
 
 /// Run the interactive session (`agent run -i`).
@@ -4231,17 +4611,25 @@ mod tests {
         // `/new` derives a fresh generation name instead of reusing the attached
         // session, so the original browser is never overwritten.
         repl.new_session();
-        assert_eq!(repl.session_id().as_deref(), Some("interactive-1"));
+        assert_eq!(
+            repl.session_id(),
+            Some(format!("{}-1", interactive_session_base()))
+        );
     }
 
-    /// Without a recorded session the interactive form keeps its old behaviour:
-    /// generation 0 submits session-less, and `-s <name>` submits the name.
+    /// Without a recorded session the interactive form submits its OWN session id:
+    /// the backend's DEFAULT pool is shared with every session-less caller, so an
+    /// unnamed `-i` used to inherit (and be inherited by) unrelated tasks.
     #[test]
     fn interactive_session_keeps_the_previous_behaviour_without_state() {
         let client = Client::new();
         let params = serde_json::json!({});
         let anonymous = Repl::new(&client, "http://127.0.0.1:1", &params, None);
-        assert_eq!(anonymous.session_id(), None);
+        let id = anonymous.session_id().expect("an unnamed -i gets a session id");
+        assert!(id.starts_with("interactive-"), "{id}");
+        assert_ne!(id, "DEFAULT");
+        // Stable for every task of the session (that is what carries the context).
+        assert_eq!(anonymous.session_id().as_deref(), Some(id.as_str()));
 
         let named = Repl::new(&client, "http://127.0.0.1:1", &params, Some("work"));
         assert_eq!(named.session_id().as_deref(), Some("work"));
@@ -4434,6 +4822,42 @@ mod tests {
         assert!(renderer.format(&result).is_none());
     }
 
+    /// A line typed just before the task ended was never delivered; the CLI had
+    /// already answered "steering queued", so the follower has to say so instead of
+    /// leaving the user to believe the agent read it.
+    #[test]
+    fn renderer_reports_steering_that_arrived_too_late() {
+        let mut renderer = Renderer::new(Instant::now(), false, false);
+        renderer.width = 200;
+        let mut late = event("steering.undelivered");
+        late.text = Some("no, use CSV not XLSX".to_string());
+
+        let line = renderer.format(&late).expect("undelivered steering renders");
+        assert!(line.contains("steering not delivered"), "{line}");
+        assert!(line.contains("no, use CSV not XLSX"), "{line}");
+        // Not the delivered marker: `steer` means the model actually saw it.
+        assert!(!line.contains("steering delivered"), "{line}");
+    }
+
+    /// Follow-ups are a different delivery point from steering (stop point vs next
+    /// model round), so the live view must label them differently.
+    #[test]
+    fn renderer_distinguishes_follow_ups_from_steering() {
+        let mut renderer = Renderer::new(Instant::now(), false, false);
+        renderer.width = 200;
+
+        let mut delivered = event("follow_up");
+        delivered.text = Some("also fetch the enterprise page".to_string());
+        let line = renderer.format(&delivered).expect("delivered follow-up renders");
+        assert!(line.contains("follow-up delivered"), "{line}");
+        assert!(!line.contains("steering"), "{line}");
+
+        let mut late = event("follow_up.undelivered");
+        late.text = Some("also fetch the enterprise page".to_string());
+        let line = renderer.format(&late).expect("undelivered follow-up renders");
+        assert!(line.contains("follow-up not delivered"), "{line}");
+    }
+
     /// P1-1/P1-2: prose wraps under its marker, and the emoji that is a tofu box
     /// on conhost is gone.
     #[test]
@@ -4604,9 +5028,10 @@ mod tests {
         assert_eq!(repl.session_id().as_deref(), Some("work-1"));
 
         let mut unnamed = Repl::new(&client, "http://localhost:1", &params, None);
-        assert_eq!(unnamed.session_id(), None);
+        let base = unnamed.session_id().expect("an unnamed -i gets a session id");
+        assert!(base.starts_with("interactive-"), "{base}");
         unnamed.new_session();
-        assert_eq!(unnamed.session_id().as_deref(), Some("interactive-1"));
+        assert_eq!(unnamed.session_id(), Some(format!("{base}-1")));
     }
 
     #[test]
@@ -4630,6 +5055,25 @@ mod tests {
         let payload = repl.payload();
         assert!(payload.get("coding").is_none());
         assert!(payload.get("noopLimit").is_none());
+    }
+
+    /// `/rewind <task-id>` arms exactly one task: the payload carries it, a resume
+    /// payload never does, and `off` clears it again.
+    #[test]
+    fn rewind_arms_only_the_next_task_payload() {
+        let client = Client::new();
+        let params = serde_json::json!({});
+        let mut repl = Repl::new(&client, "http://127.0.0.1:1", &params, Some("work"));
+        assert!(repl.payload().get("rewindTaskId").is_none());
+
+        repl.set_rewind("task-42");
+        assert_eq!(repl.payload()["rewindTaskId"], "task-42");
+        // Resume and rewind are different continuation mechanisms; the backend rejects
+        // the combination, so a resume payload must never carry an armed rewind.
+        assert!(repl.resume_payload("task-7", None).get("rewindTaskId").is_none());
+
+        repl.set_rewind("off");
+        assert!(repl.payload().get("rewindTaskId").is_none());
     }
 
     #[test]
@@ -5336,7 +5780,12 @@ mod tests {
         let default_repl = Repl::new(&client, "http://localhost:1", &json!({}), None);
         let lines = default_repl.banner_lines();
         assert_eq!(lines.len(), 2, "{lines:?}");
-        assert!(lines[0].contains("session=default"), "{lines:?}");
+        // An unnamed session names its own id: it is not the backend's DEFAULT pool
+        // any more, so the banner must say what the session is bound to.
+        assert!(
+            lines[0].contains(&format!("session={}", interactive_session_base())),
+            "{lines:?}"
+        );
         // `engine=` is gone from the banner entirely: the CLI tool loop is the only
         // engine left, so there is nothing for the reader to choose or compare.
         for knob in ["engine=", "coding=", "access=", "budget=", "quiet"] {
@@ -6667,5 +7116,100 @@ mod tests {
         let payload = repl.resume_payload("task-1", None);
         assert_eq!(payload["resumeTaskId"], "task-1");
         assert_eq!(payload["tokenBudget"], 2_000_000);
+    }
+
+    /// Arrow keys reach a Unix cooked terminal as raw CSI sequences; they must
+    /// never become part of the prompt text sent to the backend.
+    #[test]
+    fn sanitize_stdin_line_strips_arrow_key_sequences() {
+        assert_eq!(
+            sanitize_stdin_line("open https://example.com\u{1b}[D\u{1b}[A\u{1b}[B\u{1b}[C"),
+            "open https://example.com"
+        );
+        // Parameterized CSI (Ctrl+Right, Delete) is consumed whole.
+        assert_eq!(sanitize_stdin_line("ab\u{1b}[1;5Ccd\u{1b}[3~e"), "abcde");
+    }
+
+    /// Ctrl+Space emits NUL, and bracketed paste wraps text in its own markers;
+    /// neither belongs in the user's message.
+    #[test]
+    fn sanitize_stdin_line_strips_nul_and_paste_markers() {
+        // Ctrl+Space arrives as NUL. Turn it into a space so a pasted line
+        // keeps its word boundary instead of gluing the neighbours together;
+        // DEL is still dropped outright.
+        assert_eq!(
+            sanitize_stdin_line("hello\u{0}()\u{7f}world"),
+            "hello ()world"
+        );
+        assert_eq!(
+            sanitize_stdin_line("\u{1b}[200~pasted text\u{1b}[201~"),
+            "pasted text"
+        );
+    }
+
+    /// F1–F4, keypad keys and Alt+key combinations are shorter escapes too.
+    #[test]
+    fn sanitize_stdin_line_strips_ss3_and_alt_sequences() {
+        assert_eq!(sanitize_stdin_line("a\u{1b}OPb\u{1b}vc"), "abc");
+    }
+
+    /// A line made only of terminal noise collapses to nothing, so the
+    /// interactive loop's emptiness check drops it instead of sending it.
+    #[test]
+    fn sanitize_stdin_line_drops_line_made_only_of_noise() {
+        assert_eq!(sanitize_stdin_line("\u{1b}[D\u{1b}[A\u{1b}[B\u{1b}[C"), "");
+        assert!(sanitize_stdin_line("\u{0}\u{1b}[200~\u{1b}[201~")
+            .trim()
+            .is_empty());
+    }
+
+    /// Ordinary text — including non-ASCII and literal tabs — is untouched.
+    #[test]
+    fn sanitize_stdin_line_keeps_plain_text() {
+        assert_eq!(
+            sanitize_stdin_line("写个测试 ✅ café\tok"),
+            "写个测试 ✅ café\tok"
+        );
+    }
+    /// OSC titles and DCS/APC payloads are string-valued escapes: dropping only
+    /// the introducer leaked their payload (`0;title`) into the prompt.
+    #[test]
+    fn sanitize_stdin_line_strips_string_escapes() {
+        assert_eq!(
+            sanitize_stdin_line("\u{1b}]0;window title\u{7}hello"),
+            "hello"
+        );
+        assert_eq!(sanitize_stdin_line("a\u{1b}]2;title\u{1b}\\b"), "ab");
+        assert_eq!(sanitize_stdin_line("a\u{1b}P1;2;3q\u{1b}\\b"), "ab");
+        assert_eq!(sanitize_stdin_line("a\u{1b}_payload\u{1b}\\b"), "ab");
+        // An unterminated string is dropped to the end of the line.
+        assert_eq!(sanitize_stdin_line("a\u{1b}]0;unterminated"), "a");
+    }
+
+    /// Terminals may send the 8-bit C1 spelling of the same escapes.
+    #[test]
+    fn sanitize_stdin_line_strips_c1_escapes() {
+        assert_eq!(sanitize_stdin_line("a\u{9b}Db"), "ab");
+        assert_eq!(sanitize_stdin_line("a\u{9d}0;title\u{9c}b"), "ab");
+        assert_eq!(sanitize_stdin_line("a\u{90}payload\u{9c}b"), "ab");
+    }
+
+    /// Invalid UTF-8 used to end the stdin reader thread; lossy decoding plus
+    /// dropping U+FFFD keeps the session alive and only loses the bad byte.
+    #[test]
+    fn sanitize_stdin_bytes_drops_invalid_utf8() {
+        assert_eq!(sanitize_stdin_bytes(b"caf\xe9 ok\n"), "caf ok");
+        assert_eq!(sanitize_stdin_bytes(b"a\xffb\r\n"), "ab");
+    }
+
+    /// Task text keeps its line structure but loses terminal noise; both the
+    /// interactive and the one-shot submission paths use this.
+    #[test]
+    fn sanitize_task_text_keeps_newlines_and_drops_escapes() {
+        assert_eq!(
+            sanitize_task_text("  first line\u{1b}[A\nsecond\u{1b}]0;title\u{7} line  "),
+            "first line\nsecond line"
+        );
+        assert_eq!(sanitize_task_text("\u{1b}[A\n\u{0}"), "");
     }
 }

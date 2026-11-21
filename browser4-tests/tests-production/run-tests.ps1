@@ -222,8 +222,11 @@ if ($ShouldPreStartServer -and $cliBin) {
         # the page load stalls (the server will still be running and
         # warm even if the open doesn't complete).
         $preTimeout = 120
-        $tmpOut = Join-Path $env:TEMP "b4_prestart_stdout_${pid}.txt"
-        $tmpErr = Join-Path $env:TEMP "b4_prestart_stderr_${pid}.txt"
+        # $env:TEMP is Windows-only; POSIX hosts expose TMPDIR (GetTempPath() as a last resort).
+        # A bare `Join-Path $env:TEMP ...` throws on Linux instead of degrading.
+        $tmpRoot = if ($env:TEMP) { $env:TEMP } elseif ($env:TMPDIR) { $env:TMPDIR } else { [System.IO.Path]::GetTempPath() }
+        $tmpOut = Join-Path $tmpRoot "b4_prestart_stdout_${pid}.txt"
+        $tmpErr = Join-Path $tmpRoot "b4_prestart_stderr_${pid}.txt"
         Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
 
         $preProc = Start-Process -FilePath $cliBin `

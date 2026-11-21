@@ -2675,12 +2675,26 @@ pub(super) fn test_mouse_coordinate_spaces(ctx: &mut E2ECtx) {
         3_000,
         "an out-of-viewport move should make the page see mouseleave",
     );
-    let viewport_height = after_outside["viewport"][1].as_i64().unwrap_or(0);
+    // The fixture's `viewport` field is captured when the page loads, i.e. before
+    // `resize 1280 900`, so it is not the height the dispatch sees (the 2026-11-20
+    // control run logged 1920x1080 while the real viewport was 1280x900). Ask the
+    // page for the live height — "the last pixel is h-1" only means something
+    // against the height the mousemove was clamped to.
+    let live_height = eval_text(ctx, "window.innerHeight")
+        .trim()
+        .parse::<i64>()
+        .unwrap_or(0);
     let max_client_y = after_outside["maxClientY"].as_i64().unwrap_or(-1);
     assert!(
-        max_client_y <= viewport_height,
-        "the requested y=1200 must never appear as an event coordinate \
-         (viewport height {viewport_height}): {after_outside}"
+        live_height > 0,
+        "the page must report its viewport height: {after_outside}"
+    );
+    assert!(
+        max_client_y < live_height,
+        "an in-page mousemove may reach the last pixel ({}) but never the viewport \
+         height itself ({live_height}), and the requested y=1200 must never appear \
+         as an event coordinate: {after_outside}",
+        live_height - 1
     );
     assert!(
         max_client_y < 1200,
@@ -2705,6 +2719,86 @@ pub(super) fn test_mouse_coordinate_spaces(ctx: &mut E2ECtx) {
         after_negative["last"][1].as_i64().unwrap_or(-1) >= 0,
         "a negative y cannot be delivered as an in-page coordinate: {after_negative}"
     );
+    // The glide to the requested point passes through many intermediate points; the
+    // page must never receive *any* of them as a negative in-page coordinate. The
+    // last point alone is not enough: the trail's final in-viewport step is what
+    // leaked `clientX = -1` first (2026-11-20 nightly).
+    assert!(
+        after_negative["minClientX"].as_i64().unwrap_or(-1) >= 0,
+        "no mousemove in the trail may carry a negative x: {after_negative}"
+    );
+    assert!(
+        after_negative["minClientY"].as_i64().unwrap_or(-1) >= 0,
+        "no mousemove in the trail may carry a negative y: {after_negative}"
+    );
+
+    // ── 3b. A fractional coordinate just outside the edge is snapped out ──
+    // `-0.6` used to be dispatched verbatim as the trail's last point; Chrome rounds
+    // it to `-1` and delivers it as an in-page mousemove. Now the trail stops at
+    // `(0,0)` and the exit dispatch is pushed clear of the rounding band, so this is
+    // a deterministic probe of the fix (unlike the -20 case, where the old trail only
+    // leaked sometimes): the last point the page may see is the edge.
+    run_command(
+        ctx,
+        &[
+            "mousemove",
+            "-0.6",
+            "-0.6",
+            "--no-snapshot",
+            "--allow-outside",
+        ],
+    );
+    let after_fractional = wait_for_pointer_or_abort(
+        ctx,
+        |pointer| pointer["last"][0].as_i64() == Some(0) && pointer["last"][1].as_i64() == Some(0),
+        2_000,
+        "a fractional off-viewport point must stop the trail at the viewport edge",
+    );
+    assert!(
+        after_fractional["minClientX"].as_i64().unwrap_or(-1) >= 0,
+        "a `-0.6` request may not reach the page as a negative x: {after_fractional}"
+    );
+    assert!(
+        after_fractional["minClientY"].as_i64().unwrap_or(-1) >= 0,
+        "a `-0.6` request may not reach the page as a negative y: {after_fractional}"
+    );
+
+    // ── 3c. The same edge, with an explicit pace ────────────────────
+    // `--steps`/`--duration` select `mouse_move_at`, whose base implementation
+    // dispatched the requested point itself (`Mouse.moveTo` with that pace) and so
+    // bypassed the plan: `--steps 4 -0.6 -0.6` leaked `clientX = -1` exactly like the
+    // default pace did. The driver's override routes that branch through the same
+    // glide, so the trail must still stop at the edge whatever the requested cadence.
+    for pace in [["--steps", "4"], ["--duration", "40"]] {
+        run_command(
+            ctx,
+            &[
+                "mousemove",
+                "-0.6",
+                "-0.6",
+                "--no-snapshot",
+                "--allow-outside",
+                pace[0],
+                pace[1],
+            ],
+        );
+        let after_pace = wait_for_pointer_or_abort(
+            ctx,
+            |pointer| {
+                pointer["last"][0].as_i64() == Some(0) && pointer["last"][1].as_i64() == Some(0)
+            },
+            2_000,
+            "an explicit pace must still stop an off-viewport trail at the viewport edge",
+        );
+        assert!(
+            after_pace["minClientX"].as_i64().unwrap_or(-1) >= 0,
+            "an explicit pace may not leak a negative x: {after_pace}"
+        );
+        assert!(
+            after_pace["minClientY"].as_i64().unwrap_or(-1) >= 0,
+            "an explicit pace may not leak a negative y: {after_pace}"
+        );
+    }
 
     // ── 4. A viewport coordinate is independent of the page scroll ──
     run_command(ctx, &["scroll", "down", "800"]);

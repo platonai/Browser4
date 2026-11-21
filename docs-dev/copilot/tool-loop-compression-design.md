@@ -107,3 +107,22 @@
 - 无 session surface/事件日志基础设施，直接操作 LangChain4j `ChatMessage` 列表，轮次切分即配对平衡；
 - 裁剪默认值按循环内结果规模缩放（deepseek 8192/4096/1024 → 1500/800/400）；
 - 摘要调用为同步 `langChainChat`（复用同一模型与工具规格，保留其 KV-cache 前缀复用意图）。
+
+## 7. 2026-11-21 追加：模型窗口感知 / provider 实测 / 摘要增量合并
+
+对照 pi（`D:\codebase\pi`，`compaction.ts` 的 `shouldCompact` / `calculateContextTokens` /
+`UPDATE_SUMMARIZATION_PROMPT`）补齐测量层：
+
+| 项 | 之前 | 现在 |
+|---|---|---|
+| 压力阈值 | 固定 `compressionThresholdTokens`（默认 60_000，与模型无关） | `browser4.agent.context.windowTokens`（默认 0=未知）+ `browser4.agent.context.reserveTokens`（默认 16_384）⇒ `threshold = window - reserve`；窗口未知时回退到固定阈值（`ToolLoopCompressor.effectiveThresholdTokens`） |
+| 保留尾部 | `retainTokens`（默认 24_000），可能 ≥ 阈值 ⇒ 无可折叠区间 | 上限压到 `threshold / 2`（`effectiveRetainTokens`）：小窗口也能真正折叠 |
+| 上下文计量 | 仅 `chars / 3.5` 估算 | 优先用 provider 上报的 `input+output`（缓存命中已含在 input 内）；测量点之后的追加消息再叠加估算（pi 的 `estimateContextTokens`）；压缩提交后**失效**，回退估算（`ToolLoopCompressor.effectiveContextTokens` / `noteMeasuredContext` / `invalidateMeasuredContext`） |
+| 二次压缩的提示 | 始终用初始 `COMPACTION_INSTRUCTION` | 前缀已含 `<compacted-summary>` 时用 `COMPACTION_UPDATE_INSTRUCTION`（pi 的 update prompt：保留旧事实、增量补充、移动 Pending/Current、不重启摘要） |
+
+接线点：`AgentToolCallLoop` 每次成功响应后 `compressor.noteMeasuredContext(messages.size, in+out)`；
+`RobustBrowserAgent.cliToolLoopCompressor` 读取窗口/预留并推导阈值与尾部；
+`summarizeCliLoop` 与 `ContextToAction.summarizeToolLoop` 改用 `compactionInstructionFor(prefix)`。
+
+测试：`ToolLoopCompressorTest` 新增 7 例（实测触发、实测+追加、提交后失效、列表收缩回退、
+窗口推导、尾部上限、update 指令选择）。

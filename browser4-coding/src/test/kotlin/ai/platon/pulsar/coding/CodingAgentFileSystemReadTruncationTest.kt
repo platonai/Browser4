@@ -51,6 +51,62 @@ class CodingAgentFileSystemReadTruncationTest {
     }
 
     @Test
+    @DisplayName("readFile decodes a GBK console log instead of failing with 'Input length = 1'")
+    fun readFileDecodesGbk() = runBlocking {
+        // `拒绝访问。` in GBK — what cmd.exe leaves in stderr on a Chinese Windows. A strict UTF-8
+        // decoder failed the whole read with "Input length = 1" (run 4125acaa, 2026-11-19).
+        val f = tempDir.resolve("dump.err")
+        Files.write(f, "拒绝访问。".toByteArray(charset("GBK")))
+        val fileSystem = fs()
+
+        val result = fileSystem.readFile("dump.err")
+        assertTrue(result.contains("拒绝访问"), "the denial must be readable, was: $result")
+        assertFalse(
+            result.contains("[note]"),
+            "the content stays clean — parsers read these files too: $result",
+        )
+
+        // The lenient decode is announced by the TOOL layer, which reads the flag instead.
+        val textRead = fileSystem.readFileText("dump.err")
+        assertTrue(textRead.recoded, "a GBK file must be reported as re-decoded")
+        assertEquals(result, textRead.text, "the flag must not change the text itself")
+    }
+
+    @Test
+    @DisplayName("a UTF-8 file is not marked as re-decoded")
+    fun utf8FileIsNotRecoded() = runBlocking {
+        Files.writeString(tempDir.resolve("ok.txt"), "plain ASCII\n")
+        val fileSystem = fs()
+
+        assertFalse(fileSystem.readFileText("ok.txt").recoded)
+        assertFalse(fileSystem.readFileText("ok.txt").text.contains("[note]"))
+    }
+
+    @Test
+    @DisplayName("an empty file reads as empty instead of 'cannot coerce to an empty range'")
+    fun emptyFileReadsAsEmpty() = runBlocking {
+        // A zero-byte `.b4scratch/posts.json` made readFileLines throw
+        // "Cannot coerce value to an empty range: maximum -1 is less than minimum 0" and the tool
+        // reported that internal message instead of "the file is empty" (run 4125acaa).
+        Files.write(tempDir.resolve("posts.json"), ByteArray(0))
+        val fileSystem = fs()
+
+        assertEquals("", fileSystem.readFile("posts.json"))
+        assertEquals("", fileSystem.readFileLines("posts.json"))
+        assertEquals("", fileSystem.readFileLines("posts.json", startLine = 5, endLine = 10))
+    }
+
+    @Test
+    @DisplayName("readFileLines on a one-line file returns that line")
+    fun readFileLinesOneLine() = runBlocking {
+        Files.writeString(tempDir.resolve("one.txt"), "only-line")
+        val fileSystem = fs()
+
+        assertEquals("only-line", fileSystem.readFileLines("one.txt"))
+        assertEquals("only-line", fileSystem.readFileLines("one.txt", startLine = 3))
+    }
+
+    @Test
     @DisplayName("readFileLines respects maxChars and folds output")
     fun readFileLinesFoldsLarge() = runBlocking {
         // 5000 lines × 100 chars = 500K chars, well above the default cap

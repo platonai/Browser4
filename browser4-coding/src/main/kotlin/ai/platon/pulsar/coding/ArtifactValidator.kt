@@ -395,21 +395,174 @@ object ArtifactValidator {
             issues += ValidationIssue(Severity.ERROR, "Missing package declaration", fileName)
         }
 
-        // Simple brace balance check
-        val braceBalance = content.count { it == '{' } - content.count { it == '}' }
-        if (braceBalance != 0) {
-            issues += ValidationIssue(Severity.ERROR,
-                "Unbalanced braces: difference of $braceBalance", fileName)
-        }
-
-        // Simple paren balance check
-        val parenBalance = content.count { it == '(' } - content.count { it == ')' }
-        if (parenBalance != 0) {
-            issues += ValidationIssue(Severity.ERROR,
-                "Unbalanced parentheses: difference of $parenBalance", fileName)
-        }
+        // Delimiters are matched on a stack after skipping comments, strings, raw strings and
+        // char literals: a ToolExecutor is mostly prompt/JSON string literals (`"{ref}"`), and the
+        // old `count { it == '{' }` reported them as code.
+        issues += checkKotlinDelimiters(content, fileName)
 
         return issues
+    }
+
+    /**
+     * Kotlin delimiter check that understands comments, strings and char literals.
+     *
+     * A ToolExecutor is mostly prompt and JSON string literals (`"{ref}"`, `"{\"a\":1}"`), so the
+     * old `count { it == '{' }` reported data as code — the same false positive the JS checker had,
+     * and a false `Unbalanced braces` ERROR blocks a file that compiles. Comments (nestable in
+     * Kotlin), raw `"""` strings, char literals and backtick identifiers are skipped, and closers
+     * are matched on a stack so `)(` is caught where a count would call it balanced.
+     *
+     * A `${…}` template expression *is* code, and it can contain quotes of its own
+     * (`"${map["key"]}"`), so the string is suspended at `${` and resumed by the `}` that brings
+     * the delimiter depth back to where the interpolation started.
+     */
+    private fun checkKotlinDelimiters(content: String, fileName: String): List<ValidationIssue> {
+        val closers = ArrayList<Char>()
+        val openings = ArrayList<Int>()
+        // One entry per open `${`: (was the surrounding literal raw, closers.size at entry).
+        val interpolations = ArrayDeque<Pair<Boolean, Int>>()
+        var inString = false
+        var rawString = false
+        var i = 0
+
+        fun fail(message: String, at: Int) = listOf(ValidationIssue(
+            Severity.ERROR, "Unbalanced $message at ${position(content, at)}", fileName))
+
+        while (i < content.length) {
+            if (inString) {
+                val c = content[i]
+                if (rawString) {
+                    if (content.startsWith("\"\"\"", i)) {
+                        inString = false
+                        i += 3
+                        continue
+                    }
+                } else {
+                    when (c) {
+                        '\\' -> {
+                            i += 2
+                            continue
+                        }
+                        '"' -> {
+                            inString = false
+                            i++
+                            continue
+                        }
+                        // A plain Kotlin string cannot span a raw newline.
+                        '\n' -> return fail("string literal: '\"' is never closed", i)
+                    }
+                }
+                if (c == '$' && i + 1 < content.length && content[i + 1] == '{') {
+                    interpolations.addLast(rawString to closers.size)
+                    inString = false
+                    i += 2
+                    continue
+                }
+                i++
+                continue
+            }
+
+            when {
+                content.startsWith("//", i) -> {
+                    while (i < content.length && content[i] != '\n') i++
+                }
+                content.startsWith("/*", i) -> {
+                    var depth = 1
+                    i += 2
+                    while (i < content.length && depth > 0) {
+                        when {
+                            content.startsWith("/*", i) -> { depth++; i += 2 }
+                            content.startsWith("*/", i) -> { depth--; i += 2 }
+                            else -> i++
+                        }
+                    }
+                    if (depth > 0) return fail("block comment: '/*' is never closed", i)
+                }
+                content.startsWith("\"\"\"", i) -> {
+                    inString = true
+                    rawString = true
+                    i += 3
+                }
+                content[i] == '"' -> {
+                    inString = true
+                    rawString = false
+                    i++
+                }
+                content[i] == '\'' -> {
+                    val end = skipKotlinQuoted(content, i, '\'')
+                    if (end < 0) return fail("char literal: \"'\" is never closed", i)
+                    i = end + 1
+                }
+                content[i] == '`' -> {
+                    val end = content.indexOf('`', i + 1)
+                    if (end < 0) return fail("backtick identifier is never closed", i)
+                    i = end + 1
+                }
+                content[i] == '(' || content[i] == '[' || content[i] == '{' -> {
+                    closers.add(closingDelimiter(content[i]))
+                    openings.add(i)
+                    i++
+                }
+                content[i] == ')' || content[i] == ']' || content[i] == '}' -> {
+                    // This `}` ends a `${…}` expression: resume the literal around it.
+                    if (content[i] == '}' && interpolations.isNotEmpty() &&
+                        closers.size == interpolations.last().second
+                    ) {
+                        rawString = interpolations.removeLast().first
+                        inString = true
+                        i++
+                        continue
+                    }
+                    val expected = closers.lastOrNull()
+                        ?: return fail("'${content[i]}': nothing is open before it", i)
+                    if (expected != content[i]) {
+                        return fail(
+                            "delimiters: '${openingDelimiter(content[i])}' at " +
+                                "${position(content, openings.last())} is closed by '${content[i]}' " +
+                                "before '$expected'",
+                            i,
+                        )
+                    }
+                    closers.removeLast()
+                    openings.removeAt(openings.lastIndex)
+                    i++
+                }
+                else -> i++
+            }
+        }
+
+        if (inString) {
+            return fail(
+                if (rawString) "raw string: the triple quote is never closed"
+                else "string literal: '\"' is never closed",
+                content.length,
+            )
+        }
+        if (closers.isNotEmpty()) {
+            val open = openingDelimiter(closers.first())
+            return listOf(ValidationIssue(
+                Severity.ERROR,
+                "Unbalanced '$open': ${closers.size} never closed, " +
+                    "first at ${position(content, openings.first())}",
+                fileName,
+            ))
+        }
+        return emptyList()
+    }
+
+    /** Index of the closing [quote] of a single-line Kotlin literal; `\` escapes. */
+    private fun skipKotlinQuoted(content: String, start: Int, quote: Char): Int {
+        var i = start + 1
+        while (i < content.length) {
+            when (content[i]) {
+                '\\' -> i += 2
+                quote -> return i
+                // A plain Kotlin string/char literal cannot span a raw newline.
+                '\n' -> return -1
+                else -> i++
+            }
+        }
+        return -1
     }
 
     // ==================== Skill ====================
@@ -580,6 +733,17 @@ object ArtifactValidator {
     // ==================== JS ====================
 
     /**
+     * Words after which a `/` opens a regex literal rather than a division.
+     *
+     * `return /re/.test(s)` is the case that matters in browser scripts; without it the scanner
+     * would read the regex body as code and report delimiters that are inside the pattern.
+     */
+    private val REGEX_PRECEDING_KEYWORDS = setOf(
+        "return", "typeof", "instanceof", "case", "delete", "void", "in", "of",
+        "new", "do", "else", "yield", "await", "throw",
+    )
+
+    /**
      * Validate a browser JS script's structural integrity.
      *
      * This is a static check only. For runtime validation, the agent should
@@ -588,41 +752,334 @@ object ArtifactValidator {
     fun validateJs(content: String, fileName: String = "script.js"): ValidationResult {
         val issues = mutableListOf<ValidationIssue>()
 
-        // Check bracket balance
-        issues += checkBracketBalance(content, '(', ')', fileName)
-        issues += checkBracketBalance(content, '{', '}', fileName)
-        issues += checkBracketBalance(content, '[', ']', fileName)
+        // Delimiters are matched on a stack after skipping comments, strings, template literals
+        // and regex literals. Counting characters was wrong in both directions: `1)` in a comment
+        // produced a false ERROR (the agent rewrote its own prose comments to pass validation),
+        // and a stray `)` in a comment could balance a genuinely missing one.
+        issues += checkJsDelimiters(content, fileName)
+
+        // The word heuristics below run on code only: `// no return value` used to satisfy the
+        // "has return" check and `// eval( is dangerous` produced an eval warning.
+        val code = jsCodeOnly(content)
 
         // Check for return statement (scripts should return a value)
-        if (!content.contains("return ")) {
+        if (!code.contains("return ")) {
             issues += ValidationIssue(Severity.WARNING,
                 "No 'return' statement found — script should return a value for the agent to read", fileName)
         }
 
-        // Check for 'use strict'
+        // Check for 'use strict' — a directive *is* a string literal, so this reads the source.
         if (!content.contains("'use strict'") && !content.contains("\"use strict\"")) {
             issues += ValidationIssue(Severity.INFO,
                 "No 'use strict' directive — recommended for browser scripts", fileName)
         }
 
         // Check for common anti-patterns
-        if (content.contains("document.write(")) {
+        if (code.contains("document.write(")) {
             issues += ValidationIssue(Severity.WARNING,
                 "document.write() detected — this can corrupt the page DOM", fileName)
         }
 
-        if (content.contains("eval(") && !content.contains("'eval'")) {
+        if (code.contains("eval(") && !code.contains("'eval'")) {
             issues += ValidationIssue(Severity.WARNING,
                 "eval() detected — can cause performance and security issues", fileName)
         }
 
         // Check for IIFE pattern (recommended for browser scripts)
-        if (!content.contains("(function") && !content.contains("(()")) {
+        if (!code.contains("(function") && !code.contains("(()")) {
             issues += ValidationIssue(Severity.INFO,
                 "No IIFE pattern — consider wrapping in (function(){...})() to avoid polluting global scope", fileName)
         }
 
         return ValidationResult.of(issues)
+    }
+
+    /**
+     * JavaScript delimiter check that understands the language's lexical structure.
+     *
+     * Comments, string literals, template literals (including their `${…}` code spans) and regex
+     * literals are skipped, and every closer must match the top of a stack — so `)(` is reported
+     * where a raw `count()` would call the script balanced. A raw count made `coding_validate`
+     * reject a valid script because a comment listed `1) 2)`, and the agent then rewrote its prose
+     * to satisfy the checker before re-validating (2026-11-20 run). The same count also hid a
+     * genuinely missing closer behind a `)` in a comment, which only failed later in `tab.eval`.
+     *
+     * A plain JS string cannot span a raw newline and a regex literal cannot either, so both
+     * scanners roll back to "not a literal" instead of swallowing the rest of the script.
+     */
+    private fun checkJsDelimiters(content: String, fileName: String): List<ValidationIssue> {
+        val closers = ArrayList<Char>()
+        val openings = ArrayList<Int>()
+        // Stack size at each `${` of a template literal: the `}` that brings the size back to it
+        // closes the interpolation and the scan resumes inside the template.
+        val templateDepths = ArrayDeque<Int>()
+        var inTemplate = false
+        var i = 0
+
+        fun fail(message: String, at: Int) = listOf(ValidationIssue(
+            Severity.ERROR, "Unbalanced $message at ${position(content, at)}", fileName))
+
+        while (i < content.length) {
+            val c = content[i]
+            if (inTemplate) {
+                when {
+                    c == '\\' -> i += 2
+                    c == '`' -> { inTemplate = false; i++ }
+                    c == '$' && i + 1 < content.length && content[i + 1] == '{' -> {
+                        templateDepths.addLast(closers.size)
+                        inTemplate = false
+                        i += 2
+                    }
+                    else -> i++
+                }
+                continue
+            }
+            when {
+                c == '/' && i + 1 < content.length && content[i + 1] == '/' -> {
+                    while (i < content.length && content[i] != '\n') i++
+                }
+                c == '/' && i + 1 < content.length && content[i + 1] == '*' -> {
+                    val end = content.indexOf("*/", i + 2)
+                    if (end < 0) return fail("block comment: '/*' is never closed", i)
+                    i = end + 2
+                }
+                c == '\'' || c == '"' -> {
+                    val end = skipQuoted(content, i)
+                    if (end < 0) return fail("string literal: '$c' is never closed", i)
+                    i = end + 1
+                }
+                c == '`' -> { inTemplate = true; i++ }
+                c == '/' -> {
+                    val end = skipRegex(content, i)
+                    i = if (end > 0) end + 1 else i + 1
+                }
+                c == '(' || c == '[' || c == '{' -> {
+                    closers.add(closingDelimiter(c))
+                    openings.add(i)
+                    i++
+                }
+                c == ')' || c == ']' || c == '}' -> {
+                    if (c == '}' && templateDepths.isNotEmpty() && closers.size == templateDepths.last()) {
+                        templateDepths.removeLast()
+                        inTemplate = true
+                        i++
+                        continue
+                    }
+                    val expected = closers.lastOrNull()
+                        ?: return fail("'$c': nothing is open before it", i)
+                    if (expected != c) {
+                        val opener = openingDelimiter(c)
+                        return fail(
+                            "delimiters: '$opener' at ${position(content, openings.last())} is closed " +
+                                "by '$c' before '$expected'",
+                            i,
+                        )
+                    }
+                    closers.removeLast()
+                    openings.removeAt(openings.lastIndex)
+                    i++
+                }
+                else -> i++
+            }
+        }
+
+        if (inTemplate) return fail("template literal: '`' is never closed", content.length)
+        if (closers.isNotEmpty()) {
+            val open = openingDelimiter(closers.first())
+            return listOf(ValidationIssue(
+                Severity.ERROR,
+                "Unbalanced '$open': ${closers.size} never closed, " +
+                    "first at ${position(content, openings.first())}",
+                fileName,
+            ))
+        }
+        return emptyList()
+    }
+
+    /** Index of the closing quote of the literal that starts at [start], or `-1`. */
+    private fun skipQuoted(content: String, start: Int): Int {
+        val quote = content[start]
+        var i = start + 1
+        while (i < content.length) {
+            when (content[i]) {
+                '\\' -> i += 2
+                quote -> return i
+                // A plain JS string cannot span a raw newline; reporting it beats skipping on.
+                '\n' -> return -1
+                else -> i++
+            }
+        }
+        return -1
+    }
+
+    /**
+     * Index of the closing `/` when the `/` at [start] opens a regex literal, otherwise `-1`.
+     *
+     * Whether a `/` starts a regex or a division depends on the token before it; the heuristic is
+     * the same one every JS highlighter uses (an operator/keyword/opening delimiter can precede a
+     * regex, an identifier or a number cannot). When in doubt the caller treats it as division,
+     * which is the conservative choice: the only cost is a missed regex body.
+     */
+    private fun skipRegex(content: String, start: Int): Int {
+        if (!regexCanStartAfter(previousToken(content, start))) return -1
+        var i = start + 1
+        var inClass = false
+        while (i < content.length) {
+            when (content[i]) {
+                '\\' -> i += 2
+                '\n' -> return -1
+                '[' -> { inClass = true; i++ }
+                ']' -> { inClass = false; i++ }
+                '/' -> if (inClass) i++ else return i
+                else -> i++
+            }
+        }
+        return -1
+    }
+
+    /** Last significant token before [start]: a word, a single character, or `null` at the start. */
+    private fun previousToken(content: String, start: Int): String? {
+        var i = start - 1
+        while (i >= 0 && content[i].isWhitespace()) i--
+        if (i < 0) return null
+        if (content[i].isLetterOrDigit() || content[i] == '_' || content[i] == '$') {
+            val end = i + 1
+            while (i >= 0 && (content[i].isLetterOrDigit() || content[i] == '_' || content[i] == '$')) i--
+            return content.substring(i + 1, end)
+        }
+        return content[i].toString()
+    }
+
+    private fun regexCanStartAfter(token: String?): Boolean {
+        if (token == null) return true
+        if (token.length == 1) return token[0] in "([{,;:=!&|?+-*%<>~^"
+        return token in REGEX_PRECEDING_KEYWORDS
+    }
+
+    private fun closingDelimiter(open: Char): Char = when (open) {
+        '(' -> ')'
+        '[' -> ']'
+        else -> '}'
+    }
+
+    private fun openingDelimiter(close: Char): Char = when (close) {
+        ')' -> '('
+        ']' -> '['
+        else -> '{'
+    }
+
+    /** `line N, col M` (1-based) for a character index — what the agent needs to find the spot. */
+    private fun position(content: String, index: Int): String {
+        val safe = index.coerceIn(0, content.length)
+        var line = 1
+        var lineStart = 0
+        for (i in 0 until safe) {
+            if (content[i] == '\n') {
+                line++
+                lineStart = i + 1
+            }
+        }
+        return "line $line, col ${safe - lineStart + 1}"
+    }
+
+    /**
+     * [content] with comments and literal bodies blanked to spaces, newlines kept.
+     *
+     * The word heuristics (`return `, `eval(`, `document.write(`, `(function`) looked at the raw
+     * text, so prose satisfied them or tripped them. Blanking comments, strings, template text and
+     * regex bodies lets the same cheap `contains` run on code only, and preserving positions means
+     * any offset still matches the source.
+     *
+     * A `${…}` template expression *is* code and is kept: `eval(` inside one is a real call, while
+     * the same words in the template text around it are data. The expression is followed by brace
+     * depth, the same way [checkJsDelimiters] finds the `}` that resumes the template.
+     */
+    private fun jsCodeOnly(content: String): String {
+        val out = StringBuilder(content.length)
+        val templateDepths = ArrayDeque<Int>()
+        var inTemplate = false
+        var braceDepth = 0
+        var i = 0
+
+        fun blankTo(to: Int) {
+            val stop = to.coerceAtMost(content.length)
+            for (k in i until stop) out.append(if (content[k] == '\n') '\n' else ' ')
+            i = stop
+        }
+
+        while (i < content.length) {
+            val c = content[i]
+            if (inTemplate) {
+                when {
+                    c == '\\' -> blankTo(i + 2)
+                    c == '`' -> {
+                        out.append(' ')
+                        i++
+                        inTemplate = false
+                    }
+                    c == '$' && i + 1 < content.length && content[i + 1] == '{' -> {
+                        templateDepths.addLast(braceDepth)
+                        out.append("  ")
+                        i += 2
+                        inTemplate = false
+                    }
+                    else -> blankTo(i + 1)
+                }
+                continue
+            }
+            when {
+                c == '/' && i + 1 < content.length && content[i + 1] == '/' -> {
+                    var j = i
+                    while (j < content.length && content[j] != '\n') j++
+                    blankTo(j)
+                }
+                c == '/' && i + 1 < content.length && content[i + 1] == '*' -> {
+                    val end = content.indexOf("*/", i + 2)
+                    blankTo(if (end < 0) content.length else end + 2)
+                }
+                c == '\'' || c == '"' -> {
+                    val end = skipQuoted(content, i)
+                    blankTo(if (end < 0) content.length else end + 1)
+                }
+                c == '`' -> {
+                    out.append(' ')
+                    i++
+                    inTemplate = true
+                }
+                c == '/' -> {
+                    val end = skipRegex(content, i)
+                    if (end > 0) {
+                        blankTo(end + 1)
+                    } else {
+                        out.append(c)
+                        i++
+                    }
+                }
+                c == '{' -> {
+                    braceDepth++
+                    out.append(c)
+                    i++
+                }
+                c == '}' -> {
+                    if (templateDepths.isNotEmpty() && braceDepth == templateDepths.last()) {
+                        // This `}` ends a `${…}`: blank it and resume the template text.
+                        templateDepths.removeLast()
+                        out.append(' ')
+                        i++
+                        inTemplate = true
+                    } else {
+                        braceDepth--
+                        out.append(c)
+                        i++
+                    }
+                }
+                else -> {
+                    out.append(c)
+                    i++
+                }
+            }
+        }
+        return out.toString()
     }
 
     // ==================== Script ====================
@@ -659,8 +1116,20 @@ object ArtifactValidator {
                         "No \$ErrorActionPreference set — errors may be silently ignored", fileName)
                 }
 
-                // Check for brace balance
-                issues += checkBracketBalance(content, '{', '}', fileName)
+                // Braces only, and only outside comments/strings/here-strings: `# usage: { -Path }`
+                // and `'{"a":1}'` are prose and data, not blocks.
+                issues += checkPowershellBraces(content, fileName)
+
+                // Windows PowerShell 5.1 reads a BOM-less `.ps1` as ANSI, so a non-ASCII literal
+                // is corrupted before the script runs (measured 2026-11-20: the same file prints
+                // 中文 under `pwsh` and 涓枃 under `powershell`). `coding.write` writes UTF-8
+                // without a BOM, so this is the default state of an agent-written script.
+                if (content.any { it.code > 0x7F }) {
+                    issues += ValidationIssue(Severity.WARNING,
+                        "Non-ASCII text in a .ps1 — Windows PowerShell 5.1 reads a BOM-less script as " +
+                            "ANSI and corrupts it; run it with `pwsh`, add a UTF-8 BOM, or keep it ASCII",
+                        fileName)
+                }
             }
             "bash" -> {
                 // Check for shebang
@@ -696,26 +1165,115 @@ object ArtifactValidator {
     // ==================== Shared Helpers ====================
 
     /**
-     * Check that opening and closing brackets are balanced.
+     * PowerShell brace check that skips comments, quoted strings and here-strings.
+     *
+     * The raw `count { it == '{' }` this replaces reported `# usage: { -Path … }` and the JSON in
+     * `$body = '{"a":1}'` as an unbalanced script — the same false positive the JS check had, and
+     * the agent then rewrote working scripts to satisfy it. A brace in a string could also *hide*
+     * a genuinely missing one. Only `{`/`}` are structural here: `@(…)` / `$(…)` are expressions,
+     * and their parentheses are what the language itself balances.
      */
-    private fun checkBracketBalance(
-        content: String,
-        open: Char,
-        close: Char,
-        fileName: String
-    ): List<ValidationIssue> {
-        val openCount = content.count { it == open }
-        val closeCount = content.count { it == close }
-        val diff = openCount - closeCount
+    private fun checkPowershellBraces(content: String, fileName: String): List<ValidationIssue> {
+        val openings = ArrayList<Int>()
+        var i = 0
 
-        return if (diff != 0) {
-            listOf(ValidationIssue(
-                Severity.ERROR,
-                "Unbalanced '$open$close': $openCount open vs $closeCount close (diff=$diff)",
-                fileName
-            ))
-        } else {
-            emptyList()
+        fun fail(message: String, at: Int) = listOf(ValidationIssue(
+            Severity.ERROR, "Unbalanced $message at ${position(content, at)}", fileName))
+
+        while (i < content.length) {
+            when {
+                content.startsWith("<#", i) -> {
+                    val end = content.indexOf("#>", i + 2)
+                    if (end < 0) return fail("block comment: '<#' is never closed", i)
+                    i = end + 2
+                }
+                content[i] == '#' -> {
+                    while (i < content.length && content[i] != '\n') i++
+                }
+                content[i] == '\'' -> {
+                    val end = skipPowerShellSingleQuoted(content, i)
+                    if (end < 0) return fail("string literal: \"'\" is never closed", i)
+                    i = end + 1
+                }
+                content[i] == '"' -> {
+                    val end = skipPowerShellDoubleQuoted(content, i)
+                    if (end < 0) return fail("string literal: '\"' is never closed", i)
+                    i = end + 1
+                }
+                content[i] == '@' && isHereStringStart(content, i) -> {
+                    val quote = content[i + 1]
+                    val terminator = "\n$quote@"
+                    val end = content.indexOf(terminator, i + 2)
+                    if (end < 0) return fail("here-string: '@$quote' is never closed", i)
+                    i = end + terminator.length
+                }
+                content[i] == '{' -> {
+                    openings.add(i)
+                    i++
+                }
+                content[i] == '}' -> {
+                    if (openings.isEmpty()) return fail("'}': nothing is open before it", i)
+                    openings.removeAt(openings.lastIndex)
+                    i++
+                }
+                else -> i++
+            }
         }
+
+        if (openings.isNotEmpty()) {
+            return listOf(ValidationIssue(
+                Severity.ERROR,
+                "Unbalanced '{': ${openings.size} never closed, " +
+                    "first at ${position(content, openings.first())}",
+                fileName,
+            ))
+        }
+        return emptyList()
+    }
+
+    /**
+     * `@'` / `@"` followed immediately by a line break — that is what opens a here-string.
+     *
+     * The opener may follow an assignment (`$x = @"`); only the *terminator* has to start a line,
+     * which the caller searches for as `\n'@` / `\n"@`.
+     */
+    private fun isHereStringStart(content: String, index: Int): Boolean {
+        if (index + 1 >= content.length) return false
+        val quote = content[index + 1]
+        if (quote != '\'' && quote != '"') return false
+        var i = index + 2
+        if (i < content.length && content[i] == '\r') i++
+        return i >= content.length || content[i] == '\n'
+    }
+
+    /** Index of the closing `'` of the literal at [start]; `''` is an escaped quote. */
+    private fun skipPowerShellSingleQuoted(content: String, start: Int): Int {
+        var i = start + 1
+        while (i < content.length) {
+            if (content[i] == '\'') {
+                if (i + 1 < content.length && content[i + 1] == '\'') {
+                    i += 2
+                    continue
+                }
+                return i
+            }
+            i++
+        }
+        return -1
+    }
+
+    /** Index of the closing `"` of the literal at [start]; a backtick escapes, `""` is a quote. */
+    private fun skipPowerShellDoubleQuoted(content: String, start: Int): Int {
+        var i = start + 1
+        while (i < content.length) {
+            when (content[i]) {
+                '`' -> i += 2
+                '"' -> {
+                    if (i + 1 < content.length && content[i + 1] == '"') i += 2 else return i
+                }
+                else -> i++
+            }
+        }
+        return -1
     }
 }

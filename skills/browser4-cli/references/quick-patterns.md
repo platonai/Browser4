@@ -33,7 +33,7 @@ The patterns share one loop: open → snapshot (get refs) → interact → re-sn
 
 ### 1. Multi-Session Workflow
 
-Named sessions isolate browser state. Create and switch with `-s <name>`, list with `list`, close one with `close`, and clean up with `close-all`:
+Named sessions isolate browser state. Create and switch with `-s <name>`, list with `list`, close one with `close`, and clean up with `close all`:
 
 ```bash
 browser4-cli -s research goto "https://en.wikipedia.org"   # opens "research"
@@ -42,7 +42,7 @@ browser4-cli -s news     snapshot -v 0 --stdout            # act inside "news"
 browser4-cli list                                          # show all sessions
 browser4-cli list --all                                    # + sessions from other checkouts (Workspace column)
 browser4-cli -s news     close                             # close only "news"
-browser4-cli close-all                                     # close every session
+browser4-cli close all                                     # close every session
 ```
 
 ### 2. Interactive Form Fill
@@ -123,19 +123,19 @@ browser4-cli snapshot -v 0                    # re-snapshot: refs are invalidate
 Native browser dialogs (`alert()`, `confirm()`, `prompt()`) block the page's main thread while they are open. A click that triggers a dialog returns quickly with a "dialog is pending" error instead of hanging — the click stays parked server-side and completes on its own once the dialog is handled. Do not re-run the triggering click (it would open a second dialog):
 
 ```bash
-browser4-cli click "#alertBtn"                    # prints: native dialog pending — run dialog-accept
-browser4-cli dialog-accept                        # dismiss the alert ("OK") — the parked click then completes
+browser4-cli click "#alertBtn"                    # prints: native dialog pending — run dialog accept
+browser4-cli dialog accept                        # dismiss the alert ("OK") — the parked click then completes
 
 browser4-cli click "#confirmBtn"                  # triggers confirm
-browser4-cli dialog-accept                        # click "OK" (returns true to page)
+browser4-cli dialog accept                        # click "OK" (returns true to page)
 
 browser4-cli click "#promptBtn"                   # triggers prompt
-browser4-cli dialog-accept "Hello from Browser4"  # fill prompt and accept
+browser4-cli dialog accept "Hello from Browser4"  # fill prompt and accept
 
-browser4-cli dialog-dismiss                       # cancel/dismiss any dialog
+browser4-cli dialog dismiss                       # cancel/dismiss any dialog
 ```
 
-**Note:** `dialog-accept` and `dialog-dismiss` must be run in a separate invocation — they cannot be part of the same command as the triggering `click`. The triggering `click` fails fast with a "dialog pending" message instead of hanging, and the underlying click stays parked and finishes when `dialog-accept`/`dialog-dismiss` releases the dialog — run the two commands as separate invocations (e.g. in a script: `browser4-cli click "#alertBtn" || true; browser4-cli dialog-accept`). Alternatively, use `click --auto-dismiss-dialogs <ref>` to auto-accept any dialog triggered by the click in a single invocation (auto-accept only — it cannot exercise the dismiss path of `confirm`/`prompt`).
+**Note:** `dialog accept` and `dialog dismiss` must be run in a separate invocation — they cannot be part of the same command as the triggering `click`. The triggering `click` fails fast with a "dialog pending" message instead of hanging, and the underlying click stays parked and finishes when `dialog accept`/`dialog dismiss` releases the dialog — run the two commands as separate invocations (e.g. in a script: `browser4-cli click "#alertBtn" || true; browser4-cli dialog accept`). Alternatively, use `click --auto-dismiss-dialogs <ref>` to auto-accept any dialog triggered by the click in a single invocation (auto-accept only — it cannot exercise the dismiss path of `confirm`/`prompt`).
 
 ### 6. Verifying Results (verify-after-interaction)
 
@@ -153,11 +153,11 @@ browser4-cli drag <source> <target> --at bottom     # e.g. "Dropped li#x as chil
 
 # After dialog — handle the dialog, then verify the interaction log
 browser4-cli click "#alertBtn" || true          # "dialog pending" error is expected
-browser4-cli dialog-accept
+browser4-cli dialog accept
 browser4-cli snapshot grep "\[alert\]|\[confirm\]|\[prompt\]"
 
 # Generate resilient CSS selectors from snapshot refs
-browser4-cli generate-locator <ref>               # produces e.g. "#contactForm > button.primary"
+browser4-cli generate locator <ref>               # produces e.g. "#contactForm > button.primary"
 browser4-cli get text "#contactForm > button.primary"  # verify with the generated selector
 ```
 
@@ -263,7 +263,7 @@ See **[agent.md](agent.md)** for full details including LLM key configuration, e
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `click` errors with "dialog is pending" | the click triggered a native dialog and returned early by design — it did not hang | handle the dialog with `dialog-accept` / `dialog-dismiss` in a separate invocation (the parked click then completes), or use `click --auto-dismiss-dialogs <ref>`
+| `click` errors with "dialog is pending" | the click triggered a native dialog and returned early by design — it did not hang | handle the dialog with `dialog accept` / `dialog dismiss` in a separate invocation (the parked click then completes), or use `click --auto-dismiss-dialogs <ref>`
 | Refs fail after an interaction | Refs are single-use | Re-snapshot before reusing refs — see [SKILL.md §5](../SKILL.md#5-critical-warnings) |
 | `agent status` never completes | Task failed (417/4xx/5xx) or LLM key missing | Inspect `message`; configure the LLM key |
 | SQL errors on inline `--sql` | Shell escaping on Windows | Use `--sql @file.sql` — see [shell-quoting.md](shell-quoting.md) |

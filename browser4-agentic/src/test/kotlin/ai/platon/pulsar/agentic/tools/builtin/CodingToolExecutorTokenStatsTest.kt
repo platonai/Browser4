@@ -33,7 +33,7 @@ class CodingToolExecutorTokenStatsTest {
     @Test
     @DisplayName("successful tool calls are recorded with input and output tokens")
     fun testRecordsSuccessfulCall() = runBlocking {
-        coEvery { fs.readFile(any<String>()) } returns "fun main() {}"
+        coEvery { fs.readFileText(any<String>()) } returns CodingAgentFileSystem.TextRead("fun main() {}")
 
         executor.callFunctionOn(tc("read", mapOf("path" to "Foo.kt")), target)
 
@@ -49,7 +49,7 @@ class CodingToolExecutorTokenStatsTest {
     @DisplayName("failed tool calls are recorded as errors")
     fun testRecordsFailedCall() = runBlocking {
         // No stubbing: fs.readFile on a relaxed mock returns "" — force a failure instead
-        coEvery { fs.readFile(any<String>()) } throws IllegalArgumentException("not allowed")
+        coEvery { fs.readFileText(any<String>()) } throws IllegalArgumentException("not allowed")
 
         val result = executor.callFunctionOn(tc("read", mapOf("path" to "X.kt")), target)
         assertFalse(result.success)
@@ -70,7 +70,7 @@ class CodingToolExecutorTokenStatsTest {
     @Test
     @DisplayName("tokenStats tool reports recorded usage and reset clears counters")
     fun testTokenStatsTool() = runBlocking {
-        coEvery { fs.readFile(any<String>()) } returns "x".repeat(500)
+        coEvery { fs.readFileText(any<String>()) } returns CodingAgentFileSystem.TextRead("x".repeat(500))
         executor.callFunctionOn(tc("read", mapOf("path" to "a.kt")), target)
         executor.callFunctionOn(tc("read", mapOf("path" to "b.kt")), target)
 

@@ -57,14 +57,16 @@ data class CommandStatsResponse(
 )
 
 /**
- * Body of `POST /api/commands/{id}/input`: a steering message typed while the
- * task runs.
+ * Body of `POST /api/commands/{id}/input`: a user message typed while the task runs.
  *
- * @property text what the user wants the agent to do from now on; injected as a
- *   user message at the agent's next model round-trip
+ * @property text what the user wants the agent to do from now on
+ * @property deliverAs `steer` (default) injects it at the agent's next model
+ *   round-trip; `followUp` delivers it when the agent would stop, continuing the same
+ *   conversation with the new instruction instead of starting a second task
  * */
 data class CommandInputRequest(
     val text: String = "",
+    val deliverAs: String = "steer",
 )
 
 /**

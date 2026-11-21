@@ -36,7 +36,7 @@ class FinishReportRepairTest {
 
     private fun lie(): FinishReportGate.Verdict =
         FinishReportGate.Verdict(
-            violations = listOf("filesChanged lists 1 file(s) git does not show as changed: fake.kt"),
+            violations = listOf("filesChanged lists 1 file(s) neither git nor this run's file trace shows: fake.kt"),
             warnings = emptyList(),
         )
 
@@ -111,7 +111,7 @@ class FinishReportRepairTest {
     fun omissionPlusLieIsRejected() {
         val verdict = FinishReportGate.Verdict(
             violations = listOf(
-                "filesChanged lists 1 file(s) git does not show as changed: fake.kt",
+                "filesChanged lists 1 file(s) neither git nor this run's file trace shows: fake.kt",
                 "the run modified 1 file(s) the report does not list: ev.js",
             ),
             warnings = emptyList(),

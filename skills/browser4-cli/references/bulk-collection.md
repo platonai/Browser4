@@ -62,7 +62,7 @@ every later batch on the same session) then inherits.
 
 `?language=en_US`, `set headers Accept-Language` and a hand-written `i18n-prefs` cookie
 are at best site-specific hints. Measured 2026-10-29 on `amazon.com`: the URL parameter,
-the header override **and** `cookie-set lc-main/i18n-prefs` all left the tab on the
+the header override **and** `cookie set lc-main/i18n-prefs` all left the tab on the
 Chinese preferences interstitial in a fresh profile; only driving the page (or fetching
 with the cookies the page itself had set) produced English content.
 

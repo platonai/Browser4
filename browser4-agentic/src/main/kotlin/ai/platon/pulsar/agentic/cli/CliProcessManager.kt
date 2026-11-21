@@ -3,6 +3,7 @@ package ai.platon.pulsar.agentic.cli
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.agentic.observability.CliMetrics
+import ai.platon.pulsar.coding.CodingAgentShell
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -17,9 +18,7 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
-import java.nio.ByteBuffer
 import java.nio.charset.Charset
-import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.time.Duration
@@ -27,6 +26,9 @@ import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import ai.platon.pulsar.coding.sandbox.ExecutionSandbox
+import ai.platon.pulsar.coding.sandbox.ProcessLauncher
+import ai.platon.pulsar.coding.sandbox.ProcessSpec
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -83,6 +85,16 @@ class CliProcessManager(
     private val config: CliProcessConfig = CliProcessConfig(),
     /** Process environment; injectable so tests do not mutate the JVM's own. */
     private val processEnv: Map<String, String> = System.getenv(),
+    /**
+     * The task's OS boundary, when it has one.
+     *
+     * `b4.run` was the widest remaining agent channel: it spawned `browser4-cli` at the backend's own
+     * integrity level, so a sandboxed task could reach any path the CLI can write. With a boundary the
+     * child joins it (and the job object), exactly like `coding.shell`.
+     */
+    private val sandbox: () -> ExecutionSandbox? = { null },
+    /** Workspace of the running task; `null` keeps the historical unsandboxed launch. */
+    private val workspace: () -> Path? = { null },
 ) {
     private val logger = getLogger(this)
 
@@ -190,13 +202,18 @@ class CliProcessManager(
 
         val proc = try {
             withContext(Dispatchers.IO) {
-                pb.start()
+                startProcess(spec, pb)
             }
         } catch (e: IOException) {
             return CliResult(
                 null, "", "", infraFailure = "spawn failed: ${e.message}",
                 durationMs = System.currentTimeMillis() - startMs,
             )
+        }
+        // The sandboxed launch wires stdin to a pipe; with no payload the child must still see EOF
+        // immediately, or a command that reads stdin blocks until its deadline (2026-10-29 hang).
+        if (spec.stdin == null) {
+            runCatching { proc.outputStream.close() }
         }
 
         val stdout = HeadTailBuffer(spec.outputBufferBytes)
@@ -327,6 +344,57 @@ class CliProcessManager(
         return a.size >= 2 && b.size >= 2 && (a[0] != b[0] || a[1] != b[1])
     }
 
+    /**
+     * Starts the CLI inside the task's OS boundary when there is one.
+     *
+     * The CLI keeps its state under `BROWSER4_CLI_STATE_DIR`; a sandboxed child cannot write the
+     * Medium `~/.browser4`, so the state goes into the workspace instead (the CLI itself falls back
+     * to `./.browser4-cli-state` on `PermissionDenied`, this is the explicit form of the same idea).
+     * The fallback is the historical `ProcessBuilder` path, used only when the task has no boundary —
+     * `prepare` throws rather than degrading when the backend cannot start.
+     */
+    private fun startProcess(spec: CliRunSpec, legacy: ProcessBuilder): Process {
+        val boundary = sandbox()
+        val taskWorkspace = workspace()
+        if (boundary == null || boundary.id == "off" || taskWorkspace == null) {
+            return legacy.start()
+        }
+        val prepared = sandboxedSpec(spec, boundary, taskWorkspace, legacy)
+        logger.info("b4.run starts inside the OS boundary: backend={} workspace={}", boundary.id, taskWorkspace)
+        return ProcessLauncher.start(
+            boundary.prepare(prepared, taskWorkspace, allowNetwork = true),
+            redirectErrorStream = false,
+        )
+    }
+
+    /**
+     * The [ProcessSpec] a sandboxed `b4.run` launches with.
+     *
+     * @param legacy the builder the caller configured (used for the working directory and the
+     *   null-input redirection decision, so both paths agree)
+     */
+    internal fun sandboxedSpec(
+        spec: CliRunSpec,
+        boundary: ExecutionSandbox,
+        taskWorkspace: Path,
+        legacy: ProcessBuilder? = null,
+    ): ProcessSpec {
+        val env = LinkedHashMap(spec.env).apply {
+            // One definition of the sandbox state dir, shared with `coding.shell` (see CliStateEnv):
+            // a Low-integrity child can read the Medium `~/.browser4` but cannot write it, so
+            // `attach` would persist its session to a directory the next invocation never reads.
+            put("BROWSER4_CLI_STATE_DIR", CliStateEnv.dirInWorkspace(taskWorkspace))
+        }
+        val directory = spec.workingDir
+            ?: legacy?.directory()?.toPath()
+            ?: taskWorkspace.toAbsolutePath().normalize()
+        return ProcessSpec(
+            command = spec.shellArgv,
+            directory = directory,
+            environment = env,
+        )
+    }
+
     private fun killTree(process: Process, graceMs: Long) {
         val descendants = try {
             process.toHandle().descendants().toList()
@@ -413,21 +481,14 @@ class CliProcessManager(
     /**
      * Decode one line of child-process output.
      *
-     * UTF-8 is attempted strictly; only bytes that are not valid UTF-8 are decoded
-     * with [fallback] (the platform charset), so a GBK/cp1252 error message becomes
-     * readable instead of `Դ�ı����޷�ʶ��`. A trailing CR is dropped.
+     * Delegates to [CodingAgentShell.decodeLine] so `b4.run` and `coding.shell` cannot drift
+     * apart: strict UTF-8 first, the platform charset only for bits UTF-8 cannot decode, and a
+     * trailing CR dropped. A GBK/cp1252 error message becomes readable instead of
+     * `Դ�ı����޷�ʶ��`, while UTF-8 output from the tool that did the work is never
+     * re-decoded as GBK.
      */
-    internal fun decodeLine(bytes: ByteArray, fallback: Charset = StandardCharsets.UTF_8): String {
-        if (bytes.isEmpty()) return ""
-        val utf8 = runCatching {
-            StandardCharsets.UTF_8.newDecoder()
-                .onMalformedInput(CodingErrorAction.REPORT)
-                .onUnmappableCharacter(CodingErrorAction.REPORT)
-                .decode(ByteBuffer.wrap(bytes))
-                .toString()
-        }.getOrNull()
-        return (utf8 ?: String(bytes, fallback)).removeSuffix("\r")
-    }
+    internal fun decodeLine(bytes: ByteArray, fallback: Charset = StandardCharsets.UTF_8): String =
+        CodingAgentShell.decodeLine(bytes, fallback)
 
     /**
      * The charset a Windows console program writes when its output is not UTF-8.

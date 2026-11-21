@@ -1,6 +1,6 @@
 ---
 title: "Import Browser State"
-description: "Reuse logged-in state (cookies, localStorage) or an entire profile from your system Chrome/Edge inside Browser4-managed sessions. Covers attach + state-save/state-load, the deprecated SYSTEM_DEFAULT mode, and full-profile copy via PROTOTYPE or open --profile."
+description: "Reuse logged-in state (cookies, localStorage) or an entire profile from your system Chrome/Edge inside Browser4-managed sessions. Covers attach + state save/state load, the deprecated SYSTEM_DEFAULT mode, and full-profile copy via PROTOTYPE or open --profile."
 tier: procedure
 ---
 
@@ -9,9 +9,9 @@ tier: procedure
 ## Quick Start
 
 ```bash
-browser4-cli state-save my-state.json            # save the current session's web state (cookies + localStorage)
+browser4-cli state save my-state.json            # save the current session's web state (cookies + localStorage)
 browser4-cli open --fresh https://example.com    # launch a Browser4-managed browser
-browser4-cli state-load my-state.json            # restore cookies + localStorage into it
+browser4-cli state load my-state.json            # restore cookies + localStorage into it
 ```
 
 The recommended end-to-end path — attach to your running system browser, save its state, then load it into a managed browser — is step [1](#1-recommended-copy-web-state-cookies--localstorage) below.
@@ -24,33 +24,33 @@ Two levels of "state" exist:
 
 | Level | What is copied | Supported today |
 |---|---|---|
-| **Web state** | Cookies + localStorage — enough to restore logins | ✅ Fully supported via `state-save` / `state-load` |
+| **Web state** | Cookies + localStorage — enough to restore logins | ✅ Fully supported via `state save` / `state load` |
 | **Full profile** | History, passwords, extensions, IndexedDB, cache, settings | ⚠️ Manual profile-directory copy only (with caveats) |
 
 ## When to Use
 
-Use this when you need **logged-in state** (cookies + localStorage) from your system Chrome/Edge inside a Browser4-managed session — e.g. to access authenticated pages without logging in again. Prefer `state-save`/`state-load` web-state copies; full profile copies are manual, fragile, and only for special cases.
+Use this when you need **logged-in state** (cookies + localStorage) from your system Chrome/Edge inside a Browser4-managed session — e.g. to access authenticated pages without logging in again. Prefer `state save`/`state load` web-state copies; full profile copies are manual, fragile, and only for special cases.
 
 ## How It Works
 
-`state-save` serializes the session's cookies and localStorage into a JSON file; `state-load` writes them back into a browser session's cookie jar and storage, so logins survive without re-authentication. Full profile copies instead copy the entire system Chrome profile directory (history, extensions, passwords) — manual and fragile.
+`state save` serializes the session's cookies and localStorage into a JSON file; `state load` writes them back into a browser session's cookie jar and storage, so logins survive without re-authentication. Full profile copies instead copy the entire system Chrome profile directory (history, extensions, passwords) — manual and fragile.
 
 ## Patterns
 
-- [1. Web state copy (recommended)](#1-recommended-copy-web-state-cookies--localstorage) — attach → `state-save` → `open` → `state-load`
+- [1. Web state copy (recommended)](#1-recommended-copy-web-state-cookies--localstorage) — attach → `state save` → `open` → `state load`
 - [2. `SYSTEM_DEFAULT` profile mode](#2-system_default-profile-mode-deprecated) — deprecated; kept for legacy setups
 - [3. Full profile copy](#3-full-profile-copy-prototype-mode--open---profile) — manual profile-directory copy for history/passwords/extensions
 
 ## Flags
 
-The `state-save` / `state-load` / `attach` commands take positional arguments only; see [storage-state.md](storage-state.md) and [attach.md](attach.md) for their full command references.
+The `state save` / `state load` / `attach` commands take positional arguments only; see [storage-state.md](storage-state.md) and [attach.md](attach.md) for their full command references.
 
 ## Errors & Recovery
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Cookies restored but login still fails | Page not reloaded after `state-load` | `open` / reload the page so cookies are sent with the next request |
-| `state-load` has no effect | State was saved from a different profile/origin | Save from the exact session you attached to; check the JSON's origins |
+| Cookies restored but login still fails | Page not reloaded after `state load` | `open` / reload the page so cookies are sent with the next request |
+| `state load` has no effect | State was saved from a different profile/origin | Save from the exact session you attached to; check the JSON's origins |
 | Full profile copy broken | Chrome profile locked or version mismatch | Close the source browser first; copy only the needed subdirectories |
 
 ## 1. Recommended: copy web state (cookies + localStorage)
@@ -65,7 +65,7 @@ session:
 browser4-cli attach --extension
 
 # 2. Export cookies + current-origin localStorage from the system browser.
-browser4-cli state-save system-auth.json
+browser4-cli state save system-auth.json
 
 # 3. Disconnect (your system browser keeps running untouched).
 browser4-cli close
@@ -75,7 +75,7 @@ browser4-cli open --fresh
 
 # 5. Import the state. Cookies are restored to the jar immediately;
 #    reload/open a page when you need them sent with the next request.
-browser4-cli state-load system-auth.json
+browser4-cli state load system-auth.json
 browser4-cli goto https://example.com/dashboard
 ```
 
@@ -83,13 +83,13 @@ If the system browser has remote debugging enabled, the same flow works with
 `attach --cdp chrome` (channel name) or `attach --cdp http://localhost:9222`
 (endpoint). See [attach.md](attach.md) for details.
 
-### What `state-save` includes (and excludes)
+### What `state save` includes (and excludes)
 
 Included:
 
 - All cookies from the browser cookie jar (`Network.getAllCookies`).
 - `localStorage` of the **active origin only** (the page currently open in the
-  session when `state-save` runs).
+  session when `state save` runs).
 
 Excluded (by design):
 
@@ -99,10 +99,10 @@ Excluded (by design):
 
 ### Multiple-origin localStorage
 
-`state-save` captures only the active origin's localStorage. To collect several
+`state save` captures only the active origin's localStorage. To collect several
 origins, navigate to each origin and save separately, then merge the JSON
-`origins` arrays, or copy individual entries with `localstorage-get` /
-`cookie-list`.
+`origins` arrays, or copy individual entries with `localstorage get` /
+`cookie list`.
 
 ## 2. `SYSTEM_DEFAULT` profile mode (deprecated)
 
@@ -175,7 +175,7 @@ To make a full copy of your system profile:
 
 | Path | State covered | Copied into managed browser | Status |
 |---|---|---|---|
-| attach → `state-save` → `state-load` | cookies + localStorage | ✅ Yes | ✅ Supported |
+| attach → `state save` → `state load` | cookies + localStorage | ✅ Yes | ✅ Supported |
 | `attach --extension` / `--cdp` (use directly) | everything live | ❌ No — drives the original browser | ✅ Supported |
 | `SYSTEM_DEFAULT` mode | system default profile | ❌ No — shares it | ⚠️ Deprecated (Chrome ≥ 143) |
 | Profile copy → PROTOTYPE / `open --profile` | nearly everything | ✅ Yes | ⚠️ Manual, with caveats |

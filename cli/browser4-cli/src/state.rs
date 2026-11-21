@@ -9,10 +9,11 @@
 //! on Windows).  See [`resolve_runtime_data_dir`].
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MousePosition {
@@ -283,33 +284,310 @@ fn default_home_state_dir() -> PathBuf {
         .join(".browser4")
 }
 
-/// True when `state_dir` resolves to the implicit `~/.browser4` (no accepted
-/// `BROWSER4_CLI_STATE_DIR` override). Handles both `None` (caller asked for
+/// True when `state_dir` resolves to the implicit default (`~/.browser4`, or the
+/// per-checkout development namespace under it) with no accepted
+/// `BROWSER4_CLI_STATE_DIR` override. Handles both `None` (caller asked for
 /// the default) and `Some(p)` equal to the default (e.g. `SessionRegistry`
-/// pins the dir at startup).
+/// pins the dir at startup) — including the development namespace, which used
+/// to fall through to "explicit, so never relocate" and made a sandboxed
+/// command fail with a raw `PermissionDenied` instead of relocating.
 fn is_implicit_default_dir(state_dir: Option<&Path>) -> bool {
     if user_state_dir_override().is_some() {
         return false;
     }
     match state_dir {
         None => true,
-        Some(p) => p == default_home_state_dir(),
+        Some(p) => {
+            p == default_home_state_dir() || dev_workspace_state_dir().is_some_and(|d| d == p)
+        }
     }
 }
 
-/// Name of the workspace-relative fallback directory used when the default
-/// state directory (`~/.browser4`) is not writable.
+/// Name of the workspace fallback directory used when the default state
+/// directory (`~/.browser4`) is not usable.
+///
+/// The name is kept from the pre-anchor layout: a directory of that name left
+/// by an older CLI is still read, and is migrated on the first relocated write.
 const FALLBACK_STATE_DIR_NAME: &str = ".browser4-cli-state";
+
+/// Scratch directory an agent sandbox pins its workspace into.  The Java side
+/// injects `BROWSER4_CLI_STATE_DIR=<workspace>/.b4scratch/cli-state`
+/// (`CliStateEnv.DIR_IN_WORKSPACE`); anchoring on the same marker makes an
+/// un-injected CLI invocation land in the same directory as an injected one.
+const WORKSPACE_SCRATCH_DIR: &str = ".b4scratch";
+
+/// Subdirectory of [`WORKSPACE_SCRATCH_DIR`] holding CLI session state.
+const WORKSPACE_CLI_STATE_DIR: &str = "cli-state";
+
+/// Marker that makes a directory the root of a checkout.
+const CHECKOUT_MARKER: &str = ".git";
+
+/// File left in a migrated legacy fallback directory, holding the path the state
+/// moved to.  A later invocation started in that directory follows it instead of
+/// creating a second, divergent state directory.
+const STATE_DIR_POINTER_FILE: &str = "STATE_DIR_POINTER";
 
 /// Once-per-process guard so the fallback warning prints at most once within
 /// a single command invocation.
 static FALLBACK_WARNING_PRINTED: AtomicBool = AtomicBool::new(false);
 
-/// Workspace-relative fallback directory: `./.browser4-cli-state`.
+/// Why a directory was chosen as the fallback state directory.
+///
+/// Named because "my session disappeared" is otherwise indistinguishable from
+/// "the state went to a directory derived from a different working directory".
+/// `status` prints the anchor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FallbackAnchor {
+    /// Not a fallback: the state lives in its primary directory (or in an
+    /// operator-pinned `BROWSER4_CLI_STATE_DIR`).
+    None,
+    /// `./.browser4-cli-state` in the current working directory — no workspace
+    /// marker was found, so the layout is the historic one and stays
+    /// CWD-relative.
+    Cwd,
+    /// A `.browser4-cli-state` directory in a parent of the working directory.
+    AncestorDir,
+    /// `<workspace>/.b4scratch/cli-state`, anchored at the agent workspace.
+    Scratch,
+    /// `<checkout>/.b4scratch/cli-state`, anchored at the checkout root.
+    Checkout,
+    /// A path recorded in a legacy directory's `STATE_DIR_POINTER` file.
+    Pointer,
+}
+
+impl FallbackAnchor {
+    /// Stable identifier for `--json` output.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "primary",
+            Self::Cwd => "cwd",
+            Self::AncestorDir => "ancestor",
+            Self::Scratch => "b4scratch",
+            Self::Checkout => "checkout",
+            Self::Pointer => "pointer",
+        }
+    }
+
+    /// Human-readable explanation, used in the warning and in `status`.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::None => "primary directory",
+            Self::Cwd => "in the current directory",
+            Self::AncestorDir => "found in a parent directory",
+            Self::Scratch => "anchored at the agent workspace's .b4scratch",
+            Self::Checkout => "anchored at the checkout root",
+            Self::Pointer => "following a STATE_DIR_POINTER left by an earlier invocation",
+        }
+    }
+
+    /// Whether the state lives outside its primary directory.
+    pub fn is_fallback(self) -> bool {
+        self != Self::None
+    }
+}
+
+/// A resolved fallback location: where the state goes, why, and where an older
+/// CLI version would have put it.
+#[derive(Debug, Clone)]
+struct FallbackResolution {
+    /// Directory to read and write the state in.
+    dir: PathBuf,
+    /// Why [`Self::dir`] was chosen.
+    anchor: FallbackAnchor,
+    /// A `./.browser4-cli-state` directory on the same walk that is *not*
+    /// [`Self::dir`]: the place a pre-anchor CLI wrote to, so it must be read
+    /// (until migrated) or the session looks lost.
+    legacy: Option<PathBuf>,
+}
+
+fn current_dir_or_dot() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Resolve the fallback state directory from `cwd` upwards.
+///
+/// The historic fallback was `./.browser4-cli-state`, i.e. relative to the
+/// working directory: `attach` run in `browser4-tests/` and the following `eval`
+/// run in the checkout root wrote and read *different* directories, and the
+/// session looked lost.  Resolution is therefore anchored at the workspace
+/// instead of at the CWD:
+///
+/// 1. a `STATE_DIR_POINTER` file in a parent `.browser4-cli-state` wins — that is
+///    the explicit, migration-written pointer;
+/// 2. otherwise the nearest `.b4scratch` directory anchors the state at the agent
+///    workspace (the same directory the Java side injects);
+/// 3. otherwise the nearest checkout root (`.git`) anchors it at
+///    `<checkout>/.b4scratch/cli-state`;
+/// 4. otherwise a `.browser4-cli-state` in a parent is reused (a user's own tree
+///    gets continuity too);
+/// 5. otherwise `./.browser4-cli-state`, exactly as before.
+///
+/// Steps 2–4 keep an existing legacy directory (step 4, or a pre-existing
+/// `.browser4-cli-state` next to the anchor) as [`FallbackResolution::legacy`] so
+/// reads still find the session and the first relocated write migrates it.
+fn resolve_fallback_dir_in(cwd: &Path) -> FallbackResolution {
+    let mut pointer: Option<PathBuf> = None;
+    let mut legacy: Option<PathBuf> = None;
+    let mut scratch: Option<PathBuf> = None;
+    let mut checkout: Option<PathBuf> = None;
+
+    for dir in cwd.ancestors() {
+        if legacy.is_none() {
+            let candidate = dir.join(FALLBACK_STATE_DIR_NAME);
+            if candidate.is_dir() {
+                match read_state_dir_pointer(&candidate) {
+                    Some(target) => pointer = Some(target),
+                    None => legacy = Some(candidate),
+                }
+            }
+        }
+        if scratch.is_none() && dir.join(WORKSPACE_SCRATCH_DIR).is_dir() {
+            scratch = Some(dir.join(WORKSPACE_SCRATCH_DIR).join(WORKSPACE_CLI_STATE_DIR));
+        }
+        if checkout.is_none() && dir.join(CHECKOUT_MARKER).exists() {
+            checkout = Some(dir.join(WORKSPACE_SCRATCH_DIR).join(WORKSPACE_CLI_STATE_DIR));
+        }
+    }
+
+    if let Some(dir) = pointer {
+        return FallbackResolution {
+            dir,
+            anchor: FallbackAnchor::Pointer,
+            legacy: None,
+        };
+    }
+
+    let anchored = |dir: PathBuf, anchor: FallbackAnchor| FallbackResolution {
+        legacy: legacy.clone().filter(|l| *l != dir),
+        dir,
+        anchor,
+    };
+
+    if let Some(dir) = scratch {
+        return anchored(dir, FallbackAnchor::Scratch);
+    }
+    if let Some(dir) = checkout {
+        return anchored(dir, FallbackAnchor::Checkout);
+    }
+    if let Some(dir) = legacy {
+        let anchor = match dir.parent() {
+            Some(parent) if parent == cwd => FallbackAnchor::Cwd,
+            _ => FallbackAnchor::AncestorDir,
+        };
+        return FallbackResolution {
+            dir,
+            anchor,
+            legacy: None,
+        };
+    }
+
+    FallbackResolution {
+        dir: cwd.join(FALLBACK_STATE_DIR_NAME),
+        anchor: FallbackAnchor::Cwd,
+        legacy: None,
+    }
+}
+
+/// Read the [`STATE_DIR_POINTER_FILE`] of a legacy fallback directory.
+///
+/// A relative path is resolved against the directory holding the pointer.
+/// Anything unreadable or empty is ignored: a broken pointer must not stop the
+/// CLI from resolving a state directory.
+fn read_state_dir_pointer(dir: &Path) -> Option<PathBuf> {
+    let raw = fs::read_to_string(dir.join(STATE_DIR_POINTER_FILE)).ok()?;
+    let text = raw.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(text);
+    Some(if path.is_absolute() {
+        path
+    } else {
+        dir.join(path)
+    })
+}
+
+/// Fallback state directory for the current working directory.
 fn fallback_state_dir() -> PathBuf {
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(FALLBACK_STATE_DIR_NAME)
+    resolve_fallback_dir_in(&current_dir_or_dot()).dir
+}
+
+/// The legacy fallback directory the current working directory would have used
+/// before the anchor existed, when it is not the resolved one.
+fn fallback_legacy_dir() -> Option<PathBuf> {
+    resolve_fallback_dir_in(&current_dir_or_dot()).legacy
+}
+
+/// Move the state files an older CLI left in `legacy` into `target`.
+///
+/// Best-effort and non-destructive: a file that already exists in `target` wins,
+/// a file that cannot be moved stays where it is (reads still consult the legacy
+/// directory), and `STATE_DIR_POINTER` is written only once something moved, so
+/// the next invocation started in `legacy` resolves to `target` instead of
+/// creating a second state directory.
+///
+/// Returns the number of files moved.
+fn migrate_legacy_fallback(legacy: &Path, target: &Path) -> usize {
+    if legacy == target || !legacy.is_dir() {
+        return 0;
+    }
+
+    let mut moved = 0;
+    for entry in fs::read_dir(legacy).into_iter().flatten().flatten() {
+        let name = entry.file_name();
+        if name == STATE_DIR_POINTER_FILE {
+            continue;
+        }
+        let from = entry.path();
+        let to = target.join(&name);
+        if to.exists() {
+            continue;
+        }
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            moved += migrate_dir_contents(&from, &to);
+        } else if move_file(&from, &to).is_ok() {
+            moved += 1;
+        }
+    }
+
+    if moved > 0 {
+        let pointer = target.display().to_string();
+        let _ = atomic_write(
+            &legacy.join(STATE_DIR_POINTER_FILE),
+            pointer.as_bytes(),
+        );
+    }
+    moved
+}
+
+/// Move every file directly under `from` into `to`, skipping names that already
+/// exist there.
+fn migrate_dir_contents(from: &Path, to: &Path) -> usize {
+    let mut moved = 0;
+    for entry in fs::read_dir(from).into_iter().flatten().flatten() {
+        let dest = to.join(entry.file_name());
+        if dest.exists() {
+            continue;
+        }
+        if move_file(&entry.path(), &dest).is_ok() {
+            moved += 1;
+        }
+    }
+    moved
+}
+
+/// Move one file, falling back to copy-then-delete across volumes.
+fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    match fs::rename(from, to) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            fs::copy(from, to)?;
+            fs::remove_file(from)
+        }
+    }
 }
 
 /// Resolve the directory for Browser4 runtime data (JRE, JARs, launchers).
@@ -389,37 +667,230 @@ fn primary_state_dir_usable(dir: &Path) -> bool {
     }
 }
 
+/// Whether reading state has to consult the workspace-relative fallback.
+///
+/// Read and write must agree, because the fallback is where
+/// [`write_state`] *moved* the state file. The write path relocates on
+/// `PermissionDenied`, which is what a **readable but not writable** primary
+/// produces. That is exactly the shape of `~/.browser4` under the Windows
+/// Low-integrity agent sandbox (`windows-low-il`, the default coding backend):
+/// a Low token may read Medium objects and may not write them. This predicate
+/// used to be "the primary is unlistable", so a sandboxed `attach` wrote its
+/// session to `./.browser4-cli-state`, the next command read the empty primary
+/// and answered "Session required" — a success report followed by a failure
+/// the caller could only explain by retrying (2026-11-20 run).
+///
+/// A primary that is merely *missing the state file* still stays out of the
+/// fallback: after `close` that is the normal state, and reading the fallback
+/// there would resurrect a stale session forever (the regression pinned by
+/// `test_read_state_does_not_resurrect_fallback_when_primary_exists`).
+fn should_consult_fallback(implicit_default: bool, usable: bool, writable: bool) -> bool {
+    implicit_default && (!usable || !writable)
+}
+
+/// The fallback directory [`read_state`] must consult, if any.
+///
+/// `None` for an operator-pinned state dir (`BROWSER4_CLI_STATE_DIR`, or a
+/// caller that passed an explicit path): those never relocate, and
+/// [`write_state`] will not relocate either, so both sides keep the flat
+/// layout. Otherwise the fallback is selected by [`should_consult_fallback`].
+fn fallback_for(state_dir: Option<&Path>, dir: &Path) -> Option<PathBuf> {
+    if !is_implicit_default_dir(state_dir) {
+        return None;
+    }
+    let usable = primary_state_dir_usable(dir);
+    let writable = usable && primary_state_dir_writable(dir);
+    should_consult_fallback(true, usable, writable).then(fallback_state_dir)
+}
+
+/// The legacy fallback directory [`read_state`] must consult, if any.
+///
+/// This is the `./.browser4-cli-state` a pre-anchor CLI version used, and it is
+/// read *after* the anchored directory (see [`read_state_with_locations`]): the
+/// first relocated write migrates it, but a session created by an older CLI has
+/// to stay readable until that write happens.  Gated exactly like
+/// [`fallback_for`], so it can never resurrect state while the primary directory
+/// is healthy.
+fn legacy_fallback_for(state_dir: Option<&Path>, dir: &Path) -> Option<PathBuf> {
+    if !is_implicit_default_dir(state_dir) {
+        return None;
+    }
+    let usable = primary_state_dir_usable(dir);
+    let writable = usable && primary_state_dir_writable(dir);
+    if !should_consult_fallback(true, usable, writable) {
+        return None;
+    }
+    fallback_legacy_dir()
+}
+
+/// Per-process cache for [`primary_state_dir_writable`]: one probe file per
+/// directory per invocation, however many `read_state` calls happen.
+static STATE_DIR_WRITABLE: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
+
+/// Whether a state file can actually be written into `dir`.
+///
+/// Probed with a real create+remove instead of inspecting mode bits: on
+/// Windows the answer lives in the ACL and in the mandatory integrity label
+/// (a Medium directory refuses a Low-integrity writer while it stays readable),
+/// so only an attempted write tells the truth. A missing directory is *not*
+/// treated as writable — [`primary_state_dir_usable`] already routes it to the
+/// fallback, and creating it from a read path would be a surprise.
+fn primary_state_dir_writable(dir: &Path) -> bool {
+    let cache = STATE_DIR_WRITABLE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock() {
+        if let Some(known) = guard.get(dir) {
+            return *known;
+        }
+    }
+    let writable = probe_state_dir_writable(dir);
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(dir.to_path_buf(), writable);
+    }
+    writable
+}
+
+fn probe_state_dir_writable(dir: &Path) -> bool {
+    if !primary_state_dir_usable(dir) {
+        return false;
+    }
+    let probe = dir.join(format!(".browser4-write-probe-{}", std::process::id()));
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
+        Ok(_) => {
+            let _ = fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Once-per-process guard for the "state file exists but cannot be read" warning.
+static UNREADABLE_STATE_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// Read one state file, keeping "there is no file" apart from "it cannot be read".
+///
+/// `None` means the file does not exist (the normal state after `close`);
+/// `Some((path, Err(_)))` means it exists but the read failed (ACL, lock, a
+/// directory in its place). Collapsing the two used to turn a permissions
+/// problem into "no session" — and then into `Session required`.
+fn read_state_file(
+    dir: &Path,
+    session_name: Option<&str>,
+) -> Option<(PathBuf, std::io::Result<CliState>)> {
+    let path = state_file(dir, session_name);
+    match fs::read_to_string(&path) {
+        Ok(raw) => Some((path, Ok(parse_state(&raw)))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => Some((path, Err(e))),
+    }
+}
+
 /// Read the persisted CLI state from disk, falling back to defaults.
 /// Auto-migrates old state files that lack the `kind` field by inferring it
 /// from the legacy `is_attached` / `attach_type` fields.
 ///
-/// When the implicit default directory (`~/.browser4`) does not exist / is
-/// not accessible (e.g. under a file sandbox where fallback writes landed in
-/// `./.browser4-cli-state`), the fallback directory is checked so sessions
-/// survive across invocations.
+/// When the state dir is not usable or not writable — a primary that could
+/// never be created, or the readable-but-not-writable `~/.browser4` of an
+/// agent sandbox — the workspace-relative fallback is read too, so a session
+/// written there survives across invocations.
+///
+/// A state file that exists but cannot be read is reported on stderr: the
+/// command still continues with the default state, but the failure that
+/// follows (`Session required`) is no longer the first hint the operator gets.
 pub fn read_state(state_dir: Option<&Path>, session_name: Option<&str>) -> CliState {
     let dir = state_dir
         .map(|p| p.to_path_buf())
         .unwrap_or_else(resolve_default_state_dir);
 
-    // Only consult the fallback when the primary directory is genuinely
-    // unusable. If the primary dir merely lacks the state file (normal after
-    // `close`), the fallback must NOT be read — otherwise a stale fallback
-    // file is resurrected forever and `close-all` can never report 0.
-    let fallback = if is_implicit_default_dir(state_dir) && !primary_state_dir_usable(&dir) {
-        Some(fallback_state_dir())
+    match read_state_file(&dir, session_name) {
+        Some((_, Ok(state))) => return state,
+        Some((path, Err(e))) => {
+            if UNREADABLE_STATE_WARNED
+                .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                // A stable English reason, like the write warning: the raw OS
+                // text is localized and would produce a mixed-language message.
+                eprintln!(
+                    "browser4-cli: warning: cannot read CLI state {} ({}); \
+                     treating the session as missing — fix its permissions or set \
+                     BROWSER4_CLI_STATE_DIR to a readable location",
+                    path.display(),
+                    e.kind(),
+                );
+            }
+        }
+        None => {}
+    }
+
+    // Read where the write path would have written: a stale fallback must not be
+    // resurrected when the primary merely lacks the file (normal after `close`),
+    // but it must be read when `write_state` had to relocate there. A primary
+    // that has the file decides on its own, so the writability probe is skipped
+    // on the common path.
+    let fallback = if state_file(&dir, session_name).is_file() {
+        None
+    } else {
+        fallback_for(state_dir, &dir)
+    };
+    // Then the pre-anchor location: sessions created by an older CLI (or by a
+    // command run from another directory) stay readable until the first
+    // relocated write migrates them into the anchored directory.
+    let legacy = if fallback.is_some() {
+        legacy_fallback_for(state_dir, &dir)
     } else {
         None
     };
 
-    read_state_with_fallback(&dir, fallback.as_deref(), session_name)
+    read_state_with_locations(&dir, fallback.as_deref(), legacy.as_deref(), session_name)
 }
 
-/// Core read logic with explicit primary/fallback directories (split out so
-/// the fallback-gating behaviour is unit-testable without touching HOME/CWD).
+/// The directory a command resolves its state to, and why.
+///
+/// `status` prints this. "My session disappeared" is usually "the state went to
+/// a directory this command does not derive" — the operator should see the
+/// directory and the anchor instead of discovering it through the next
+/// `Session required`.
+pub fn effective_state_dir() -> (PathBuf, FallbackAnchor) {
+    effective_state_dir_in(&resolve_default_state_dir())
+}
+
+/// [`effective_state_dir`] over an explicit primary directory (unit-testable).
+fn effective_state_dir_in(primary: &Path) -> (PathBuf, FallbackAnchor) {
+    if !is_implicit_default_dir(None) {
+        return (primary.to_path_buf(), FallbackAnchor::None);
+    }
+    let usable = primary_state_dir_usable(primary);
+    let writable = usable && primary_state_dir_writable(primary);
+    if !should_consult_fallback(true, usable, writable) {
+        return (primary.to_path_buf(), FallbackAnchor::None);
+    }
+    let resolved = resolve_fallback_dir_in(&current_dir_or_dot());
+    (resolved.dir, resolved.anchor)
+}
+
+/// Core read logic over an explicit primary directory (split out so the
+/// fallback-gating behaviour is unit-testable without touching HOME/CWD).
 fn read_state_with_fallback(
     primary: &Path,
     fallback: Option<&Path>,
+    session_name: Option<&str>,
+) -> CliState {
+    read_state_with_locations(primary, fallback, None, session_name)
+}
+
+/// Read order: primary, the anchored fallback, then the legacy fallback.
+///
+/// The legacy directory is last on purpose — the anchored location is where
+/// writes go now, and it may hold a newer session than the pre-anchor copy the
+/// migration has not moved yet.
+fn read_state_with_locations(
+    primary: &Path,
+    fallback: Option<&Path>,
+    legacy: Option<&Path>,
     session_name: Option<&str>,
 ) -> CliState {
     let try_read = |d: &Path| -> Option<CliState> {
@@ -431,8 +902,8 @@ fn read_state_with_fallback(
         return state;
     }
 
-    if let Some(fb) = fallback {
-        if let Some(state) = try_read(fb) {
+    for candidate in [fallback, legacy].into_iter().flatten() {
+        if let Some(state) = try_read(candidate) {
             return state;
         }
     }
@@ -445,13 +916,20 @@ fn read_state_with_fallback(
 /// Development mode uses this to tell "this checkout never recorded a server,
 /// so it needs its own development port" from "a server URL was persisted
 /// (either by a previous run of this workspace or by `--server`), so honour
-/// it".  Mirrors [`read_state`]: the workspace-relative fallback directory is
-/// checked as well when the effective state dir is the implicit default.
+/// it".  Mirrors [`read_state`] exactly — including *where* it reads — so a
+/// stale fallback cannot pick the port of a healthy install.
 pub fn has_persisted_state(session_name: Option<&str>) -> bool {
-    if state_file(&resolve_default_state_dir(), session_name).is_file() {
+    let primary = resolve_default_state_dir();
+    if state_file(&primary, session_name).is_file() {
         return true;
     }
-    is_implicit_default_dir(None) && state_file(&fallback_state_dir(), session_name).is_file()
+    let Some(fallback) = fallback_for(None, &primary) else {
+        return false;
+    };
+    if state_file(&fallback, session_name).is_file() {
+        return true;
+    }
+    legacy_fallback_for(None, &primary).is_some_and(|dir| state_file(&dir, session_name).is_file())
 }
 
 /// Parse and migrate a raw state JSON string.
@@ -477,9 +955,17 @@ fn migrate_legacy_kind(state: &mut CliState) {
 /// old CLI versions can still read the state file.
 ///
 /// When the implicit default directory (`~/.browser4`) is not writable (e.g.
-/// under a file sandbox), the write automatically falls back to a workspace-
-/// relative directory (`./.browser4-cli-state`) and prints a one-time warning
-/// suggesting `BROWSER4_CLI_STATE_DIR`.
+/// under a file sandbox), the write relocates to the workspace-anchored
+/// fallback directory (see [`resolve_fallback_dir_in`]), migrates any state a
+/// pre-anchor CLI left in `./.browser4-cli-state`, and prints a one-time warning
+/// naming the directory and the anchor.
+///
+/// The write is **verified by reading it back** before it reports success. A
+/// state directory that accepts the write but cannot be read back (a writable
+/// but deny-read file, another process rewriting it, a redirected `HOME`) used
+/// to surface one command later as `Session required`, which the caller could
+/// only explain by retrying; here it fails at the command that lost the state
+/// and names the file.
 pub fn write_state(
     state: &CliState,
     state_dir: Option<&Path>,
@@ -489,13 +975,20 @@ pub fn write_state(
         .map(|p| p.to_path_buf())
         .unwrap_or_else(resolve_default_state_dir);
 
-    match write_state_to_dir(state, &dir, session_name) {
-        Ok(()) => Ok(()),
+    let written = match write_state_to_dir(state, &dir, session_name) {
+        Ok(()) => dir,
         Err(e)
             if e.kind() == std::io::ErrorKind::PermissionDenied
                 && is_implicit_default_dir(state_dir) =>
         {
-            let fallback = fallback_state_dir();
+            let resolved = resolve_fallback_dir_in(&current_dir_or_dot());
+            let fallback = resolved.dir.clone();
+            let legacy = resolved.legacy.clone();
+            let migrated = legacy
+                .as_deref()
+                .map(|l| migrate_legacy_fallback(l, &fallback))
+                .unwrap_or(0);
+
             if FALLBACK_WARNING_PRINTED
                 .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
                 .is_ok()
@@ -508,16 +1001,59 @@ pub fn write_state(
                     "browser4-cli: warning: cannot write CLI state to {} (permission denied)",
                     dir.display(),
                 );
+                if let (true, Some(legacy)) = (migrated > 0, legacy.as_deref()) {
+                    eprintln!(
+                        "browser4-cli: note: moved {} CLI state file(s) from {} to {} \
+                        (left a STATE_DIR_POINTER behind)",
+                        migrated,
+                        legacy.display(),
+                        fallback.display(),
+                    );
+                }
                 eprintln!(
-                    "browser4-cli: warning: using {} instead — set BROWSER4_CLI_STATE_DIR \
+                    "browser4-cli: warning: using {} instead ({}) — set BROWSER4_CLI_STATE_DIR \
                     to a writable location to silence this warning",
-                    fallback.display()
+                    fallback.display(),
+                    resolved.anchor.describe(),
                 );
             }
-            write_state_to_dir(state, &fallback, session_name)
+            write_state_to_dir(state, &fallback, session_name)?;
+            fallback
         }
-        Err(e) => Err(e),
+        Err(e) => return Err(e),
+    };
+
+    verify_state_round_trip(&written, state, session_name)
+}
+
+/// Re-read the state file that was just written and check it kept this
+/// command's session.
+///
+/// Read back through the same gate as [`read_state`] (so a write that landed in
+/// the fallback is verified where the next invocation will look), which is what
+/// makes "written" and "readable by the next command" the same fact.
+fn verify_state_round_trip(
+    dir: &Path,
+    state: &CliState,
+    session_name: Option<&str>,
+) -> std::io::Result<()> {
+    let persisted = read_state_with_fallback(dir, None, session_name);
+    if persisted.session_id == state.session_id {
+        return Ok(());
     }
+
+    let path = state_file(dir, session_name);
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        format!(
+            "the CLI state file {} did not keep this command's session \
+             (wrote {:?}, read back {:?}) — the state directory is not usable by this \
+             identity; set BROWSER4_CLI_STATE_DIR to a writable location",
+            path.display(),
+            state.session_id,
+            persisted.session_id,
+        ),
+    ))
 }
 
 /// Core write logic — operates on an explicit directory so the fallback
@@ -567,9 +1103,10 @@ fn atomic_write(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 
 /// Clear all persisted CLI state (called on `close`).
 ///
-/// Also removes the corresponding file in the workspace-relative fallback
-/// directory (`./.browser4-cli-state`) when the implicit default dir is in
-/// use, so a stale fallback copy cannot be resurrected on the next read.
+/// Also removes the corresponding file in the fallback directory (see
+/// [`resolve_fallback_dir_in`]) and in the legacy `./.browser4-cli-state` when
+/// the implicit default dir is in use, so a stale fallback copy cannot be
+/// resurrected on the next read.
 pub fn clear_state(state_dir: Option<&Path>, session_name: Option<&str>) {
     let dir = state_dir
         .map(|p| p.to_path_buf())
@@ -578,6 +1115,9 @@ pub fn clear_state(state_dir: Option<&Path>, session_name: Option<&str>) {
 
     if is_implicit_default_dir(state_dir) {
         let _ = fs::remove_file(state_file(&fallback_state_dir(), session_name));
+        if let Some(legacy) = fallback_legacy_dir() {
+            let _ = fs::remove_file(state_file(&legacy, session_name));
+        }
     }
 }
 
@@ -656,24 +1196,24 @@ pub fn clear_all_state(state_dir: Option<&Path>) {
     // Belt-and-suspenders: wipe any fallback copies written by older versions
     // (or while the primary dir was temporarily unwritable). Without this, a
     // stale fallback cli-state.json is re-counted by `close-all` forever.
-    let fallback = if is_implicit_default_dir(state_dir) {
-        Some(fallback_state_dir())
+    let (fallback, legacy) = if is_implicit_default_dir(state_dir) {
+        (Some(fallback_state_dir()), fallback_legacy_dir())
     } else {
-        None
+        (None, None)
     };
 
-    clear_all_state_in_dirs(&dir, fallback.as_deref());
+    clear_all_state_in_dirs(&dir, fallback.as_deref(), legacy.as_deref());
 }
 
 /// Core clear logic with explicit primary/fallback directories (split out so
 /// the fallback cleanup is unit-testable without touching HOME/CWD).
-fn clear_all_state_in_dirs(primary: &Path, fallback: Option<&Path>) {
+fn clear_all_state_in_dirs(primary: &Path, fallback: Option<&Path>, legacy: Option<&Path>) {
     clear_state(Some(primary), None);
     clear_session_files_in_dir(primary);
 
-    if let Some(fb) = fallback {
-        let _ = fs::remove_file(state_file(fb, None));
-        clear_session_files_in_dir(fb);
+    for dir in [fallback, legacy].into_iter().flatten() {
+        let _ = fs::remove_file(state_file(dir, None));
+        clear_session_files_in_dir(dir);
     }
 }
 
@@ -2259,6 +2799,286 @@ mod tests {
     }
 
     #[test]
+    fn test_effective_state_dir_reports_the_fallback() {
+        // `is_implicit_default_dir` is false under an explicit override, so the
+        // fallback is never in play and the assertions below do not apply.
+        if std::env::var("BROWSER4_CLI_STATE_DIR").is_ok() {
+            return;
+        }
+
+        let tmp = test_temp_dir();
+        let (dir, anchor) = effective_state_dir_in(tmp.path());
+        assert_eq!(dir, tmp.path());
+        assert!(!anchor.is_fallback(), "a writable primary is not the fallback");
+        assert_eq!(anchor, FallbackAnchor::None);
+
+        let missing = tmp.path().join("does-not-exist");
+        let (dir, anchor) = effective_state_dir_in(&missing);
+        // The anchor is derived from the working directory (which a test cannot
+        // change safely), so compare against the same resolution instead of a
+        // hardcoded path.
+        assert_eq!(dir, fallback_state_dir());
+        assert!(anchor.is_fallback(), "an unusable primary resolves to the fallback");
+    }
+
+    /// Build `root/<rel...>` under a temp dir and return `root`.
+    fn make_dirs(root: &Path, rel: &[&str]) {
+        let mut dir = root.to_path_buf();
+        for part in rel {
+            dir = dir.join(part);
+        }
+        fs::create_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_fallback_anchor_keeps_a_checkout_stable_across_working_directories() {
+        // The bug this fixes: `attach` in one directory and `eval` in another
+        // used to resolve to two different `./.browser4-cli-state` directories,
+        // and the second command answered "Session required" for a session the
+        // first one had just reported as opened.
+        let tmp = test_temp_dir();
+        let root = tmp.path();
+        fs::create_dir_all(root.join(CHECKOUT_MARKER)).unwrap();
+        make_dirs(root, &["browser4-coding", "src"]);
+
+        let at_root = resolve_fallback_dir_in(root);
+        let in_subdir = resolve_fallback_dir_in(&root.join("browser4-coding").join("src"));
+
+        assert_eq!(at_root.anchor, FallbackAnchor::Checkout);
+        assert_eq!(in_subdir.anchor, FallbackAnchor::Checkout);
+        assert_eq!(at_root.dir, in_subdir.dir);
+        assert_eq!(
+            in_subdir.dir,
+            root.join(WORKSPACE_SCRATCH_DIR).join(WORKSPACE_CLI_STATE_DIR)
+        );
+        assert_eq!(in_subdir.dir, at_root.dir, "one workspace, one state dir");
+    }
+
+    #[test]
+    fn test_fallback_anchor_prefers_the_agent_scratch_dir() {
+        // The agent sandbox creates `<workspace>/.b4scratch`; anchoring on it
+        // makes an un-injected CLI land in exactly the directory the Java side
+        // injects (`.b4scratch/cli-state`), instead of a sibling copy.
+        let tmp = test_temp_dir();
+        let root = tmp.path();
+        fs::create_dir_all(root.join(CHECKOUT_MARKER)).unwrap();
+        make_dirs(root, &["workspace", WORKSPACE_SCRATCH_DIR, "tmp"]);
+        make_dirs(root, &["workspace", "src"]);
+
+        let resolved = resolve_fallback_dir_in(&root.join("workspace").join("src"));
+        assert_eq!(resolved.anchor, FallbackAnchor::Scratch);
+        assert_eq!(
+            resolved.dir,
+            root.join("workspace")
+                .join(WORKSPACE_SCRATCH_DIR)
+                .join(WORKSPACE_CLI_STATE_DIR)
+        );
+    }
+
+    #[test]
+    fn test_fallback_follows_a_pointer_file() {
+        // The migrated-from directory keeps a pointer so a process started
+        // there does not create a second state directory.
+        let tmp = test_temp_dir();
+        let root = tmp.path();
+        let legacy = root.join(FALLBACK_STATE_DIR_NAME);
+        fs::create_dir_all(&legacy).unwrap();
+        let target = root.join("elsewhere").join("cli-state");
+        fs::write(
+            legacy.join(STATE_DIR_POINTER_FILE),
+            target.display().to_string(),
+        )
+        .unwrap();
+
+        let resolved = resolve_fallback_dir_in(root);
+        assert_eq!(resolved.anchor, FallbackAnchor::Pointer);
+        assert_eq!(resolved.dir, target);
+        assert!(resolved.legacy.is_none(), "a followed pointer needs no migration");
+    }
+
+    #[test]
+    fn test_fallback_reuses_a_parent_legacy_dir_outside_a_checkout() {
+        let tmp = test_temp_dir();
+        let root = tmp.path();
+        let legacy = root.join(FALLBACK_STATE_DIR_NAME);
+        fs::create_dir_all(&legacy).unwrap();
+        make_dirs(root, &["sub", "deeper"]);
+
+        let resolved = resolve_fallback_dir_in(&root.join("sub").join("deeper"));
+        assert_eq!(resolved.anchor, FallbackAnchor::AncestorDir);
+        assert_eq!(resolved.dir, legacy);
+    }
+
+    #[test]
+    fn test_fallback_stays_cwd_relative_outside_any_workspace() {
+        let tmp = test_temp_dir();
+        let root = tmp.path();
+        let resolved = resolve_fallback_dir_in(root);
+        assert_eq!(resolved.anchor, FallbackAnchor::Cwd);
+        assert_eq!(resolved.dir, root.join(FALLBACK_STATE_DIR_NAME));
+        assert!(resolved.legacy.is_none());
+    }
+
+    #[test]
+    fn test_fallback_reports_the_legacy_dir_of_a_checkout_for_migration() {
+        // A checkout that ran a pre-anchor CLI has `./.browser4-cli-state`; the
+        // anchor wins, and the legacy directory is kept as the migration source.
+        let tmp = test_temp_dir();
+        let root = tmp.path();
+        let legacy = root.join(FALLBACK_STATE_DIR_NAME);
+        fs::create_dir_all(&legacy).unwrap();
+        fs::create_dir_all(root.join(CHECKOUT_MARKER)).unwrap();
+
+        let resolved = resolve_fallback_dir_in(root);
+        assert_eq!(resolved.anchor, FallbackAnchor::Checkout);
+        assert_eq!(resolved.legacy.as_deref(), Some(legacy.as_path()));
+    }
+
+    #[test]
+    fn test_migration_moves_legacy_state_and_leaves_a_pointer() {
+        let tmp = test_temp_dir();
+        let root = tmp.path();
+        let legacy = root.join(FALLBACK_STATE_DIR_NAME);
+        let target = root.join(WORKSPACE_SCRATCH_DIR).join(WORKSPACE_CLI_STATE_DIR);
+        let state = CliState {
+            session_id: Some("legacy-session".to_string()),
+            ..Default::default()
+        };
+        write_state(&state, Some(&legacy), None).unwrap();
+        write_state(&state, Some(&legacy), Some("named")).unwrap();
+
+        let moved = migrate_legacy_fallback(&legacy, &target);
+        assert_eq!(moved, 2, "cli-state.json and sessions/named.json");
+        assert!(!state_file(&legacy, None).exists());
+        assert!(!state_file(&legacy, Some("named")).exists());
+        assert_eq!(
+            read_state(Some(&target), None).session_id.as_deref(),
+            Some("legacy-session")
+        );
+        // The pointer resolves the legacy directory to where the state went.
+        assert_eq!(read_state_dir_pointer(&legacy), Some(target.clone()));
+        let resolved = resolve_fallback_dir_in(root);
+        assert_eq!(resolved.anchor, FallbackAnchor::Pointer);
+        assert_eq!(resolved.dir, target);
+    }
+
+    #[test]
+    fn test_migration_never_overwrites_an_anchored_file() {
+        let tmp = test_temp_dir();
+        let root = tmp.path();
+        let legacy = root.join(FALLBACK_STATE_DIR_NAME);
+        let target = root.join(WORKSPACE_SCRATCH_DIR).join(WORKSPACE_CLI_STATE_DIR);
+        let old = CliState {
+            session_id: Some("legacy-session".to_string()),
+            ..Default::default()
+        };
+        let current = CliState {
+            session_id: Some("current-session".to_string()),
+            ..Default::default()
+        };
+        write_state(&old, Some(&legacy), None).unwrap();
+        write_state(&current, Some(&target), None).unwrap();
+
+        assert_eq!(migrate_legacy_fallback(&legacy, &target), 0);
+        // The anchored state survives, and no pointer is written for a migration
+        // that moved nothing (a later run stays on the legacy directory).
+        assert_eq!(
+            read_state(Some(&target), None).session_id.as_deref(),
+            Some("current-session")
+        );
+        assert!(!legacy.join(STATE_DIR_POINTER_FILE).exists());
+    }
+
+    #[test]
+    fn test_read_state_consults_the_legacy_dir_until_migrated() {
+        // A session created by a pre-anchor CLI must stay usable even though the
+        // anchored directory (where writes go now) is still empty.
+        let tmp = test_temp_dir();
+        let primary = tmp.path().join("unusable-primary");
+        let anchored = tmp.path().join(WORKSPACE_SCRATCH_DIR).join(WORKSPACE_CLI_STATE_DIR);
+        let legacy = tmp.path().join(FALLBACK_STATE_DIR_NAME);
+        let state = CliState {
+            session_id: Some("legacy-session".to_string()),
+            ..Default::default()
+        };
+        write_state(&state, Some(&legacy), None).unwrap();
+
+        let read = read_state_with_locations(&primary, Some(&anchored), Some(&legacy), None);
+        assert_eq!(read.session_id.as_deref(), Some("legacy-session"));
+
+        // The anchored directory wins once it holds a session of its own: it is
+        // where this CLI writes, so it cannot be older than the legacy copy.
+        let anchored_state = CliState {
+            session_id: Some("anchored-session".to_string()),
+            ..Default::default()
+        };
+        write_state(&anchored_state, Some(&anchored), None).unwrap();
+        let read = read_state_with_locations(&primary, Some(&anchored), Some(&legacy), None);
+        assert_eq!(read.session_id.as_deref(), Some("anchored-session"));
+    }
+
+    #[test]
+    fn test_read_state_file_separates_missing_from_unreadable() {
+        let tmp = test_temp_dir();
+        // No file at all is "no state", not an error.
+        assert!(read_state_file(tmp.path(), None).is_none());
+
+        // A state path that exists but cannot be read must not look like "no
+        // session": that used to surface one command later as Session required.
+        fs::create_dir_all(state_file(tmp.path(), None)).unwrap();
+        match read_state_file(tmp.path(), None) {
+            Some((path, Err(_))) => assert_eq!(path, state_file(tmp.path(), None)),
+            other => panic!("an unreadable state path must be reported, got {other:?}"),
+        }
+
+        // The production path still answers with the default state (and warns
+        // once) instead of panicking or pretending the session exists.
+        assert!(read_state(Some(tmp.path()), None).session_id.is_none());
+    }
+
+    #[test]
+    fn test_write_state_round_trips_the_session_it_was_given() {
+        // `write_state` now reads its own file back: a writable-but-unreadable
+        // state dir must fail at the command that lost the state, not one
+        // command later as "Session required".
+        let tmp = test_temp_dir();
+        let state = CliState {
+            session_id: Some("round-trip".to_string()),
+            ..Default::default()
+        };
+        write_state(&state, Some(tmp.path()), None).unwrap();
+        assert_eq!(
+            read_state(Some(tmp.path()), None).session_id.as_deref(),
+            Some("round-trip")
+        );
+    }
+
+    #[test]
+    fn test_verify_state_round_trip_rejects_a_file_holding_another_session() {
+        let tmp = test_temp_dir();
+        let stored = CliState {
+            session_id: Some("stored".to_string()),
+            ..Default::default()
+        };
+        write_state(&stored, Some(tmp.path()), None).unwrap();
+
+        let claimed = CliState {
+            session_id: Some("claimed".to_string()),
+            ..Default::default()
+        };
+        let error = verify_state_round_trip(tmp.path(), &claimed, None).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("did not keep this command's session"),
+            "unexpected message: {message}"
+        );
+        assert!(
+            message.contains("BROWSER4_CLI_STATE_DIR"),
+            "the failure has to name the fix: {message}"
+        );
+    }
+
+    #[test]
     fn test_clear_state() {
         let tmp = test_temp_dir();
         let state = CliState::default();
@@ -2294,6 +3114,46 @@ mod tests {
         let file_path = tmp.path().join("a-file");
         fs::write(&file_path, b"x").unwrap();
         assert!(!primary_state_dir_usable(&file_path));
+    }
+
+    #[test]
+    fn test_should_consult_fallback_matches_the_write_path() {
+        // A primary that could never be created (file sandbox): the historical
+        // case the fallback was written for.
+        assert!(should_consult_fallback(true, false, false));
+        // Readable but not writable — the Windows Low-integrity sandbox shape
+        // (`windows-low-il`). `attach` relocated its state file there, so the
+        // next command must read it instead of the empty primary.
+        assert!(should_consult_fallback(true, true, false));
+        // Healthy primary: a missing file means "no state", and a stale
+        // CWD-relative fallback must stay unread or `close-all` can never
+        // report 0 (regression pinned below).
+        assert!(!should_consult_fallback(true, true, true));
+        // An operator-pinned state dir never relocates on either side.
+        assert!(!should_consult_fallback(false, true, false));
+        assert!(!should_consult_fallback(false, false, false));
+    }
+
+    #[test]
+    fn test_primary_state_dir_writable_probes_and_cleans_up() {
+        let tmp = test_temp_dir();
+        assert!(primary_state_dir_writable(tmp.path()));
+        assert_eq!(
+            fs::read_dir(tmp.path()).unwrap().filter_map(Result::ok).count(),
+            0,
+            "the writability probe must remove its probe file"
+        );
+
+        // A missing directory is not "writable": `primary_state_dir_usable`
+        // routes it to the fallback, and a read must not create it.
+        let missing = tmp.path().join("does-not-exist");
+        assert!(!primary_state_dir_writable(&missing));
+        assert!(!missing.exists());
+
+        // Nor is a regular file masquerading as the state dir.
+        let file_path = tmp.path().join("a-file");
+        fs::write(&file_path, b"x").unwrap();
+        assert!(!primary_state_dir_writable(&file_path));
     }
 
     #[test]
@@ -2358,7 +3218,7 @@ mod tests {
         )
         .unwrap();
 
-        clear_all_state_in_dirs(primary.path(), Some(fallback.path()));
+        clear_all_state_in_dirs(primary.path(), Some(fallback.path()), None);
 
         assert!(!state_file(primary.path(), None).exists());
         assert!(!state_file(fallback.path(), None).exists());

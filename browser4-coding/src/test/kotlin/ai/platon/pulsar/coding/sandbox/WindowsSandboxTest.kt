@@ -245,4 +245,56 @@ class WindowsSandboxTest {
         assertEquals(2, runner.calls.size, "Credential Manager, then the DPAPI file")
         assertTrue(runner.calls.all { it.first() == "powershell.exe" && it.contains("-NoProfile") })
     }
+
+    /**
+     * The readiness probe is what keeps an upgrade of an existing installation from breaking it: a
+     * backend that cannot provision must stay `off` instead of failing every command.
+     */
+    @Test
+    @DisplayName("isReady is false off Windows, whatever is provisioned")
+    fun isReadyIsFalseOffWindows() {
+        val previous = System.getProperty("os.name")
+        System.setProperty("os.name", "Linux")
+        try {
+            val runner = FakeRunner { SandboxCommandResult(0, "User name b4-agent") }
+
+            assertFalse(bootstrap(runner).isReady())
+            assertTrue(runner.calls.isEmpty(), "off Windows there is nothing to probe")
+        } finally {
+            if (previous == null) System.clearProperty("os.name") else System.setProperty("os.name", previous)
+        }
+    }
+
+    @Test
+    @DisplayName("isReady is false when the account is missing, and it applies no ACL")
+    fun isReadyIsFalseWithoutAccount() {
+        assumeTrue(isWindows, "net user only exists on Windows")
+        val runner = FakeRunner { SandboxCommandResult(2, "The user name could not be found.") }
+
+        assertFalse(bootstrap(runner).isReady())
+        assertEquals(listOf(listOf("net", "user", "b4-agent")), runner.calls, "the probe has no side effects")
+    }
+
+    @Test
+    @DisplayName("isReady is false when the account exists but has no credential")
+    fun isReadyIsFalseWithoutCredential() {
+        assumeTrue(isWindows, "net user only exists on Windows")
+        val runner = FakeRunner { SandboxCommandResult(0, "User name b4-agent") }
+
+        assertFalse(bootstrap(runner, credentials = SandboxCredentialSource { null }).isReady())
+        assertEquals(1, runner.calls.size, "an unreadable credential stops the probe before any ACL work")
+    }
+
+    @Test
+    @DisplayName("isReady is true when the account and its credential are both there")
+    fun isReadyIsTrueWhenProvisioned() {
+        assumeTrue(isWindows, "net user only exists on Windows")
+        val runner = FakeRunner { SandboxCommandResult(0, "User name b4-agent") }
+
+        assertTrue(bootstrap(runner).isReady())
+        assertTrue(
+            runner.calls.none { it.first() == "icacls" },
+            "readiness must not change ACLs: provisioning stays lazy (calls=${runner.calls})",
+        )
+    }
 }

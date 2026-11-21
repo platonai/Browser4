@@ -50,6 +50,10 @@ class CliAgentPromptTest {
         // coding.shell is cmd.exe on Windows: POSIX tools fail.
         assertTrue(windowsPrompt.contains("cmd.exe"), windowsPrompt)
         assertTrue(windowsPrompt.contains("workingDir"), windowsPrompt)
+        // Windows PowerShell 5.1 reads a BOM-less .ps1 as ANSI, so non-ASCII literals corrupt:
+        // the prompt has to name the shell that reads UTF-8 (measured 2026-11-20).
+        assertTrue(windowsPrompt.contains("pwsh"), windowsPrompt)
+        assertTrue(windowsPrompt.contains("BOM-less"), windowsPrompt)
         // Scratch artifacts must not pollute module sources / the workspace root.
         assertTrue(windowsPrompt.contains(".b4scratch/"), windowsPrompt)
 
@@ -173,6 +177,33 @@ class CliAgentPromptTest {
             assertTrue(hygiene.contains("system.taskComplete"), hygiene)
             assertTrue(hygiene.contains("VERDICT_JSON"), hygiene)
             assertTrue(hygiene.contains("filesChanged"), hygiene)
+        }
+    }
+
+    @Test
+    @DisplayName("the boundary section states the effective enforcement layer, not a promise")
+    fun boundaryNamesTheEffectiveLayer() {
+        // 2026-11-16 (run 966a5f2e): the prompt claimed "interpreters do not get around it" on an
+        // installation whose sandbox was `off`; a `python -c` read `D:\` and the model had been told
+        // the opposite. The section must name what actually confines a process.
+        val previous = System.getProperty("browser4.agent.sandbox")
+        try {
+            System.clearProperty("browser4.agent.sandbox")
+            val off = CliAgentPrompt.hygiene(true, workspace, AgentAccessPolicy())
+
+            assertTrue(off.contains("No OS sandbox is active"), off)
+            assertFalse(off.contains("interpreters do not get around it"), "a false promise: $off")
+            assertTrue(off.contains("never reach around a refusal"), off)
+
+            System.setProperty("browser4.agent.sandbox", "windows-acl")
+            val on = CliAgentPrompt.hygiene(true, workspace, AgentAccessPolicy())
+
+            assertTrue(on.contains("windows-acl"), on)
+            assertTrue(on.contains("cannot cross"), on)
+            assertFalse(on.contains("No OS sandbox is active"), on)
+        } finally {
+            if (previous == null) System.clearProperty("browser4.agent.sandbox")
+            else System.setProperty("browser4.agent.sandbox", previous)
         }
     }
 

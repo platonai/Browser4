@@ -118,11 +118,19 @@ class B4CliToolExecutor(
                 "(dir /b, %VAR%). " +
                 "Several commands in one call: see `b4.batch`, which saves one process and one " +
                 "MCP round trip per command. " +
+                "Keep one round to roughly 8 tool calls: a round that runs past the per-round cap " +
+                "is cut mid-flight, everything that lived only in the conversation is lost, and " +
+                "the continuation only sees a summary — write collected rows to .b4scratch/ as " +
+                "you go. " +
                 "The binary is resolved automatically (bundled / PATH / auto-install). " +
                 "Default timeout 300s (max 600s); above 30s the CLI is also given a matching " +
-                "global --timeout, so the CLI's own HTTP deadline is longer than the MCP call " +
-                "and a long eval is not cut at the MCP default. Pass timeoutSeconds for longer " +
-                "commands. " +
+                "global --timeout, so the CLI's own HTTP deadline is longer than the MCP call. " +
+                "ONE `eval` CANNOT EXCEED 30s: the driver's page-evaluate deadline is fixed " +
+                "(reported as `No response | Runtime.evaluate | (PT30S)`) and neither --timeout " +
+                "nor timeoutSeconds widens it — for a longer wait use `wait <ms>`, " +
+                "`wait --selector <css> --timeout <ms>`, `wait --fn '<expr>' --timeout <ms>`, or " +
+                "poll with short evals. Pass timeoutSeconds for longer non-eval commands, or " +
+                "split a long batch (20 pages in 4 batches of 5). " +
                 "BATCH MODE: `b4.run` supports the CLI's `batch` command for chaining multiple " +
                 "DOM operations in one call — e.g. `b4.run(args=\"batch 'goto https://example.com' " +
                 "'eval --file .b4scratch/extract.js'\")`. " +

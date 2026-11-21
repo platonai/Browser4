@@ -559,29 +559,85 @@ docker run -d -p 18182:18182 `
   ```
 
 * **`browser4.agent.sandbox`** *(JVM system property; default: platform-dependent, see below)*
-  OS-level sandbox for `coding.shell` and `coding.runCode`. This is the enforcement boundary; the
-  access preset and the string checks above decide what the model may *spell*, the sandbox decides
-  what a process may actually *reach*.
+  OS-level sandbox for `coding.shell`, `coding.runCode` and — on the backends that can execute them
+  (see the table) — the **file mutations** (`coding.write`/`append`/`replace`/`editLines`/`delete`/
+  `mkdir`/`copy`/`move`/`revert`, each performed by a child inside the boundary). This is the
+  enforcement boundary; the access preset and the string checks above decide what the model may
+  *spell*, the sandbox decides what a process may actually *reach*.
 
   | Value | Meaning |
   |---|---|
   | `off` | no OS sandbox; the preset and string checks alone apply |
-  | `windows-acl` | Windows: runs commands as the low-privilege sandbox account with an ACL matrix (workspace and mirrors `M`, toolchain roots `RX`, the user profile denied folder-only) |
+  | `windows-low-il` | Windows, **no account and no administrator**: commands and file mutations run with a restricted, Low-integrity token. Writes are confined to the workspace and the build caches (their labels are lowered to Low); reads keep the user's rights, and the credential stores are labelled Medium + `NO_READ_UP` so the child cannot read them. Does **not** restrict the network. |
+  | `windows-acl` | Windows: runs commands as the low-privilege sandbox account with an ACL matrix (workspace and mirrors `M`, toolchain roots `RX`, the user profile denied folder-only). The strongest option, but the account and its credential must be provisioned by an administrator out of band. File mutations stay in the backend process (policy layer only). |
+  | `windows-appcontainer` | Windows, **no account and no administrator** (a per-user container profile): commands and file mutations run inside an AppContainer with the workspace as its only granted tree, the user profile unreachable, and **no network** (no `internetClient` capability). Opt-in for the browse chain with `-Dbrowser4.agent.sandbox.browse=on`, or select it outright — `browser4-cli` lives under the user profile, which a container cannot read |
   | `bwrap` / `container` / `nsjail` / `sandbox-exec` | accepted ids whose backends arrive with P2 — selecting one now is a hard failure, not a silent fallback |
 
-  Defaults: a **fresh** Windows installation starts with `windows-acl`; an **existing** installation
-  keeps `off` until you switch. Linux/macOS stay `off` until P2. The first start records the
-  decision in `<browser4.data.dir or ~>/.browser4/sandbox-default`, so later starts replay it
-  instead of re-deriving it. An explicit `-Dbrowser4.agent.sandbox=<id>` always wins, is not
-  persisted, and blanks count as unset. `off` is also the one-command rollback.
+  Defaults: a **fresh** Windows installation starts with `windows-acl` (the shipped default), and an
+  **existing** installation is **upgraded once** to the platform backend. Its historical `off` was the automatic default for
+  installations that predate the boundary, not a decision — and with `off` the string layer is the
+  only boundary (2026-11-16 review of agent run `966a5f2e`: `python -c`, `powershell -File` and
+  `%VAR%` expansions left the workspace while every refusal still claimed "the OS sandbox enforces
+  the boundary").
 
-  Failure semantics: a missing account or credential, a failed ACL application, a failed write
-  probe, an unknown id, or a known-but-unimplemented id **stops the task** with
+  `windows-low-il` is the recommended backend for **coding-only** installations: it needs no
+  account, no credential and no administrator, and it confines writes plus credential reads. It is
+  not the global default yet because it is a per-mode backend — before the `AgentMode` wiring lands,
+  it would also confine browse tasks, whose `b4` CLI legitimately writes `~/.browser4` state. Set it
+  explicitly with `-Dbrowser4.agent.sandbox=windows-low-il`.
+
+  The upgrade is **gated on the backend being ready** (for `windows-acl`: the account and its
+  credential must already be provisioned; for `windows-low-il`: a restricted Low-integrity token can
+  be built). A backend that cannot provision stays `off` — switching it on would fail every command
+  instead of protecting it — and the start logs `sandbox boundary NOT enforced: …` naming the missing
+  piece. Nothing is pinned in that case, so the next start re-probes and upgrades as soon as the
+  machine can support it.
+
+  The first successful start records the decision in
+  `<browser4.data.dir or ~>/.browser4/sandbox-default` as `v2:<id>`, so later starts replay it
+  instead of re-deriving it; `v2:off` is therefore an operator decision and is never upgraded again.
+  An explicit `-Dbrowser4.agent.sandbox=<id>` always wins, is not persisted, and blanks count as
+  unset. `off` is also the one-command rollback — pass it explicitly, or persist `v2:off` in the
+  marker. Linux/macOS stay `off` until P2 ships a backend.
+
+  Per-mode selection: `agent run --coding` picks its backend from the coding chain
+  (`windows-low-il` → `windows-acl`), so a coding task gets real write confinement even when the
+  installation default is `off`. Browse tasks never fall through to the coding backend — an
+  integrity level confines writes but not reads — so they keep the installation default until the
+  AppContainer backend lands. An explicit `-Dbrowser4.agent.sandbox` still beats both.
+  `coding.permissions` prints the backend, the mode's goals, whether the network is refused, and
+  which channels the OS boundary actually covers. The covered/uncovered lists are generated from the
+  backend's declared capabilities, not written by hand: `coding.shell`/`runCode`/`mvnBuild`, skill
+  scripts and `b4.run` are inside it, the file mutations join them on `windows-low-il` and
+  `windows-appcontainer`, and the read/search tools plus the language servers never do (reads are the
+  operator's own rights by design in coding mode). On `windows-appcontainer`, `b4.run` is reported as
+  **not** covered: `browser4-cli` lives under the user profile and talks to the backend over
+  `127.0.0.1`, neither of which a capability-less container can reach, so that channel keeps its
+  historical launch in the backend process instead of failing inside the container. A sandboxed
+  `b4.run` keeps the CLI state inside the workspace (`BROWSER4_CLI_STATE_DIR`).
+  Sandboxed children join a job object, so they are terminated with the backend instead of leaking.
+  A file mutation that the boundary cannot start is a refused tool call
+  (`Error: Failed to write …`), never an in-process write: the seam has no unconfined fallback.
+
+  Failure semantics: a missing account or credential, a failed ACL application, a failed label or
+  write probe, a workspace without `WRITE_OWNER` (an integrity label cannot be lowered there), an
+  unknown id, or a known-but-unimplemented id **stops the task** with
   `SandboxUnavailableException` — the sandbox never falls back to an unwrapped launch. A denial
   inside a working sandbox is translated for the model as
   `PERMISSION_DENIED | code=SANDBOX_DENIED | tool=… | detail=… | hint=… | needed=…`; the raw OS
   evidence goes to the log only. When the sandbox is `off`, a plain `Access is denied` stays an
   ordinary OS error.
+
+  The same holds for the file writes the boundary executes (`windows-low-il`,
+  `windows-appcontainer`): if the child that performs them cannot start — a policy that disables
+  `powershell.exe`, a workspace the label cannot be lowered on — the file tool returns
+  `Error: Failed to write …: the OS sandbox '<id>' could not start …` instead of writing from the
+  backend process. Fix the cause, choose a backend that can run the writes (`windows-acl`, whose file
+  tools stay in-process), or roll the boundary back to `off` explicitly.
+
+  Repair steps for the workspace-without-`WRITE_OWNER` case — the exact symptom strings, the two minimal
+  `icacls` grants (neither needs elevation when you own the directory), and the four-step verification —
+  are in [agent-permissions.md](agent-permissions.md) §10「故障排查」.
 
   ```bash
   # First start on Windows (fresh install): defaults to windows-acl.
@@ -707,7 +763,12 @@ docker run -d -p 18182:18182 `
 * **`browser4.agent.isolation.requireVerify`** *(default: `true`)*
   A coding run that changed code is merged back only when `coding.verify` produced a
   **passing** verdict covering the changed modules. Documentation-only changes need no
-  build. A refused merge fails the task and keeps the worktree; nothing is applied.
+  build, and neither does a change no Maven module owns (`bin/`, `chrome-extension/`): there,
+  no `-pl` build could compile it, so any passing verdict will do — in practice
+  `coding.verify(checks="repo-consistency")`, which scans the tree without starting a
+  process. The verdict still has to describe the tree being merged in both cases
+  (content digest, else timestamp). A refused merge fails the task and keeps the
+  worktree; nothing is applied.
 
 * **`browser4.agent.lock.staleHours`** *(default: `12`)*
   One coding task per checkout at a time (`.git/b4-coding.lock`). A lock whose process is
@@ -725,53 +786,107 @@ docker run -d -p 18182:18182 `
   bootstrap build/recovery scripts — rebuilding the runtime that executes the task is
   operator work. `coding.mvnBuild` / `coding.verify` are unaffected.
 
-* **`browser4.agent.session.contextEnabled`** *(default: `true`)* and
-  **`browser4.agent.session.contextTokens`** *(default: `1200`)*
-  Tasks of one agent session are separate runs, so each new task receives a compacted
-  `## Session context` block: what the earlier tasks of that session asked, how they ended
-  (`done` / `failed` / `cancelled`), the files they changed and the problems they left open.
-  That is what makes `agent run -i` — and any client that submits several tasks under one
-  `sessionId` — build on what it already did instead of restarting from zero.
+* **`browser4.agent.session.contextEnabled`** *(default: `true`)*,
+  **`browser4.agent.session.contextTokens`** *(default: `24000`)*,
+  **`browser4.agent.session.memoryTokens`** *(default: `2000`)* and
+  **`browser4.agent.session.contextTtlMinutes`** *(default: `720`)*
+  Tasks of one agent session are separate runs, so each new task receives the **actual
+  conversation of the earlier tasks** as a `## Session context` block: what the user asked
+  (and every steering line typed into it), the model's own messages, every tool call with
+  its result, and how each task ended (`done` / `failed` / `cancelled`, its files, and the
+  workspace they live in). That is what makes `agent run -i` — and any client that submits
+  several tasks under one `sessionId` — continue the session instead of restarting from
+  zero: the next run sees the same context the previous run saw, not a summary of it.
 
-  The block is **compressed automatically**, because it is part of every prompt of the next run:
-  the newest 3 tasks keep their details, older ones collapse into one summary line, the whole
-  block stays under `contextTokens` (estimated at 4 characters per token), and over budget it
-  compacts further — oldest first — instead of growing.
+  **The transcript is compressed by the model when it grows.** The block rides in every
+  prompt of the next run, so once the rendered transcript crosses `contextTokens`
+  (estimated at 4 characters per token) the runner asks the model — with a dedicated
+  *compression instruction* — to fold the older turns into a memory block of about
+  `memoryTokens`. The instruction states what must survive the fold, so compression cannot
+  quietly lose the thread:
 
-  **Compaction never loses the thread.** A recency-biased summary is exactly how a long session
-  forgets what it set out to do: the first record *is* the founding task, so it is the first thing
-  folded and the first evicted. Four guarantees prevent that:
+  - the **session goal** (the first task's instruction) and **every correction** — a task
+    instruction that reads like a redirection ("actually…", "instead…", "改用…") or a line
+    typed into a running task is quoted verbatim;
+  - the decisions taken and the facts later work depends on (URLs, selectors, ids,
+    formats, accounts — never secrets);
+  - the **files** created or changed, and the workspace directory they live in;
+  - tool outcomes that constrain later work, and the **open problems** / unfinished steps.
 
-  - **The session goal is anchored** — the instruction of the session's first task is rendered
-    verbatim (`Session goal …`) in every block once that task stops being detailed, and it is never
-    rolled up or evicted. Later tasks are steps toward it, not new goals.
-  - **The goal can be revised, and the revision wins** — a user who changes direction mid-session is
-    recorded as a *correction*, not mistaken for another sub-step: a later task instruction that
-    reads like a redirection ("actually…", "instead…", "改用…", "不要…") and any line typed into a
-    running task (`POST /api/commands/{id}/input`, i.e. `-i` steering) are kept (newest 3, 160
-    chars each) and rendered **above** the goal as superseding it. The block also says the
-    instruction at the top of the message wins over everything below, and the goal line no longer
-    claims to be current — an anchor that insisted on the abandoned direction would fight the
-    instruction the user just typed. Steering text used to die with the run it steered; it now
-    survives the session.
-  - **Unresolved problems survive the fold** — `problems` reported by an older (undetailed) task are
-    re-listed in their own section, so "the CI gate was not run" is still actionable several tasks
-    later. Problems belonging to a task that is still detailed are left in its bullet (no
-    duplication).
-  - **The newest task is never dropped** — the degradation chain ends at *newest direction +
-    newest task* (bounded per field), never at a top-down truncation that would keep stale titles
-    while cutting the bullet the next instruction refers to. A budget below ~150 tokens is raised to
-    that floor rather than silently producing a block that says nothing.
+  What it drops: page snapshots, repeated tool chatter, and reasoning that led nowhere. The
+  **newest task's turns are never folded** — they are what the next instruction most likely
+  refers to — and a second compression receives the first memory as input, so nothing is
+  lost across folds. If the compression call fails, the transcript is sent uncompressed and
+  the failure is logged: losing the session's memory is worse than a long prompt.
 
-  What is deliberately **not** carried: the details of tasks older than the 12-record window (only
-  their goal/status line survives through the goal anchor), and corrections beyond the newest 3.
-  Set `contextTokens` to `0` (or `contextEnabled=false`) to disable the injection; a one-shot
-  `agent run` is unaffected either way, because the first task of a session has nothing to
-  remember. `agent run -i`'s `/new` starts a fresh context on purpose.
+  Set `contextTokens` to `0` (or `contextEnabled=false`) to disable the injection; a
+  one-shot `agent run` is unaffected either way, because the first task of a session has
+  nothing to remember. `agent run -i`'s `/new` starts a fresh context on purpose (a new
+  session id ⇒ a new conversation).
+
+  **The session's memory survives a backend restart.** The conversation is written to
+  `agent-session-context.jsonl` (beside the task registry, one row per task start/end and
+  per steering line, the last row per session id winning), so the CLI keeps submitting to
+  the same `sessionId` and the next task re-reads what the session did instead of silently
+  starting from zero. Rows older than `contextTtlMinutes` are ignored — a `-s work` typed
+  again days later cannot resurrect an unrelated session — and `contextTtlMinutes=0` keeps
+  the conversation in memory only. The anonymous `DEFAULT` session (every session-less
+  `agent run` / MCP caller) is deliberately never persisted, so unrelated one-shot tasks
+  cannot inherit each other across restarts; an `agent run -i` started without `-s` derives
+  its own `interactive-<hash>` session id (printed in the banner) instead of joining that
+  pool.
+
+  A steering line that arrives after the task's last model round can no longer be delivered:
+  it is reported (`⚠ steering not delivered — the task ended first`) and appended to the
+  transcript as an undelivered user instruction, so the next task still honors it.
+
+  **While the process lives, the next task continues the real conversation.** The session
+  also keeps its actual message list: the runner hands it to the next run, which appends the
+  new task as a user message, so the model sees the earlier tasks' assistant messages and
+  their tool calls **with the results** instead of a text rendering, and never re-executes a
+  tool whose output it already has. That list is measured and folded by the tool loop's
+  compressor (round boundaries, window-aware pressure, provider usage — see
+  `browser4.agent.context.windowTokens`), so it grows under the same rules as a single
+  task's history. It is not persisted: after a backend restart the compacted transcript
+  above is the continuation. Set `browser4.agent.session.continuousMessages=false` to keep
+  the transcript-only behaviour, and `browser4.agent.toolLoop.carryRoundMessages=false` to
+  keep each outer round on the bounded digest instead of the real round messages.
 
   ```bash
-  BROWSER4_SERVER_OPTS="-Dbrowser4.agent.session.contextTokens=3000" browser4-cli open
+  BROWSER4_SERVER_OPTS="-Dbrowser4.agent.session.contextTokens=48000 -Dbrowser4.agent.session.memoryTokens=3000" browser4-cli open
   ```
+
+* **`browser4.agent.context.windowTokens`** *(default: `0` = unknown)* and
+  **`browser4.agent.context.reserveTokens`** *(default: `16384`)*
+  The in-task tool-loop compaction pressure point. When the model's context window is configured,
+  the threshold becomes `windowTokens - reserveTokens` (pi's `shouldCompact`), so a 200k model
+  compacts near 184k instead of at a flat value and a small model does not overflow first; the
+  reserve covers what the conversation is not (the next response's output and the tool
+  specifications re-sent with every request). `windowTokens=0` keeps the legacy flat
+  `browser4.agent.toolLoop.compressionThresholdTokens` (default `60000`). The retained tail is
+  capped at half the threshold, so a small window still leaves a foldable region. The pressure
+  decision prefers the **provider-reported** context size of the last request (prompt + completion,
+  cache reads included) over the char estimate (`length/3.5`, which under-counts CJK and tool JSON),
+  and falls back to the estimate after every compaction; the estimate still covers the messages
+  appended after the measured request. A second fold of the same conversation uses the incremental
+  merge instruction (`<compacted-summary>` present) so older facts survive instead of being
+  re-summarized away. Budget aborts during summarization are rethrown, never disguised as
+  compaction failures.
+
+  ```bash
+  BROWSER4_SERVER_OPTS="-Dbrowser4.agent.context.windowTokens=200000 -Dbrowser4.agent.context.reserveTokens=16384" browser4-cli open
+  ```
+
+* **`browser4.agent.session.continuousMessages`** *(default: `true`)* and
+  **`browser4.agent.toolLoop.carryRoundMessages`** *(default: `true`)*
+  Continuous conversation (pi's model): the session's real message list is handed to the
+  next task, and each outer round continues from the assistant tool-call messages plus
+  their tool results instead of a bounded digest. Both keep the tool-call/tool-result pairs
+  intact, which is what lets `ToolLoopCompressor` fold that history at round boundaries and
+  what stops the model from re-running a tool it already ran. `continuousMessages=false`
+  returns to the transcript-only continuation; `carryRoundMessages=false` returns each outer
+  round to the digest + nudge form (the pre-2026-11-21 behaviour). Neither changes the
+  per-task token budget or the model's output cap.
 
 * **`browser4.agent.copyTaskInputs`** *(default: `true`)*
   Before a task runs, copy the files its instruction references but that live outside the agent
@@ -807,10 +922,10 @@ All are JVM system properties (set with `BROWSER4_SERVER_OPTS` or `-D…` when y
 
 | Switch | Default | Effect / failure semantics |
 |---|---|---|
-| `browser4.agent.sandbox` | Windows fresh install `windows-acl`; otherwise `off` | OS enforcement for `coding.shell`/`coding.runCode`. Unavailable backend, unknown id or unimplemented id → task fails (`SandboxUnavailableException`); never falls back. A denial becomes `code=SANDBOX_DENIED`. |
+| `browser4.agent.sandbox` | Windows: `windows-acl` (fresh install, and a one-time upgrade of an existing one); `windows-low-il` is the recommended opt-in for coding-only work; `off` elsewhere until P2 | OS enforcement for `coding.shell`/`coding.runCode`, and for the file mutations on `windows-low-il`/`windows-appcontainer`. Unavailable backend, unknown id or unimplemented id → task fails (`SandboxUnavailableException`); never falls back. A denial becomes `code=SANDBOX_DENIED`. A persisted `v2:off`, or `-Dbrowser4.agent.sandbox=off`, keeps the historical unsandboxed behaviour. `windows-low-il` confines writes and credential reads but **not** the network. |
 | `browser4.agent.sandbox.account` | `browser4-agent` | Windows sandbox account. Missing account/credential or failed ACLs → hard failure at task start. |
 | `browser4.agent.workspace.isolation` | `worktree` | Coding tasks run in an isolated git worktree and merge back as a patch; `off` restores in-place execution. A coding task whose workspace is **not** a git work tree fails with instructions (installing git, or setting this to `off`) instead of degrading to the mirror, whose writes reach the checkout with no merge step. A patch larger than 32 MiB is refused too: keep build output and binary assets out of the change set. |
-| `browser4.agent.isolation.requireVerify` | `true` | A code change is merged only with passing `coding.verify` verdicts covering **every** changed module (one verdict covers several via `-am`; a Rust + Kotlin change needs one per ecosystem) **that still describe the tree being merged**: `coding.verify` records `verifiedAt` + a content digest, and a file written after the verdict refuses the merge with "re-run verify for the final change set". |
+| `browser4.agent.isolation.requireVerify` | `true` | A code change is merged only with passing `coding.verify` verdicts covering **every** changed module (one verdict covers several via `-am`; a Rust + Kotlin change needs one per ecosystem) **that still describe the tree being merged**: `coding.verify` records `verifiedAt` + a content digest, and a file written after the verdict refuses the merge with "re-run verify for the final change set". Documentation paths and paths no module owns (`bin/`, `chrome-extension/`) add no requirement of their own; a change set with **no** owned module needs one passing verdict of any kind (e.g. `checks="repo-consistency"`), still bound to the final tree by the same digest/timestamp check. |
 | `browser4.agent.lock.staleHours` | `12` | One coding task per checkout — `agent run --coding` **and** `coding.devTask(execute=true)` both take `<repo>/.git/b4-coding.lock`, because both can merge into that checkout. A lock older than this is taken over, as is one whose pid is gone **on this host**. A lock written by another host (a checkout reached over a share) is judged by age only — a same-numbered pid here says nothing about the other machine's holder. |
 | `browser4.agent.protected.extra` | empty | Extra workspace-relative paths a task may not modify (defaults already cover `b4w.*`, `bin/build.ps1`, `bin/recover.ps1`, `build-runtime-bundle.ps1`, `mvnw*`, `.mvn/`). |
 | `browser4.agent.isolation.keep` | `3` | Isolated worktrees always retained (newest by task activity — the ledger's end/start time, falling back to the directory mtime — first). Older ones are reclaimed with `git worktree remove` once they also exceed `isolation.maxAgeDays` **and** their manifest proves the task merged — a tree whose change never reached the checkout (refused, failed, cancelled, crashed, still running) is never reclaimed, and neither is one with no manifest. |

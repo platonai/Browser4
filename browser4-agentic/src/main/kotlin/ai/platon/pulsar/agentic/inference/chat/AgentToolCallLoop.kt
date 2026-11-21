@@ -190,6 +190,14 @@ class AgentToolCallLoop(
      */
     private val onBeforeIteration: (MutableList<ChatMessage>) -> Unit = {},
     /**
+     * Stop-point injection: called when the model answered without tool calls and the
+     * loop is about to return. Returning `true` means "a message was appended, keep
+     * looping" — the caller delivers a queued follow-up as a real user message here, so
+     * it continues the SAME conversation instead of becoming a second task (pi drains
+     * its `followUp` queue at exactly this point).
+     */
+    private val onStop: (MutableList<ChatMessage>) -> Boolean = { false },
+    /**
      * Called once per tool round with its measured attribution (plan P0-0): the provider
      * call, the tool bodies, and the loop's own per-call plumbing. Default is a no-op, so
      * callers that do not measure are unaffected.
@@ -200,6 +208,20 @@ class AgentToolCallLoop(
 
     /** Progressive disclosure state: grows as the model calls system.exposeTools. */
     private val exposedToolSpecs: MutableList<LangChain4jToolSpec> = toolSpecifications.toMutableList()
+
+    /**
+     * The conversation the last [generate] call ended with, system prompt included:
+     * the assistant messages carrying tool calls and their tool results are still
+     * there, in order.
+     *
+     * Empty before the first call (and when the call threw). The CLI engine uses it
+     * to carry the REAL conversation into the next outer round instead of re-deriving
+     * a digest of it — pi's loop keeps one message list for the whole run. Keeping the
+     * tool-call/tool-result pairs also lets [ToolLoopCompressor] compact that history
+     * at round boundaries, which is impossible on a digest-only list.
+     */
+    var finalMessages: List<ChatMessage> = emptyList()
+        private set
 
     /**
      * Snapshot of the currently exposed tool specifications.
@@ -354,8 +376,25 @@ class AgentToolCallLoop(
             val cachedInTokens = roundUsage?.cachedInputTokenCount ?: 0
             val inTokens = roundUsage?.inputTokenCount ?: 0
 
+            // Provider-measured context size for the request that just ran (pi's
+            // `calculateContextTokens`: prompt + completion, cache reads included).
+            // The compressor prefers it over its char estimate and falls back to the
+            // estimate once it rewrites the list; `messages` already ends with the
+            // assistant message this usage describes, so nothing is double counted.
+            if (inTokens > 0 || outTokens > 0) {
+                compressor?.noteMeasuredContext(messages.size, (inTokens + outTokens).toLong())
+            }
+
             val toolRequests = aiMessage.toolExecutionRequests()
             if (toolRequests.isNullOrEmpty()) {
+                // The model would stop here. A queued follow-up (typed while the run was
+                // in flight, `deliverAs=followUp`) is delivered NOW as a real user
+                // message; the loop continues the same conversation with it, exactly as
+                // pi's follow-up queue does at its stop point.
+                if (onStop(messages)) {
+                    logger.info("↪ follow-up delivered at the stop point; continuing the run")
+                    continue
+                }
                 // No more tool calls — return the final response.
                 //
                 // P0-0: the closing round is measured too (calls = 0). It is often the
@@ -366,6 +405,7 @@ class AgentToolCallLoop(
                     onRoundTiming(RoundTiming(iteration + 1, 0, modelMs, 0L, 0L, outTokens, cachedInTokens, inTokens))
                 }.onFailure { logger.warn("round timing observer failed: {}", it.message) }
                 logger.debug("Tool loop finished after ${iteration + 1} round(s)")
+                finalMessages = messages.toList()
                 return chatResponseToModelResponse(response, totalUsage)
             }
 
@@ -439,6 +479,9 @@ class AgentToolCallLoop(
         // a whole step's work (the results list itself dies with the loop).
         logger.warn("Tool loop exceeded max iterations ($maxIterations)")
         val executed = executedTools.distinct().joinToString(", ")
+        // The round-limit hand-off keeps the conversation: the next `generate` call
+        // resumes from these exact messages instead of replaying a digest.
+        finalMessages = messages.toList()
         return chatResponseToModelResponse(response!!, totalUsage).let { mr ->
             mr.copy(modelError = OVERFLOW_ERROR_PREFIX + " ($maxIterations)" +
                 (if (executed.isNotBlank()) "; executed: $executed" else "") +

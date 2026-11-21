@@ -101,6 +101,29 @@ data class AgentTaskEvent(
         const val TYPE_STEER = "steer"
 
         /**
+         * A steering message arrived after the task's LAST model round.
+         *
+         * It can never be delivered: the loop is over. The runner drains it at the
+         * terminal transition, keeps it as a session correction for the next task and
+         * says so here — the CLI answered "steering queued" when the user typed it, so
+         * silence would report success for a line the agent never saw.
+         */
+        const val TYPE_STEER_UNDELIVERED = "steering.undelivered"
+
+        /**
+         * A queued FOLLOW-UP message was delivered.
+         *
+         * Unlike [TYPE_STEER] (injected mid-run, at the next model round), a follow-up is
+         * delivered when the agent would otherwise stop: it is appended as a real user
+         * message to the same conversation and the loop continues, so the task does not
+         * end between the user's line and the model reading it.
+         */
+        const val TYPE_FOLLOW_UP = "follow_up"
+
+        /** A follow-up arrived after the task ended and could not be delivered. */
+        const val TYPE_FOLLOW_UP_UNDELIVERED = "follow_up.undelivered"
+
+        /**
          * One successful model request: the tokens the provider reported for it.
          *
          * Emitted once per LLM API call, so the count of these steps is the

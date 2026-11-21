@@ -15,6 +15,9 @@ import java.nio.file.Path
  */
 class FinishReportGateTest {
 
+    @TempDir
+    lateinit var tempDir: Path
+
     private fun evidence(
         executedToolCalls: Int = 3,
         executedToolNames: Set<String> = setOf("coding.mvnBuild", "coding.validate"),
@@ -27,6 +30,7 @@ class FinishReportGateTest {
         claimedVerdictJson: String? = null,
         actualVerdictJson: String? = null,
         gitDeletedFiles: Set<String>? = null,
+        grantedRoots: List<Path> = emptyList(),
     ) = FinishEvidence(
         executedToolCalls = executedToolCalls,
         executedToolNames = executedToolNames,
@@ -39,6 +43,7 @@ class FinishReportGateTest {
         claimedVerdictJson = claimedVerdictJson,
         actualVerdictJson = actualVerdictJson,
         gitDeletedFiles = gitDeletedFiles,
+        grantedRoots = grantedRoots,
     )
 
     private fun gate(name: String, ran: Boolean, ok: Boolean = ran, detail: String? = null): Map<String, Any?> =
@@ -113,7 +118,140 @@ class FinishReportGateTest {
             )
         )
         assertFalse(verdict.passed)
-        assertTrue(verdict.violations.any { it.contains("git does not show as changed") }, "${verdict.violations}")
+        assertTrue(
+            verdict.violations.any { it.contains("neither git nor this run's file trace shows") },
+            "${verdict.violations}",
+        )
+    }
+
+    /**
+     * Issue `20261120-0156`: `--add-dir` grants a folder outside the checkout, so a write there is
+     * real and the report can list it honestly — but git can never show it. Failing the task for
+     * that made the only passing strategy "hide the file you wrote".
+     */
+    @Test
+    @DisplayName("rule 4/7: a file under a granted root is accepted and its write stays material")
+    fun grantedRootFileIsBackedByTheGrant() {
+        val granted = tempDir.resolve("granted")
+        Files.createDirectories(granted)
+        val grantFile = granted.resolve("grant.txt")
+        Files.writeString(grantFile, "ok")
+        val reported = grantFile.toString().replace('\\', '/')
+
+        // The write is real and the report lists it: accepted although git has no such change.
+        val listed = FinishReportGate.evaluate(
+            evidence(
+                filesChanged = listOf(reported),
+                gitChangedFiles = emptySet(),
+                recordedMutations = listOf("write $reported"),
+                grantedRoots = listOf(granted.toAbsolutePath().normalize()),
+            )
+        )
+        assertTrue(listed.passed, "violations: ${listed.violations}")
+
+        // The same write, hidden from the report: the grant does not make it immaterial, so the
+        // run is asked to list the deliverable instead of being rewarded for concealing it.
+        val concealed = FinishReportGate.evaluate(
+            evidence(
+                filesChanged = emptyList(),
+                gitChangedFiles = emptySet(),
+                recordedMutations = listOf("write $reported"),
+                grantedRoots = listOf(granted.toAbsolutePath().normalize()),
+            )
+        )
+        assertFalse(concealed.passed)
+        assertTrue(
+            concealed.violations.any { it.contains("the report does not list") },
+            "${concealed.violations}",
+        )
+        // `filesChanged` entries are compared in the normalized form `normalizePath` produces, which
+        // drops a leading separator (its other half is repo-relative git output). A POSIX absolute
+        // entry therefore comes back without its leading `/` — `isUnderGrantedRoot` compensates by
+        // retrying the spelled form — so the expectation has to be normalized the same way or this
+        // case only passes on Windows.
+        assertEquals(listOf(reported.removePrefix("/")), concealed.unlistedFiles)
+    }
+
+    @Test
+    @DisplayName("rule 4: a sibling with a granted-root prefix is not the granted root")
+    fun grantedRootPrefixIsNotTheRoot() {
+        val granted = tempDir.resolve("granted")
+        Files.createDirectories(granted)
+        val sibling = tempDir.resolve("granted-other").resolve("not-granted.txt")
+        Files.createDirectories(sibling.parent)
+        Files.writeString(sibling, "no")
+
+        val verdict = FinishReportGate.evaluate(
+            evidence(
+                filesChanged = listOf(sibling.toString().replace('\\', '/')),
+                gitChangedFiles = emptySet(),
+                recordedMutations = listOf("write ${sibling.toString().replace('\\', '/')}"),
+                grantedRoots = listOf(granted.toAbsolutePath().normalize()),
+            )
+        )
+        // The trace still backs it (the run wrote it), so rule 4 passes; this asserts the *grant*
+        // check is component-wise, i.e. no false positive. Without the trace it must be a phantom.
+        assertTrue(verdict.passed, "violations: ${verdict.violations}")
+
+        val untraced = FinishReportGate.evaluate(
+            evidence(
+                filesChanged = listOf(sibling.toString().replace('\\', '/')),
+                gitChangedFiles = emptySet(),
+                grantedRoots = listOf(granted.toAbsolutePath().normalize()),
+            )
+        )
+        assertFalse(untraced.passed, "a sibling of a granted root must not inherit the grant")
+    }
+
+    /**
+     * Run `4125acaa` (2026-11-19): the agent wrote 23 helper files under `.b4scratch/`, deleted
+     * them before finishing, listed them in `filesChanged` — and rule 4 failed the whole task
+     * ("Invalid state: step 0 - Finish report rejected") although `coding.verify` passed and
+     * the deliverable was written. `git status` never saw those files: nothing was ever
+     * staged, and deleting an untracked file is as invisible as creating it.
+     */
+    @Test
+    @DisplayName("rule 4: a file the run created and deleted itself is backed by the trace, not a phantom")
+    fun scratchFileBackedByTraceIsAccepted() {
+        val verdict = FinishReportGate.evaluate(
+            evidence(
+                filesChanged = listOf(".b4scratch/collect.js", "examples/scripts/weibo-ego-lite.mjs"),
+                gitChangedFiles = setOf("examples/scripts/weibo-ego-lite.mjs"),
+                recordedMutations = listOf(
+                    "write .b4scratch/collect.js",
+                    "delete .b4scratch/collect.js",
+                    "write examples/scripts/weibo-ego-lite.mjs",
+                ),
+            )
+        )
+
+        assertTrue(verdict.passed, "the run's own trace backs the scratch entry: ${verdict.violations}")
+    }
+
+    @Test
+    @DisplayName("rule 4: a file neither git nor the trace shows is still an invented change")
+    fun inventedFileStillRejectedNextToTracedOnes() {
+        val verdict = FinishReportGate.evaluate(
+            evidence(
+                filesChanged = listOf("examples/scripts/weibo-ego-lite.mjs", "docs/invented.md"),
+                gitChangedFiles = setOf("examples/scripts/weibo-ego-lite.mjs"),
+                recordedMutations = listOf(
+                    "write .b4scratch/collect.js",
+                    "delete .b4scratch/collect.js",
+                    "write examples/scripts/weibo-ego-lite.mjs",
+                ),
+            )
+        )
+
+        assertFalse(verdict.passed, "docs/invented.md is backed by nothing")
+        assertTrue(
+            verdict.violations.any { it.contains("docs/invented.md") },
+            "the violation must name the invented file only: ${verdict.violations}",
+        )
+        assertTrue(
+            verdict.violations.none { it.contains(".b4scratch/") },
+            "the traced scratch file must not be named: ${verdict.violations}",
+        )
     }
 
     @Test

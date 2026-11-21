@@ -624,6 +624,162 @@ class Browser4WebDriverTest {
         assertTrue(js.contains("h: r.height"), "expected the element height: $js")
     }
 
+    // -------------------------------------------------------------------------
+    // pointerMoveSteps — the step count shared by mouseMove and the
+    // wheel-over-element glide
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("pointerMoveSteps scales with the distance at about one step per 20 px")
+    fun pointerMoveStepsScalesWithDistance() {
+        assertEquals(7, Browser4WebDriver.pointerMoveSteps(140.0))
+        assertEquals(20, Browser4WebDriver.pointerMoveSteps(400.0))
+    }
+
+    @Test
+    @DisplayName("pointerMoveSteps clamps short hops to 3 and long moves to 30")
+    fun pointerMoveStepsClampsTheRange() {
+        assertEquals(3, Browser4WebDriver.pointerMoveSteps(0.0))
+        assertEquals(3, Browser4WebDriver.pointerMoveSteps(39.0))
+        assertEquals(30, Browser4WebDriver.pointerMoveSteps(600.0))
+        assertEquals(30, Browser4WebDriver.pointerMoveSteps(100_000.0))
+    }
+
+    // -------------------------------------------------------------------------
+    // offViewportPointerPlan — the page may only receive in-viewport coordinates
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("an in-viewport move is a plain trail and touches nothing else")
+    fun offViewportPointerPlanKeepsAnInsideMoveUnchanged() {
+        val plan = Browser4WebDriver.offViewportPointerPlan(200.0, 200.0, 0.0, 0.0, 1280.0, 900.0)
+
+        assertEquals(200.0, plan.trailX)
+        assertEquals(200.0, plan.trailY)
+        assertNull(plan.exitX)
+        assertNull(plan.exitY)
+        assertFalse(plan.leavesViewport)
+        assertFalse(plan.reenter)
+    }
+
+    @Test
+    @DisplayName("a move below the viewport trails to the last pixel and exits as one dispatch")
+    fun offViewportPointerPlanSplitsAnOffViewportMove() {
+        // The coordinate-space scenario: `mousemove 640 1200` on a 1280x900 viewport
+        // must make the page see the pointer leave, never `clientY = 1200`.
+        val plan = Browser4WebDriver.offViewportPointerPlan(640.0, 1200.0, 0.0, 0.0, 1280.0, 900.0)
+
+        assertEquals(640.0, plan.trailX)
+        assertEquals(899.0, plan.trailY)
+        assertNull(plan.exitX)
+        assertEquals(1200.0, plan.exitY)
+        assertTrue(plan.leavesViewport)
+    }
+
+    @Test
+    @DisplayName("a negative coordinate is snapped clear of the edge's rounding band")
+    fun offViewportPointerPlanSnapsNegativeCoordinates() {
+        // `-0.6` rounds to `-1`, which Chrome delivers as an in-page coordinate; the
+        // exit dispatch must stay unambiguous.
+        val plan = Browser4WebDriver.offViewportPointerPlan(-0.6, -20.0, 473.0, 898.0, 1280.0, 900.0)
+
+        assertEquals(0.0, plan.trailX)
+        assertEquals(0.0, plan.trailY)
+        assertEquals(-Browser4WebDriver.OFF_VIEWPORT_MARGIN_PX, plan.exitX)
+        assertEquals(-20.0, plan.exitY)
+        assertTrue(plan.leavesViewport)
+    }
+
+    @Test
+    @DisplayName("a move past the last pixel exits above the viewport instead of landing on it")
+    fun offViewportPointerPlanHandlesTheUpperEdge() {
+        val plan = Browser4WebDriver.offViewportPointerPlan(1279.6, 899.6, 10.0, 10.0, 1280.0, 900.0)
+
+        assertEquals(1279.0, plan.trailX)
+        assertEquals(899.0, plan.trailY)
+        assertEquals(1281.0, plan.exitX)
+        assertEquals(901.0, plan.exitY)
+    }
+
+    @Test
+    @DisplayName("exactly half a pixel past the edge already rounds back out of the page")
+    fun offViewportPointerPlanSplitsAtTheHalfPixel() {
+        // `1279.4` rounds to the last pixel and stays in-page; `1279.5` rounds to
+        // `1280` (`w`) — an off-viewport coordinate delivered as an in-page one, the
+        // same failure the negative side had.
+        val inside = Browser4WebDriver.offViewportPointerPlan(1279.4, 400.0, 10.0, 10.0, 1280.0, 900.0)
+        assertEquals(1279.4, inside.trailX)
+        assertNull(inside.exitX)
+        assertFalse(inside.leavesViewport)
+
+        val outside = Browser4WebDriver.offViewportPointerPlan(1279.5, 400.0, 10.0, 10.0, 1280.0, 900.0)
+        assertEquals(1279.0, outside.trailX)
+        assertEquals(1281.0, outside.exitX)
+        // The other axis is inside, so it is dispatched as the caller asked.
+        assertEquals(400.0, outside.trailY)
+        assertNull(outside.exitY)
+
+        // A pointer resting exactly on the boundary is outside as well, so the trail
+        // back onto the page must be the single re-entry step.
+        assertTrue(
+            Browser4WebDriver.offViewportPointerPlan(200.0, 200.0, 1279.5, 400.0, 1280.0, 900.0).reenter
+        )
+    }
+
+    @Test
+    @DisplayName("an unknown viewport still keeps the trail out of the negative quadrant")
+    fun offViewportPointerPlanWorksWithoutTheViewportSize() {
+        val plan = Browser4WebDriver.offViewportPointerPlan(-20.0, 5000.0, 0.0, 0.0, null, null)
+
+        assertEquals(0.0, plan.trailX)
+        // Without a viewport height the upper bound is unknown, so a large positive
+        // coordinate is not treated as off-viewport.
+        assertEquals(5000.0, plan.trailY)
+        assertEquals(-20.0, plan.exitX)
+        assertNull(plan.exitY)
+    }
+
+    @Test
+    @DisplayName("a pointer resting off-viewport re-enters in one step")
+    fun offViewportPointerPlanReentersFromOutside() {
+        // A multi-step trail from (-20, -20) crosses the same rounding band, so the
+        // move back onto the page must be a single dispatch.
+        val plan = Browser4WebDriver.offViewportPointerPlan(200.0, 200.0, -20.0, -20.0, 1280.0, 900.0)
+
+        assertEquals(200.0, plan.trailX)
+        assertEquals(200.0, plan.trailY)
+        assertTrue(plan.reenter)
+        assertFalse(plan.leavesViewport)
+
+        val afterExit = Browser4WebDriver.offViewportPointerPlan(200.0, 200.0, 640.0, 1200.0, 1280.0, 900.0)
+        assertTrue(afterExit.reenter, "the exit dispatch leaves the pointer below the viewport")
+    }
+
+    // -------------------------------------------------------------------------
+    // mouseMoveAt space conversion — mirrors the base library
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("viewport spaces pass through and document spaces subtract the scroll offset")
+    fun viewportPointForSpaceMirrorsTheBaseConversion() {
+        for (space in listOf("viewport", "VIEWPORT", " viewport ", "", "client")) {
+            assertEquals(120.0 to 240.0, Browser4WebDriver.viewportPointForSpace(120.0, 240.0, space, 30.0, 50.0), space)
+            assertFalse(Browser4WebDriver.spaceNeedsScrollOffset(space), space)
+        }
+        for (space in listOf("document", "Page", " absolute ")) {
+            assertEquals(
+                -30.0 to 190.0,
+                Browser4WebDriver.viewportPointForSpace(0.0, 240.0, space, 30.0, 50.0),
+                space
+            )
+            assertTrue(Browser4WebDriver.spaceNeedsScrollOffset(space), space)
+        }
+        // An unknown space is the base's to report, so the driver resolves nothing and
+        // does not invent a second error message.
+        assertNull(Browser4WebDriver.viewportPointForSpace(10.0, 10.0, "device", 0.0, 0.0))
+        assertFalse(Browser4WebDriver.spaceNeedsScrollOffset("device"))
+    }
+
     @Test
     @DisplayName("dragCenterJs resolves center, css path, frame residency and viewport")
     fun dragCenterJsContainsResolutionLogic() {

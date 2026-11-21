@@ -9,7 +9,10 @@ import java.nio.file.Path
  * The rule is deliberately narrow: **a run that changed code must carry passing
  * `coding.verify` verdicts that cover the modules it touched, and those verdicts must
  * describe the tree about to be merged.** Everything else (documentation-only changes,
- * the gate switched off by the operator) passes without a build.
+ * the gate switched off by the operator) passes without a build. A change set no Maven
+ * module owns (`bin/`, `chrome-extension/`) has nothing to compile, so it needs one
+ * passing verdict of any kind — `coding.verify(checks="repo-consistency")` — still bound
+ * to the tree being merged.
  *
  * Three things are checked, in this order:
  *
@@ -18,6 +21,11 @@ import java.nio.file.Path
  *    dependent of it, which is what `mvn -pl <verifier> -am` compiles). A single
  *    verdict used to be required, which made a change spanning the Rust CLI and a
  *    Kotlin module impossible to merge: no one module covers both ecosystems.
+ *    Only modules a build can actually select count ([ModuleResolver.knownModulesOf]):
+ *    a path outside every module (`bin/test.ps1`, `chrome-extension/manifest.json`) has no
+ *    `-pl` build, and inventing a module name for it produced requirements nothing could
+ *    satisfy (see [ModuleResolver.knownModuleOf] for the 2026-11-19 stranded run).
+ *    Documentation is never a requirement either, whatever directory it sits in.
  * 2. **Passing** — at least one recorded verdict passed; a failing one is reported with
  *    its own reason.
  * 3. **Freshness** — the verdict must still describe the change set. `coding.verify`
@@ -46,6 +54,9 @@ object IsolationGate {
      * filesystem timestamps must not turn a same-second write into a false refusal.
      */
     private const val FRESHNESS_TOLERANCE_SECONDS = 2L
+
+    /** The module-less check a change set no module owns has to be proven with. */
+    private const val TREE_CHECK = "repo-consistency"
 
     /**
      * Outcome of one gate evaluation.
@@ -106,16 +117,27 @@ object IsolationGate {
             return Decision(true, "no changes to merge", changed)
         }
         val graph = worktree?.let { root -> runCatching { ModuleGraph.cachedGraph(root) }.getOrNull() }
-        val modules = ModuleResolver.modulesOf(changed, graph)
+        // Known modules only, documentation excluded: a path no module contains (`bin/`,
+        // `chrome-extension/`) has no `mvn -pl` build, and a note cannot break one — exactly the
+        // two shapes that produced a requirement nothing could satisfy (see
+        // [ModuleResolver.knownModuleOf] for the 2026-11-19 stranded run).
+        val modules = ModuleResolver.knownModulesOf(changed, graph)
         if (!requireVerify || !ModuleResolver.requiresVerification(changed)) {
             return Decision(true, "no verification required (documentation-only or gate disabled)", changed, modules)
         }
 
         val reported = verdicts.mapNotNull { parseVerdict(it) }
         if (reported.isEmpty()) {
+            val instruction = if (modules.isEmpty()) {
+                // Nothing to compile, but a run that touched code still owes a verdict; the
+                // cheapest honest one scans the tree instead of naming a module.
+                "coding.verify(checks=\"$TREE_CHECK\") (no Maven module owns the changed paths)"
+            } else {
+                "coding.verify(module=<module>)"
+            }
             return Decision(
                 false,
-                "no coding.verify verdict for this run — run coding.verify(module=<module>) " +
+                "no coding.verify verdict for this run — run $instruction " +
                     "and make it pass before finishing (changed: ${changed.take(5).joinToString(", ")})",
                 changed,
                 modules,
@@ -157,25 +179,71 @@ object IsolationGate {
             return Decision(
                 false,
                 "coding.verify did not cover ${uncovered.joinToString(", ")} — recorded: [$verified]. " +
-                    "Verify every changed module (one that depends on all of them, or one verdict per " +
-                    "ecosystem: mvn -pl <module> -am / module=\"${ModuleMap.CLI_CRATE}\")",
+                    coverageHint(modules, graph),
                 changed,
                 modules,
                 passing.firstOrNull()?.module,
             )
         }
 
-        val used = covering.values.distinct()
-        freshnessProblem(changed, used, worktree)?.let { problem ->
-            return Decision(false, problem, changed, modules, used.firstOrNull()?.module)
+        val coveringVerdicts = covering.values.distinct()
+        if (coveringVerdicts.isNotEmpty()) {
+            // One stale covering verdict refuses the merge: it is the one that let the module in.
+            freshnessProblem(changed, coveringVerdicts, worktree)?.let { problem ->
+                return Decision(false, problem, changed, modules, coveringVerdicts.first().module)
+            }
+        } else {
+            // A change set no module owns (`bin/test.ps1`) has no covering verdict, but freshness
+            // still applies: `coding.verify` fingerprints the WHOLE change set
+            // ([VerificationReport.contentDigest]), so "verify, keep editing, merge on the old
+            // verdict" must not become legal just because nothing can be compiled. One fresh
+            // passing verdict is enough here — a run may verify more than once, and the older
+            // digests legitimately no longer match.
+            val fresh = passing.filter { freshnessProblem(changed, listOf(it), worktree) == null }
+            if (fresh.isEmpty()) {
+                val stale = passing.firstNotNullOfOrNull { freshnessProblem(changed, listOf(it), worktree) }
+                    ?: "no passing verdict describes the change set about to be merged"
+                return Decision(false, stale, changed, modules)
+            }
         }
-        return Decision(
-            true,
-            "verification passed (module=${used.joinToString(", ") { it.module ?: "?" }})",
-            changed,
-            modules,
-            used.joinToString(", ") { it.module ?: "?" },
-        )
+        // No modules means no `-pl` build could have compiled the change set (bin/, docs-side
+        // scripts); the verdict proves the tree is consistent, not that a module compiles.
+        val verifiedBy = coveringVerdicts.joinToString(", ") { it.module ?: "?" }
+        val reason = if (coveringVerdicts.isEmpty()) {
+            "verification passed (no Maven module owns the changed paths; nothing to compile)"
+        } else {
+            "verification passed (module=$verifiedBy)"
+        }
+        return Decision(true, reason, changed, modules, verifiedBy.ifEmpty { null })
+    }
+
+    /**
+     * What to verify instead, naming the concrete `module=` whose build covers the change set.
+     *
+     * "Verify every changed module" says nothing about which module's `-am` build contains the
+     * others, so a change spanning two modules can only be rescued by reasoning about the
+     * dependency direction — the 2026-11-18 run guessed it backwards (`browser4-coding` for a
+     * change that also touched `browser4-agentic`), the merge was refused, and 19 minutes of
+     * work stayed in the worktree. [ModuleResolver.suggestVerifier] answers that question from
+     * the same graph the coverage check uses.
+     */
+    private fun coverageHint(modules: Set<String>, graph: ModuleGraph.Graph?): String = buildString {
+        append("Verify every changed module, or one whose `-am` build compiles all of them")
+        val verifier = ModuleResolver.suggestVerifier(modules, graph)
+        if (verifier != null) {
+            append(": coding.verify(module=\"").append(verifier)
+            append("\") → mvn -pl ").append(verifier).append(" -am covers this change set")
+        } else {
+            // Never leave the run guessing a name: say that no single module's build covers the
+            // change set instead of proposing one Maven would reject (`mvn -pl scripts -am` on
+            // 2026-11-19 failed before compiling a single class).
+            append(" — no single module of this workspace has an `-am` build covering all of them, ")
+            append("so verify each changed module on its own")
+        }
+        if (ModuleMap.CLI_CRATE in modules) {
+            append("; the Rust crate needs module=\"").append(ModuleMap.CLI_CRATE).append("\"")
+        }
+        append('.')
     }
 
     /**

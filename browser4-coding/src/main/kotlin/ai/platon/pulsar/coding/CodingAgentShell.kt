@@ -235,6 +235,18 @@ class CodingAgentShell(
     private val additionalDirs: Set<Path> = emptySet(),
 ) {
     /**
+     * Id of the OS boundary this shell launches commands under (`off` when there is none).
+     *
+     * Callers that spawn a *toolchain* need it: a confined child cannot write the per-user
+     * scratch directories a shared build daemon keeps. A `windows-low-il` Maven build died on
+     * `%LOCALAPPDATA%\kotlin\daemon\kotlin-daemon-client-tsmarker*.tmp`
+     * (AccessDeniedException, 2026-11-20 agent run), so the build path now compiles Kotlin
+     * in-process when this is not `off`.
+     */
+    internal fun sandboxId(): String =
+        runCatching { (sandbox ?: ExecutionSandboxes.current()).id }.getOrDefault("off")
+
+    /**
      * The workspace this shell is bound to.
      *
      * Public because other tools that spawn processes must resolve relative paths the
@@ -245,6 +257,65 @@ class CodingAgentShell(
      * root from the receiver makes the two agree by construction.
      */
     val workspaceRoot: Path get() = baseDir
+
+    /**
+     * The backend this shell's children actually run under.
+     *
+     * [sandbox] is the seam [CodingComponents.shell] hands over (`sandbox(policy)`), i.e. the backend
+     * the task's mode chain selected. Only a shell built without it falls back to the process-wide
+     * property — reading that property alone reported "no OS sandbox is active" for a task that was
+     * demonstrably running low-integrity children (run `4125acaa`, 2026-11-19).
+     */
+    private fun effectiveSandboxId(): String = SandboxStatus.effectiveIdOf(sandbox)
+
+    /**
+     * Spelled into every string-guard refusal (plan P3-5/D2).
+     *
+     * The text used to advertise `-Dbrowser4.agent.shell.pathGuard=off`, which read as an official
+     * bypass and implied the switch was a boundary. The guard is advisory, so the refusal now says so
+     * and points at the workspace instead.
+     *
+     * 2026-11-16 (review of agent run `966a5f2e`): the old wording promised "the OS sandbox enforces
+     * the boundary when enabled" — and on an installation whose `browser4.agent.sandbox` is `off`
+     * nothing enforces it. That run left the workspace through `python -c`, a `powershell -File`
+     * script and `%VAR%` expansions while every refusal still read as if an OS boundary were behind
+     * it. The note follows the **effective** enforcement (the task's backend, not the bare
+     * property — run `4125acaa`, 2026-11-19), so a model reading it cannot over-trust the check.
+     */
+    private fun advisoryNote(): String =
+        if (SandboxStatus.osBoundaryActive(sandbox)) {
+            "the path check is advisory — the OS sandbox (${effectiveSandboxId()}) enforces the boundary; "
+        } else {
+            "the path check is advisory and no OS sandbox is active " +
+                "(${ExecutionSandboxes.PROP_SANDBOX}=off), so a command that runs its own code can " +
+                "leave the workspace; "
+        }
+
+    /**
+     * The remediation appended to an "outside the workspace" refusal.
+     *
+     * Chrome's default download folder is the OS `~/Downloads`, which is outside the task
+     * workspace, so "use a workspace-relative path" is not actionable for an agent asked to check
+     * what a page downloaded: it cannot make the files appear inside the workspace that way. The
+     * 2026-11-21 run spent three rounds on exactly this (and then went looking for the files
+     * through `chrome://downloads`), so a path under the download folder answers with the command
+     * that moves the download target instead.
+     */
+    private fun outsideWorkspaceHint(resolved: Path): String {
+        val downloads = userDownloadsDir()
+        if (downloads != null && resolved.startsWith(downloads)) {
+            return "the browser's downloads land in that folder by default — point it at the " +
+                "workspace first with `download --dir <workspace>/downloads` (the default is " +
+                "./downloads inside the task workspace), then verify with a workspace-relative read"
+        }
+        return "use a workspace-relative path or copy the input into the workspace"
+    }
+
+    /** The OS download folder the browser writes to by default, when it can be named. */
+    private fun userDownloadsDir(): Path? {
+        val home = System.getProperty("user.home")?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return runCatching { Path.of(home, "Downloads").toAbsolutePath().normalize() }.getOrNull()
+    }
 
     companion object {
         const val MAX_TIMEOUT_SECONDS = 600L
@@ -261,16 +332,6 @@ class CodingAgentShell(
 
         /** Prefix of every [argumentPathViolation] message; used to pick the audit code. */
         private const val PATH_GUARD_PREFIX = "path guard: "
-
-        /**
-         * Spelled into every string-guard refusal (plan P3-5/D2).
-         *
-         * The text used to advertise `-Dbrowser4.agent.shell.pathGuard=off`, which read as an
-         * official bypass and implied the switch was a boundary. The guard is advisory, so the
-         * refusal now says so and points at the workspace instead.
-         */
-        private const val ADVISORY_NOTE =
-            "the path check is advisory — the OS sandbox enforces the boundary when enabled; "
 
         /** Prefix of every [protectedPathViolation] message; used to pick the audit code. */
         private const val PROTECTED_PATH_PREFIX = "protected path: "
@@ -340,6 +401,19 @@ class CodingAgentShell(
         /** Redirection introduced by an argument (`>file`, `>>file`, `2>file`, `&>file`). */
         private val REDIRECTION_PREFIX = Regex("""^(?:\d+|&)?>>?""")
 
+        /**
+         * POSIX device sinks: a redirection such as `2>/dev/null` is shell hygiene, not filesystem
+         * access, so it must not trip the workspace boundary. Compared exactly — device names are
+         * case-sensitive on POSIX.
+         */
+        private val POSIX_DEVICE_SINKS = setOf(
+            "/dev/null", "/dev/zero", "/dev/stdout", "/dev/stderr", "/dev/tty",
+        )
+
+        /** Windows reserved device names (case-insensitive), also reachable as `\\.\NUL`. */
+        private val WINDOWS_DEVICE_NAMES: Set<String> =
+            setOf("nul", "con", "prn", "aux") + (1..9).flatMap { listOf("com$it", "lpt$it") }
+
         private val logger = LoggerFactory.getLogger(CodingAgentShell::class.java)
 
         private val PS_ENV_VAR = Regex("""\${'$'}env:([A-Za-z_][A-Za-z0-9_]*)""", RegexOption.IGNORE_CASE)
@@ -396,23 +470,92 @@ class CodingAgentShell(
         }.getOrElse { StandardCharsets.UTF_8 }
 
         /**
-         * Decode a child process's stdout/stderr bytes.
+         * Decode one line of child-process output.
          *
-         * Strict UTF-8 when the bytes decode cleanly (Maven, git, python), and
-         * the platform native encoding otherwise (cmd.exe built-ins on a
-         * localized Windows). A leading UTF-8 BOM is stripped.
+         * Strict UTF-8 is attempted first, but a line that decodes is not automatically UTF-8:
+         * GBK text can be *valid* UTF-8 (`目录` is `C4 BF C2 BC`, i.e. `U+013F U+00BC`). Real
+         * non-ASCII UTF-8 is 3 or 4 bytes (CJK, emoji), so a line whose non-ASCII characters are
+         * all 2-byte sequences is far more likely native text that happens to decode — it is
+         * decoded with [fallback] instead. Everything else falls back only when UTF-8 cannot
+         * decode the bits at all. A trailing CR is dropped.
+         *
+         * Shared with `b4.run`'s reader (`CliProcessManager.decodeLine`), which needs exactly
+         * these semantics; keeping one implementation is what stops the two channels from
+         * drifting apart again.
+         */
+        fun decodeLine(bytes: ByteArray, fallback: Charset = NATIVE_OUTPUT_CHARSET): String {
+            if (bytes.isEmpty()) return ""
+            val utf8 = strictUtf8(bytes)
+            val text = when {
+                utf8 == null -> String(bytes, fallback)
+                isProbablyNativeMisread(utf8) -> String(bytes, fallback)
+                else -> utf8
+            }
+            return text.removeSuffix("\r")
+        }
+
+        /**
+         * Decode a child process's stdout/stderr bytes, line by line.
+         *
+         * One line in the OEM codepage must not turn the UTF-8 output around it into mojibake: a
+         * single capture can mix `mvn`/`git`/`python` output (UTF-8) with a localized `cmd.exe`
+         * built-in message (GBK on a zh-CN host), and decoding the whole buffer as GBK because of
+         * that one line garbled everything the model then had to read. A stream that is valid
+         * UTF-8 end to end is taken as UTF-8 wholesale, so the per-line heuristic only runs on
+         * output that really mixes encodings; a GBK line whose bytes happen to be valid UTF-8,
+         * with no invalid byte anywhere else in the capture, is indistinguishable from UTF-8
+         * text and keeps the UTF-8 reading. A leading UTF-8 BOM is stripped.
          */
         fun decodeProcessOutput(bytes: ByteArray): String {
             if (bytes.isEmpty()) return ""
-            val utf8 = runCatching {
-                StandardCharsets.UTF_8.newDecoder()
-                    .onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT)
-                    .decode(ByteBuffer.wrap(bytes))
-                    .toString()
-            }.getOrNull()
-            val text = utf8 ?: String(bytes, NATIVE_OUTPUT_CHARSET)
+            val text = strictUtf8(bytes) ?: buildString(bytes.size) {
+                var start = 0
+                while (start < bytes.size) {
+                    val newline = indexOfNewline(bytes, start)
+                    if (newline < 0) {
+                        append(decodeLine(bytes.copyOfRange(start, bytes.size)))
+                        break
+                    }
+                    append(decodeLine(bytes.copyOfRange(start, newline)))
+                    append('\n')
+                    start = newline + 1
+                }
+            }
             return if (text.startsWith('\uFEFF')) text.substring(1) else text
+        }
+
+        /** The whole buffer as strict UTF-8, or `null` when any byte sequence is not valid UTF-8. */
+        private fun strictUtf8(bytes: ByteArray): String? = runCatching {
+            StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(bytes))
+                .toString()
+        }.getOrNull()
+
+        /**
+         * True when a valid-UTF-8 line is more likely OEM bytes read as UTF-8.
+         *
+         * Only 2-byte UTF-8 sequences (U+0080…U+07FF) are ambiguous with a 2-byte GBK pair; a
+         * CJK ideograph, an emoji or any other 3/4-byte sequence is unambiguous UTF-8, so a line
+         * containing one keeps its UTF-8 reading. A Latin-only accented line inside an otherwise
+         * native stream is the accepted casualty of this rule.
+         */
+        private fun isProbablyNativeMisread(text: String): Boolean {
+            var sawNonAscii = false
+            for (ch in text) {
+                if (ch.code < 0x80) continue
+                if (ch.code >= 0x0800) return false
+                sawNonAscii = true
+            }
+            return sawNonAscii
+        }
+
+        private fun indexOfNewline(bytes: ByteArray, from: Int): Int {
+            for (i in from until bytes.size) {
+                if (bytes[i] == '\n'.code.toByte()) return i
+            }
+            return -1
         }
 
         // ------------------------------------------------------------------
@@ -594,6 +737,13 @@ class CodingAgentShell(
          * (`mvnw.cmd` → `mvnw`, which is what the DEV allow-list names).
          */
         private val EXECUTABLE_SUFFIXES = listOf(".exe", ".cmd", ".bat", ".com", ".ps1")
+
+        /**
+         * Interpreter families that are commonly spelled with a version pin
+         * (`python3.12`, `python2.7`, `pip3.13`). Captured by
+         * [canonicalInterpreterName] so the pin never decides the verdict.
+         */
+        private val VERSION_PINNED_INTERPRETER = Regex("""(python|pip)(\d+)(?:\.\d+)*""")
 
         /** Recursion guard for `sh -c "sh -c '...'"` style nesting. */
         private const val MAX_INLINE_SCRIPT_DEPTH = 3
@@ -1499,6 +1649,7 @@ class CodingAgentShell(
         if (!pathGuardEnabled) return null
         for (token in tokens) {
             val candidate = pathCandidate(token) ?: continue
+            if (isDeviceSink(candidate)) continue
             val expanded = expandVariables(candidate)
             if (expanded == null) {
                 if (SENSITIVE_PATH_KEYWORDS.any { candidate.lowercase().contains(it) }) {
@@ -1519,13 +1670,13 @@ class CodingAgentShell(
                     SensitivePaths.isRefused(resolved, sensitiveRoots, resolvedReadableRoots)
                 ) {
                     return PATH_GUARD_PREFIX + "'$token' links to a credential location ($resolved); " +
-                        ADVISORY_NOTE + "pass a workspace-relative path instead"
+                        advisoryNote() + "pass a workspace-relative path instead"
                 }
                 continue
             }
             if (SensitivePaths.isRefused(resolved, sensitiveRoots, resolvedReadableRoots)) {
                 return PATH_GUARD_PREFIX + "'$token' resolves to a credential location ($resolved); " +
-                    ADVISORY_NOTE + "pass a workspace-relative path instead"
+                    advisoryNote() + "pass a workspace-relative path instead"
             }
         }
         return null
@@ -1570,6 +1721,7 @@ class CodingAgentShell(
         for (token in tokens) {
             if (isWindowsSwitch(token)) continue
             val candidate = pathCandidate(token) ?: continue
+            if (isDeviceSink(candidate)) continue
             val expanded = expandVariables(candidate) ?: continue
             val ported = portableSeparators(expanded)
             val path = runCatching { Path.of(ported) }.getOrNull() ?: continue
@@ -1606,7 +1758,7 @@ class CodingAgentShell(
                     return null
                 }
                 return PATH_GUARD_PREFIX + "'$token' resolves outside the workspace ($resolved); " +
-                    ADVISORY_NOTE + "use a workspace-relative path or copy the input into the workspace"
+                    advisoryNote() + outsideWorkspaceHint(resolved)
             }
         }
         return null
@@ -1717,6 +1869,7 @@ class CodingAgentShell(
         if (writeTargets.isEmpty()) return null
         for (token in writeTargets) {
             val candidate = pathLikeValue(token) ?: continue
+            if (isDeviceSink(candidate)) continue
             val hit = protectedRootOf(candidate) ?: continue
             return PROTECTED_PATH_PREFIX +
                 "'$token' is inside protected directory '${canonicalBaseDir.relativize(hit).toString().replace('\\', '/')}' — " +
@@ -1810,6 +1963,23 @@ class CodingAgentShell(
         val looksLikePath = value.startsWith("~") || value.startsWith("%") || value.startsWith("$") ||
             value.contains('/') || value.contains('\\')
         return if (looksLikePath) value else null
+    }
+
+    /**
+     * Whether [candidate] names an OS device sink rather than a real filesystem location.
+     *
+     * A redirection like `2>/dev/null` reached the boundary guard as the token `2>/dev/null`, had
+     * its redirection prefix stripped to `/dev/null`, and was refused as "outside the workspace"
+     * (a live run lost the redirection to COMMAND_PATH_DENIED). Device sinks belong to no
+     * workspace, so no boundary decision applies; ordinary absolute paths such as `/dev/sda` stay
+     * guarded. `NUL` is matched for Windows command lines, where it is legal without a directory.
+     */
+    private fun isDeviceSink(candidate: String): Boolean {
+        val ported = portableSeparators(candidate.trim()).trimEnd('/')
+        if (ported in POSIX_DEVICE_SINKS) return true
+        // `\\.\NUL` becomes `//./NUL` after separator normalisation.
+        val windowsName = ported.removePrefix("//./")
+        return windowsName.lowercase() in WINDOWS_DEVICE_NAMES
     }
 
     /**
@@ -2485,7 +2655,9 @@ class CodingAgentShell(
     /**
      * Normalized base-command name used for allow-list membership:
      * basename, lowercase, without a Windows launcher / script suffix
-     * (`mvnw.cmd` → `mvnw`, `python3.exe` → `python3`, `/usr/bin/git` → `git`).
+     * (`mvnw.cmd` → `mvnw`, `python3.exe` → `python3`, `/usr/bin/git` → `git`),
+     * with a version-pinned interpreter folded onto its family
+     * (`python3.12` → `python3`, `python2.7` → `python`, `pip3.13` → `pip3`).
      */
     internal fun normalizeCommandName(token: String): String {
         var name = token.trim().trim('\'', '"', '\\')
@@ -2497,7 +2669,39 @@ class CodingAgentShell(
                 break
             }
         }
-        return name
+        return canonicalInterpreterName(name)
+    }
+
+    /**
+     * Fold a version-pinned interpreter onto the spelling the tiers know:
+     * `python3.12` → `python3`, `python2.7` → `python`, `pip3.13` → `pip3`.
+     *
+     * The same dev tool must not be judged differently because of how it is
+     * spelled: keeping the pin distinct made the verdict depend on whether the
+     * *host* happens to expose that exact version on PATH. On the Ubuntu 26.04
+     * nightly runner (which installs Python 3.14 and no `python3.12`),
+     * `python3.12.exe --version` was refused while `python3 --version` ran —
+     * a verdict about the runner image, not about the command (2026-11-17
+     * nightly, `CodingAgentShellTest.normalizationStripsOnlyLauncherSuffixes`).
+     *
+     * The pin is dropped only when the unpinned spelling is a known tier
+     * command, so an unknown `python3.12`-lookalike keeps its own name in the
+     * refusal message instead of borrowing `python`'s.
+     *
+     * This decides **permission, not availability**: a folded name is allowed
+     * even when that exact binary is not installed (the old PATH lookup was what
+     * made the verdict host-dependent), so a missing interpreter surfaces as the
+     * process's own "command not found" instead of a permission refusal.
+     */
+    private fun canonicalInterpreterName(name: String): String {
+        val match = VERSION_PINNED_INTERPRETER.matchEntire(name) ?: return name
+        val family = match.groupValues[1]
+        val major = family + match.groupValues[2]
+        return when {
+            major in SAFE_COMMANDS || major in DEV_COMMANDS || major in BUILD_COMMANDS -> major
+            family in SAFE_COMMANDS || family in DEV_COMMANDS || family in BUILD_COMMANDS -> family
+            else -> name
+        }
     }
 
     /** True when the raw token is spelled as a path rather than a bare name. */
@@ -2621,7 +2825,11 @@ class CodingAgentShell(
 
         // Plan P3-3: an OS-level denial becomes a structured refusal for the model; the raw bytes
         // were logged by the translator, so they stay available for the audit trail.
-        val denial = if (exitCode != 0) SandboxDenials.envelope("coding.shell", command, err + "\n" + out) else null
+        val denial = if (exitCode != 0) {
+            SandboxDenials.envelope("coding.shell", command, err + "\n" + out, effectiveSandboxId())
+        } else {
+            null
+        }
 
         return ShellResult(
             sessionId = sessionId,

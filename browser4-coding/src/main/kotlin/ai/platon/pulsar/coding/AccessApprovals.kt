@@ -70,6 +70,16 @@ class AccessRequest(
     var decidedAt: Instant? = null
         internal set
 
+    /**
+     * Why an operator (or a rail) decided it this way, or `null`.
+     *
+     * Recorded for the model-facing answer: a request denied by a rail must say which rail, so the
+     * model stops looking for an approval that can never come instead of retrying the same target.
+     */
+    @Volatile
+    var decisionReason: String? = null
+        internal set
+
     /** Expiry of the issued capability (`null` = until the task ends). */
     val expiresAt: Instant? get() = capability?.expiresAt
 
@@ -210,6 +220,14 @@ class AccessApprovals(
             detail = "${request.id} effect=${effect.id} target=${target.describe()} " +
                 "source=${requestedBy.id}${request.reason?.let { " reason=$it" } ?: ""}",
         )
+        // Rails are evaluated at request time as well as at approval time: asking for a credential
+        // store is refused immediately with `ACCESS_DENIED` instead of becoming a pending item no
+        // operator could ever approve. The approval-time check stays — the policy can change between
+        // the request and the decision, and a FILE entry may be older than the rail.
+        val violation = guardrailViolation(effect, target)
+        if (violation != null) {
+            deny(request.id, requestedBy, violation)
+        }
         return request
     }
 
@@ -296,12 +314,19 @@ class AccessApprovals(
         return request
     }
 
-    /** Denies [requestId]; [reason] defaults to the model's own stated reason. */
+    /**
+     * Denies [requestId]; [reason] is the operator's decision reason, recorded for the model.
+     *
+     * Omitting it leaves [AccessRequest.decisionReason] `null` — the request's own
+     * [AccessRequest.reason] says what the model asked for, so echoing it here would present the
+     * model's words as the operator's justification.
+     */
     fun deny(requestId: String, source: AccessSource, reason: String? = null): AccessRequest? {
         val request = requests[requestId] ?: return null
         if (request.state == AccessState.DENIED) return request
         request.state = AccessState.DENIED
         request.decidedAt = clock()
+        request.decisionReason = reason?.trim()?.takeIf { it.isNotEmpty() }
         PermissionAudit.writeEvent(
             tool = "coding.requestAccess",
             code = PermissionAudit.CODE_ACCESS_DENIED,
@@ -408,6 +433,13 @@ class AccessApprovals(
             return "credential locations are never approved"
         }
         val resolved = canonicalPath(path)
+        // The credential rail is checked first so the refusal names the *real* reason: `~/.ssh` is
+        // also outside the workspace, and reporting only "outside the workspace" invites the model to
+        // look for an `--add-dir` grant to it — which the same rail refuses.
+        val sensitiveRoots = SensitivePaths.roots(current.sensitivePaths)
+        if (SensitivePaths.isSensitive(resolved, sensitiveRoots)) {
+            return "path '$resolved' is a credential location — never approved"
+        }
         val root = runCatching { workspaceRoot().toRealPath() }.getOrDefault(workspaceRoot().toAbsolutePath().normalize())
         if (!current.allowExternalAccess && !resolved.startsWith(root)) {
             return "path '$resolved' is outside the workspace and allowExternalAccess=false — " +
@@ -421,10 +453,6 @@ class AccessApprovals(
                 if (p == "pom.xml" || p.contains('/')) p == rel else rel.substringAfterLast('/') == p
             }
             if (protectedFile) return "file '$rel' is protected"
-        }
-        val sensitiveRoots = SensitivePaths.roots(current.sensitivePaths)
-        if (SensitivePaths.isSensitive(resolved, sensitiveRoots)) {
-            return "path '$resolved' is a credential location — never approved"
         }
         return null
     }

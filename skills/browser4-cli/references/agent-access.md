@@ -218,10 +218,16 @@ coding.requestAccess(effect="fs.write", target="src/main/kotlin/Foo.kt", reason=
 The call returns immediately with the pending request — it never waits for a human:
 
 ```json
-{"requestId": "req-1", "state": "pending", "effect": "fs.write", "target": "…/Foo.kt",
- "needed": "fs.write at …/Foo.kt", "alternatives": ["continue with the tools the preset grants",
- "re-run with access=full or access=write"]}
+{"requestId":"req-1","state":"pending","code":"","decisionReason":null,"effect":"fs.write",
+ "target":"…/Foo.kt","needed":"fs.write","expiresAt":null,
+ "alternatives":"continue with read/list/plan steps and retry the write after approval"}
 ```
+
+`needed` is the plain effect id (the value `coding.requestAccess` itself takes) and
+`alternatives` is one sentence, not a list. `code` stays empty while the request is pending,
+becomes `ACCESS_DENIED` plus a `decisionReason` when a rail refused it at request time, and
+`ACCESS_APPROVED` when the same `effect + target` is answered from a grant still in force;
+`expiresAt` is `null` until an operator approves it (and stays `null` for a task-end grant).
 
 Rules:
 
@@ -230,10 +236,17 @@ Rules:
   `requestId` instead of flooding the queue. Once a grant expires, a fresh request is
   allowed.
 - The agent keeps working with the tools the preset grants while the request is pending.
-- An approval is **effect-level**: `fs.write` unlocks mutating methods (and the project
-  build, which needs the narrower `read-build` grant); `fs.exec` / `proc.spawn` unlock the
-  shell and arbitrary code. The target is recorded in the audit and the grant's scope, not
-  enforced per path — the layers that know the path still enforce the rails below.
+- An approval is **effect-level at the method gate and target-scoped below it**: `fs.write`
+  unlocks mutating methods (and the project build, which needs the narrower `read-build`
+  grant); `fs.exec` / `proc.spawn` unlock the shell and arbitrary code. The method gate cannot
+  see the call's target, so the layers that can — the file system and the shell — match it
+  against the grant's scope (`AgentAccessPolicy.operatorAllows` over the same `Authorizer`):
+  a write grant for `src/Foo.kt` does not unlock `src/Bar.kt` (refused as `not covered by an
+  active operator grant | needed=fs.write`), an `fs.exec` grant covers the approved **program
+  name** only (`echo hi` approves `echo`, never `node`), and `coding.runCode` additionally
+  needs the language's interpreter covered. `net.connect` is the exception: the grant only
+  turns the network flag on and its host scope is advisory. The rails below are enforced
+  separately and are never approvable.
 - `ttlSeconds` bounds the grant; omitted, it lasts until the task ends. Expiry is lazy:
   the next decision (or `coding.permissions`) drops the grant and records
   `ACCESS_EXPIRED`, so no timer runs in the background.
@@ -313,8 +326,10 @@ A watched `agent run -i` session on a TTY keeps `browser4.agent.access`; an expl
   are not an OS-level sandbox: every preset that allows the project build (`read-build`,
   `write`, `full`) executes repository code (Maven plugins, npm scripts). The execution
   sandbox (`browser4.agent.sandbox`, see [config.md](../../../docs/config.md)) enforces
-  where a process may write when your platform has a backend; otherwise use a container or
-  VM when the repository itself is untrusted.
+  where a process may write when your platform has a backend — `coding.shell`/`coding.runCode`
+  and, on `windows-low-il`/`windows-appcontainer`, the file mutations themselves (each change
+  runs in a sandboxed child); otherwise use a container or VM when the repository itself is
+  untrusted.
 - `--access` is scoped to the task and reset when it ends, so the next task on the same
   backend starts from the server default again.
 
@@ -409,7 +424,8 @@ browser4-cli agent run "Read the previous task's log and explain why it failed" 
 | `code=PATH_DENIED` | the path is outside the workspace | see [agent-workspace.md](agent-workspace.md) — name the input, use `--coding`, or widen paths |
 | `code=PROTECTED_PATH` / `code=SENSITIVE_PATH` | rails, not capabilities | never approvable; copy the data somewhere allowed |
 | `code=SANDBOX_DENIED` | the OS sandbox refused the operation (the step's `needed` names the granted roots) | keep the command inside the workspace and granted roots; change the sandbox configuration, not the command |
-| An approved grant "did not apply" | the effect does not cover the method, the grant expired, or a rail matched (denied tool, protected path, workspace boundary, command whitelist) | ask for the right effect (`fs.write` vs `fs.exec`), re-request after expiry, or remove the rail in the embedding configuration — a rail is never approvable |
+| `Error: Failed to write … the OS sandbox 'windows-low-il' could not start …` / `Unexpected error executing … Windows sandbox unavailable …` | the OS sandbox could not start on this workspace (an integrity label cannot be lowered without `WRITE_OWNER`); read-only tools keep working | the operator repairs the workspace ACL — symptom table, minimal `icacls` grant and verification in [agent-permissions.md](../../../docs/agent-permissions.md) §10; changing `--access` / `--unrestricted` does not help |
+| An approved grant "did not apply" | the effect does not cover the method, the grant expired, the call's target is outside the grant's scope (`not covered by an active operator grant`), or a rail matched (denied tool, protected path, workspace boundary, command whitelist) | ask for the right effect (`fs.write` vs `fs.exec`), re-request after expiry, file a request for the exact path/program that failed (one grant covers its own target only), or remove the rail in the embedding configuration — a rail is never approvable |
 
 ## Related
 

@@ -1,32 +1,35 @@
 package ai.platon.pulsar.agentic.tools.advanced.agent
 
+import ai.platon.pulsar.agentic.agents.AgentRunEvent
 import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.common.ResourceStatus
-import ai.platon.pulsar.common.config.ImmutableConfig
+import dev.langchain4j.data.message.UserMessage
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
+import java.nio.file.Path
 import java.time.Instant
 
 /**
  * The cross-task conversation of one agent session.
  *
- * Origin: an `agent run -i --coding` session of related tasks behaved like a fresh
- * process per task — task N had no idea what task N-1 had done — and nothing
- * compressed the little context there was.
+ * The session inherits the ACTUAL conversation of its earlier tasks — instructions,
+ * model messages, tool calls and their results, steering lines — not a per-task
+ * bullet summary. When the transcript grows past its budget the model compacts it
+ * with the session-memory instruction (the "compression instruction").
  */
 @DisplayName("agent session conversation")
 class SessionConversationTest {
 
     private fun status(
-        instruction: String?,
+        instruction: String,
         statusCode: Int = ResourceStatus.SC_OK,
-        summary: String? = null,
         files: List<String>? = null,
-        problems: List<String>? = null,
-        findings: List<String>? = null,
         deliverables: List<String>? = null,
+        workspace: String? = null,
         failureReason: String? = null,
         cancelled: Boolean = false,
         elapsedMs: Long? = null,
@@ -36,12 +39,10 @@ class SessionConversationTest {
         this.cancelled = cancelled
         this.failureReason = failureReason
         this.deliverables = deliverables
-        val state = AgentState(step = 3, instruction = instruction.orEmpty()).apply {
-            this.isComplete = true
-            this.summary = summary
-            this.keyFindings = findings
-            this.filesChanged = files
-            this.problems = problems
+        this.workspace = workspace
+        val state = AgentState(step = 3, instruction = instruction).apply {
+            isComplete = true
+            filesChanged = files
         }
         agentHistory = AgentHistory(mutableListOf(state))
         // `done()` stamps finishTime itself, so the synthetic window is set after it.
@@ -52,442 +53,397 @@ class SessionConversationTest {
         }
     }
 
+    private fun model(text: String) = AgentRunEvent(AgentRunEvent.MODEL_TEXT, text = text)
+
+    private fun tool(name: String, args: String = "{}") =
+        AgentRunEvent(AgentRunEvent.TOOL_CALL, tool = name, arguments = args)
+
+    private fun result(name: String, ok: Boolean = true, text: String? = null) =
+        AgentRunEvent(AgentRunEvent.TOOL_RESULT, tool = name, ok = ok, text = text)
+
+    // ---- the transcript is the real conversation --------------------------------
+
     @Test
     @DisplayName("a session that finished no task renders no block")
     fun anEmptySessionRendersNothing() {
         val conversation = SessionConversation()
 
-        assertEquals("", conversation.renderBlock())
+        assertEquals("", conversation.renderForPrompt())
         assertEquals(0, conversation.size)
+        assertFalse(conversation.needsCompression())
+        assertTrue(conversation.compressionInput().contains("## Transcript to compact"))
     }
 
     @Test
-    @DisplayName("a finished task is remembered with its report")
-    fun aFinishedTaskIsRemembered() {
+    @DisplayName("the next task inherits the previous task's whole conversation")
+    fun theWholeConversationIsInherited() {
         val conversation = SessionConversation()
-        conversation.record(
-            status(
-                instruction = "add the CSV export",
-                summary = "Added the export and its CLI flag.",
-                files = listOf("browser4-cli/src/main.rs"),
-                problems = listOf("the xlsx writer was unavailable"),
-                findings = listOf("the flag is --format csv"),
-                elapsedMs = 133_000,
-            )
-        )
+        conversation.beginTask("add the CSV export")
+        conversation.noteEvent(model("I'll add the export flag to main.rs"))
+        conversation.noteEvent(tool("coding.write", """{"path":"src/export.kt"}"""))
+        conversation.noteEvent(result("coding.write", text = "wrote 120 bytes"))
+        conversation.noteEvent(tool("coding.verify", """{"module":"browser4-cli"}"""))
+        conversation.noteEvent(result("coding.verify", ok = false, text = "gate failed: 3 checks"))
+        conversation.noteEvent(AgentRunEvent(AgentRunEvent.STEER, text = "no, use CSV not XLSX"))
+        conversation.endTask(status("add the CSV export", files = listOf("src/export.kt"), elapsedMs = 133_000))
 
-        val block = conversation.renderBlock()
+        val block = conversation.renderForPrompt()
 
         assertTrue(block.startsWith(SESSION_BLOCK_MARKER), block)
-        assertTrue(block.contains("1 earlier task(s)"), block)
-        assertTrue(block.contains("\"add the CSV export\" — done in 2m 13s"), block)
-        assertTrue(block.contains("Added the export and its CLI flag."), block)
-        assertTrue(block.contains("files: browser4-cli/src/main.rs"), block)
-        assertTrue(block.contains("problems: the xlsx writer was unavailable"), block)
-        assertTrue(block.contains("findings: the flag is --format csv"), block)
-        // The block must tell the model which instruction is the real task.
+        // The task, the model's own words, the tool calls and their outcomes.
+        assertTrue(block.contains("#1 add the CSV export"), block)
+        assertTrue(block.contains("model: I'll add the export flag to main.rs"), block)
+        assertTrue(block.contains("tool: coding.write({\"path\":\"src/export.kt\"})"), block)
+        assertTrue(block.contains("result: coding.write: wrote 120 bytes"), block)
+        assertTrue(block.contains("FAILED: gate failed: 3 checks"), block)
+        // A steering line is a user instruction and belongs to the conversation.
+        assertTrue(block.contains("user: steering: no, use CSV not XLSX"), block)
+        // The outcome carries what the next task reuses.
+        assertTrue(block.contains("→ done in 2m 13s"), block)
+        assertTrue(block.contains("files: src/export.kt"), block)
+        // The block tells the model which instruction is the real task.
         assertTrue(block.contains("The instruction at the top of this"), block)
     }
 
     @Test
-    @DisplayName("a failed task is remembered with its reason, a cancelled one as cancelled")
+    @DisplayName("two tasks render in order, numbered")
+    fun tasksAreNumbered() {
+        val conversation = SessionConversation()
+        conversation.beginTask("first task")
+        conversation.endTask(status("first task"))
+        conversation.beginTask("second task")
+        conversation.endTask(status("second task"))
+
+        val block = conversation.renderForPrompt()
+
+        assertTrue(block.contains("#1 first task"), block)
+        assertTrue(block.contains("#2 second task"), block)
+        assertTrue(block.indexOf("#1 first task") < block.indexOf("#2 second task"), block)
+        assertEquals(2, conversation.tasks)
+    }
+
+    @Test
+    @DisplayName("round markers and token usage are statistics, not context")
+    fun usageAndRoundsAreNotRemembered() {
+        val conversation = SessionConversation()
+        conversation.beginTask("do something")
+        conversation.noteEvent(AgentRunEvent(AgentRunEvent.ROUND_START, turn = 1))
+        conversation.noteEvent(AgentRunEvent(AgentRunEvent.USAGE, totalTokens = 1200))
+        conversation.noteEvent(AgentRunEvent(AgentRunEvent.TOOL_CALL, tool = "b4.run", arguments = """{"url":"https://example.com"}"""))
+
+        assertEquals(2, conversation.size)
+        assertFalse(conversation.renderForPrompt().contains("run.usage"))
+        assertFalse(conversation.renderForPrompt().contains("round.start"))
+    }
+
+    // ---- outcome: files and the workspace they live in --------------------------
+
+    @Test
+    @DisplayName("the outcome names the workspace the files live in")
+    fun theOutcomeCarriesTheWorkspace(@TempDir dir: Path) {
+        // Every task of a session runs in its OWN workspace: the relative file names
+        // are unusable for the next task without the directory.
+        val workspace = Files.createDirectories(dir.resolve("workspace.task-1"))
+        val conversation = SessionConversation().apply {
+            beginTask("extract prices")
+            endTask(status("extract prices", files = listOf("prices.csv"), workspace = workspace.toString()))
+        }
+
+        val block = conversation.renderForPrompt()
+
+        assertTrue(block.contains("files: prices.csv"), block)
+        assertTrue(block.contains("workspace: $workspace"), block)
+    }
+
+    @Test
+    @DisplayName("a workspace that no longer exists is not advertised")
+    fun aVanishedWorkspaceIsNotAdvertised(@TempDir dir: Path) {
+        val conversation = SessionConversation().apply {
+            beginTask("fix the build")
+            endTask(
+                status(
+                    "fix the build",
+                    files = listOf("src/main.kt"),
+                    workspace = dir.resolve("deleted-worktree").toString(),
+                )
+            )
+        }
+
+        val block = conversation.renderForPrompt()
+
+        assertTrue(block.contains("files: src/main.kt"), block)
+        assertFalse(block.contains("workspace:"), block)
+    }
+
+    @Test
+    @DisplayName("a failed or cancelled run is remembered with its reason")
     fun failuresAndCancelsAreRemembered() {
         val conversation = SessionConversation()
-        conversation.record(
+        conversation.beginTask("fix the build")
+        conversation.endTask(
             status(
-                instruction = "fix the build",
+                "fix the build",
                 statusCode = ResourceStatus.SC_EXPECTATION_FAILED,
                 failureReason = "TokenBudgetExceededException: budget exceeded",
             )
         )
-        conversation.record(
-            status(instruction = "extract prices", cancelled = true, deliverables = listOf("prices.csv"))
-        )
+        conversation.beginTask("extract prices")
+        conversation.endTask(status("extract prices", cancelled = true, deliverables = listOf("prices.csv")))
 
-        val block = conversation.renderBlock()
+        val block = conversation.renderForPrompt()
 
-        assertTrue(block.contains("\"fix the build\" — failed"), block)
-        assertTrue(block.contains("TokenBudgetExceededException: budget exceeded"), block)
-        assertTrue(block.contains("\"extract prices\" — cancelled"), block)
-        // An aborted run's deliverables are still the files the next task builds on.
-        assertTrue(block.contains("files: prices.csv"), block)
+        assertTrue(block.contains("→ failed — TokenBudgetExceededException: budget exceeded"), block)
+        assertTrue(block.contains("→ cancelled · files: prices.csv"), block)
     }
 
-    @Test
-    @DisplayName("a task with no instruction to remember is skipped")
-    fun aBlankInstructionIsSkipped() {
-        val conversation = SessionConversation()
+    // ---- compression (the compression instruction) ------------------------------
 
-        conversation.record(status(instruction = null))
-        conversation.record(status(instruction = "   "))
-
-        assertEquals(0, conversation.size)
-        assertEquals("", conversation.renderBlock())
-    }
-
-    @Test
-    @DisplayName("only the newest tasks keep their details; older ones roll up into one line")
-    fun olderTasksAreCompacted() {
-        val conversation = SessionConversation(detailEntries = 2)
-        (1..5).forEach { index ->
-            conversation.record(status(instruction = "task $index", summary = "summary $index"))
-        }
-
-        val block = conversation.renderBlock()
-
-        assertTrue(block.contains("3 earlier task(s), compacted:"), block)
-        assertTrue(block.contains("\"task 1\" (done)"), block)
-        assertTrue(block.contains("\"task 3\" (done)"), block)
-        // The two newest keep their details.
-        assertTrue(block.contains("\"task 4\" — done — summary 4"), block)
-        assertTrue(block.contains("\"task 5\" — done — summary 5"), block)
-        assertFalse(block.contains("summary 1"), "a compacted task shows no details: $block")
-    }
-
-    @Test
-    @DisplayName("an over-budget block compacts automatically instead of growing")
-    fun anOverBudgetBlockCompacts() {
-        val budget = 1_200
-        val conversation = SessionConversation(budgetChars = budget, detailEntries = 5)
-        (1..6).forEach { index ->
-            conversation.record(
-                status(
-                    instruction = "task $index " + "x".repeat(60),
-                    summary = "summary $index " + "y".repeat(80),
-                    files = listOf("module/file-$index.kt"),
-                )
-            )
-        }
-
-        val block = conversation.renderBlock()
-
-        assertTrue(block.length <= budget, "the block must respect its budget: ${block.length} > $budget\n$block")
-        // Compaction is a rollup, never a silent drop of the whole session.
-        assertTrue(block.contains("earlier task(s)"), block)
-        assertTrue(block.contains("\"task 6"), "the newest task always survives: $block")
-        assertTrue(block.contains("do not repeat work"), "the guidance text survives: $block")
-    }
-
-    @Test
-    @DisplayName("a budget even the digest cannot fit falls back to goal + newest task")
-    fun aTinyBudgetDegradesGracefully() {
-        val budget = SessionConversation.MIN_BUDGET_CHARS
-        val conversation = SessionConversation(budgetChars = budget)
-        (1..3).forEach { index ->
-            conversation.record(
-                status(
-                    instruction = "task $index " + "x".repeat(80),
-                    summary = "summary $index " + "y".repeat(120),
-                )
-            )
-        }
-
-        val block = conversation.renderBlock()
-
-        assertTrue(block.length <= budget, "got ${block.length} > $budget\n$block")
-        assertTrue(block.contains(SESSION_BLOCK_MARKER), block)
-        // The last resort must not degrade into "header only": the goal and the newest
-        // task are what the next instruction is written against.
-        assertTrue(block.contains("Session goal"), block)
-        assertTrue(block.contains("\"task 3 "), block)
-    }
-
-    // ---- focus: the session must not forget what it set out to do -----------
-
-    /// The failure this guards against: a recency-biased compaction folds the FIRST
-    /// task (the session's goal) into "and N more" and then evicts it, so a long
-    /// session only remembers its last few sub-steps.
-    @Test
-    @DisplayName("the session goal survives every compaction step")
-    fun theSessionGoalSurvivesCompaction() {
-        val conversation = SessionConversation(budgetChars = 900, detailEntries = 2)
-        conversation.record(
-            status(instruction = "implement the CSV export end to end", summary = "step 1")
-        )
-        (2..9).forEach { index ->
-            conversation.record(
-                status(
-                    instruction = "sub-step $index " + "x".repeat(50),
-                    summary = "did sub-step $index " + "y".repeat(60),
-                    problems = if (index == 2) listOf("the xlsx writer was unavailable") else null,
-                )
-            )
-        }
-
-        val block = conversation.renderBlock()
-
-        assertTrue(block.length <= 900, "got ${block.length}\n$block")
-        assertTrue(
-            block.contains("Session goal (set by the first task"),
-            "the founding task must stay labelled as the goal after 9 tasks: $block",
-        )
-        assertTrue(
-            block.contains("implement the CSV export end to end"),
-            "the goal must still say WHAT the session is for: $block",
-        )
-        // The first task's detail bullet is long gone — the goal line is what carries it.
-        assertFalse(block.contains("\"implement the CSV export end to end\" — done"), block)
-    }
-
-    @Test
-    @DisplayName("the goal is anchored once, from the first task only")
-    fun theGoalComesFromTheFirstTaskOnly() {
-        val conversation = SessionConversation(detailEntries = 1)
-        conversation.record(status(instruction = "the original goal"))
-        conversation.record(status(instruction = "a later sub-step"))
-
-        assertEquals("the original goal", conversation.goal)
-        val block = conversation.renderBlock()
-        assertTrue(block.contains("Session goal"), block)
-        assertEquals(
-            1,
-            Regex("Session goal").findAll(block).count(),
-            "the goal line is stated once per block: $block",
-        )
-
-        // A one-task session has not folded anything: the goal would only repeat the
-        // bullet that is already there.
-        val single = SessionConversation().apply { record(status(instruction = "only task")) }
-        assertFalse(single.renderBlock().contains("Session goal"), single.renderBlock())
-
-        conversation.clear()
-        assertNull(conversation.goal)
-        assertNull(conversation.renderBlock().ifBlank { null })
-    }
-
-    /// A problem reported by an *older* task is exactly what "don't forget" means: the
-    /// bullet that carried it is folded away, so it gets its own section.
-    @Test
-    @DisplayName("open problems from folded tasks stay visible")
-    fun openProblemsFromFoldedTasksStayVisible() {
-        val conversation = SessionConversation(detailEntries = 1)
-        conversation.record(
-            status(instruction = "fix the build", problems = listOf("the CI gate was not run"))
-        )
-        conversation.record(status(instruction = "add the export"))
-        conversation.record(status(instruction = "run the tests"))
-
-        val block = conversation.renderBlock()
-
-        assertTrue(
-            block.contains("Problems earlier tasks reported as unresolved"),
-            block,
-        )
-        assertTrue(
-            block.contains("\"fix the build\": the CI gate was not run"),
-            "an unresolved problem must outlive its folded bullet: $block",
-        )
-        // A task still in detail keeps its own problems in its bullet — no duplication.
-        val detailed = SessionConversation(detailEntries = 3)
-        detailed.record(status(instruction = "a", problems = listOf("p1")))
-        assertFalse(
-            detailed.renderBlock().contains("Problems earlier tasks reported"),
-            detailed.renderBlock(),
-        )
-    }
-
-    /// The last resort used to keep the header and stale titles while cutting the one
-    /// bullet the next task refers to.
-    @Test
-    @DisplayName("degradation never keeps stale titles instead of the newest task")
-    fun degradationNeverDropsTheNewestTask() {
+    private fun crowdedConversation(): SessionConversation {
+        // The minimum budget is deliberately small enough to be crossed by a handful
+        // of turns, so the compress path is exercised without a huge fixture.
         val conversation = SessionConversation(budgetChars = SessionConversation.MIN_BUDGET_CHARS)
-        (1..6).forEach { index ->
-            conversation.record(
-                status(
-                    instruction = "task $index " + "x".repeat(80),
-                    summary = "summary $index " + "y".repeat(200),
-                )
-            )
+        conversation.beginTask("first task")
+        repeat(8) { index ->
+            conversation.noteEvent(model("model note $index " + "x".repeat(SessionConversation.MODEL_CHARS)))
+            conversation.noteEvent(tool("coding.write", """{"path":"file-$index.kt"}"""))
         }
-
-        val block = conversation.renderBlock()
-
-        assertTrue(block.length <= SessionConversation.MIN_BUDGET_CHARS, block)
-        assertTrue(block.contains("\"task 6 "), "the newest task is the one that matters: $block")
-        assertTrue(block.contains("Session goal"), block)
-    }
-
-    /// The mirror image of forgetting the goal: a block that keeps insisting on the
-    /// founding task fights the instruction the user just typed.
-    @Test
-    @DisplayName("a mid-session goal correction is recorded and outranks the goal")
-    fun aGoalCorrectionOutranksTheGoal() {
-        val conversation = SessionConversation(detailEntries = 1)
-        conversation.record(status(instruction = "implement the web UI end to end"))
-        conversation.record(status(instruction = "add the settings page"))
-        conversation.record(status(instruction = "actually, ship the CLI flag first and drop the web UI"))
-        conversation.record(status(instruction = "run the CLI tests"))
-
-        val block = conversation.renderBlock()
-
-        assertTrue(block.contains("User corrections (they supersede the goal below where they conflict)"), block)
-        assertTrue(
-            block.contains("task 3: \"actually, ship the CLI flag first and drop the web UI\""),
-            "the redirection must be recorded with where it happened: $block",
-        )
-        // Both facts stay visible: the original anchor and the newer direction.
-        assertTrue(block.contains("Session goal (set by the first task; later corrections supersede it)"), block)
-        assertTrue(block.contains("implement the web UI end to end"), block)
-        assertTrue(block.contains("if it contradicts anything below, it wins"), block)
-        // The correction is rendered ABOVE the goal, so a fold can never hide it first.
-        assertTrue(
-            block.indexOf("User corrections") < block.indexOf("Session goal"),
-            "the correction must precede the goal: $block",
-        )
-        assertEquals(
-            listOf("actually, ship the CLI flag first and drop the web UI"),
-            conversation.correctionTexts(),
-        )
+        conversation.endTask(status("first task"))
+        conversation.beginTask("second task")
+        conversation.noteEvent(model("working on the second task"))
+        return conversation
     }
 
     @Test
-    @DisplayName("an ordinary next task is not mistaken for a correction")
-    fun ordinaryTasksAreNotCorrections() {
-        val conversation = SessionConversation(detailEntries = 1)
-        conversation.record(status(instruction = "implement the web UI"))
-        conversation.record(status(instruction = "add the settings page"))
-        conversation.record(status(instruction = "write the tests for the settings page"))
+    @DisplayName("a transcript over budget asks for compression; a small one does not")
+    fun theBudgetDecidesCompression() {
+        assertFalse(SessionConversation().needsCompression())
 
-        assertEquals(emptyList<String>(), conversation.correctionTexts())
-        assertFalse(conversation.renderBlock().contains("User corrections"), conversation.renderBlock())
-    }
+        val conversation = crowdedConversation()
 
-    /// A line typed into a running task is the most direct statement of intent there is,
-    /// and it used to die with the run it steered.
-    @Test
-    @DisplayName("a correction typed into a running task is recorded")
-    fun midTaskSteeringIsRecorded() {
-        val conversation = SessionConversation(detailEntries = 1)
-        conversation.record(status(instruction = "implement the export"))
-        conversation.noteUserInput(listOf("no, use CSV not XLSX"))
-        conversation.noteUserInput(listOf("   ", "keep the header row"))
-
-        assertEquals(
-            listOf("no, use CSV not XLSX", "keep the header row"),
-            conversation.correctionTexts(),
-        )
-        val block = conversation.renderBlock()
-        assertTrue(block.contains("during task 2: \"no, use CSV not XLSX\""), block)
-        // Deduplicated: a repeated line is one instruction, not two.
-        conversation.noteUserInput(listOf("no, use CSV not XLSX"))
-        assertEquals(2, conversation.correctionTexts().size)
+        assertTrue(conversation.needsCompression(), conversation.renderForPrompt())
     }
 
     @Test
-    @DisplayName("corrections are bounded to the newest few")
-    fun correctionsAreBounded() {
-        val conversation = SessionConversation(detailEntries = 1)
-        conversation.record(status(instruction = "start"))
-        (1..(SessionConversation.CORRECTION_ENTRIES + 3)).forEach { index ->
-            conversation.noteUserInput(listOf("change of plan $index"))
-        }
+    @DisplayName("compression folds the older tasks and keeps the newest one raw")
+    fun compressionKeepsTheNewestTask() {
+        val conversation = crowdedConversation()
 
-        val texts = conversation.correctionTexts()
-        assertEquals(SessionConversation.CORRECTION_ENTRIES, texts.size)
-        assertEquals("change of plan ${SessionConversation.CORRECTION_ENTRIES + 3}", texts.last())
-    }
+        val input = conversation.compressionInput()
+        assertTrue(input.contains("#1 first task"), input)
+        assertTrue(input.contains("## Transcript to compact"), input)
+        assertFalse(input.contains("#2 second task"), "the running task must not be folded: $input")
 
-    /// At the smallest size only one of goal/correction fits, and the newer direction is
-    /// the one that must survive.
-    @Test
-    @DisplayName("the smallest block states the newest correction instead of the stale goal")
-    fun minimalStatesTheNewestCorrection() {
-        val conversation = SessionConversation(budgetChars = SessionConversation.MIN_BUDGET_CHARS)
-        conversation.record(status(instruction = "implement the web UI end to end"))
-        (2..6).forEach { index -> conversation.record(status(instruction = "sub-step $index " + "x".repeat(60))) }
-        conversation.noteUserInput(listOf("actually, drop the web UI"))
+        conversation.adoptCompressed("SESSION MEMORY: the goal is a CSV export")
 
-        val block = conversation.renderBlock()
-
-        assertTrue(block.length <= SessionConversation.MIN_BUDGET_CHARS, block)
-        assertTrue(
-            block.contains("Latest user correction (supersedes the original goal)"),
-            "the redirect must outlive the goal at the smallest budget: $block",
-        )
-        assertTrue(block.contains("actually, drop the web UI"), block)
+        val block = conversation.renderForPrompt()
+        assertTrue(block.contains(SESSION_MEMORY_MARKER), block)
+        assertTrue(block.contains("SESSION MEMORY: the goal is a CSV export"), block)
+        assertTrue(block.contains("#2 second task"), block)
+        assertTrue(block.contains("model: working on the second task"), block)
+        assertFalse(block.contains("#1 first task"), "the folded turns are gone: $block")
+        // The memory replaced them, so the transcript is small again.
+        assertFalse(conversation.needsCompression(), block)
     }
 
     @Test
-    @DisplayName("the correction cues recognize redirections without eating ordinary text")
-    fun correctionCuesAreConservative() {
-        for (text in listOf(
-            "actually, we should ship the CLI first",
-            "use the v2 endpoint instead",
-            "forget about the settings page",
-            "this is no longer needed",
-            "改用 CSV 输出",
-            "把 web UI 先不做了",
-            "重新定义一下这个会话的目标",
-        )) {
-            assertTrue(looksLikeCorrection(text), text)
-        }
-        for (text in listOf(
-            "add the settings page",
-            "write the tests for the settings page",
-            "run the browser4-rest tests",
-            "修复编译错误",
-            "把 CSV 导出的测试补上",
-        )) {
-            assertFalse(looksLikeCorrection(text), text)
-        }
+    @DisplayName("a second compression keeps what the first one remembered")
+    fun compressionCarriesTheEarlierMemory() {
+        val conversation = crowdedConversation()
+        conversation.adoptCompressed("SESSION MEMORY: keep the CLI flag")
+
+        val input = conversation.compressionInput()
+
+        assertTrue(input.contains("## Session memory already compressed"), input)
+        assertTrue(input.contains("SESSION MEMORY: keep the CLI flag"), input)
     }
 
     @Test
-    @DisplayName("the remembered task list is bounded")
-    fun theRecordListIsBounded() {
+    @DisplayName("the compression instruction says what must survive the fold")
+    fun theCompressionInstructionIsExplicit() {
+        val instruction = SessionConversation(memoryChars = 800 * SessionConversation.CHARS_PER_TOKEN)
+            .compressionSystemInstruction()
+
+        assertTrue(instruction.contains("smallest memory block"), instruction)
+        assertTrue(instruction.contains("session goal"), instruction)
+        assertTrue(instruction.contains("correction"), instruction)
+        assertTrue(instruction.contains("workspace"), instruction)
+        assertTrue(instruction.contains("open problems"), instruction)
+        assertTrue(instruction.contains("about 800 tokens"), instruction)
+        assertTrue(instruction.contains("Output only the memory block"), instruction)
+    }
+
+    @Test
+    @DisplayName("a late steering line is remembered as an undelivered user instruction")
+    fun undeliveredSteeringIsRemembered() {
         val conversation = SessionConversation()
-        (1..(SessionConversation.MAX_RECORDS + 8)).forEach { index ->
-            conversation.record(status(instruction = "task $index"))
-        }
+        conversation.beginTask("do something")
+        conversation.noteUserInput(listOf("no, use CSV not XLSX", "  "))
 
-        assertEquals(SessionConversation.MAX_RECORDS, conversation.size)
-        assertEquals("task 9", conversation.snapshot().first().instruction)
-        assertEquals(
-            "task ${SessionConversation.MAX_RECORDS + 8}",
-            conversation.snapshot().last().instruction,
+        val block = conversation.renderForPrompt()
+
+        assertTrue(block.contains("not delivered"), block)
+        assertTrue(block.contains("no, use CSV not XLSX"), block)
+        assertEquals(2, conversation.size)
+    }
+
+    // ---- durability across a backend restart -------------------------------------
+
+    private fun storeFor(dir: Path, sessionKey: String = "work", ttlMinutes: Long = 720) =
+        requireNotNull(
+            SessionConversationStore.open(
+                sessionKey,
+                ttlMinutes,
+                dir.resolve("agent-session-context.jsonl"),
+            )
         )
-        // Eviction drops the founding RECORD but not the goal.
-        assertEquals("task 1", conversation.goal)
 
-        conversation.clear()
-        assertEquals(0, conversation.size)
-        assertEquals("", conversation.renderBlock())
+    @Test
+    @DisplayName("a backend restart does not lose the session's context")
+    fun theConversationSurvivesARestart(@TempDir dir: Path) {
+        val first = SessionConversation().apply {
+            attach(storeFor(dir))
+            beginTask("add the CSV export")
+            noteEvent(model("I'll add the export flag"))
+            noteEvent(tool("coding.write", """{"path":"src/export.kt"}"""))
+            endTask(status("add the CSV export", files = listOf("src/export.kt")))
+        }
+        assertEquals(4, first.size)
+
+        // The restart: a brand new runner builds a brand new conversation, same id.
+        val restarted = SessionConversation().apply { attach(storeFor(dir)) }
+
+        val block = restarted.renderForPrompt()
+        assertTrue(block.contains("#1 add the CSV export"), block)
+        assertTrue(block.contains("model: I'll add the export flag"), block)
+        assertTrue(block.contains("tools: coding.write") || block.contains("tool: coding.write"), block)
+        assertEquals(4, restarted.size)
+        assertEquals(1, restarted.tasks)
     }
 
     @Test
-    @DisplayName("fromConf reads the switch and the budget")
-    fun fromConfReadsTheSettings() {
-        // The defaults: on, with the default budget.
-        assertNotNull(SessionConversation.fromConf(ImmutableConfig()))
-        assertNull(SessionConversation.fromSettings(enabled = false, tokens = 500))
+    @DisplayName("a compressed memory survives a restart")
+    fun theCompressedMemorySurvivesARestart(@TempDir dir: Path) {
+        SessionConversation().apply {
+            attach(storeFor(dir))
+            beginTask("first task")
+            endTask(status("first task"))
+            adoptCompressed("SESSION MEMORY: the goal")
+        }
+
+        val restarted = SessionConversation().apply { attach(storeFor(dir)) }
+
+        assertTrue(restarted.renderForPrompt().contains("SESSION MEMORY: the goal"), restarted.renderForPrompt())
+    }
+
+    @Test
+    @DisplayName("an expired conversation is not restored")
+    fun anExpiredConversationIsNotRestored(@TempDir dir: Path) {
+        val store = storeFor(dir, ttlMinutes = 60)
+        val savedAt = 1_000_000L
+        store.save(
+            SessionSnapshot(
+                sessionId = "work",
+                updatedAt = savedAt,
+                taskCount = 1,
+                turns = listOf(SessionTurn(SessionConversation.TASK, "#1 old task")),
+            )
+        )
+
+        // Just inside the TTL it is still the session's memory ...
+        assertEquals(1, store.restore(now = savedAt + 59 * 60_000L)?.turns?.size)
+        // ... and past it, a reused session id must not resurrect a dead session.
+        assertNull(store.restore(now = savedAt + 61 * 60_000L))
+    }
+
+    @Test
+    @DisplayName("a session restores only its own conversation")
+    fun theStoreIsPerSessionId(@TempDir dir: Path) {
+        val store = storeFor(dir, sessionKey = "work")
+        store.save(
+            SessionSnapshot(
+                sessionId = "work",
+                updatedAt = System.currentTimeMillis(),
+                taskCount = 1,
+                turns = listOf(SessionTurn(SessionConversation.TASK, "#1 work task")),
+            )
+        )
+
+        val other = SessionConversation().apply { attach(storeFor(dir, sessionKey = "other")) }
+
+        assertEquals("", other.renderForPrompt())
+        assertEquals(1, store.restore()?.turns?.size)
+    }
+
+    @Test
+    @DisplayName("clearing the conversation is persisted too")
+    fun aClearIsPersisted(@TempDir dir: Path) {
+        val first = SessionConversation().apply {
+            attach(storeFor(dir))
+            beginTask("task one")
+            endTask(status("task one"))
+        }
+        assertEquals(2, first.size)
+
+        first.clear()
+
+        val restarted = SessionConversation().apply { attach(storeFor(dir)) }
+        assertEquals(0, restarted.size)
+        assertEquals("", restarted.renderForPrompt())
+    }
+
+    @Test
+    @DisplayName("persistence needs a session key and a positive TTL")
+    fun persistenceNeedsAKeyAndATtl(@TempDir dir: Path) {
+        val file = dir.resolve("agent-session-context.jsonl")
+
+        assertNull(SessionConversationStore.open(null, 720, file))
+        assertNull(SessionConversationStore.open("   ", 720, file))
+        // `contextTtlMinutes=0` keeps the pre-persistence behaviour: memory only.
+        assertNull(SessionConversationStore.open("work", 0, file))
+        assertNotNull(SessionConversationStore.open("work", 720, file))
+    }
+
+    @Test
+    @DisplayName("the anonymous DEFAULT pool is never persisted")
+    fun theDefaultSessionHasNoDurableHome(@TempDir dir: Path) {
+        // Every session-less `agent run` / MCP caller shares DEFAULT; persisting it
+        // would let unrelated one-shot tasks inherit each other across a restart.
+        assertNull(SessionConversationStore.open("DEFAULT", 720, dir.resolve("agent-session-context.jsonl")))
+        assertNotNull(SessionConversationStore.open("work", 720, dir.resolve("agent-session-context.jsonl")))
+    }
+
+    // ---- configuration and the block's lifecycle --------------------------------
+
+    @Test
+    @DisplayName("the feature and the transcript budget are configurable")
+    fun fromSettingsReadsTheSettings() {
+        assertNull(SessionConversation.fromSettings(enabled = false, tokens = 1000))
+        // A non-positive budget disables the injection instead of shipping a block
+        // that is compressed on arrival.
         assertNull(SessionConversation.fromSettings(enabled = true, tokens = 0))
-        assertNull(SessionConversation.fromSettings(enabled = true, tokens = -5))
 
-        val conversation = SessionConversation.fromSettings(enabled = true, tokens = 300)!!
-        conversation.record(status(instruction = "task 1", summary = "a long summary ".repeat(100)))
-        assertTrue(
-            conversation.renderBlock().length <= 300 * SessionConversation.CHARS_PER_TOKEN,
-            conversation.renderBlock(),
-        )
+        // The default budget is comfortably larger than a short session, so it is not
+        // compressed on arrival.
+        val conversation = requireNotNull(SessionConversation.fromSettings(enabled = true, tokens = null))
+        conversation.beginTask("only task")
+        repeat(4) { conversation.noteEvent(model("note $it")) }
+        assertFalse(conversation.needsCompression())
 
-        // A budget below the floor is raised, not silently honoured: a goal plus one task
-        // cannot be said in fewer characters, and a block that dropped them would be
-        // worse than no block at all.
-        val cramped = SessionConversation.fromSettings(enabled = true, tokens = 20)!!
-        (1..5).forEach { index -> cramped.record(status(instruction = "task $index", summary = "s")) }
-        assertTrue(
-            cramped.renderBlock().length <= SessionConversation.MIN_BUDGET_CHARS,
-            cramped.renderBlock(),
-        )
-        assertTrue(cramped.renderBlock().contains("Session goal"), cramped.renderBlock())
+        // A deliberately small budget compresses the same session.
+        val small = requireNotNull(SessionConversation.fromSettings(enabled = true, tokens = 1))
+        small.beginTask("task")
+        repeat(4) { small.noteEvent(model("x".repeat(SessionConversation.MODEL_CHARS))) }
+        assertTrue(small.needsCompression())
     }
 
     @Test
     @DisplayName("stripSessionBlock removes the session block and keeps the task")
     fun stripSessionBlockKeepsTheTask() {
         val task = "add the CSV export"
-        val block = SessionConversation().apply { record(status(instruction = "previous")) }.renderBlock()
+        val block = SessionConversation().apply {
+            beginTask("previous")
+            endTask(status("previous"))
+        }.renderForPrompt()
         val prompt = "$task\n\n$block"
 
         assertEquals(task, stripSessionBlock(prompt))
@@ -496,42 +452,92 @@ class SessionConversationTest {
     }
 
     @Test
-    @DisplayName("the resume block and the session block strip in either order")
-    fun resumeAndSessionBlocksStripTogether() {
-        val conversation = SessionConversation().apply { record(status(instruction = "previous")) }
-        val resume = """
-            add the CSV export
-
-            ## Resume context
-
-            This run resumes task older, which was interrupted before completion
-        """.trimIndent()
-        val prompt = "$resume\n\n${conversation.renderBlock()}"
-
-        assertEquals("add the CSV export", stripResumeBlock(stripSessionBlock(prompt)))
-        assertEquals("add the CSV export", stripSessionBlock(stripResumeBlock(prompt)))
-    }
-
-    @Test
     @DisplayName("recording a run keeps the block out of its history")
     fun theHistoryDoesNotKeepTheSessionBlock() {
-        val conversation = SessionConversation().apply { record(status(instruction = "previous")) }
-        val completed = status(instruction = "add the CSV export", summary = "done")
+        val conversation = SessionConversation().apply {
+            beginTask("previous")
+            endTask(status("previous"))
+        }
+        val completed = status("add the CSV export")
         val state = completed.agentHistory!!.states.first()
-        state.instruction = "${state.instruction}\n\n${conversation.renderBlock()}"
+        state.instruction = "${state.instruction}\n\n${conversation.renderForPrompt()}"
 
         stripSessionBlockFromHistory(completed.agentHistory)
 
         assertEquals("add the CSV export", state.instruction)
         // A history without a block stays untouched.
-        val clean = status(instruction = "another task")
+        val clean = status("another task")
         stripSessionBlockFromHistory(clean.agentHistory)
         assertEquals("another task", clean.agentHistory!!.states.first().instruction)
         stripSessionBlockFromHistory(null)
     }
 
     @Test
-    @DisplayName("elapsed times render short enough for a bullet")
+    @DisplayName("the in-process conversation is carried between tasks and cleared with the session")
+    fun theInProcessConversationIsCarried() {
+        val conversation = SessionConversation()
+        assertFalse(conversation.hasConversationMessages())
+        assertTrue(conversation.messageHistory().isEmpty())
+
+        // A run that produced nothing must not erase the session's memory.
+        conversation.adoptConversationMessages(null)
+        conversation.adoptConversationMessages(emptyList())
+        assertFalse(conversation.hasConversationMessages())
+
+        val messages = listOf<UserMessage>(
+            UserMessage.from("first task"),
+            UserMessage.from("second task"),
+        )
+        conversation.adoptConversationMessages(messages)
+        assertTrue(conversation.hasConversationMessages())
+        assertEquals(messages, conversation.messageHistory())
+
+        // A new session must not inherit the old list.
+        conversation.clear()
+        assertFalse(conversation.hasConversationMessages())
+    }
+
+    @Test
+    @DisplayName("beginTask checkpoints the conversation so a later task can rewind to it")
+    fun beginTaskCheckpointsTheConversation() {
+        val conversation = SessionConversation()
+        val first = listOf<UserMessage>(UserMessage.from("first task"))
+        conversation.adoptConversationMessages(first)
+
+        conversation.beginTask("second task", "task-2")
+
+        // The checkpoint of a task is the conversation as it was BEFORE that task ran.
+        assertEquals(first, conversation.rewindStartOf("task-2"))
+        assertNull(conversation.rewindStartOf("unknown"))
+        assertTrue(conversation.branchSummaryInstruction().contains("## What not to repeat"))
+
+        // A rewind replaces the conversation even when the checkpoint is empty: the
+        // compacted transcript must not re-inject what the user just rewound away from.
+        conversation.replaceConversationMessages(emptyList())
+        assertTrue(
+            conversation.hasConversationMessages(),
+            "an empty rewound conversation is still a deliberate conversation",
+        )
+        assertTrue(conversation.messageHistory().isEmpty())
+
+        conversation.clear()
+        assertEquals(0, conversation.rewindCheckpointCount)
+    }
+
+    @Test
+    @DisplayName("rewind checkpoints are bounded, the oldest dropped first")
+    fun rewindCheckpointsAreBounded() {
+        val conversation = SessionConversation()
+        val last = SessionConversation.MAX_REWIND_CHECKPOINTS + 3
+        (1..last).forEach { index -> conversation.beginTask("task $index", "task-$index") }
+
+        assertEquals(SessionConversation.MAX_REWIND_CHECKPOINTS, conversation.rewindCheckpointCount)
+        assertNull(conversation.rewindStartOf("task-1"), "the oldest checkpoint is dropped first")
+        assertNotNull(conversation.rewindStartOf("task-$last"))
+    }
+
+    @Test
+    @DisplayName("elapsed times render short enough for a transcript turn")
     fun elapsedFormatting() {
         assertEquals("0s", formatElapsed(900))
         assertEquals("45s", formatElapsed(45_400))

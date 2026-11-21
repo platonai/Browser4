@@ -13,6 +13,8 @@ import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingAgentShell
 import ai.platon.pulsar.coding.CodingComponents
 import ai.platon.pulsar.coding.CodingWorkspace
+import ai.platon.pulsar.coding.sandbox.ExecutionSandboxes
+import ai.platon.pulsar.agentic.cli.CliStateEnv
 import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.skills.SkillContext
 import ai.platon.pulsar.agentic.skills.SkillRegistry
@@ -132,7 +134,14 @@ class AgentToolManager constructor(
         )
     }
     val skillTarget: SkillToolTarget by lazy { SkillToolTarget(skillContext, SkillRegistry.instance) }
-    val skills: SkillToolExecutor = SkillToolExecutor(accessPolicy = { accessPolicy })
+    val skills: SkillToolExecutor = SkillToolExecutor(
+        accessPolicy = { accessPolicy },
+        workspace = { workspaceRoot },
+        // Same resolution the coding shell uses: an operator's explicit backend wins, otherwise the
+        // mode's chain. `null`/off keeps the historical launch for skill scripts.
+        sandbox = { runCatching { ai.platon.pulsar.coding.CodingComponents.sandbox(accessPolicy) }.getOrNull() },
+        sessionEnv = { cliSessionEnv() },
+    )
 
     /**
      * Domain alias are mainly used for backward capability
@@ -380,6 +389,13 @@ class AgentToolManager constructor(
             ))
             gitBaseline = emptySet()
         }.onFailure { logger.warn("endTask manifest write failed: {}", it.message) }
+
+        // Release the OS grants the task received (integrity labels, ACLs, container identity). The
+        // Windows backends share their security identity across tasks, so a grant left behind is a
+        // standing permission for the next task: releasing here, in the same finally that records the
+        // task, bounds it to the task's own lifetime (2026-11-20 review, issue S2).
+        runCatching { ExecutionSandboxes.releaseTask(root) }
+            .onFailure { logger.warn("endTask sandbox release failed: {}", it.message) }
     }
 
     /** Git status baseline captured at task start; cleared on task end. */
@@ -404,6 +420,10 @@ class AgentToolManager constructor(
      * - `BROWSER4_CLI_SERVER` pins the CLI to the running backend, so it never starts one.
      * - `BROWSER4_CLI_INVOKE_DIR` points the CLI's root search at the checkout, which
      *   selects the same `workspaces/<slug>` state namespace the agent's session lives in.
+     * - `BROWSER4_CLI_STATE_DIR` relocates the CLI state into the task workspace when a boundary is
+     *   on (see [ai.platon.pulsar.agentic.cli.CliStateEnv]): the default `~/.browser4` stays
+     *   readable but becomes unwritable, so `attach` used to persist its session to a fallback the
+     *   next invocation never read.
      * - Explicit state/runtime/session overrides are passed through when the operator set
      *   them; the shell's environment whitelist would otherwise drop them.
      */
@@ -414,8 +434,14 @@ class AgentToolManager constructor(
         runCatching { CliBinaryResolver().devRoot() }.getOrNull()
             ?.let { env["BROWSER4_CLI_INVOKE_DIR"] = it.toString() }
         val overrides = System.getenv()
-        overrides["BROWSER4_CLI_STATE_DIR"]?.takeIf { it.isNotBlank() }
-            ?.let { env["BROWSER4_CLI_STATE_DIR"] = it }
+        // Same resolution as `b4.run` (CliProcessManager.sandboxedSpec): an operator's explicit
+        // directory wins, otherwise a boundary moves the state into the workspace so a shell can
+        // see the session it just attached. An unsandboxed run keeps the flat `~/.browser4`.
+        CliStateEnv.stateDir(
+            overrides["BROWSER4_CLI_STATE_DIR"],
+            runCatching { CodingComponents.sandbox(accessPolicy).id }.getOrNull(),
+            workspaceRoot,
+        )?.let { env["BROWSER4_CLI_STATE_DIR"] = it }
         overrides["BROWSER4_RUNTIME_DIR"]?.takeIf { it.isNotBlank() }
             ?.let { env["BROWSER4_RUNTIME_DIR"] = it }
         overrides["BROWSER4_CLI_SESSION"]?.takeIf { it.isNotBlank() }
@@ -451,6 +477,15 @@ class AgentToolManager constructor(
         // Per-task policy: `b4.run`'s file:// and upload must obey the same
         // boundary as the coding tools (read lazily — the policy changes per task).
         accessPolicy = { accessPolicy },
+        // `b4.run` runs the CLI on the same OS boundary as `coding.shell`: it was the widest
+        // remaining agent channel (it spawned the CLI at the backend's integrity level). A backend
+        // that cannot host the CLI at all (the browse container: profile unreachable, no loopback)
+        // answers `null` here and keeps the historical launch — declared as a backend capability, not
+        // a silent fallback, and reported by `coding.permissions` as outside the boundary.
+        cliProcessManager = ai.platon.pulsar.agentic.cli.CliProcessManager(
+            sandbox = { runCatching { ai.platon.pulsar.coding.CodingComponents.b4RunSandbox(accessPolicy) }.getOrNull() },
+            workspace = { workspaceRoot },
+        ),
     )
 
     /**

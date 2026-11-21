@@ -28,6 +28,28 @@ class ExecutionSandboxTest {
     lateinit var tempDir: Path
 
     @Test
+    @DisplayName("releaseTask reaches the backend that prepared the workspace, exactly once")
+    fun releaseTaskDispatchesOnce() {
+        val released = mutableListOf<Path>()
+        val backend = object : ExecutionSandbox by OffSandbox {
+            override fun release(workspace: Path) {
+                released.add(workspace.toAbsolutePath().normalize())
+            }
+        }
+        val workspace = Files.createDirectories(tempDir.resolve("ws"))
+
+        ExecutionSandboxes.releaseTask(workspace)
+        assertTrue(released.isEmpty(), "a workspace this process never prepared has nothing to release")
+
+        ExecutionSandboxes.bindTask(workspace, backend)
+        ExecutionSandboxes.releaseTask(workspace)
+        assertEquals(listOf(workspace.toAbsolutePath().normalize()), released)
+
+        ExecutionSandboxes.releaseTask(workspace)
+        assertEquals(1, released.size, "the binding is consumed by the first release")
+    }
+
+    @Test
     @DisplayName("off and windows-acl resolve; known-but-unimplemented and unknown ids fail hard")
     fun sandboxResolution() {
         assertEquals("off", ExecutionSandboxes.of("").id)
@@ -241,7 +263,12 @@ class ExecutionSandboxTest {
 
         val env = SandboxEnvironment.build(inherited)
 
-        assertEquals(setOf("PATH", "HOME", "JAVA_HOME", "USERPROFILE"), env.keys)
+        // PYTHONIOENCODING is a deliberate default (Python writes GBK into a UTF-8 pipe on a
+        // zh-CN host otherwise), so it is present even though nothing inherited it.
+        assertEquals(
+            setOf("PATH", "HOME", "JAVA_HOME", "USERPROFILE", "PYTHONIOENCODING"),
+            env.keys,
+        )
         assertFalse(env.containsValue("sk-deepseek"))
         assertFalse(env.containsValue("ghp_x"))
     }
@@ -315,5 +342,31 @@ class ExecutionSandboxTest {
         val output = shell.execute(command)
 
         assertTrue(output.contains("http://127.0.0.1:18182"), output)
+    }
+
+    @Test
+    @DisplayName("children get a UTF-8 stdio contract for Python, and an explicit value wins")
+    fun pythonStdioDefaultsToUtf8() = runBlocking {
+        Files.createDirectories(tempDir.resolve("ws"))
+        // On a zh-CN Windows host `print('中文')` writes GBK bytes into a pipe the agent reads as
+        // UTF-8, so the text arrived as mojibake (or, with per-line decoding, one wrong word).
+        val shell = CodingAgentShell(baseDir = tempDir.resolve("ws"))
+        val command = if (System.getProperty("os.name").lowercase().contains("win")) {
+            "echo %PYTHONIOENCODING%"
+        } else {
+            "echo \"\$PYTHONIOENCODING\""
+        }
+        assertTrue(shell.execute(command).contains("utf-8"), "every child needs the contract")
+
+        // The inherited value is not whitelisted, so it cannot leak in and override the default…
+        assertEquals(
+            "utf-8",
+            SandboxEnvironment.build(mapOf("PYTHONIOENCODING" to "gbk"))["PYTHONIOENCODING"],
+        )
+        // …while an explicitly declared one (session env) still wins.
+        assertEquals(
+            "gbk",
+            SandboxEnvironment.build(emptyMap(), mapOf("PYTHONIOENCODING" to "gbk"))["PYTHONIOENCODING"],
+        )
     }
 }

@@ -136,6 +136,25 @@ enum class ToolErrorCode(
     /** The resource changed under the call. */
     CONFLICT(true, 409, "Re-read the resource and retry."),
 
+    /**
+     * The access policy refused the call before it took effect.
+     *
+     * `PermissionAudit` returns a refusal as a *value* (`PERMISSION_DENIED | code=… | tool=…`) because
+     * the agent loop must survive a refused step, so before this code existed the transport envelope
+     * still said `success` and `tool call --fail-on-error` never tripped (run `permission-e2e`
+     * A03/A07/A08, 2026-11-20). The dispatcher now recognises the leading refusal and answers with
+     * this code; the specific reason (`PATH_DENIED`, `PROTECTED_PATH`, `SANDBOX_DENIED`, …) stays in
+     * the text and in `structuredContent.permissionCode`.
+     *
+     * Non-retryable: the rails are not a transient condition, and retrying the identical call cannot
+     * change the policy that refused it.
+     */
+    PERMISSION_DENIED(
+        false, 403,
+        "The access policy refused this call. Use a path the task allows, or ask for an operator " +
+            "grant (`coding.requestAccess`); the refusal text names the exact reason.",
+    ),
+
     /** The task was cancelled. */
     CANCELLED(false, 499, "The task was cancelled; submit a new one if still needed."),
 

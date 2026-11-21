@@ -42,9 +42,54 @@ class WindowsTokenLaunchTest {
         assertEquals("\"a b\\\\\"", WindowsTokenLauncher.quoteWindowsArgument("a b\\"))
         assertEquals("a\\b", WindowsTokenLauncher.quoteWindowsArgument("a\\b"))
 
+        // A non-shell program keeps the CRT rules: powershell.exe parses its own argv that way.
         assertEquals(
-            "cmd.exe /c \"echo hi\"",
+            "powershell.exe -Command \"Write-Output a\"",
+            WindowsTokenLauncher.buildWindowsCommandLine(
+                listOf("powershell.exe", "-Command", "Write-Output a"),
+            ),
+        )
+    }
+
+    /**
+     * `cmd.exe /c <text>` hands `<text>` to cmd's own parser, so the text is a command-line fragment,
+     * not an argv element. Escaping its quotes produced a literal `\"` the child saw (measured
+     * 2026-11-20: `pwsh -NoProfile -File "…"` exited 64, `cmd /c "…"` reported `'\"echo …\"' is not a
+     * recognized command`).
+     */
+    @Test
+    @DisplayName("the cmd.exe /c tail is passed verbatim, quotes included")
+    fun shellTailIsVerbatim() {
+        assertEquals(
+            "cmd.exe /c echo hi",
             WindowsTokenLauncher.buildWindowsCommandLine(listOf("cmd.exe", "/c", "echo hi")),
+        )
+        assertEquals(
+            "cmd.exe /c pwsh -NoProfile -File \"C:\\a b\\x.ps1\"",
+            WindowsTokenLauncher.buildWindowsCommandLine(
+                listOf("cmd.exe", "/c", "pwsh -NoProfile -File \"C:\\a b\\x.ps1\""),
+            ),
+        )
+        assertEquals(
+            "cmd.exe /v:on /c cmd /v:on /c \"echo probe > !B4_CANARY!\"",
+            WindowsTokenLauncher.buildWindowsCommandLine(
+                listOf("cmd.exe", "/v:on", "/c", "cmd /v:on /c \"echo probe > !B4_CANARY!\""),
+            ),
+        )
+        // Several fragment arguments stay one raw tail: cmd joins them with whitespace itself.
+        assertEquals(
+            "cmd.exe /c echo a b",
+            WindowsTokenLauncher.buildWindowsCommandLine(listOf("cmd.exe", "/c", "echo", "a b")),
+        )
+        // Without /c or /k the argument list is ordinary argv and keeps the CRT rules.
+        assertEquals(
+            "cmd.exe /v:on \"a b\"",
+            WindowsTokenLauncher.buildWindowsCommandLine(listOf("cmd.exe", "/v:on", "a b")),
+        )
+        // Only a leading cmd.exe qualifies: a program that merely takes "/c" is not a shell.
+        assertEquals(
+            "my-tool.exe /c \"a b\"",
+            WindowsTokenLauncher.buildWindowsCommandLine(listOf("my-tool.exe", "/c", "a b")),
         )
     }
 
@@ -85,6 +130,65 @@ class WindowsTokenLaunchTest {
         assertEquals("C:\\tools;C:\\Windows", merged["PATH"], "the toolchain still comes from the declaration")
         assertEquals("C:\\jdk", merged["JAVA_HOME"])
         assertFalse(merged.containsKey("temp"), "a case variant must not duplicate a token-owned variable")
+    }
+
+    /**
+     * `permission-e2e` A10 on `windows-low-il` (2026-11-20): the token environment is the *user's
+     * persistent* environment, so copying it verbatim handed `cmd /c echo %DEEPSEEK_API_KEY%` the
+     * real key — the in-process path's whitelist was bypassed. The token block may only contribute
+     * identity/plumbing and toolchain variables.
+     */
+    @Test
+    @DisplayName("a persistent user secret in the token environment never reaches the child")
+    fun mergeStripsUserSecrets() {
+        val merged = WindowsTokenLauncher.mergeEnvironment(
+            tokenEnvironment = mapOf(
+                "USERPROFILE" to "C:\\Users\\pereg",
+                "TEMP" to "C:\\Users\\pereg\\AppData\\Local\\Temp",
+                "PATH" to "C:\\Windows",
+                "JAVA_HOME" to "C:\\jdk",
+                "DEEPSEEK_API_KEY" to "sk-live-secret",
+                "OPENAI_API_KEY" to "sk-other-secret",
+                "B4_E2E_UNLISTED" to "leaked",
+            ),
+            declared = mapOf("PATH" to "C:\\tools;C:\\Windows"),
+        )
+
+        assertFalse(merged.containsKey("DEEPSEEK_API_KEY"), "an API key must not be inherited: $merged")
+        assertFalse(merged.containsKey("OPENAI_API_KEY"), "an API key must not be inherited: $merged")
+        assertFalse(merged.containsKey("B4_E2E_UNLISTED"), "an unlisted variable must not be inherited: $merged")
+        assertEquals("C:\\Users\\pereg", merged["USERPROFILE"], "the account identity stays")
+        assertEquals("C:\\Users\\pereg\\AppData\\Local\\Temp", merged["TEMP"])
+        assertEquals("C:\\jdk", merged["JAVA_HOME"], "a whitelisted toolchain variable stays")
+        assertEquals("C:\\tools;C:\\Windows", merged["PATH"])
+    }
+
+    /**
+     * `windows-low-il` provisions and labels the child's temp itself, so for that backend the declared
+     * `TEMP`/`TMP` must win — the token's value is the user's Medium `%TEMP%`, which a Low child cannot
+     * write.
+     */
+    @Test
+    @DisplayName("a backend that owns its temp dir can make the declared value win")
+    fun declaredTempWinsWhenTheBackendAsks() {
+        val merged = WindowsTokenLauncher.mergeEnvironment(
+            tokenEnvironment = mapOf(
+                "TEMP" to "C:\\Users\\b4-agent\\AppData\\Local\\Temp",
+                "TMP" to "C:\\Users\\b4-agent\\AppData\\Local\\Temp",
+                "USERPROFILE" to "C:\\Users\\b4-agent",
+            ),
+            declared = mapOf(
+                "temp" to "C:\\ws\\.b4scratch\\tmp",
+                "TMP" to "C:\\ws\\.b4scratch\\tmp",
+                "USERPROFILE" to "C:\\Users\\backend",
+            ),
+            declaredWins = setOf("TEMP", "TMP"),
+        )
+
+        assertEquals("C:\\ws\\.b4scratch\\tmp", merged["temp"], "the task temp must reach the child")
+        assertFalse(merged.containsKey("TEMP"), "the token's spelling must not survive as a duplicate")
+        assertEquals("C:\\ws\\.b4scratch\\tmp", merged["TMP"])
+        assertEquals("C:\\Users\\b4-agent", merged["USERPROFILE"], "identity is still the token's")
     }
 
     @Test
@@ -166,6 +270,60 @@ class WindowsTokenLaunchTest {
         val output = readAll(process)
         assertTrue(process.waitFor(30, TimeUnit.SECONDS))
         assertTrue(output.contains("token-stderr"), output)
+    }
+
+    /**
+     * The measured P0-1 failures (`windows-low-il`, 2026-11-20): a quoted `-File` path made `pwsh`
+     * exit 64 and `cmd /c "…"` received a literal `\"…\"`. Both are the launcher's own quoting, so
+     * both are reproduced and pinned here through a real child process.
+     */
+    @Test
+    @DisplayName("quoted arguments reach the child verbatim")
+    fun quotedArgumentsReachTheChild() {
+        assumeTrue(isWindows, "the token launch only exists on Windows")
+
+        val echoed = startWithCurrentToken(spec("cmd.exe", "/c", "echo \"token quoted\"")) ?: return
+        val echoedOut = readAll(echoed)
+        assertTrue(echoed.waitFor(30, TimeUnit.SECONDS))
+        assertEquals(0, echoed.exitValue(), "stdout=$echoedOut")
+        assertTrue(echoedOut.contains("token quoted"), echoedOut)
+        assertFalse(
+            echoedOut.contains("\\\""),
+            "the launcher escaped a quote the child should have received verbatim: $echoedOut",
+        )
+
+        // The A05 shape: an inner cmd composes the redirect target, which contains a space. The
+        // outer `^>` keeps the redirect for the inner shell (the outer one would eat it), and the
+        // quoted target must arrive intact instead of becoming a literal `\"…\"`.
+        val target = tempDir.resolve("quoted target.txt")
+        val inner = "cmd /v:on /c echo probe ^> \"$target\""
+        val redirect = startWithCurrentToken(spec("cmd.exe", "/c", inner)) ?: return
+        val redirectOut = readAll(redirect)
+        val redirectErr = redirect.errorStream.bufferedReader().use { it.readText() }
+        assertTrue(redirect.waitFor(30, TimeUnit.SECONDS))
+        assertEquals(0, redirect.exitValue(), "stdout=$redirectOut stderr=$redirectErr")
+        assertTrue(
+            Files.isRegularFile(target),
+            "the quoted redirect target must exist; stdout=$redirectOut stderr=$redirectErr",
+        )
+        assertEquals("probe", Files.readString(target).trim())
+    }
+
+    @Test
+    @DisplayName("a quoted -File path runs instead of failing with a usage error")
+    fun quotedScriptPathRuns() {
+        assumeTrue(isWindows, "the token launch only exists on Windows")
+
+        val script = tempDir.resolve("probe script.ps1")
+        Files.writeString(script, "'PROBE_QUOTED_OK'\n")
+        val process = startWithCurrentToken(
+            spec("cmd.exe", "/c", "pwsh -NoProfile -File \"$script\""),
+        ) ?: return
+        val stdout = readAll(process)
+        val stderr = process.errorStream.bufferedReader().use { it.readText() }
+        assertTrue(process.waitFor(120, TimeUnit.SECONDS), "the child must exit")
+        assertEquals(0, process.exitValue(), "stdout=$stdout stderr=$stderr")
+        assertTrue(stdout.contains("PROBE_QUOTED_OK"), "stdout=$stdout stderr=$stderr")
     }
 
     @Test

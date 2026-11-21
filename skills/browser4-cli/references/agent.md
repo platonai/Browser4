@@ -56,7 +56,7 @@ Two consequences matter in practice:
 
 - **The submission echoes the binding, and so does the backend log.** The CLI prints `Task submitted: <id> (session=<sid>, <connection>)` or `(no session — a session-less task)`; `--json` carries `session_id`/`session_connection`, `--ndjson` puts `sessionId`/`connection` on the `task.submitted` line. The authoritative log lines are `tool.call start … tool=command_run session=<browser session>` and `Submitting agent task <task-id> (session=<browser session>)` — both must carry the session id the
   CLI reported. Lines naming the agent's own session use `agentSession=` — a second, unrelated UUID (the agentic session), never the browser session.
-- **Its navigation is not visible in your session's tab list.** The backend saves the URL you were on before the task and navigates back to it when the task ends, so `tab-list`, `page-info` and `snapshot` keep showing your own page and the agent's intermediate pages never appear there. Observe its work through `agent status` (step count and message) and through the artifacts it reports.
+- **Its navigation is not visible in your session's tab list.** The backend saves the URL you were on before the task and navigates back to it when the task ends, so `tab list`, `page info` and `snapshot` keep showing your own page and the agent's intermediate pages never appear there. Observe its work through `agent status` (step count and message) and through the artifacts it reports.
 - **Its deliverables are files, not always fields.** When a task says "extract X", the agent usually writes the data into a file under its own per-task **workspace** and returns a short summary. `agent result` names that directory (`workspace`) and lists the files the agent reported (`filesChanged`), so the deliverable is reachable without searching the backend's app-data tree by hand:
 
 ```bash
@@ -130,7 +130,7 @@ A task's coding tools run under one access **preset** (`full` / `write` / `read-
 
 **Reads are wider than writes.** Browser4's own data root (`~/.browser4`: logs, task data, per-task workspaces, its `tmp/`), `~/.browser4` itself even when a managed `--workspace` moved the data root, the CLI workspace owning `<app data>`, the source checkout, and any folder added with `-Dbrowser4.agent.readPaths=…` are readable from every task — read-only, whatever the preset. The one write scope outside the workspace is the checkout a task's workspace **mirrors** (a self-development task edits the code it runs from; the protected rails still apply). `coding.permissions` lists them; see [agent-access.md](agent-access.md#readable-roots--browser4s-own-folders).
 
-**Two layers, one boundary.** The preset and the string checks (`pathGuard`, `workspaceBoundary`, `allowExternalAccess`) decide what the model may *spell* — they are fast-fail and advisory, not enforcement. The boundary is the **execution sandbox**: `coding.shell` and `coding.runCode` run inside it whenever `browser4.agent.sandbox` selects a backend other than `off`. A fresh Windows installation defaults to `windows-acl`; existing installations and Linux/macOS stay `off` until switched. When the
+**Two layers, one boundary.** The preset and the string checks (`pathGuard`, `workspaceBoundary`, `allowExternalAccess`) decide what the model may *spell* — they are fast-fail and advisory, not enforcement. The boundary is the **execution sandbox**: `coding.shell` and `coding.runCode` run inside it whenever `browser4.agent.sandbox` selects a backend other than `off`, and on the two backends that can execute them the **file mutations** (`coding.write`/`append`/`replace`/`editLines`/`delete`/`mkdir`/`copy`/`move`/`revert`) do too — each change is performed by a child inside the boundary, so an outside write is refused by the OS, not only by the path check. `b4.run` is a *product* channel: it stays inside the boundary on `windows-low-il`/`windows-acl`, and on the browse AppContainer — which cannot read the profile or reach the host's `127.0.0.1` — it keeps its launch in the backend and `coding.permissions` lists it as not covered. Reads stay in the backend on purpose (in coding mode "read like the user" *is* the goal). A fresh Windows installation defaults to `windows-acl`; existing installations and Linux/macOS stay `off` until switched. When the
 sandbox is active, an OS denial reaches the model as `PERMISSION_DENIED | code=SANDBOX_DENIED | tool=… | needed=…` (raw evidence stays in the log), and an unavailable sandbox — missing account or credential, failed ACLs, failed write probe, unknown id — **fails the task**; there is no unsandboxed fallback. Switch values, defaults, the ACL matrix, the account property and the `off` rollback are in [config.md](../../../docs/config.md).
 
 ### Extra folders (`--add-dir`)
@@ -214,7 +214,7 @@ The payload is the agent's **completion report**, not just a summary:
 
 ```bash
 browser4-cli open https://app.example.com
-browser4-cli state-load auth.json
+browser4-cli state load auth.json
 browser4-cli agent run "Navigate to the reports dashboard, extract all monthly metrics, and summarize trends"
 ```
 

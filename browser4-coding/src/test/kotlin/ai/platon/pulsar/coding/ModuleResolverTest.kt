@@ -42,6 +42,80 @@ class ModuleResolverTest {
     }
 
     @Test
+    @DisplayName("a file nested below a module belongs to that module, not to its own directory")
+    fun resolvesFilesNestedBelowAModule() {
+        // The 2026-11-19 stranded run: examples/scripts/weibo-ego-lite.mjs resolved to the
+        // phantom module "scripts", so the isolation gate demanded coding.verify(module="scripts")
+        // and `mvn -pl scripts -am` ("Could not find the selected project in the reactor: scripts")
+        // could never pass — while the verdict that HAD passed, module="examples", was ignored.
+        assertEquals("examples", ModuleResolver.moduleOf("examples/scripts/weibo-ego-lite.mjs"))
+        assertEquals("examples", ModuleResolver.moduleOf("examples/scripts/deep/nested/probe.mjs"))
+        assertEquals("examples", ModuleResolver.moduleOf("D:/work/Browser4/examples/scripts/probe.mjs"))
+        assertEquals("browser4-tests", ModuleResolver.moduleOf("browser4-tests/tests-production/smoke.ps1"))
+        // The nested module is still preferred over its aggregator parent.
+        assertEquals(
+            "examples/browser4-examples",
+            ModuleResolver.moduleOf("examples/browser4-examples/scripts/run.mjs"),
+        )
+    }
+
+    @Test
+    @DisplayName("a Rust file nested inside the CLI crate resolves to the crate")
+    fun resolvesNestedCliCrateFiles() {
+        // Before the containment fix this answered "e2e" / "tests" — names cargo has no target for.
+        assertEquals(ModuleMap.CLI_CRATE, ModuleResolver.moduleOf("cli/browser4-cli/tests/e2e/mod.rs"))
+        assertEquals(ModuleMap.CLI_CRATE, ModuleResolver.moduleOf("cli/browser4-cli/Cargo.toml"))
+    }
+
+    @Test
+    @DisplayName("paths no module contains are left out of the verifier's module set")
+    fun knownModulesIgnoreUnownedPaths() {
+        assertNull(ModuleResolver.knownModuleOf("bin/test.ps1"), "bin/ is not a Maven module")
+        assertNull(ModuleResolver.knownModuleOf("chrome-extension/manifest.json"))
+        assertNull(ModuleResolver.knownModuleOf("pom.xml"), "the root aggregator is not a module")
+        assertEquals(
+            setOf("browser4-coding"),
+            ModuleResolver.knownModulesOf(
+                listOf("bin/test.ps1", "browser4-coding/src/main/kotlin/X.kt", "README.md"),
+            ),
+        )
+        // `coding.mvnBuild` keeps its best-effort answer, so the build tool still works on
+        // paths outside the reactor; only the gate's requirement drops them.
+        assertEquals("bin", ModuleResolver.moduleOf("bin/test.ps1"))
+    }
+
+    @Test
+    @DisplayName("documentation is never a module requirement, whatever its directory is called")
+    fun documentationIsNotAModuleRequirement() {
+        // `docs-dev/examples/**` and `skills/browser4-coding/**` contain real module names; a note
+        // cannot break a build, so counting them demanded an unrelated module's `-am` build.
+        assertTrue(ModuleResolver.knownModulesOf(listOf("docs-dev/examples/weibo/run.ps1")).isEmpty())
+        assertTrue(ModuleResolver.knownModulesOf(listOf("skills/browser4-coding/SKILL.md")).isEmpty())
+        assertEquals(
+            setOf("browser4-coding"),
+            ModuleResolver.knownModulesOf(
+                listOf("browser4-coding/src/main/kotlin/X.kt", "docs/agent-permissions.md"),
+            ),
+        )
+    }
+
+    @Test
+    @DisplayName("a workspace graph wins over the static Browser4 snapshot")
+    fun workspaceGraphIsAuthoritative() {
+        val graph = demoGraph()
+
+        // `examples/` exists in most repositories and is a Browser4 module name. This reactor has
+        // no such module, so naming it would demand `mvn -pl examples -am` — a build Maven
+        // rejects before compiling anything, the failure this resolver exists to prevent.
+        assertNull(ModuleResolver.knownModuleOf("examples/demo.js", graph))
+        // Without a graph the static snapshot still answers (Browser4's own tree, `coding.mvnBuild`).
+        assertEquals("examples", ModuleResolver.knownModuleOf("examples/demo.js"))
+        assertEquals("lib", ModuleResolver.knownModuleOf("lib/src/main/java/A.java", graph))
+        // The Rust crate is in no pom, so the graph path still resolves it.
+        assertEquals(ModuleMap.CLI_CRATE, ModuleResolver.knownModuleOf("cli/browser4-cli/src/main.rs", graph))
+    }
+
+    @Test
     @DisplayName("documentation is detected by directory and suffix")
     fun detectsDocumentation() {
         assertTrue(ModuleResolver.isDocumentation("docs/config.md"))
@@ -140,5 +214,52 @@ class ModuleResolverTest {
         assertTrue(ModuleResolver.covers("browser4-agentic", setOf("browser4-coding"), graph))
         assertTrue(ModuleResolver.covers(ModuleMap.CLI_CRATE, setOf(ModuleMap.CLI_CRATE), graph))
         assertTrue(ModuleResolver.covers("app", emptySet(), graph), "an empty change set needs no verifier")
+    }
+
+    // -- suggesting which module to verify --------------------------------------
+
+    @Test
+    @DisplayName("the suggestion names the smallest module whose -am build covers every change")
+    fun suggestsCoveringVerifier() {
+        // The 2026-11-18 failure: 2 files in browser4-coding + 1 in browser4-agentic, verified
+        // browser4-coding only. browser4-agentic depends on browser4-coding, so its -am build
+        // compiles both — that is the verdict that would have merged.
+        assertEquals(
+            "browser4-agentic",
+            ModuleResolver.suggestVerifier(setOf("browser4-coding", "browser4-agentic")),
+        )
+        assertEquals("browser4-agentic", ModuleResolver.suggestVerifier(setOf("browser4-agentic")))
+        // The crate is not a Maven module: the Maven half can still be named, the Rust half cannot.
+        assertEquals(
+            "browser4-coding",
+            ModuleResolver.suggestVerifier(setOf("browser4-coding", ModuleMap.CLI_CRATE)),
+        )
+        assertNull(
+            ModuleResolver.suggestVerifier(setOf(ModuleMap.CLI_CRATE)),
+            "cargo is not a Maven module and always needs its own verdict",
+        )
+    }
+
+    @Test
+    @DisplayName("a foreign graph suggests the module that depends on the library it changed")
+    fun suggestsForeignVerifier() {
+        assertEquals("app", ModuleResolver.suggestVerifier(setOf("lib", "app"), demoGraph()))
+        assertNull(
+            ModuleResolver.suggestVerifier(setOf("lib", "app")),
+            "the static Browser4 snapshot cannot cover a foreign repo's modules — guessing would " +
+                "name a module the workspace does not have",
+        )
+    }
+
+    @Test
+    @DisplayName("the suggestion never names a module the workspace does not have")
+    fun suggestionIsAlwaysSelectable() {
+        // 2026-11-19: the refusal told the run to verify "scripts", a directory with no pom.
+        // Following that instruction could only fail inside Maven, so the hint must stay silent
+        // instead of proposing a phantom module.
+        assertNull(ModuleResolver.suggestVerifier(setOf("scripts")))
+        assertNull(ModuleResolver.suggestVerifier(setOf("bin")))
+        assertEquals("examples", ModuleResolver.suggestVerifier(setOf("examples")))
+        assertNull(ModuleResolver.suggestVerifier(setOf("scripts"), demoGraph()))
     }
 }

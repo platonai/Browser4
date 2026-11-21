@@ -1,5 +1,6 @@
 package ai.platon.pulsar.coding
 
+import ai.platon.pulsar.coding.sandbox.OwnerSecurityRights
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
@@ -185,6 +186,20 @@ class WorkspaceIsolation private constructor(
                         "git worktree add failed (exit ${retry.exitCode}): ${retry.output.takeLast(500)}"
                     )
                 }
+            }
+            // The worktree was just created by this process, so its owner is known here: grant
+            // that owner the security-information rights a Low-integrity label needs
+            // (`docs/agent-permissions.md` §10). Doing it at creation time makes "labelable"
+            // structural instead of an accident of the parent directory's DACL — a checkout
+            // under `D:\`, `%TEMP%` or a tree copied from another account inherits Modify only,
+            // and every `windows-low-il` write would otherwise fail with `icacls exit=5`.
+            // Best effort: a `windows-acl`/`off` install never labels the tree, so a refused
+            // grant must not fail task creation; the sandbox retries once and then fails loudly.
+            if (OwnerSecurityRights.isWindows() && !OwnerSecurityRights.grant(isolated)) {
+                logger.warn(
+                    "worktree {} did not get OWNER RIGHTS; a windows-low-il task may fail to lower its label",
+                    isolated,
+                )
             }
             logger.info(
                 "Workspace isolation started: {} -> {} (baseline {}{})",

@@ -81,6 +81,51 @@ class ToolLoopCompressor(
     private val logger = getLogger(ToolLoopCompressor::class.java)
 
     /**
+     * The size the provider itself reported for the last request into THIS loop.
+     *
+     * Char heuristics under-count CJK and tool JSON by 2-4x, so a pressure decision
+     * made only on estimates either compacts too late (a real overflow) or too early
+     * (wasted summarization). The loop feeds this after every response, and the
+     * decision uses the measured size plus the estimate of whatever was appended
+     * since that request — pi's `estimateContextTokens` (last usage + trailing
+     * estimate). [measuredContext] is invalidated by every commit, because the list
+     * the provider measured no longer exists.
+     */
+    private var measuredContext: MeasuredContext? = null
+
+    /** One provider-reported request: [messageCount] messages cost [totalTokens]. */
+    data class MeasuredContext(val messageCount: Int, val totalTokens: Long)
+
+    /**
+     * Record the provider's own context size for the request that carried
+     * [messageCount] messages. Non-positive values are ignored (a provider that
+     * reports no usage leaves the estimate in charge).
+     */
+    fun noteMeasuredContext(messageCount: Int, totalTokens: Long) {
+        if (messageCount <= 0 || totalTokens <= 0) return
+        measuredContext = MeasuredContext(messageCount, totalTokens)
+    }
+
+    /** Forget the measurement — the message list it described was rewritten. */
+    fun invalidateMeasuredContext() {
+        measuredContext = null
+    }
+
+    /**
+     * The conversation size the compaction decision uses.
+     *
+     * Measured provider usage wins over the char estimate whenever the measured
+     * request is still a prefix of [messages]; anything appended after it (tool
+     * results of the running round) is estimated on top. A list that shrank below
+     * the measured request (a rewrite) falls back to the pure estimate.
+     */
+    fun effectiveContextTokens(messages: List<ChatMessage>): Long {
+        val measured = measuredContext ?: return estimateTotal(messages)
+        if (measured.messageCount > messages.size) return estimateTotal(messages)
+        return measured.totalTokens + estimateTotal(messages.drop(measured.messageCount))
+    }
+
+    /**
      * One tool-calling round inside the message list: an [AiMessage] carrying
      * tool-execution requests plus all immediately following
      * [ToolExecutionResultMessage]s (until the next AiMessage).
@@ -238,7 +283,9 @@ class ToolLoopCompressor(
         reason: String,
     ): Boolean {
         if (!enabled) return false
-        val total = estimateTotal(messages)
+        // Measured provider usage wins over the char estimate (see [effectiveContextTokens]);
+        // the estimate stays the fallback for engines/providers without usage reporting.
+        val total = effectiveContextTokens(messages)
         // Overflow bypasses the pressure threshold: the provider already
         // rejected the request, so any useful reduction is worth landing.
         if (total <= thresholdTokens && reason != "context-overflow") return false
@@ -347,7 +394,10 @@ class ToolLoopCompressor(
         val replacementIndex = compactableStart
         messages.subList(compactableStart, compactableEnd).clear()
         messages.add(replacementIndex, UserMessage.from(framed))
-        val after = estimateTotal(messages)
+        val after = effectiveContextTokens(messages)
+        // The list the provider measured is gone: the next decision must use the
+        // estimate until the next response reports a real size again.
+        invalidateMeasuredContext()
         val replacementTokens = estimateTokens(framed)
         val compactionId = ledger?.recordCompacted(
             reason, shadowedRange, replacementIndex, shadowedTokens, replacementTokens,
@@ -459,6 +509,75 @@ class ToolLoopCompressor(
                 "\"## Critical Context\" that it must be reloaded via system.skillDoc(name) when its details are needed.\n" +
                 "- Output only the checkpoint text: do not call any tool or take any other action.\n" +
                 "- If the conversation already contains a <compacted-summary> block, it is a PRIOR checkpoint. Do not copy it forward verbatim: preserve still-true facts, drop stale ones, and merge newer information into a single consolidated summary under the same structure."
+
+        /**
+         * [COMPACTION_INSTRUCTION] for a conversation that already carries a
+         * `<compacted-summary>` checkpoint.
+         *
+         * This is pi's `UPDATE_SUMMARIZATION_PROMPT`: the previous checkpoint is
+         * inside the span being compacted again, and a plain re-summarization tends to
+         * keep the newest round and drop the older facts. The update rules make the
+         * merge explicit, which is what keeps a long session's goal/files/decisions
+         * alive across many folds.
+         */
+        val COMPACTION_UPDATE_INSTRUCTION = COMPACTION_INSTRUCTION +
+            "\n" +
+            "- A `<compacted-summary>` block is present ABOVE: it is the checkpoint produced by an " +
+            "earlier compaction of this SAME conversation. Treat it as established background and " +
+            "MERGE it instead of restarting:\n" +
+            "  - PRESERVE every still-true fact from it (goals, constraints, exact paths, decisions, " +
+            "page state, open problems);\n" +
+            "  - ADD what the newer messages did, moving finished work out of `## Pending Jobs` / " +
+            "`## Current Work` while keeping the same section structure;\n" +
+            "  - DROP what is no longer true, and keep `## Next Step` at the newest state.\n" +
+            "- An update that loses older facts is worse than a longer checkpoint: when in doubt, keep it."
+
+        /**
+         * The instruction for one compaction call: the incremental variant when
+         * [prefix] already holds a checkpoint, the initial one otherwise.
+         */
+        fun compactionInstructionFor(prefix: List<ChatMessage>): String =
+            if (prefix.any { textOf(it).contains(SUMMARY_OPEN_TAG) }) COMPACTION_UPDATE_INSTRUCTION
+            else COMPACTION_INSTRUCTION
+
+        /** Best-effort text of a message, without an instance of the compressor. */
+        private fun textOf(message: ChatMessage): String = when (message) {
+            is SystemMessage -> message.text()
+            is UserMessage -> message.singleText() ?: ""
+            is AiMessage -> message.text() ?: ""
+            is ToolExecutionResultMessage -> message.text()
+            else -> message.toString()
+        }
+
+        /**
+         * The pressure threshold for a run, derived from the model's context window
+         * when it is known — pi's `tokens > contextWindow - reserveTokens` — and the
+         * configured flat threshold otherwise (the engine has no per-model window
+         * metadata, so the window is configured explicitly).
+         *
+         * `reserveTokens` covers what the conversation is not: the next response's
+         * output budget and the tool specifications re-sent with every request.
+         */
+        fun effectiveThresholdTokens(
+            windowTokens: Long,
+            reserveTokens: Long,
+            configuredThreshold: Long,
+        ): Long = if (windowTokens > reserveTokens && reserveTokens >= 0) {
+            (windowTokens - reserveTokens).coerceAtLeast(1L)
+        } else {
+            configuredThreshold.coerceAtLeast(1L)
+        }
+
+        /**
+         * The retained tail, capped at half the threshold.
+         *
+         * A tail that cannot fit below the threshold leaves nothing foldable, so a
+         * small window would compact nothing and overflow instead. pi keeps a flat
+         * `keepRecentTokens` and has the same shape; the cap is what makes the
+         * window-aware threshold actually usable on a small model.
+         */
+        fun effectiveRetainTokens(retainTokens: Long, thresholdTokens: Long): Long =
+            retainTokens.coerceIn(0L, (thresholdTokens / 2).coerceAtLeast(1L))
     }
 }
 

@@ -14,8 +14,8 @@ Manage cookies, localStorage, sessionStorage, and browser storage state.
 
 | Topic | Section | Description |
 |-------|---------|-------------|
-| Save / restore full state | [Storage State](#storage-state) | `state-save` / `state-load` (cookies + localStorage) |
-| Cookies | [Cookies](#cookies) | `cookie-list`, `cookie-get`, `cookie-set`, `cookie-delete`, `cookie-clear` |
+| Save / restore full state | [Storage State](#storage-state) | `state save` / `state load` (cookies + localStorage) |
+| Cookies | [Cookies](#cookies) | `cookie list`, `cookie get`, `cookie set`, `cookie delete`, `cookie clear` |
 | Local storage | [Local Storage](#local-storage) | list / get / set / delete / clear localStorage commands |
 | Session storage | [Session Storage](#session-storage) | list / get / set / delete / clear sessionStorage commands |
 | Common patterns | [Common Patterns](#common-patterns) | auth state reuse, save/restore roundtrip |
@@ -30,20 +30,20 @@ Save and restore browser storage state (cookies and localStorage). Note: session
 # Save to auto-generated filename in the CLI snapshot directory
 # (.browser4-cli/snapshot/storage-state-{timestamp}.json) — same output
 # location as extract/screenshot/snapshot captures.
-browser4-cli state-save
+browser4-cli state save
 
 # Save to a specific file path (relative paths resolve from the working dir)
-browser4-cli state-save my-auth-state.json
+browser4-cli state save my-auth-state.json
 ```
 
 ### Restore Storage State
 
 ```bash
 # Load storage state from file
-browser4-cli state-load my-auth-state.json
+browser4-cli state load my-auth-state.json
 
 # Cookies are restored to the browser's cookie jar immediately (visible via
-# cookie-list). Reload/open the page only if you need them sent with the next
+# cookie list). Reload/open the page only if you need them sent with the next
 # HTTP request.
 browser4-cli open https://example.com
 ```
@@ -88,14 +88,14 @@ The cookie objects are a pass-through of the backend's storage state with two no
 - attributes the browser *does* report that are not in that list (e.g. `partitionKey`) are
   passed through untouched.
 
-`cookie-list` prints the same cookie objects, so the two JSON surfaces agree.
+`cookie list` prints the same cookie objects, so the two JSON surfaces agree.
 
 ## Cookies
 
 ### List All Cookies
 
 ```bash
-browser4-cli cookie-list
+browser4-cli cookie list
 ```
 
 Output is always JSON — an array of cookie objects, sorted by domain, then path, then name,
@@ -105,19 +105,19 @@ printed as `null` (see [Storage State File Format](#storage-state-file-format)).
 ### Filter Cookies by Domain
 
 ```bash
-browser4-cli cookie-list --domain example.com
+browser4-cli cookie list --domain example.com
 ```
 
 ### Filter Cookies by Path
 
 ```bash
-browser4-cli cookie-list --path /api
+browser4-cli cookie list --path /api
 ```
 
 ### Get Specific Cookie
 
 ```bash
-browser4-cli cookie-get session_id
+browser4-cli cookie get session_id
 ```
 
 ### Set a Cookie
@@ -126,17 +126,17 @@ When `--domain` is omitted, the cookie is scoped to the current page domain.
 
 ```bash
 # Basic cookie (scoped to current page domain)
-browser4-cli cookie-set session abc123
+browser4-cli cookie set session abc123
 
 # Cookie with options
-browser4-cli cookie-set session abc123 --domain example.com --path / --httpOnly --secure --sameSite Lax
+browser4-cli cookie set session abc123 --domain example.com --path / --httpOnly --secure --sameSite Lax
 
 # Cookie with expiration (Unix timestamp)
-browser4-cli cookie-set remember_me token123 --expires 1735689600
+browser4-cli cookie set remember_me token123 --expires 1735689600
 ```
 
 > **Git Bash note:** `--path` defaults to `/`, so from Git Bash simply **omit** the flag —
-> `./b4w.ps1 cookie-set session_id abc123 --domain localhost --httpOnly --secure` needs no
+> `./b4w.ps1 cookie set session_id abc123 --domain localhost --httpOnly --secure` needs no
 > workaround. When you do need a `/`-leading value, a bare `--path /` (like any `/`-leading
 > argument) is rewritten by Git Bash's MSYS path conversion before the command starts and
 > arrives as `C:/Program Files/Git/`; the equals spelling `--path=/` is rewritten the same
@@ -144,11 +144,11 @@ browser4-cli cookie-set remember_me token123 --expires 1735689600
 > de-converted command to re-run. Two working invocations for a leading-slash value:
 >
 > ```bash
-> ./b4w.sh cookie-set session_id abc123 --domain localhost --path / --httpOnly --secure
-> MSYS2_ARG_CONV_EXCL='*' ./b4w.ps1 cookie-set session_id abc123 --path / --httpOnly --secure
+> ./b4w.sh cookie set session_id abc123 --domain localhost --path / --httpOnly --secure
+> MSYS2_ARG_CONV_EXCL='*' ./b4w.ps1 cookie set session_id abc123 --path / --httpOnly --secure
 > ```
 >
-> The same rewrite applies to `cookie-list --path /` — omit the flag to list every path.
+> The same rewrite applies to `cookie list --path /` — omit the flag to list every path.
 >
 > Note: an earlier guard let `--path=/` slip through, and the command then failed later with
 > `option '--path' was rejected: 'C' is not a valid cookie path` — a value the user never
@@ -159,13 +159,13 @@ browser4-cli cookie-set remember_me token123 --expires 1735689600
 ### Delete a Cookie
 
 ```bash
-browser4-cli cookie-delete session_id
+browser4-cli cookie delete session_id
 ```
 
 ### Clear All Cookies
 
 ```bash
-browser4-cli cookie-clear
+browser4-cli cookie clear
 ```
 
 ## Local Storage
@@ -173,37 +173,37 @@ browser4-cli cookie-clear
 ### List All localStorage Items
 
 ```bash
-browser4-cli localstorage-list
+browser4-cli localstorage list
 ```
 
 ### Get Single Value
 
 ```bash
-browser4-cli localstorage-get token
+browser4-cli localstorage get token
 ```
 
 ### Set Value
 
 ```bash
-browser4-cli localstorage-set theme dark
+browser4-cli localstorage set theme dark
 ```
 
 ### Set JSON Value
 
 ```bash
-browser4-cli localstorage-set user_settings '{"theme":"dark","language":"en"}'
+browser4-cli localstorage set user_settings '{"theme":"dark","language":"en"}'
 ```
 
 ### Delete Single Item
 
 ```bash
-browser4-cli localstorage-delete token
+browser4-cli localstorage delete token
 ```
 
 ### Clear All localStorage
 
 ```bash
-browser4-cli localstorage-clear
+browser4-cli localstorage clear
 ```
 
 ## Session Storage
@@ -211,31 +211,31 @@ browser4-cli localstorage-clear
 ### List All sessionStorage Items
 
 ```bash
-browser4-cli sessionstorage-list
+browser4-cli sessionstorage list
 ```
 
 ### Get Single Value
 
 ```bash
-browser4-cli sessionstorage-get form_data
+browser4-cli sessionstorage get form_data
 ```
 
 ### Set Value
 
 ```bash
-browser4-cli sessionstorage-set step 3
+browser4-cli sessionstorage set step 3
 ```
 
 ### Delete Single Item
 
 ```bash
-browser4-cli sessionstorage-delete step
+browser4-cli sessionstorage delete step
 ```
 
 ### Clear sessionStorage
 
 ```bash
-browser4-cli sessionstorage-clear
+browser4-cli sessionstorage clear
 ```
 
 ## Common Patterns
@@ -251,10 +251,10 @@ browser4-cli fill e2 "password123"
 browser4-cli click e3
 
 # Save the authenticated state
-browser4-cli state-save auth.json
+browser4-cli state save auth.json
 
 # Step 2: Later, restore state and skip login
-browser4-cli state-load auth.json
+browser4-cli state load auth.json
 browser4-cli open https://app.example.com/dashboard
 # Already logged in!
 ```
@@ -267,12 +267,12 @@ browser4-cli open https://example.com
 browser4-cli eval "() => { document.cookie = 'session=abc123'; localStorage.setItem('user', 'john'); }"
 
 # Save state to file
-browser4-cli state-save my-session.json
+browser4-cli state save my-session.json
 
 # ... later, in a new session ...
 
 # Restore state
-browser4-cli state-load my-session.json
+browser4-cli state load my-session.json
 browser4-cli open https://example.com
 # Cookies and localStorage are restored!
 ```

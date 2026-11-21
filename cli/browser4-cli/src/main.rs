@@ -348,6 +348,34 @@ enum ExitCode {
     /// The command ran to completion but one or more items failed
     /// (e.g. crawl pages that failed to fetch or extract) — results are partial.
     PartialFailure = 6,
+    /// Interrupted by the user (Ctrl+C while a command was waiting).
+    ///
+    /// 130 is the shell convention for a signal death (128 + SIGINT), so a script that already
+    /// distinguishes "killed" from "failed" keeps working. A handler that *handled* the interrupt
+    /// — `agent run --wait` / `--follow` ask the backend to cancel the task and print what
+    /// happened — still reports it, because returning 0 would claim the run produced a result.
+    Interrupted = 130,
+}
+
+/// Sentinel an interrupted `agent run` wait loop returns instead of an error message.
+///
+/// The handler has already printed what happened (`⏹ Agent task … cancelled.` plus the
+/// `agent status <id>` hint), so the interrupt must not be rendered a second time — only the exit
+/// code has to carry it. `run()` returns `Result<(), CliError>` while the agent handlers return
+/// `Result<(), String>`, so a marker string is the channel; `__grep_no_matches__` set the same
+/// precedent for "message already printed, code still matters".
+pub(crate) const AGENT_RUN_INTERRUPTED: &str = "__agent_run_interrupted__";
+
+/// Map an `agent run` error onto [CliError].
+///
+/// A user interrupt keeps its own exit code and stays silent (see [AGENT_RUN_INTERRUPTED]);
+/// everything else is an ordinary failure with the message the model/backend produced.
+fn agent_run_error(message: String) -> CliError {
+    if message == AGENT_RUN_INTERRUPTED {
+        CliError(ExitCode::Interrupted, String::new())
+    } else {
+        message.into()
+    }
 }
 
 /// Normalised error type that pairs a machine-readable exit code with a
@@ -719,12 +747,10 @@ fn cli_binary_name() -> String {
 /// development wrappers — which is not what the user typed and not what they
 /// can paste back.  The wrappers export `BROWSER4_CLI_INVOKE_HINT`
 /// (`./b4w.ps1`, `./b4w.sh`); prefer it, and fall back to the binary name.
+/// The env-var read itself lives in [`daemon::invocation_hint_or`] because
+/// `daemon.rs` needs the same value for its own notice.
 fn cli_invocation_hint() -> String {
-    std::env::var("BROWSER4_CLI_INVOKE_HINT")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(cli_binary_name)
+    daemon::invocation_hint_or(&cli_binary_name())
 }
 
 fn no_active_session_message() -> String {
@@ -734,6 +760,15 @@ fn no_active_session_message() -> String {
         None,
         "No active session is currently stored for this CLI context.",
         &[
+            // A session-less `agent run --coding` task reaches this every time its nested
+            // `browser4-cli tab …` runs before the attach: `open <url>` would launch a SECOND,
+            // logged-out browser, while the browser the task actually needs (the user's, already
+            // signed in) is one `attach` away. Name the attach first, and name `-s` because a
+            // second unnamed attach is refused (run `4125acaa`, 2026-11-19).
+            &format!(
+                "attach the browser you are already signed in to: `{bin} -s <name> attach --cdp <port>` \
+                 (list the ports with `{bin} attach --list`)."
+            ),
             &format!("run `{bin} open <url>` to start a new session."),
             "after tab operations, use `goto <url>` to restore the active page.",
             &format!("check available sessions with `{bin} list`."),
@@ -829,11 +864,12 @@ fn check_unnamed_slot_free(
     }
     let state = read_state(state_dir, None);
     if let Some(ref existing_id) = state.session_id {
+        let bin = cli_invocation_hint();
         return Err(format!(
             "An unnamed session already exists: {existing_id}\n\
              An unnamed session already drives a browser, so a second attach must not displace it.\n\
-             Name your sessions with `-s <name>` instead, or run `browser4-cli close` to end the \
-             current unnamed session first."
+             Re-run with a name — `{bin} -s <name> attach --cdp <port>` (any name works, e.g. \
+             `-s weibo`) — or end the current unnamed session first with `{bin} close`."
         ));
     }
     Ok(())
@@ -5006,7 +5042,7 @@ fn validate_tab_select_target(
 ) -> Result<(), String> {
     if index.is_none() && guid.is_none() {
         return Err(
-            "tab-select requires an index or --guid (usage: browser4-cli tab-select <index> | --guid <guid>)"
+            "tab select requires an index or --guid (usage: browser4-cli tab select <index> | --guid <guid>)"
                 .to_string(),
         );
     }
@@ -9607,6 +9643,30 @@ fn is_partial_download_name(name: &str) -> bool {
         || name.ends_with(".tmp")
         || name.ends_with(".part")
         || name.ends_with(".download")
+}
+
+/// The confirmation line for a completed `download` command.
+///
+/// The CDP call answers with an empty object, so the one useful fact — where the browser will
+/// write — is not in the result and has to be reported here. The folder alone is not enough: the
+/// caller also needs to know how to wait for the file, and the 2026-11-21 run spent a round on
+/// `help download` to find `wait --download` after being told only the path.
+///
+/// `behavior=deny` must not reuse the "saving to" wording: the command then saves nothing, and a
+/// line reading "denied: saving to <dir>" contradicts itself.
+fn download_configured_message(behavior: &str, dir: &str) -> String {
+    match (behavior, dir.is_empty()) {
+        ("allow", false) => format!(
+            "✓ Downloads allowed: saving to {dir} (files land there when the page triggers a \
+             download) — watch it with `wait --download --dir {dir}`"
+        ),
+        ("allow", true) => "✓ Download behavior set: allow".to_string(),
+        (_, true) => format!("✓ Download behavior set: {behavior}"),
+        (behavior, false) => format!(
+            "✓ Downloads {behavior}: the browser will not save any file (the previously \
+             configured folder was {dir})"
+        ),
+    }
 }
 
 /// Files present in `dir` right now (name -> size + modification time).
@@ -15923,6 +15983,20 @@ fn apply_resume_task_id(extra: &mut Value, resume_task_id: Option<&str>) {
     }
 }
 
+/// Forward `--rewind <task-id>` into the `command.run` payload.
+///
+/// Unlike `--resume` (which starts a new run from a task's workspace and files), a rewind
+/// continues this session's CONVERSATION from the point where that task began: the
+/// backend installs that checkpoint, summarizes the branch it abandons, and runs the new
+/// task from there. The checkpoint lives in the backend process, so a restarted backend
+/// answers with a loud "no conversation checkpoint" failure instead of silently starting
+/// from zero; a blank value is not an id and is therefore dropped.
+fn apply_rewind_task_id(extra: &mut Value, rewind_task_id: Option<&str>) {
+    if let Some(id) = rewind_task_id.map(str::trim).filter(|s| !s.is_empty()) {
+        extra["rewindTaskId"] = json!(id);
+    }
+}
+
 /// The `--add-dir` values of a parsed `agent run` payload.
 ///
 /// The command definition builds a JSON array; a single value may still arrive as a
@@ -16068,10 +16142,15 @@ async fn handle_agent_run(
             .await;
     }
 
-    let task = tool_params
-        .get("task")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
+    // A pasted task line carries the same terminal escapes as an interactive
+    // one. Sanitize before the emptiness check so the one-shot `agent run
+    // --task "…"` form cannot smuggle CSI/OSC noise into the model prompt.
+    let task = agent_interactive::sanitize_task_text(
+        tool_params
+            .get("task")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default(),
+    );
     // `--resume <id>` makes the task text optional: the backend seeds the run from
     // the interrupted task's checkpoint (its instruction, workspace and files).
     let resume_task_id = tool_params
@@ -16132,12 +16211,18 @@ async fn handle_agent_run(
         tool_params.get("tokenBudget").and_then(|v| v.as_i64()),
     );
     apply_resume_task_id(&mut extra, resume_task_id);
+    // `--rewind <task-id>`: continue this session's conversation from that task's start.
+    // Mutually exclusive with --resume (the backend rejects the combination loudly).
+    apply_rewind_task_id(
+        &mut extra,
+        tool_params.get("rewind").and_then(|v| v.as_str()),
+    );
     apply_add_dirs(&mut extra, &add_dirs_of(tool_params.get("addDirs")));
     apply_unrestricted(
         &mut extra,
         tool_params.get("unrestricted").and_then(|v| v.as_bool()) == Some(true),
     );
-    let task_id = submit_agent_task(client, base_url, task, extra).await?;
+    let task_id = submit_agent_task(client, base_url, &task, extra).await?;
 
     // Say which session the task was bound to.  A silent submission is exactly
     // what hid the 2026-10-25 regression: the task executed in the backend's
@@ -16192,7 +16277,7 @@ async fn handle_agent_run(
     // Persist the task for cross-session tracking in BOTH async and wait
     // modes, so `agent list` always reflects every submitted task — including
     // ones that later time out while the server keeps working on them.
-    let _ = track_async_task(&task_id, "agent", task, None);
+    let _ = track_async_task(&task_id, "agent", &task, None);
 
     // `--follow`: stream the task's steps while waiting. `--wait` stays the
     // quiet, poll-only form it always was.
@@ -16369,7 +16454,29 @@ async fn handle_agent_run(
                 }
             }
 
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            // Ctrl+C must ask the backend to cancel, not just end this process: the task lives in
+            // the server, so a local exit alone leaves it burning model rounds to completion while
+            // the terminal claims the user stopped it (observed 2026-11-19). `--follow` already
+            // does this; `--wait` used to sleep straight through the signal.
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
+                _ = tokio::signal::ctrl_c() => {
+                    let outcome = crate::agent_interactive::cancel_task(client, base_url, &task_id).await;
+                    let _ = update_async_task_status(&task_id, "cancelled", None);
+                    cli_println!();
+                    cli_println!("⏹ {}", outcome);
+                    cli_println!(
+                        "The backend was asked to stop; 'agent status {}' shows the final state.",
+                        task_id
+                    );
+                    json_field("task_id", json!(&task_id));
+                    json_field("status", json!("cancelled"));
+                    // Exit 130, not 0: the wait produced no result, and the cancel above is the
+                    // only thing that happened. The message is already on screen, so the marker
+                    // maps to a silent `ExitCode::Interrupted` (see `agent_run_error`).
+                    return Err(AGENT_RUN_INTERRUPTED.to_string());
+                }
+            }
         }
     }
 
@@ -19718,7 +19825,7 @@ async fn handle_experience_list(
     );
     if let Some(entries) = parsed.get("entries").and_then(|v| v.as_array()) {
         if entries.is_empty() {
-            cli_println!("No knowledge entries found. Run an agent task to build experience, then use 'experience-deep-learn' to promote facts.");
+            cli_println!("No knowledge entries found. Run an agent task to build experience, then use 'experience deep learn' to promote facts.");
         } else {
             cli_println!(
                 "{:<25}  {:<20}  {:<6}  {:<10}  {:<10}  {}",
@@ -24902,7 +25009,7 @@ async fn print_webminer_status(show_usage: bool) -> Result<(), CliError> {
         cli_println!("    update              Update to the latest release");
         cli_println!("    version             Show installed and latest versions");
         cli_println!("    uninstall           Remove the installed release");
-        cli_println!("    run-example         Download the sample dataset and run the full pipeline (needs 7-Zip)");
+        cli_println!("    run example         Download the sample dataset and run the full pipeline (needs 7-Zip)");
         cli_println!("    all <html-dir>      Run the full pipeline on downloaded HTML files");
         cli_println!("    views <result-dir>  Rebuild the interactive views from an existing run");
         cli_println!();
@@ -26734,9 +26841,58 @@ fn tool_name_matches_filter(name: &str, filter: Option<&str>) -> bool {
 /// exiting 0 makes a failed tool look like a success to any script that checks
 /// `$?`, so the failure is surfaced on stderr and can be turned into a non-zero
 /// exit with `--fail-on-error`.
+///
+/// A policy refusal is the same shape: `PermissionAudit` returns
+/// `PERMISSION_DENIED | code=…` as *text*, and a backend that predates the
+/// refusal envelope (issue `20261120-0145`) reports it as `success:true`. The
+/// refusal is therefore also looked for in the result text, and only when it
+/// **leads** the text — a `coding.permissions` report legitimately mentions the
+/// prefix while describing what it refuses.
 fn tool_call_failure_summary(tool_name: &str, result: &str) -> Option<String> {
-    let parsed: Value = serde_json::from_str(result).ok()?;
-    tool_call_failure_summary_from_json(tool_name, &parsed)
+    if let Ok(parsed) = serde_json::from_str::<Value>(result) {
+        if let Some(summary) = tool_call_failure_summary_from_json(tool_name, &parsed) {
+            return Some(summary);
+        }
+        let text = tool_call_payload_text(&parsed)?;
+        return tool_call_refusal_reason(text)
+            .map(|reason| format!("{tool_name} reported a failure: {reason}"));
+    }
+    tool_call_refusal_reason(result).map(|reason| format!("{tool_name} reported a failure: {reason}"))
+}
+
+/// The human-readable text of a tool payload, for a refusal that arrived as a value.
+///
+/// Three shapes reach this function: the MCP envelope (`content[].text`), a bare
+/// tool payload (`text`), and the CLI's own envelope (`output` wrapping either).
+fn tool_call_payload_text(parsed: &Value) -> Option<&str> {
+    let payload = parsed.get("output").unwrap_or(parsed);
+    if let Some(text) = payload.get("text").and_then(Value::as_str) {
+        return Some(text);
+    }
+    payload
+        .get("content")
+        .and_then(Value::as_array)
+        .and_then(|items| items.iter().find_map(|item| item.get("text").and_then(Value::as_str)))
+}
+
+/// The reason of a `PERMISSION_DENIED | code=…` refusal that leads `text`, or `None`.
+///
+/// The refusal may carry the `Error: ` prefix `coding.fs` adds; both producers are
+/// accepted, and anything after the first line is data (file content, a report).
+fn tool_call_refusal_reason(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim_start).find(|line| !line.is_empty())?;
+    let candidate = line.strip_prefix("Error: ").unwrap_or(line).trim_start();
+    if !candidate.starts_with("PERMISSION_DENIED") || !candidate.contains("| code=") {
+        return None;
+    }
+    let code = candidate
+        .split('|')
+        .map(str::trim)
+        .find_map(|segment| segment.strip_prefix("code="))
+        .map(|value| value.split_whitespace().next().unwrap_or(value))
+        .filter(|value| !value.is_empty())
+        .unwrap_or("PERMISSION_DENIED");
+    Some(format!("the access policy refused the call (code={code})"))
 }
 
 /// [tool_call_failure_summary] over an already-parsed payload.
@@ -26751,16 +26907,26 @@ fn tool_call_failure_summary_from_json(tool_name: &str, parsed: &Value) -> Optio
         .and_then(|v| v.as_bool())
         .map(|ok| !ok)
         .unwrap_or(false);
+    // A failed MCP envelope is a failure even when it carries no `success` field:
+    // this is the half the backend adds for a policy refusal (P0-3).
+    let flagged = payload
+        .get("isError")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let error = payload
         .get("error")
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|e| !e.is_empty() && !e.eq_ignore_ascii_case("null"));
 
-    if !failed && error.is_none() {
+    if !failed && !flagged && error.is_none() {
         return None;
     }
-    let reason = error.unwrap_or("the tool reported success:false");
+    let reason = error.unwrap_or(if flagged {
+        "the tool reported isError:true"
+    } else {
+        "the tool reported success:false"
+    });
     Some(format!("{tool_name} reported a failure: {reason}"))
 }
 
@@ -27062,6 +27228,12 @@ const BUILTIN_PLUGIN_SUBCOMMANDS: &[&str] = &["list", "info", "install", "remove
 /// Answers both spellings users type — `--help plugin-markdown` and
 /// `plugin markdown --help` — and `None` for the static `plugin` subcommands so
 /// their own help pages stay in charge.
+///
+/// The domain has to come *after* the `plugin` token. Looking for the first
+/// non-flag argument anywhere in `args` made `--help plugin` treat the queried
+/// name itself as a domain, so the advertised `plugin=plugins` alias answered
+/// with "Plugin tool domain 'plugin' has no help to show" instead of the
+/// Plugins category.
 fn plugin_domain_help_target(command: &str, args: &[String]) -> Option<String> {
     if let Some(domain) = command.strip_prefix("plugin-") {
         if !domain.is_empty() && !BUILTIN_PLUGIN_SUBCOMMANDS.contains(&domain) {
@@ -27069,10 +27241,11 @@ fn plugin_domain_help_target(command: &str, args: &[String]) -> Option<String> {
         }
         return None;
     }
-    // `plugin <domain> --help`: the second word is the domain, unless it is a
-    // flag or one of the static subcommands.
+    // `plugin <domain> --help`: the first non-flag token after `plugin` is the
+    // domain, unless it is one of the static subcommands.
     if command == "plugin" {
-        let candidate = args.iter().skip(1).find(|arg| !arg.starts_with('-'))?;
+        let start = args.iter().position(|arg| arg == command)? + 1;
+        let candidate = args.iter().skip(start).find(|arg| !arg.starts_with('-'))?;
         if !BUILTIN_PLUGIN_SUBCOMMANDS.contains(&candidate.as_str()) {
             return Some(candidate.clone());
         }
@@ -28762,7 +28935,7 @@ async fn handle_stop(base_url: &str) -> Result<(), String> {
             .collect();
         eprintln!(
             "⚠  {} browser process(es) of this workspace survived the stop: {} — \
-             retry `browser4-cli stop` or use `browser4-cli kill-all`.",
+             retry `browser4-cli stop` or use `browser4-cli kill all`.",
             workspace_browser_kill.remaining_pids.len(),
             pids.join(", ")
         );
@@ -28796,7 +28969,7 @@ async fn handle_stop(base_url: &str) -> Result<(), String> {
 
     if workspace_scoped {
         cli_println!(
-            "Other workspaces keep their own backends; use 'browser4-cli kill-all' to stop every workspace."
+            "Other workspaces keep their own backends; use 'browser4-cli kill all' to stop every workspace."
         );
     }
     Ok(())
@@ -28823,6 +28996,24 @@ async fn handle_status(
     let resolved = daemon::resolve_base_url_with_origin(server_override, session_name);
     cli_println!("  resolved from: {}", resolved.source.label());
     json_field("server_url_source", json!(resolved.source.label()));
+
+    // Where session state actually lives.  The fallback is anchored at the
+    // workspace (or, outside one, at the working directory), so a "missing"
+    // session is usually a session that went to another directory; name the
+    // directory and the anchor here instead of at the next `Session required`.
+    let (state_dir, state_anchor) = crate::state::effective_state_dir();
+    if state_anchor.is_fallback() {
+        cli_println!(
+            "Session state: {} (workspace fallback, {} — set BROWSER4_CLI_STATE_DIR to pin it)",
+            state_dir.display(),
+            state_anchor.describe()
+        );
+    } else {
+        cli_println!("Session state: {}", state_dir.display());
+    }
+    json_field("session_state_dir", json!(state_dir.display().to_string()));
+    json_field("session_state_fallback", json!(state_anchor.is_fallback()));
+    json_field("session_state_anchor", json!(state_anchor.as_str()));
     if let Some(rejected) = resolved.rejected_recorded.as_deref() {
         cli_println!(
             "  ignored recorded URL: {} (not usable — re-allocated; \
@@ -31408,8 +31599,33 @@ fn validate_required_args(
 // Entry point
 // ---------------------------------------------------------------------------
 
-/// Rewrite spaced prefixed subcommands like `swarm create` / `agent run`
-/// to their internal kebab-case command forms.
+/// Command families whose public spelling is spaced (`tab list`, `cookie get`,
+/// `dialog accept`, …) and whose registry key is the kebab form.
+///
+/// Every entry is a prefix with no bare command of its own, paired with the
+/// subcommands it accepts. `close` has a bare form but takes no arguments, so
+/// `close all` is unambiguous; the dispatch still validates the subcommand so a
+/// stray positional (`close /tmp/x`) keeps its "unexpected argument" error.
+const SPACED_PREFIXES: &[(&str, &[&str])] = &[
+    ("close", &["all"]),
+    ("cookie", &["clear", "delete", "get", "list", "set"]),
+    ("delete", &["data"]),
+    ("dialog", &["accept", "dismiss", "status"]),
+    ("generate", &["locator"]),
+    ("go", &["back", "forward"]),
+    ("kill", &["all"]),
+    ("localstorage", &["clear", "delete", "get", "list", "set"]),
+    ("page", &["info"]),
+    ("session", &["default"]),
+    ("sessionstorage", &["clear", "delete", "get", "list", "set"]),
+    ("skill", &["info", "install", "list", "reload", "uninstall"]),
+    ("state", &["load", "save"]),
+    ("tab", &["close", "list", "new", "select"]),
+    ("web", &["vitals"]),
+];
+
+/// Rewrite spaced prefixed subcommands like `swarm create` / `agent run` /
+/// `tab list` to their internal kebab-case command forms.
 fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
     let prefix = args.first().map(|s| s.as_str())?;
     let sub = args.get(1)?;
@@ -31604,6 +31820,13 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
             rewritten.extend(args[2..].iter().cloned());
             return Some(rewritten);
         }
+        // `webminer run example` is the spaced public name of
+        // `webminer-run-example` (the JAR's own `run-example` subcommand).
+        if sub == "run" && args.get(2).map(String::as_str) == Some("example") {
+            let mut rewritten = vec!["webminer-run-example".to_string()];
+            rewritten.extend(args[3..].iter().cloned());
+            return Some(rewritten);
+        }
         return None;
     }
     // "tool" is a prefix-only command (tool call <name>, tool list). Only
@@ -31613,6 +31836,19 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         let known_subs = ["call", "list"];
         if known_subs.contains(&sub.as_str()) {
             let mut rewritten = vec![format!("tool-{}", sub)];
+            rewritten.extend(args[2..].iter().cloned());
+            return Some(rewritten);
+        }
+        return None;
+    }
+    // Families whose public spelling is the spaced form (`tab list`,
+    // `cookie get`, `dialog accept`, …). None of these has a bare form, so only
+    // a known subcommand is rewritten; any other second token passes through
+    // untouched and is rejected by dispatch instead of being swallowed as a
+    // positional argument.
+    if let Some((_, subs)) = SPACED_PREFIXES.iter().find(|(name, _)| *name == prefix) {
+        if subs.contains(&sub.as_str()) {
+            let mut rewritten = vec![format!("{}-{}", prefix, sub)];
             rewritten.extend(args[2..].iter().cloned());
             return Some(rewritten);
         }
@@ -31679,7 +31915,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "experience-save" => Some("experience save"),
         "experience-query" => Some("experience query"),
         "experience-list" => Some("experience list"),
-        "experience-deep-learn" => Some("experience deep-learn"),
+        "experience-deep-learn" => Some("experience deep learn"),
         // Plugin dashed forms are accepted directly — do not reject them.
         "skills-list" => Some("skills list"),
         "skills-get" => Some("skills get"),
@@ -31738,7 +31974,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "webminer-update" => Some("webminer update"),
         "webminer-version" => Some("webminer version"),
         "webminer-uninstall" => Some("webminer uninstall"),
-        "webminer-run-example" => Some("webminer run-example"),
+        "webminer-run-example" => Some("webminer run example"),
         "webminer-all" => Some("webminer all"),
         "webminer-views" => Some("webminer views"),
         _ => None,
@@ -31750,6 +31986,26 @@ fn preferred_prefixed_group_form(command: &str) -> Option<&'static str> {
         "agent" => Some("agent <subcommand>"),
         "swarm" => Some("swarm <subcommand>"),
         "co" => Some("swarm <subcommand>"),
+        // Spaced-only families (see `SPACED_PREFIXES`): the bare prefix is not
+        // a command, so it answers with the recommended spelling instead of a
+        // bare "Unknown command". `close` is deliberately absent — it is a
+        // real command on its own, and `close all` is the spaced form of
+        // `close-all` handled by the rewrite.
+        "cookie" => Some("cookie <subcommand>"),
+        "delete" => Some("delete <subcommand>"),
+        "dialog" => Some("dialog <subcommand>"),
+        "generate" => Some("generate <subcommand>"),
+        "go" => Some("go <subcommand>"),
+        "kill" => Some("kill <subcommand>"),
+        "localstorage" => Some("localstorage <subcommand>"),
+        "page" => Some("page <subcommand>"),
+        "profile" => Some("profile <subcommand>"),
+        "session" => Some("session <subcommand>"),
+        "sessionstorage" => Some("sessionstorage <subcommand>"),
+        "skill" => Some("skill <subcommand>"),
+        "state" => Some("state <subcommand>"),
+        "tab" => Some("tab <subcommand>"),
+        "web" => Some("web <subcommand>"),
         // `plugin` bare is a valid command (lists available plugin tools), so
         // it must not be rejected here — only `plugin <subcommand>` typos are
         // caught later by the unknown-command suggestion path.
@@ -32039,7 +32295,8 @@ fn prepare_batch_eval_params(
         if !stdin_available {
             return Err(
                 "Batch --json mode reads the command list from stdin, so 'eval --stdin' cannot \
-                 read an expression. Use 'eval --file <path>' or an inline expression instead."
+                 read an expression. Write the script to a workspace file and use \
+                 'eval --file .b4scratch/x.js', or pass the expression inline as a quoted argument."
                     .to_string(),
             );
         }
@@ -32204,14 +32461,24 @@ fn compile_batch_step(
     let cmd_def = command_map.get(&nested_command).ok_or_else(|| {
         format!(
             "Unknown command: {}. Run 'browser4-cli help' for usage.",
-            nested_command
+            public_command_name(&nested_command)
         )
     })?;
 
     if !cmd_def.batch_supported {
+        // A refusal the caller cannot act on costs a whole round: name the shape of a batch
+        // step (page/DOM action plus `goto`) and, for the commands whose standalone form is a
+        // prerequisite rather than an alternative, the exact command to run first.
+        let alternative = match cmd_def.name {
+            "download" => "run `download --dir <workspace dir>` as its own command first (it sets \
+                           the browser's download folder — it is browser configuration, not a DOM \
+                           action), then batch the page steps",
+            _ => "run it as its own `browser4-cli <command>` call",
+        };
         return Err(format!(
-            "Command '{}' is not supported in batch mode. Batch mode only supports DOM operations.",
-            nested_command
+            "Command '{}' is not supported in batch mode (a batch step is a DOM action plus \
+             `goto`). Instead, {alternative}.",
+            public_command_name(cmd_def.name)
         ));
     }
 
@@ -32253,7 +32520,7 @@ fn compile_batch_step(
         "open" | "close" => {
             return Err(format!(
                 "Batch command only supports DOM operations. '{}' is not allowed. Please execute it separately.",
-                nested_command
+                public_command_name(&nested_command)
             ));
         }
         "eval" => {
@@ -32552,6 +32819,43 @@ fn resolve_batch_commands(
     Ok((batch_args.bail, commands, stdin_available))
 }
 
+/// Compile every batch step up front, before the first one runs, keeping the command order.
+///
+/// Two things come out of doing this in one pass:
+///
+/// - **Every** unbuildable step is reported before the first step runs, instead of one per
+///   attempt. The errors are client-side refusals (unknown command, a command batch mode does
+///   not support, a missing required argument, `eval --stdin` with stdin already claimed by the
+///   command list) and they are all known before any page action happens, so a single round can
+///   report all of them — observed on a run that spent three rounds discovering one refused step
+///   at a time.
+/// - The compiled plan of a step is what the executor runs, so a step never compiles twice.
+///
+/// A step that cannot be compiled is reported and skipped; the steps that do compile still run,
+/// and the batch still continues past a *runtime* failure unless `--bail` was given. That is the
+/// documented batch contract (`AGENTS.md`, `help batch`, and the e2e batch scenarios), so this
+/// function deliberately does not turn a compile error into "nothing runs".
+fn compile_batch_steps(
+    commands: &[BatchCommandSpec],
+    command_map: &HashMap<String, commands::CommandDef>,
+    stdin_available: bool,
+) -> Vec<Result<BatchStepPlan, String>> {
+    commands
+        .iter()
+        .enumerate()
+        .map(|(index, spec)| {
+            compile_batch_step(spec, command_map, stdin_available).map_err(|error| {
+                format!(
+                    "Batch command {} failed ({}): {}",
+                    index + 1,
+                    spec.display,
+                    error
+                )
+            })
+        })
+        .collect()
+}
+
 async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
     let (bail, commands, stdin_available) = resolve_batch_commands(global)?;
     let base_url = resolve_base_url(global.server_url.as_deref(), global.session_name.as_deref());
@@ -32570,33 +32874,34 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
     let client = make_client();
     let command_map = commands_map();
 
-    // The batch runs on the client: every step is compiled and executed on its
-    // own, through the same executor the equivalent standalone command uses.
-    // A failing step is reported and — unless --bail was given — the batch
-    // continues with the next command.
-    let mut failures: Vec<String> = Vec::new();
+    // Every step is compiled before the first one runs (see [compile_batch_steps]). Report all
+    // unbuildable steps first: a step that cannot be compiled is never attempted, and one round
+    // carries the whole diagnosis instead of one refusal per attempt.
+    let compiled = compile_batch_steps(&commands, &command_map, stdin_available);
 
-    for (index, spec) in commands.iter().enumerate() {
-        let plan = match compile_batch_step(spec, &command_map, stdin_available) {
-            Ok(plan) => plan,
-            Err(error) => {
-                let failure = format!(
-                    "Batch command {} failed ({}): {}",
-                    index + 1,
-                    spec.display,
-                    error
-                );
-                eprintln!("{failure}");
-                failures.push(failure);
-                if bail {
-                    break;
-                }
-                continue;
-            }
-        };
+    let mut failures: Vec<String> = Vec::new();
+    for failure in compiled.iter().filter_map(|step| step.as_ref().err()) {
+        eprintln!("{failure}");
+        failures.push(failure.clone());
+    }
+    if bail && !failures.is_empty() {
+        // --bail stops before the first *runnable* step too: the caller asked to stop at the
+        // first failure, and every compile failure is already known.
+        return Err(CliError(
+            ExitCode::BatchPartial,
+            format!("{} batch command(s) failed.", failures.len()),
+        ));
+    }
+
+    // The batch runs on the client, one compiled step at a time, through the same executor the
+    // equivalent standalone command uses. A failing step is reported and — unless --bail was
+    // given — the batch continues with the next command.
+    for (index, step) in compiled.iter().enumerate() {
+        // An unbuildable step was reported above; nothing to execute.
+        let Ok(plan) = step else { continue };
 
         if let Err(error) =
-            execute_batch_step(&client, &base_url, &plan, global.session_name.as_deref()).await
+            execute_batch_step(&client, &base_url, plan, global.session_name.as_deref()).await
         {
             let failure = format!(
                 "Batch command {} failed ({}): {}",
@@ -32758,11 +33063,47 @@ fn apply_config_defaults(global: &mut GlobalFlags) {
     }
 }
 
+/// Point a Windows console at UTF-8 before the first byte is printed.
+///
+/// `println!` writes UTF-8 bytes, and a console left on the OEM code page (cp936/GBK on a zh-CN
+/// host) renders Chinese as mojibake — which is why the docs told users to prefix every command
+/// with `chcp 65001`. Doing it here makes `browser4-cli` print correctly in the same window
+/// without the ceremony. Only a real console is touched: output redirected to a pipe or a file is
+/// already UTF-8 and must stay byte-identical (and `chcp` cannot affect a pipe anyway).
+#[cfg(windows)]
+fn ensure_utf8_console() {
+    use std::io::IsTerminal;
+
+    const CP_UTF8: u32 = 65001;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetConsoleOutputCP() -> u32;
+        fn SetConsoleOutputCP(code_page: u32) -> i32;
+    }
+
+    if !std::io::stdout().is_terminal() {
+        return;
+    }
+    // Safety: both calls take and return plain integers and only touch this process's console;
+    // there is no pointer or lifetime to get wrong.
+    unsafe {
+        if GetConsoleOutputCP() != CP_UTF8 {
+            let _ = SetConsoleOutputCP(CP_UTF8);
+        }
+    }
+}
+
+/// Non-Windows: consoles are UTF-8 (or the toolchain's locale) already.
+#[cfg(not(windows))]
+fn ensure_utf8_console() {}
+
 fn main() {
     // First statement in the process: every segment reported by `[timing]` is
     // measured from here. Off unless BROWSER4_CLI_TIMING / TRACE is set.
     timing::init();
     install_broken_pipe_panic_hook();
+    ensure_utf8_console();
     init_root_search_start_dir_from_startup();
     timing::mark("hooks");
 
@@ -32893,6 +33234,12 @@ fn main() {
 /// and return the process exit code.
 fn render_cli_error(json_mode: bool, command: &str, err: CliError) -> i32 {
     let message = err.message();
+    // A handler that already printed its own explanation reports only the exit
+    // code: `--help <typo>` prints "Unknown command" plus the full reference and
+    // then returns a bare Usage error, so the user is not told twice.
+    if message.is_empty() {
+        return err.code() as i32;
+    }
     // json_mode covers global --json; json_active() covers subcommand-level
     // --json (e.g. "tab-list --json") which enables JSON inside run().
     if json_mode || json_active() {
@@ -33188,7 +33535,7 @@ async fn run(
         // from the backend's tool list, and answering it from the static table
         // produced "Unknown command: plugin-<domain>" plus the full reference.
         if let Some(domain) = sub.as_deref().and_then(|target| {
-            plugin_domain_help_target(target, &global.args)
+            plugin_domain_help_target(target, &help_args)
         }) {
             if print_plugin_domain_help(&base_url, &domain).await {
                 return Ok(());
@@ -33219,6 +33566,9 @@ async fn run(
             if !print_declared_help(sub.as_deref(), &specs) {
                 eprintln!("Unknown command: {}", sub.as_deref().unwrap_or(""));
                 print_help(None);
+                // The reference is already on screen; the non-zero code is what
+                // lets scripts and agents notice the typo.
+                return Err(CliError(ExitCode::Usage, String::new()));
             }
             return Ok(());
         }
@@ -33305,6 +33655,9 @@ async fn run(
             if !print_declared_help(Some(command), &specs) {
                 eprintln!("Unknown command: {}", command);
                 print_help(None);
+                // The reference is already on screen; the non-zero code is what
+                // lets scripts and agents notice the typo.
+                return Err(CliError(ExitCode::Usage, String::new()));
             }
         }
         return Ok(());
@@ -33698,8 +34051,21 @@ async fn run(
         // backend, evict a session slot, or attach anything.  Handling it here —
         // before the server gate — keeps the command instant and side-effect
         // free on a machine where the backend is not running.
+        //
+        // It must also run OUTSIDE the async context: the scan probes each port
+        // with `reqwest::blocking`, whose internal tokio runtime panics when it is
+        // dropped from an async task ("Cannot drop a runtime in a context where
+        // blocking is not allowed", exit 101 — hit on 2026-11-19 with a browser
+        // listening on a debug port).  `handle_attach` wraps the same resolution in
+        // `spawn_blocking` for exactly this reason; the early-return path needs the
+        // same treatment, or the panic only shows up on a machine that actually has
+        // a `--remote-debugging-port` browser running.
         if parsed.get("list").and_then(Value::as_bool).unwrap_or(false) {
-            handle_attach_list(&parsed).map_err(|message| CliError(ExitCode::Usage, message))?;
+            let list_args = parsed.clone();
+            tokio::task::spawn_blocking(move || handle_attach_list(&list_args))
+                .await
+                .map_err(|e| CliError(ExitCode::General, format!("attach --list failed: {e}")))?
+                .map_err(|message| CliError(ExitCode::Usage, message))?;
             emit_json_envelope_for_early_return(&command);
             return Ok(());
         }
@@ -34496,7 +34862,8 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
             )
-            .await?;
+            .await
+            .map_err(agent_run_error)?;
         }
         "agent-status" => {
             handle_agent_status(&client, &base_url, &tool_params).await?;
@@ -35074,15 +35441,7 @@ async fn run(
             .await?;
             json_field("result", json!(&raw));
             if !json_active() && !quiet_active() {
-                if dir.is_empty() {
-                    cli_println!("✓ Download behavior set: {}", behavior);
-                } else {
-                    cli_println!(
-                        "✓ Downloads {}: saving to {} (files land there when the page triggers a download)",
-                        if behavior == "deny" { "denied" } else { "allowed" },
-                        dir
-                    );
-                }
+                cli_println!("{}", download_configured_message(&behavior, &dir));
             }
         }
         "upload" => {
@@ -35382,7 +35741,13 @@ fn could_be_declared_cli_command(args: &[String]) -> bool {
     let Some(second) = args.get(1) else {
         return false;
     };
-    if second.starts_with('-') || commands_map().contains_key(first) {
+    if second.starts_with('-')
+        || commands_map().contains_key(first)
+        // A spaced form the CLI owns (`tab list`, `swarm create`) dispatches
+        // locally: probing the backend for it put a specs round-trip in front
+        // of every such command.
+        || rewrite_prefixed_command(args).is_some()
+    {
         return false;
     }
     true
@@ -35417,6 +35782,9 @@ enum HelpTarget {
     Command(String),
     /// A category name or alias — list every command in that category.
     Category(&'static str),
+    /// An explicit `hidden:<prefix>` request — list the hidden commands of one
+    /// family, whatever a command of the same name would otherwise win.
+    HiddenFamily(String),
     /// A prefix of one or more public command names (`experience` → `experience …`).
     Prefix,
     /// Nothing matched.
@@ -35425,24 +35793,53 @@ enum HelpTarget {
 
 /// Classify a `--help <target>` argument.
 ///
-/// Order matters: an exact command wins, then a category name or alias, and
-/// only then a prefix. Prefix matching used to run first, so the documented
-/// category `--help session` printed an arbitrary slice of the
-/// `sessionstorage-*` family, while `--help storage`, `--help tabs`,
-/// `--help network`, and `--help core` reported an unknown command even though
-/// the reference lists those very sections.
+/// Order matters: an explicit `category:` / `hidden:` request wins, then an
+/// exact command, then a category name or alias, and only then a prefix. Prefix
+/// matching used to run first, so the documented category `--help session`
+/// printed an arbitrary slice of the `sessionstorage-*` family, while `--help
+/// storage`, `--help tabs`, `--help network`, and `--help core` reported an
+/// unknown command even though the reference lists those very sections.
+///
+/// `category:<name>` and `hidden:<prefix>` exist because a name can be claimed
+/// twice: `install`, `webminer`, `skills`, `config`, `snapshot` and `keyboard`
+/// are both category names and commands, and the hidden families `config` and
+/// `skills` share their name with a visible command. An exact command always
+/// won, so those sections — and the hidden `config list` — could not be listed
+/// at all.
 fn classify_help_target(name: &str) -> HelpTarget {
+    let trimmed = name.trim();
+    if let Some(rest) = trimmed.strip_prefix("category:") {
+        return match resolve_category_alias(rest.trim()) {
+            Some(canonical) if !commands_in_category(canonical).is_empty() => {
+                HelpTarget::Category(canonical)
+            }
+            _ => HelpTarget::Unknown,
+        };
+    }
+    if let Some(rest) = trimmed.strip_prefix("hidden:") {
+        let prefix = rest.trim();
+        let matches = |public: &str| public == prefix || public.starts_with(&format!("{prefix} "));
+        if !prefix.is_empty()
+            && commands::all_commands()
+                .iter()
+                .any(|c| c.hidden && matches(public_command_name(c.name)))
+        {
+            return HelpTarget::HiddenFamily(prefix.to_string());
+        }
+        return HelpTarget::Unknown;
+    }
+
     let cmd_map = commands_map();
-    if cmd_map.contains_key(name) {
-        return HelpTarget::Command(name.to_string());
+    if cmd_map.contains_key(trimmed) {
+        return HelpTarget::Command(trimmed.to_string());
     }
     // A quoted spaced name (`--help "swarm submit"`) arrives as one argument;
     // its internal key is the kebab-case form.
-    let kebab = name.replace(' ', "-");
-    if kebab != name && cmd_map.contains_key(kebab.as_str()) {
+    let kebab = trimmed.replace(' ', "-");
+    if kebab != trimmed && cmd_map.contains_key(kebab.as_str()) {
         return HelpTarget::Command(kebab);
     }
-    if let Some(canonical) = resolve_category_alias(name) {
+    if let Some(canonical) = resolve_category_alias(trimmed) {
         if !commands_in_category(canonical).is_empty() {
             return HelpTarget::Category(canonical);
         }
@@ -35453,13 +35850,13 @@ fn classify_help_target(name: &str) -> HelpTarget {
     // listing and printed a one-line list instead of the page.
     if let Some(cmd) = cmd_map
         .values()
-        .find(|cmd| public_command_name(cmd.name) == name)
+        .find(|cmd| public_command_name(cmd.name) == trimmed)
     {
         return HelpTarget::Command(cmd.name.to_string());
     }
     if cmd_map
         .values()
-        .any(|c| public_command_name(c.name).starts_with(name))
+        .any(|c| public_command_name(c.name).starts_with(trimmed))
     {
         return HelpTarget::Prefix;
     }
@@ -35480,6 +35877,43 @@ fn print_help(command_name: Option<&str>) -> bool {
                         .get(resolved.as_str())
                         .expect("classify_help_target reported an exact command");
                     cli_println!("{}", generate_command_help(cmd));
+                    // The name is also a category (`install`, `webminer`,
+                    // `skills`, …): the command page wins, but the listing must
+                    // stay one copy-paste away.
+                    if let Some(hint) = shadowed_category_hint(name) {
+                        cli_println!("\n{hint}");
+                    }
+                    return true;
+                }
+                HelpTarget::HiddenFamily(prefix) => {
+                    // Explicit listing of a hidden family. Needed because a
+                    // visible command of the same name (`config`, `skills`) wins
+                    // over the prefix listing, which left those families
+                    // reachable only from the reference's pointer — and that
+                    // pointer resolved to the command page.
+                    let all = commands::all_commands();
+                    let mut matching: Vec<&crate::commands::CommandDef> = all
+                        .iter()
+                        .filter(|cmd| {
+                            if !cmd.hidden {
+                                return false;
+                            }
+                            let public = public_command_name(cmd.name);
+                            public == prefix || public.starts_with(&format!("{prefix} "))
+                        })
+                        .collect();
+                    matching.sort_by_key(|cmd| public_command_name(cmd.name));
+                    let mut lines: Vec<String> =
+                        vec![format!("\nHidden `{prefix}` commands:\n")];
+                    for cmd in matching {
+                        lines.push(generate_help_entry(cmd));
+                    }
+                    lines.push(String::new());
+                    lines.push(
+                        "These work like any other command; `--help <name>` prints one's own page."
+                            .to_string(),
+                    );
+                    cli_println!("{}", lines.join("\n"));
                     return true;
                 }
                 HelpTarget::Category(canonical) => {
@@ -35546,6 +35980,22 @@ fn print_help(command_name: Option<&str>) -> bool {
     }
     cli_println!("{}", generate_help());
     true
+}
+
+/// Pointer printed under a command page whose name is also a category name.
+///
+/// `install`, `webminer`, `skills`, `config`, `snapshot` and `keyboard` are both
+/// commands and categories; the command page wins by design, and this is the one
+/// line that keeps the section listing reachable.
+fn shadowed_category_hint(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    let canonical = resolve_category_alias(trimmed)?;
+    if commands_in_category(canonical).is_empty() {
+        return None;
+    }
+    Some(format!(
+        "`{trimmed}` is also a command category — list it with `browser4-cli --help category:{canonical}`."
+    ))
 }
 
 /// Render the `[plugin]`-badged section of declared plugin commands.
@@ -36404,6 +36854,20 @@ mod tests {
              thread (build.rs: cargo:rustc-link-arg=/STACK:...), got {reserve} — the debug \
              build's async chain overflowed the 1 MB default on `click`"
         );
+    }
+
+    /// The UTF-8 console switch must work with no console and must link.
+    ///
+    /// A test process normally has its stdout captured (a pipe), which is exactly the case the
+    /// `IsTerminal` guard exists for: the call must be a silent no-op there. Run from a real
+    /// console it simply switches that console. The value of the test is the second half — a typo
+    /// in the `extern "system"` block is a *link* error, and this is the only test binary that
+    /// links those imports on Windows.
+    #[cfg(windows)]
+    #[test]
+    fn test_ensure_utf8_console_is_a_noop_on_a_piped_stdout() {
+        ensure_utf8_console();
+        ensure_utf8_console();
     }
 
     /// Guard that restores an env var to its previous value on drop, holding the shared
@@ -38555,11 +39019,34 @@ mod tests {
     }
 
     #[test]
+    fn user_interrupt_exits_130_silently() {
+        // 130 = 128 + SIGINT, so a script that distinguishes "killed" from "failed" keeps working.
+        assert_eq!(130, ExitCode::Interrupted as i32);
+
+        let interrupted = agent_run_error(AGENT_RUN_INTERRUPTED.to_string());
+        assert_eq!(ExitCode::Interrupted, interrupted.code());
+        assert!(
+            interrupted.message().is_empty(),
+            "the wait loop already printed the cancel outcome; the code travels alone"
+        );
+
+        let ordinary = agent_run_error("Agent task failed: boom".to_string());
+        assert_eq!(ExitCode::General, ordinary.code());
+        assert_eq!("Agent task failed: boom", ordinary.message());
+    }
+
+    #[test]
     fn no_active_session_message_uses_structured_cli_format() {
         let message = no_active_session_message();
 
         assert!(message.contains("🔐 Session required"));
         assert!(message.contains("💡 What to try"));
+        // The browser the user is signed in to is one attach away; `open` would start a second,
+        // logged-out browser. A session-less `agent run --coding` task hit exactly this dead end
+        // (run `4125acaa`, 2026-11-19).
+        assert!(message.contains("attach the browser you are already signed in to"), "{message}");
+        assert!(message.contains("-s <name> attach --cdp <port>"), "{message}");
+        assert!(message.contains("attach --list"), "{message}");
         assert!(message.contains("open <url>` to start a new session"));
         assert!(message.contains("after tab operations, use `goto <url>`"));
         assert!(message.contains("check available sessions with"));
@@ -39630,6 +40117,163 @@ mod tests {
         assert_eq!(rewritten[2], ".product-title");
     }
 
+    /// Every command whose public name is the spaced form (`tab list`,
+    /// `cookie get`, `dialog accept`, …) must run from that spelling: the
+    /// reference prints the spaced name, so it has to be the one that works.
+    /// The kebab registry key stays a working alias.
+    #[test]
+    fn rewrite_prefixed_command_accepts_every_spaced_public_name() {
+        for cmd in crate::commands::all_commands() {
+            let public = crate::help::public_command_name(cmd.name);
+            if public == cmd.name {
+                continue;
+            }
+            let tokens: Vec<String> = public.split(' ').map(str::to_string).collect();
+            let rewritten = rewrite_prefixed_command(&tokens).unwrap_or_else(|| {
+                panic!("spaced form '{public}' of '{}' is not rewritten", cmd.name)
+            });
+            assert_eq!(
+                rewritten[0], cmd.name,
+                "'{public}' must dispatch to '{}'",
+                cmd.name
+            );
+        }
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_handles_spaced_tab_storage_and_dialog_families() {
+        for (spaced, flat) in [
+            (vec!["tab", "list"], "tab-list"),
+            (vec!["tab", "new", "https://example.com"], "tab-new"),
+            (vec!["tab", "select", "2"], "tab-select"),
+            (vec!["tab", "close", "--guid", "abc"], "tab-close"),
+            (vec!["cookie", "set", "k", "v", "--domain", "localhost"], "cookie-set"),
+            (vec!["cookie", "clear"], "cookie-clear"),
+            (vec!["localstorage", "get", "token"], "localstorage-get"),
+            (vec!["sessionstorage", "clear"], "sessionstorage-clear"),
+            (vec!["state", "save", "auth.json"], "state-save"),
+            (vec!["dialog", "accept", "Ada"], "dialog-accept"),
+            (vec!["page", "info"], "page-info"),
+            (vec!["go", "back"], "go-back"),
+            (vec!["skill", "list"], "skill-list"),
+            (vec!["close", "all"], "close-all"),
+            (vec!["kill", "all"], "kill-all"),
+            (vec!["web", "vitals"], "web-vitals"),
+            (vec!["session", "default", "job-42"], "session-default"),
+            (vec!["generate", "locator", "e5"], "generate-locator"),
+            (vec!["delete", "data"], "delete-data"),
+        ] {
+            let args: Vec<String> = spaced.iter().map(|s| s.to_string()).collect();
+            let rewritten = rewrite_prefixed_command(&args)
+                .unwrap_or_else(|| panic!("'{spaced:?}' must rewrite to '{flat}'"));
+            assert_eq!(rewritten[0], flat, "'{spaced:?}' must dispatch to '{flat}'");
+            assert_eq!(
+                &rewritten[1..],
+                &args[2..],
+                "'{flat}' must keep the arguments after the subcommand"
+            );
+        }
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_leaves_unknown_spaced_subcommands_alone() {
+        for tokens in [
+            vec!["tab", "foo"],
+            vec!["cookie", "/tmp/cookies.json"],
+            vec!["state", "clear"],
+            vec!["dialog", "close"],
+            vec!["web", "registry"],
+            vec!["session", "list"],
+            vec!["close"],
+        ] {
+            let args: Vec<String> = tokens.iter().map(|s| s.to_string()).collect();
+            assert!(
+                rewrite_prefixed_command(&args).is_none(),
+                "{args:?} must not be rewritten — only known subcommands are"
+            );
+        }
+    }
+
+    #[test]
+    fn preferred_prefixed_group_form_names_the_new_spaced_families() {
+        for (prefix, hint) in [
+            ("tab", "tab <subcommand>"),
+            ("cookie", "cookie <subcommand>"),
+            ("state", "state <subcommand>"),
+            ("dialog", "dialog <subcommand>"),
+            ("web", "web <subcommand>"),
+            ("session", "session <subcommand>"),
+        ] {
+            assert_eq!(
+                preferred_prefixed_group_form(prefix),
+                Some(hint),
+                "bare '{prefix}' must point at the spaced form"
+            );
+        }
+        // `close` is a real command, so it must not be rejected with a group hint.
+        assert_eq!(preferred_prefixed_group_form("close"), None);
+    }
+
+    /// The public contract for the renamed families: the spaced form is the
+    /// recommended spelling (`--help` prints it) and the kebab form keeps
+    /// working. `preferred_spaced_command_form` drives a hard "Unsupported
+    /// command form" error, so these commands must never be entered into it —
+    /// existing scripts keep running with the hyphen.
+    #[test]
+    fn renamed_families_keep_their_kebab_form_accepted() {
+        for flat in [
+            "tab-close",
+            "tab-list",
+            "tab-new",
+            "tab-select",
+            "cookie-clear",
+            "cookie-delete",
+            "cookie-get",
+            "cookie-list",
+            "cookie-set",
+            "localstorage-clear",
+            "localstorage-delete",
+            "localstorage-get",
+            "localstorage-list",
+            "localstorage-set",
+            "sessionstorage-clear",
+            "sessionstorage-delete",
+            "sessionstorage-get",
+            "sessionstorage-list",
+            "sessionstorage-set",
+            "state-load",
+            "state-save",
+            "dialog-accept",
+            "dialog-dismiss",
+            "dialog-status",
+            "page-info",
+            "go-back",
+            "go-forward",
+            "generate-locator",
+            "close-all",
+            "kill-all",
+            "delete-data",
+            "session-default",
+            "skill-info",
+            "skill-install",
+            "skill-list",
+            "skill-reload",
+            "skill-uninstall",
+            "web-vitals",
+            "profile-import",
+        ] {
+            assert!(
+                commands::commands_map().contains_key(flat),
+                "'{flat}' must exist in the registry"
+            );
+            assert_eq!(
+                preferred_spaced_command_form(flat),
+                None,
+                "'{flat}' is the working alias of its spaced form and must not be rejected"
+            );
+        }
+    }
+
     #[test]
     fn rewrite_prefixed_command_handles_htmlsnapshot_algorithms() {
         let rewritten = rewrite_prefixed_command(&[
@@ -39921,8 +40565,12 @@ mod tests {
         assert!(!could_be_declared_cli_command(&args(&["fill", "e5"])));
         // A flag in second position is an option, not a subcommand.
         assert!(!could_be_declared_cli_command(&args(&["profile", "--json"])));
+        // A spaced form the CLI owns is dispatched locally, not probed.
+        assert!(!could_be_declared_cli_command(&args(&["tab", "list"])));
+        assert!(!could_be_declared_cli_command(&args(&["swarm", "create"])));
         // The declared spaced form (`profile import`) is exactly this shape.
         assert!(could_be_declared_cli_command(&args(&["profile", "import"])));
+        assert!(could_be_declared_cli_command(&args(&["profile", "sources"])));
     }
 
     /// `--examples` must resolve a spaced subcommand the same way `help` does,
@@ -41153,6 +41801,53 @@ linkGroups:
         assert!(tool_call_failure_summary("x", r#"{"error":"boom"}"#).is_some());
     }
 
+    /// Issue `20261120-0145`: `PermissionAudit` returns a refusal as text, so `tool call`
+    /// printed `Error: PERMISSION_DENIED | code=…` and still exited 0. The backend now flags
+    /// the envelope, but an older backend still reports `success:true` — the text must be
+    /// recognized by itself.
+    #[test]
+    fn tool_call_permission_refusal_is_a_failure() {
+        let refusal = "Error: PERMISSION_DENIED | code=PATH_DENIED | tool=coding.fs | detail=path 'D:\\x' is outside the workspace";
+        assert_eq!(
+            tool_call_refusal_reason(refusal).as_deref(),
+            Some("the access policy refused the call (code=PATH_DENIED)")
+        );
+        // A refusal without the `Error: ` prefix (`coding.shell`) is the same shape.
+        let shell_refusal = "PERMISSION_DENIED | code=SANDBOX_DENIED | tool=coding.shell | detail=the OS denied it";
+        assert_eq!(
+            tool_call_refusal_reason(shell_refusal).as_deref(),
+            Some("the access policy refused the call (code=SANDBOX_DENIED)")
+        );
+        // `success:true` plus a refusal text is the pre-envelope backend shape.
+        for (payload, code) in [
+            (refusal.to_string(), "PATH_DENIED"),
+            (shell_refusal.to_string(), "SANDBOX_DENIED"),
+            (
+                format!(r#"{{"content":[{{"type":"text","text":{}}}]}}"#, json!(refusal)),
+                "PATH_DENIED",
+            ),
+            (format!(r#"{{"success":true,"text":{}}}"#, json!(refusal)), "PATH_DENIED"),
+        ] {
+            let summary = tool_call_failure_summary("coding_write", &payload)
+                .unwrap_or_else(|| panic!("{payload} must be reported as a failure"));
+            assert!(summary.contains(&format!("code={code}")), "{summary}");
+        }
+        // A report that merely mentions the prefix is data, not a refusal of this call.
+        for payload in [
+            "Access preset: full\npaths outside workspace : NO (refused with PERMISSION_DENIED)",
+            r#"{"success":true,"result":"PERMISSION_DENIED | code=PATH_DENIED was the last refusal"}"#,
+            "PERMISSION_DENIED but no code",
+        ] {
+            assert!(
+                tool_call_failure_summary("coding_permissions", payload).is_none(),
+                "{payload} must not be reported as a failure"
+            );
+        }
+        // The MCP envelope half the backend adds: isError:true without any `success` field.
+        let flagged = r#"{"isError":true,"errorCode":"PERMISSION_DENIED","content":[{"text":"PERMISSION_DENIED | code=PATH_DENIED"}]}"#;
+        assert!(tool_call_failure_summary("coding_write", flagged).is_some());
+    }
+
     #[test]
     fn tool_call_fail_on_error_option_is_opt_in() {
         assert!(!parse_tool_call_fail_on_error(None));
@@ -41209,8 +41904,79 @@ linkGroups:
         );
         assert_eq!(
             plugin_domain_help_target("plugin", &args(&["plugin"])),
-            None
+            None,
+            "the help target is not a plugin domain"
         );
+        assert_eq!(
+            plugin_domain_help_target("plugin", &args(&["plugin", "list", "--help"])),
+            None,
+            "the static subcommand keeps its own page"
+        );
+    }
+
+    #[test]
+    fn shadowed_category_hint_points_at_the_explicit_form() {
+        // `install`/`webminer`/`skills` are both commands and categories: the
+        // command page must name the listing, or the section is unreachable.
+        for name in ["install", "webminer", "skills", "config", "snapshot", "keyboard"] {
+            let hint = shadowed_category_hint(name)
+                .unwrap_or_else(|| panic!("{name} is a shadowed category and needs a hint"));
+            assert!(
+                hint.contains(&format!("--help category:{name}")),
+                "{name} hint does not name the explicit form: {hint}"
+            );
+        }
+        for name in ["goto", "click", "no-such-command"] {
+            assert_eq!(
+                shadowed_category_hint(name),
+                None,
+                "{name} is not a category"
+            );
+        }
+    }
+
+    /// `category:<name>` and `hidden:<prefix>` exist because an exact command
+    /// wins over the category/prefix of the same name; without them `install`
+    /// (category) and `config list` (hidden) had no listing at all.
+    #[test]
+    fn explicit_category_and_hidden_forms_resolve() {
+        for name in ["install", "webminer", "skills", "snapshot", "keyboard", "config"] {
+            assert_eq!(
+                classify_help_target(&format!("category:{name}")),
+                HelpTarget::Category(name),
+                "category:{name}"
+            );
+        }
+        // Aliases work through the explicit form too.
+        assert_eq!(
+            classify_help_target("category:extraction"),
+            HelpTarget::Category("snapshot")
+        );
+
+        assert_eq!(
+            classify_help_target("hidden:config"),
+            HelpTarget::HiddenFamily("config".into())
+        );
+        assert_eq!(
+            classify_help_target("hidden:skills"),
+            HelpTarget::HiddenFamily("skills".into())
+        );
+        assert_eq!(
+            classify_help_target("hidden:code"),
+            HelpTarget::HiddenFamily("code".into())
+        );
+        // Unknown or empty families are not silently accepted.
+        assert_eq!(classify_help_target("hidden:no-such-family"), HelpTarget::Unknown);
+        assert_eq!(classify_help_target("hidden:"), HelpTarget::Unknown);
+        assert_eq!(classify_help_target("category:no-such-category"), HelpTarget::Unknown);
+
+        // The shadowed names themselves still resolve to their command pages.
+        assert_eq!(
+            classify_help_target("install"),
+            HelpTarget::Command("install".into())
+        );
+        // ... and the advertised alias for the plugins category keeps working.
+        assert_eq!(classify_help_target("plugin"), HelpTarget::Category("plugins"));
     }
 
     #[test]
@@ -41415,7 +42181,7 @@ linkGroups:
         );
         assert_eq!(
             preferred_spaced_command_form("experience-deep-learn"),
-            Some("experience deep-learn")
+            Some("experience deep learn")
         );
     }
 
@@ -45875,6 +46641,119 @@ linkGroups:
     }
 
     #[test]
+    fn compile_batch_step_refusal_names_where_a_download_step_belongs() {
+        // `download` configures the browser (Browser.setDownloadBehavior) instead of touching
+        // the page, so a batch cannot run it — but "not supported" alone sent a real agent run
+        // through three rounds of retries (2026-11-21). The refusal has to name the standalone
+        // form and why it is standalone.
+        let spec = BatchCommandSpec {
+            display: "download --dir ./imgs".to_string(),
+            tokens: vec![
+                "download".to_string(),
+                "--dir".to_string(),
+                "./imgs".to_string(),
+            ],
+        };
+
+        let error = compile_batch_step(&spec, &commands_map(), true).unwrap_err();
+        assert!(
+            error.contains("run `download --dir") && error.contains("browser configuration"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn compile_batch_step_refusal_points_other_commands_at_a_standalone_call() {
+        let spec = BatchCommandSpec {
+            display: "open https://example.com".to_string(),
+            tokens: vec!["open".to_string(), "https://example.com".to_string()],
+        };
+
+        let error = compile_batch_step(&spec, &commands_map(), true).unwrap_err();
+        assert!(
+            error.contains("run it as its own `browser4-cli"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// One batch step built from its command line (`"goto https://example.com"`), split the way
+    /// the CLI splits a quoted batch command.
+    fn batch_spec(command: &str) -> BatchCommandSpec {
+        BatchCommandSpec {
+            display: command.to_string(),
+            tokens: command.split_whitespace().map(str::to_string).collect(),
+        }
+    }
+
+    #[test]
+    fn compile_batch_steps_reports_every_unbuildable_step() {
+        // Every bad step is known before the first step runs, so the whole diagnosis belongs in
+        // one round — retrying one refused step per round is what the 2026-11-21 run paid for.
+        let commands = [
+            batch_spec("tab select 0"),
+            batch_spec("download --dir ./imgs"),
+            batch_spec("eval --stdin"),
+        ];
+
+        let compiled = compile_batch_steps(&commands, &commands_map(), false);
+        assert_eq!(
+            compiled.len(),
+            3,
+            "one entry per command, in declaration order"
+        );
+        assert!(compiled[0].is_ok(), "step 1 compiles");
+        let second = compiled[1].as_ref().unwrap_err();
+        assert!(
+            second.starts_with("Batch command 2 failed (download --dir ./imgs): "),
+            "unexpected second entry: {second}"
+        );
+        let third = compiled[2].as_ref().unwrap_err();
+        assert!(
+            third.starts_with("Batch command 3 failed (eval --stdin): "),
+            "unexpected third entry: {third}"
+        );
+    }
+
+    #[test]
+    fn compile_batch_steps_keeps_the_command_order() {
+        let commands = [
+            batch_spec("goto https://example.com"),
+            batch_spec("snapshot"),
+        ];
+
+        let compiled = compile_batch_steps(&commands, &commands_map(), true);
+        let names: Vec<&str> = compiled
+            .iter()
+            .map(|step| step.as_ref().expect("every step compiles").command.as_str())
+            .collect();
+        assert_eq!(names, vec!["goto", "snapshot"]);
+    }
+
+    #[test]
+    fn download_confirmation_names_the_folder_and_the_watch_command() {
+        // The folder alone is not actionable: the caller also has to know how to wait for the
+        // file (2026-11-21: one round went to `help download` just to find `wait --download`).
+        let line = download_configured_message("allow", "C:/ws/downloads");
+
+        assert!(line.contains("C:/ws/downloads"), "{line}");
+        assert!(
+            line.contains("wait --download --dir C:/ws/downloads"),
+            "the confirmation must say how to wait for the file: {line}"
+        );
+    }
+
+    #[test]
+    fn download_denial_does_not_claim_files_are_saved() {
+        let line = download_configured_message("deny", "C:/ws/downloads");
+
+        assert!(line.contains("will not save any file"), "{line}");
+        assert!(
+            !line.contains("saving to"),
+            "a denied download must not read as if files are saved: {line}"
+        );
+    }
+
+    #[test]
     fn compile_batch_step_rejects_nested_batch_and_server_override() {
         let nested = BatchCommandSpec {
             display: "batch 'click #a'".to_string(),
@@ -49426,6 +50305,13 @@ linkGroups:
         );
         assert!(err.contains("s-abc123"), "expected session id in: {err}");
         assert!(err.contains("-s <name>"), "expected -s hint in: {err}");
+        // A named retry is the *fix*, so the message has to show the whole command — the agent in
+        // run `4125acaa` only discovered `-s weibo attach …` by trial and error.
+        assert!(
+            err.contains("attach --cdp <port>"),
+            "expected a copy-pasteable attach command in: {err}"
+        );
+        assert!(err.contains("-s weibo"), "expected a concrete name example in: {err}");
     }
 
     #[test]
@@ -50093,6 +50979,28 @@ linkGroups:
         assert!(rewrite_prefixed_command(&["webminer".to_string()]).is_none());
     }
 
+    /// The WebMiner sample commands are displayed as `webminer run example`;
+    /// the JAR's own `run-example` spelling keeps working as an alias.
+    #[test]
+    fn rewrite_prefixed_command_handles_webminer_run_example_spaced_form() {
+        let rewritten = rewrite_prefixed_command(&[
+            "webminer".to_string(),
+            "run".to_string(),
+            "example".to_string(),
+            "--force".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "webminer-run-example");
+        assert_eq!(rewritten[1], "--force");
+
+        let legacy = rewrite_prefixed_command(&[
+            "webminer".to_string(),
+            "run-example".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(legacy[0], "webminer-run-example");
+    }
+
     #[test]
     fn preferred_spaced_command_form_includes_webminer_subcommands() {
         assert_eq!(
@@ -50113,7 +51021,7 @@ linkGroups:
         );
         assert_eq!(
             preferred_spaced_command_form("webminer-run-example"),
-            Some("webminer run-example")
+            Some("webminer run example")
         );
         assert_eq!(
             preferred_spaced_command_form("webminer-all"),

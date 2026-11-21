@@ -1,0 +1,641 @@
+package ai.platon.pulsar.coding.sandbox
+
+import com.sun.jna.Native
+import com.sun.jna.Pointer
+import com.sun.jna.WString
+import com.sun.jna.ptr.PointerByReference
+import org.slf4j.LoggerFactory
+import java.nio.file.Files
+import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+
+/**
+ * `windows-appcontainer` — the **browse-mode** boundary: nothing outside the workspace is reachable.
+ *
+ * Browse tasks are browser goals. The model needs the Browser4 CLI, the pages it drives and a place
+ * to put scripts — and nothing else. That is a *read and write* confinement, which an integrity label
+ * cannot express (it narrows writes only), so this backend uses the stronger Windows mechanism:
+ *
+ *  - the child runs inside a per-user **AppContainer** ([Win32.APP_CONTAINER_NAME]); the container SID
+ *    is granted `(OI)(CI)M` on the workspace (and the folders the task added) and nothing else, so the
+ *    user profile, `~/.ssh`, `D:\` and the rest are simply not in its access set;
+ *  - **no capabilities are declared**, so the container has **no network at all** — the browser lives
+ *    in the backend, outside the container, which is exactly `NetPolicy.BrowserOnly`;
+ *  - the profile is created with `CreateAppContainerProfile`, which needs **no administrator**: it is
+ *    per-user registry state, and an existing profile is derived rather than recreated.
+ *
+ * The child's `USERPROFILE`/`APPDATA`/`LOCALAPPDATA`/`TEMP` point into `<workspace>/.b4scratch`, so an
+ * ordinary tool that wants a writable home finds one instead of failing on the real profile.
+ *
+ * Availability is proven, not assumed: the first command in a workspace runs a three-part probe
+ * (write inside must succeed; a write in `%SystemRoot%\Temp` and a credential listing must fail) and a
+ * mismatch is a [SandboxUnavailableException] — never a silent fallback to an unconfined launch.
+ */
+class WindowsAppContainerSandbox(
+    private val runner: SandboxCommandRunner = SystemSandboxCommandRunner,
+    /** Probe hook: `(workspace) -> failure message`, `null` when the boundary holds. */
+    private val probe: ((Path) -> String?)? = null,
+    /** Where "already granted" markers live; injectable so tests keep the user data dir clean. */
+    private val markerDir: Path? = SandboxDefaults.defaultDataDir().resolve("sandbox").resolve("appcontainer"),
+    /**
+     * Deletes a container profile. Injectable so [release] can be tested without creating per-user
+     * registry state (and without JNA on a non-Windows host).
+     */
+    private val deleteProfile: (String) -> Boolean = { name ->
+        Win32.userenv.DeleteAppContainerProfile(WString(name)) == 0
+    },
+) : ExecutionSandbox {
+
+    companion object {
+        /** Backend id in `browser4.agent.sandbox` and [ExecutionSandboxes.KNOWN_IDS]. */
+        const val SANDBOX_ID = "windows-appcontainer"
+
+        /** Opt-in switch for selecting this backend from a mode's chain (see [autoSelectable]). */
+        const val PROP_BROWSE_OPT_IN = "browser4.agent.sandbox.browse"
+
+        private const val GRANT_TIMEOUT_SECONDS = 120L
+        private const val PROBE_TIMEOUT_SECONDS = 30L
+        private const val PROBE_TIMEOUT_EXIT = 42
+
+        /**
+         * How long a recorded grant may sit unused before [revokeRecordedGrants] removes it.
+         *
+         * `0` disables the cleanup, `off`/`never` disables it forever; the default six hours is far
+         * longer than a container task lives, so a live task never loses a grant it is using (plan G9).
+         */
+        const val PROP_GRANT_RETENTION_HOURS = "browser4.agent.sandbox.grantRetentionHours"
+
+        internal fun defaultGrantRetention(): java.time.Duration {
+            val raw = System.getProperty(PROP_GRANT_RETENTION_HOURS, "6").trim().lowercase()
+            if (raw == "off" || raw == "never") return java.time.Duration.ofDays(365_000)
+            val hours = raw.toLongOrNull() ?: 6L
+            return java.time.Duration.ofHours(hours.coerceAtLeast(0L))
+        }
+
+        private val logger = LoggerFactory.getLogger(WindowsAppContainerSandbox::class.java)
+    }
+
+    /**
+     * Roots already granted **by this instance**.
+     *
+     * Per instance, not per JVM: a test (or an operator) can swap the runner, and a shared cache would
+     * then report a grant that never happened — which is exactly how `realContainerIsConfined` lost its
+     * data-directory grant once.
+     */
+    private val grantedRoots = ConcurrentHashMap<Path, Unit>()
+
+    override val id: String = SANDBOX_ID
+
+    /** No capabilities means no egress: the container cannot open a socket. */
+    override val enforcesNetwork: Boolean = true
+
+    /**
+     * The backend's own file mutations are handed to a container child (plan P3-6): the workspace is
+     * the only tree the container SID was granted, so `coding.write` cannot reach the profile either.
+     * See [SandboxedFileOps].
+     */
+    override val executesFileOps: Boolean = true
+
+    /**
+     * `b4.run` cannot run here, by construction: `browser4-cli` lives under the operator profile (not in
+     * the container's access set) and would have to reach this backend over `127.0.0.1`, which a
+     * capability-less container is refused (measured 2026-11-17, `realContainerNetworkAndStagedBinary`).
+     *
+     * Copying the CLI into the workspace fixes only the first half (a staged binary does run), and
+     * granting `privateNetworkClientServer` to fix the second would open every host-local service —
+     * so the channel keeps its historical launch in the backend process and `coding.permissions` says
+     * it is outside the boundary (decision 2026-11-17, design §14.2.1).
+     */
+    override val executesProductCommands: Boolean = false
+
+    /**
+     * Opt-in only for now (2026-11-17).
+     *
+     * The confinement itself is proven (workspace-only writes, profile unreachable, no egress), but
+     * `browser4-cli` — what `b4.run` and most browse tasks drive — lives **under the user profile**,
+     * which a container cannot read at all. Making this the browse default before that is solved would
+     * break the very tasks the mode exists for, so a mode's chain skips it and the operator opts in:
+     *
+     * ```
+     * -Dbrowser4.agent.sandbox.browse=on               # let the browse chain pick it
+     * -Dbrowser4.agent.sandbox=windows-appcontainer    # or select it outright
+     * ```
+     */
+    override val autoSelectable: Boolean
+        get() {
+            val raw = System.getProperty(PROP_BROWSE_OPT_IN, "off").trim().lowercase()
+            return raw == "on" || raw == "true" || raw == "1" || raw == SANDBOX_ID
+        }
+
+    /**
+     * Container identity of the installation, used only by [isReady] and by [runInContainer] before
+     * any task prepared a workspace.
+     */
+    private val probeContainer: ContainerIdentity by lazy { ensureContainer(Win32.APP_CONTAINER_NAME) }
+
+    /**
+     * One container identity per task workspace.
+     *
+     * A single shared container made every task's grants reachable from every other task: the SID is
+     * the security identity, so one SID granted on N workspaces is one principal allowed into all of
+     * them (2026-11-20 review, issue S2). A profile per workspace keeps the same mechanism while
+     * making the access set per task; [release] deletes it when the task ends.
+     */
+    private val containers = ConcurrentHashMap<Path, ContainerIdentity>()
+
+    /** The roots each task was granted, so [release] removes exactly those and nothing else. */
+    private val taskRoots = ConcurrentHashMap<Path, List<Path>>()
+
+    /**
+     * Process-tree lifetime, exactly like the Low-integrity backend: a backend exit takes its
+     * container children with it.
+     */
+    private val job: WindowsJob by lazy { WindowsJob("browser4-$SANDBOX_ID") }
+
+    private val verifiedWorkspaces = ConcurrentHashMap<Path, Unit>()
+
+    /**
+     * Whether this backend already dropped the grants of earlier runs (see [prepare]).
+     *
+     * Cleanup runs **once per backend**, before any task of this process starts, instead of on every
+     * `prepare`: a grant can be older than the retention window while the task that owns it is still
+     * running (a build, a long browse session), and another task's `prepare` used to revoke it under
+     * that task's feet. Nothing outlives a backend process — [WindowsJob] kills its children — so
+     * "once, at the start" collects the same stale grants without ever touching a live one.
+     */
+    private val staleGrantsRevoked = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    override fun prepare(
+        spec: ProcessSpec,
+        workspace: Path,
+        allowNetwork: Boolean,
+        extraWritableRoots: List<Path>,
+    ): ProcessSpec {
+        requireWindows()
+        val root = workspace.toAbsolutePath().normalize()
+        if (!Files.isDirectory(root)) {
+            fail("workspace '$root' is not a directory")
+        }
+        // The backend creates `.b4scratch` (home, temp) inside the workspace itself, so a junction
+        // there would prepare a child home outside it. Checked here, on the real workspace, because
+        // the probe also runs commands with foreign directories as their working directory.
+        ScratchBoundary.refusal(root, root.resolve(".b4scratch"))?.let {
+            fail("the task scratch directory of '$root' is not safe to use: $it")
+        }
+        val container = containerFor(root)
+        val extras = extraWritableRoots.map { it.toAbsolutePath().normalize() }
+        grant(root, container, required = true)
+        extras.forEach { grant(it, container, required = true) }
+
+        // G9: drop grants this task does not need (older than the retention window). Cheap — the
+        // marker directory holds one small file per grant — and it is what keeps a container
+        // experiment from leaving an ACE on a toolchain tree forever. Once per backend: a later
+        // task must not revoke a grant an earlier, still-running task is using.
+        if (staleGrantsRevoked.compareAndSet(false, true)) {
+            runCatching { revokeRecordedGrants(keep = listOf(root) + extraWritableRoots) }
+                .onFailure { logger.debug("could not revoke stale container grants: {}", it.message) }
+        }
+
+        val environment = sandboxEnvironment(spec.environment, root)
+        if (!verifiedWorkspaces.contains(root)) {
+            val failure = if (probe != null) probe.invoke(root) else defaultProbe(root)
+            if (failure != null) {
+                fail("appcontainer probe failed: $failure")
+            }
+            verifiedWorkspaces[root] = Unit
+            logger.info("windows-appcontainer probe passed: workspace={} sid={}", root, container.sidString)
+        }
+        if (allowNetwork) {
+            logger.debug("windows-appcontainer has no network capability; net was requested but cannot be granted")
+        }
+        taskRoots[root] = listOf(root) + extras
+        ExecutionSandboxes.bindTask(root, this)
+        val sid = container.sid
+        return spec.copy(
+            environment = environment,
+            sandboxLauncher = SandboxLauncher { prepared, redirect ->
+                WindowsTokenLauncher.startInAppContainer(prepared, sid, redirect, job)
+            },
+        )
+    }
+
+    /**
+     * Revokes this task's container grants and deletes its container profile.
+     *
+     * The container SID is the identity, so a profile that outlives its task is an identity that can
+     * still read every workspace it was granted — including one a later task creates under a reused
+     * path. Dropping the grants and the profile is what makes the per-task container actually per
+     * task (2026-11-20 review, issue S2).
+     *
+     * Best effort by contract: a refused `icacls` or profile deletion is logged, never thrown.
+     */
+    override fun release(workspace: Path) {
+        if (!isWindows()) return
+        val root = workspace.toAbsolutePath().normalize()
+        val container = containers.remove(root) ?: return
+        val roots = (taskRoots.remove(root) ?: listOf(root)).distinct()
+        for (path in roots) {
+            if (!Files.exists(path)) {
+                forgetGrant(path)
+                continue
+            }
+            val result = runner.run(ContainerAceScan.removeCommand(path, container.sidString), GRANT_TIMEOUT_SECONDS)
+            if (result.ok) {
+                grantedRoots.remove(path)
+                forgetGrant(path)
+                logger.info("windows-appcontainer released the grant on {} ({})", path, container.sidString)
+            } else {
+                logger.warn(
+                    "windows-appcontainer could not revoke the grant on {} (icacls exit={}): {}",
+                    path, result.exitCode, firstLine(result.output),
+                )
+            }
+        }
+        val deleted = runCatching { deleteProfile(container.name) }.getOrDefault(false)
+        if (deleted) {
+            logger.info("windows-appcontainer deleted the task profile {} ({})", container.name, container.sidString)
+        } else {
+            logger.warn(
+                "windows-appcontainer could not delete the task profile {}; its SID {} keeps only the " +
+                    "grants that already exist, but check `icacls` on the workspace",
+                container.name, container.sidString,
+            )
+        }
+    }
+
+    /**
+     * Whether the backend can run here: Windows and a container SID can be obtained.
+     *
+     * Deriving the SID creates the profile on first use — per-user state, no elevation — so this is a
+     * cheap idempotent call rather than a provisioning step.
+     */
+    override fun isReady(): Boolean = runCatching {
+        if (!isWindows()) return false
+        probeContainer
+        true
+    }.getOrElse { e ->
+        logger.info("windows-appcontainer is not ready: {}", e.message)
+        false
+    }
+
+    // ------------------------------------------------------------------
+    // Container identity
+    // ------------------------------------------------------------------
+
+    private class ContainerIdentity(val name: String, val sid: Pointer, val sidString: String)
+
+    /** The container of [workspace], created on first use (per-user state, no administrator). */
+    private fun containerFor(workspace: Path): ContainerIdentity =
+        containers.computeIfAbsent(workspace.toAbsolutePath().normalize()) { ensureContainer(containerNameFor(it)) }
+
+    /**
+     * A container profile name unique to [workspace].
+     *
+     * Stable for a workspace path (a retried task reuses its profile) and different across workspaces,
+     * which is what gives each task its own SID. The digest keeps the name within the profile-name
+     * limit while an absolute path would not.
+     */
+    internal fun containerNameFor(workspace: Path): String {
+        val normalized = workspace.toAbsolutePath().normalize().toString().lowercase()
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(normalized.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        return "${Win32.APP_CONTAINER_NAME}-${digest.take(12)}"
+    }
+
+    private fun ensureContainer(name: String): ContainerIdentity {
+        val ref = PointerByReference()
+        val created = Win32.userenv.CreateAppContainerProfile(
+            WString(name),
+            WString("Browser4 agent (browse)"),
+            WString("Confines a browse-mode agent's commands to the task workspace"),
+            null,
+            0,
+            ref,
+        )
+        val sid = when (created) {
+            0 -> ref.value ?: fail("CreateAppContainerProfile returned no SID")
+            Win32.HRESULT_ALREADY_EXISTS -> {
+                val derived = PointerByReference()
+                val hr = Win32.userenv.DeriveAppContainerSidFromAppContainerName(
+                    WString(name), derived,
+                )
+                if (hr != 0) {
+                    fail("DeriveAppContainerSidFromAppContainerName failed (hr=0x${hr.toUInt().toString(16)})")
+                }
+                derived.value ?: fail("DeriveAppContainerSidFromAppContainerName returned no SID")
+            }
+            else -> fail("CreateAppContainerProfile failed (hr=0x${created.toUInt().toString(16)})")
+        }
+        val sidString = runCatching {
+            val stringRef = PointerByReference()
+            if (!Win32.advapi32.ConvertSidToStringSidW(sid, stringRef)) return@runCatching null
+            val pointer = stringRef.value ?: return@runCatching null
+            try {
+                pointer.getWideString(0)
+            } finally {
+                Win32.kernel32.LocalFree(pointer)
+            }
+        }.getOrNull() ?: fail("could not render the container SID as a string")
+        // The SID itself is owned by the container profile and lives as long as the process does.
+        logger.info("windows-appcontainer ready: name={} sid={}", name, sidString)
+        return ContainerIdentity(name, sid, sidString)
+    }
+
+    // ------------------------------------------------------------------
+    // ACL grants
+    // ------------------------------------------------------------------
+
+    /**
+     * Grants the container `(OI)(CI)M` on [path] (deep, inherited by new members).
+     *
+     * `icacls` accepts the `*S-1-15-2-…` SID form, which is why the container needs no readable name.
+     * The grant is recorded next to the data directory so a restart does not re-walk a workspace —
+     * and so it can be **revoked** later ([revokeRecordedGrants]).
+     *
+     * **Only the task's own roots are ever granted**: the workspace and the folders the task added
+     * (`--add-dir`), which is all [prepare] passes here. Granting a user-global directory (`%APPDATA%`,
+     * an npm prefix, a JDK install) is what G9 exists to undo: the container keeps working from the
+     * task's copy, and the leftover entry makes that tree unreadable to `windows-low-il` — the backend
+     * that shares the coding mode chain with it (see [ContainerAceScan]).
+     */
+    private fun grant(path: Path, container: ContainerIdentity, required: Boolean) {
+        if (!Files.exists(path)) return
+        val normalized = path.toAbsolutePath().normalize()
+        if (grantedRoots.putIfAbsent(normalized, Unit) != null) return
+        if (isGranted(normalized, container)) return
+        val result = runner.run(
+            listOf("icacls", normalized.toString(), "/grant", "*${container.sidString}:(OI)(CI)(M)"),
+            GRANT_TIMEOUT_SECONDS,
+        )
+        if (result.ok) {
+            rememberGrant(normalized, container)
+            return
+        }
+        grantedRoots.remove(normalized)
+        val detail = "icacls exit=${result.exitCode}: ${firstLine(result.output)}"
+        if (required) {
+            fail(
+                "cannot grant the container SID access to '$normalized' ($detail). The sandbox needs " +
+                    "WRITE_DAC there; a path inherited from a shared directory does not grant it.",
+            )
+        }
+        logger.warn("windows-appcontainer could not grant {} ({})", normalized, detail)
+    }
+
+    /**
+     * Whether this exact path already carries a grant for [container].
+     *
+     * The recorded SID is compared, not just the marker's existence: a re-created container profile
+     * gets a new SID, and a marker from the old one would otherwise suppress the grant the task needs.
+     */
+    private fun isGranted(path: Path, container: ContainerIdentity): Boolean {
+        val marker = markerFile(path, "grant") ?: return false
+        // `(sid, recordedPath)` — a legacy path-only marker answers `null` and is therefore *not*
+        // treated as granted: the grant call is idempotent, a missing ACE is not.
+        val sid = readMarker(marker)?.first ?: return false
+        return sid.equals(container.sidString, ignoreCase = true)
+    }
+
+    private fun rememberGrant(path: Path, container: ContainerIdentity) {
+        val marker = markerFile(path, "grant") ?: return
+        runCatching {
+            Files.createDirectories(marker.parent)
+            // `sid|path`: the SID is what makes a later revoke possible without a container identity,
+            // and what tells a stale grant from a live one.
+            Files.writeString(marker, "${container.sidString}|$path")
+        }.onFailure { logger.debug("could not record the container grant for {}: {}", path, it.message) }
+    }
+
+    /** Drops the grant marker of [path], so a re-granted path is recorded again from scratch. */
+    private fun forgetGrant(path: Path) {
+        val marker = markerFile(path, "grant") ?: return
+        runCatching { Files.deleteIfExists(marker) }
+            .onFailure { logger.debug("could not drop the grant marker of {}: {}", path, it.message) }
+    }
+
+    /** `(sid, path)` recorded in [marker]; `sid` is `null` for a legacy path-only marker. */
+    private fun readMarker(marker: Path): Pair<String?, Path>? = runCatching {
+        val text = Files.readString(marker).trim()
+        if (text.isEmpty()) return@runCatching null
+        val separator = text.indexOf('|')
+        if (separator > 0 && text.substring(0, separator).uppercase().startsWith("S-1-15-2-")) {
+            text.substring(0, separator) to Path.of(text.substring(separator + 1))
+        } else {
+            null to Path.of(text)
+        }
+    }.getOrNull()
+
+    /**
+     * Revoke container grants this installation recorded that the current task does not need.
+     *
+     * Closes the other half of G9: [grant] records every grant, but nothing used to undo one, so a
+     * container experiment left an ACE on a toolchain tree for good. Only markers **older than**
+     * [retention] are touched, so a container task running right now keeps its grants; [keep] is
+     * everything the calling task is about to grant, and is never revoked.
+     *
+     * A legacy path-only marker has no SID to remove; the entry is found through
+     * [ContainerAceScan.packageSidsIn] on the directory's own ACL instead. When that finds nothing
+     * (or more than one package SID, which cannot be attributed), the marker is dropped and a warning
+     * names the manual command — guessing an ACL edit is worse than asking.
+     *
+     * @return the directories whose ACE was actually removed
+     */
+    fun revokeRecordedGrants(
+        keep: Collection<Path> = emptyList(),
+        retention: java.time.Duration = defaultGrantRetention(),
+    ): List<Path> {
+        val dir = markerDir ?: return emptyList()
+        if (!Files.isDirectory(dir)) return emptyList()
+        val kept = keep.map { it.toAbsolutePath().normalize() }.toSet()
+        val deadline = System.currentTimeMillis() - retention.toMillis()
+        val revoked = mutableListOf<Path>()
+        Files.list(dir).use { stream ->
+            stream.filter { it.fileName.toString().endsWith(".grant") }.forEach { marker ->
+                val recorded = readMarker(marker) ?: run { runCatching { Files.deleteIfExists(marker) }; return@forEach }
+                val (sid, path) = recorded
+                val normalized = path.toAbsolutePath().normalize()
+                if (normalized in kept || !Files.exists(normalized)) return@forEach
+                val lastModified = runCatching { Files.getLastModifiedTime(marker).toMillis() }.getOrDefault(0L)
+                if (lastModified > deadline) return@forEach
+                val targetSid = sid ?: ContainerAceScan.packageSidsIn(
+                    runner.run(listOf("icacls", normalized.toString()), GRANT_TIMEOUT_SECONDS).output,
+                ).singleOrNull()
+                if (targetSid == null) {
+                    logger.warn(
+                        "windows-appcontainer cannot attribute the recorded grant on {} to one SID; " +
+                            "check `icacls {}` for an `S-1-15-2-...` entry and remove it by hand",
+                        normalized, normalized,
+                    )
+                    runCatching { Files.deleteIfExists(marker) }
+                    return@forEach
+                }
+                val result = runner.run(ContainerAceScan.removeCommand(normalized, targetSid), GRANT_TIMEOUT_SECONDS)
+                if (result.ok) {
+                    revoked.add(normalized)
+                    runCatching { Files.deleteIfExists(marker) }
+                    logger.info("windows-appcontainer revoked a stale grant on {} ({})", normalized, targetSid)
+                } else {
+                    logger.warn(
+                        "windows-appcontainer could not revoke the grant on {} (icacls exit={}): {}",
+                        normalized, result.exitCode, firstLine(result.output),
+                    )
+                }
+            }
+        }
+        grantsRevoked += revoked
+        return revoked
+    }
+
+    /** Grants this instance revoked, so `coding.permissions` / a test can see the cleanup happened. */
+    private val grantsRevoked = java.util.concurrent.CopyOnWriteArrayList<Path>()
+
+    /** Directories this instance revoked a container grant from ([revokeRecordedGrants]). */
+    fun revokedGrants(): List<Path> = grantsRevoked.toList()
+
+    /** Deterministic marker path for [path]; `internal` so a test can plant one. */
+    internal fun markerFile(path: Path, kind: String): Path? {
+        val dir = markerDir ?: return null
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest("$kind|${path.toString().lowercase()}".toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        return dir.resolve("$digest.grant")
+    }
+
+    // ------------------------------------------------------------------
+    // Environment
+    // ------------------------------------------------------------------
+
+    /**
+     * Points the child's home and temp at the workspace.
+     *
+     * A container cannot read the real profile, so `USERPROFILE` would name an inaccessible directory;
+     * tools that write caches there would fail for a reason unrelated to the task. Everything a browse
+     * task legitimately needs a home for lives under `<workspace>/.b4scratch`, which is granted.
+     */
+    private fun sandboxEnvironment(declared: Map<String, String>, workspace: Path): Map<String, String> {
+        val scratch = workspace.resolve(".b4scratch")
+        val home = scratch.resolve("home")
+        val roaming = home.resolve("AppData").resolve("Roaming")
+        val local = home.resolve("AppData").resolve("Local")
+        val temp = scratch.resolve("tmp")
+        listOf(home, roaming, local, temp).forEach { runCatching { Files.createDirectories(it) } }
+        return LinkedHashMap(declared).apply {
+            put("USERPROFILE", home.toString())
+            put("APPDATA", roaming.toString())
+            put("LOCALAPPDATA", local.toString())
+            put("TEMP", temp.toString())
+            put("TMP", temp.toString())
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Probe
+    // ------------------------------------------------------------------
+
+    /**
+     * Proves the boundary: a workspace write must succeed, and a write under `%SystemRoot%\Temp` plus a
+     * credential listing must fail.
+     *
+     * The inside check uses a **relative** file name with the working directory set to the workspace:
+     * the launcher quotes argv with the C-runtime rules, and a `cmd` payload that carries its own
+     * quotes cannot survive both layers (see `windows-low-il`'s PowerShell probe for the same lesson).
+     */
+    private fun defaultProbe(workspace: Path): String? {
+        // Unique names: the probe must never delete a file the workspace already had.
+        val nonce = java.util.UUID.randomUUID().toString()
+        val insideName = "b4probe-in-$nonce.txt"
+        val inside = workspace.resolve(insideName)
+        try {
+            val writeInside = runInContainer(workspace, "echo b4> $insideName")
+            if (writeInside.first != 0 || !Files.exists(inside)) {
+                return "a write inside the workspace failed (exit=${writeInside.first}): ${writeInside.second}"
+            }
+            val outsideDir = Path.of(System.getenv("SystemRoot") ?: "C:\\Windows", "Temp")
+            if (Files.isDirectory(outsideDir)) {
+                val outsideName = "b4probe-out-$nonce.txt"
+                val outside = outsideDir.resolve(outsideName)
+                val writeOutside = runInContainer(outsideDir, "echo b4> $outsideName")
+                if (writeOutside.first == 0 || Files.exists(outside)) {
+                    runCatching { Files.deleteIfExists(outside) }
+                    return "a write OUTSIDE the workspace succeeded (exit=${writeOutside.first}): " +
+                        "the container SID has more access than the workspace"
+                }
+            }
+            // The child's USERPROFILE points into the workspace, so the real profile is handed over
+            // explicitly for the credential check. A path with spaces breaks `dir`, which only ever
+            // makes this check *stricter*; the failure that matters is "it succeeded".
+            val credential = Path.of(System.getProperty("user.home")).resolve(".ssh")
+            if (Files.isDirectory(credential)) {
+                val listed = runInContainer(
+                    workspace,
+                    "dir %B4_SANDBOX_PROBE_HOME%\\.ssh",
+                    extraEnv = mapOf("B4_SANDBOX_PROBE_HOME" to System.getProperty("user.home")),
+                )
+                if (listed.first == 0) {
+                    return "a credential store was reachable from the container: $credential"
+                }
+            }
+            return null
+        } finally {
+            runCatching { Files.deleteIfExists(inside) }
+        }
+    }
+
+    /** Runs one `cmd /c` line inside the container and returns `(exit code, output)`. */
+    internal fun runInContainer(
+        directory: Path,
+        line: String,
+        extraEnv: Map<String, String> = emptyMap(),
+    ): Pair<Int, String> {
+        val root = verifiedRootFor(directory)
+        val container = containerFor(root)
+        val spec = ProcessSpec(
+            command = listOf("cmd.exe", "/c", line),
+            directory = directory,
+            environment = sandboxEnvironment(SandboxEnvironment.build(System.getenv()), root) + extraEnv,
+        )
+        val prepared = spec.copy(
+            sandboxLauncher = SandboxLauncher { s, redirect ->
+                WindowsTokenLauncher.startInAppContainer(s, container.sid, redirect, job)
+            },
+        )
+        val process = ProcessLauncher.start(prepared, redirectErrorStream = true)
+        return try {
+            val output = process.inputStream.readBytes().toString(Charsets.UTF_8).trim()
+            val finished = process.waitFor(PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            if (!finished) {
+                process.destroyForcibly()
+                PROBE_TIMEOUT_EXIT to "timed out after ${PROBE_TIMEOUT_SECONDS}s"
+            } else {
+                process.exitValue() to output
+            }
+        } finally {
+            if (process.isAlive) process.destroyForcibly()
+        }
+    }
+
+    /** The workspace a probe directory belongs to: a probe may run in a subdirectory (or outside it). */
+    private fun verifiedRootFor(directory: Path): Path {
+        val normalized = directory.toAbsolutePath().normalize()
+        return verifiedWorkspaces.keys.firstOrNull { normalized.startsWith(it) }
+            ?: verifiedWorkspaces.keys.firstOrNull()
+            ?: normalized
+    }
+
+    private fun isWindows(): Boolean = System.getProperty("os.name", "").lowercase().contains("win")
+
+    private fun requireWindows() {
+        if (!isWindows()) {
+            fail("the '$SANDBOX_ID' sandbox requires Windows, but os.name='${System.getProperty("os.name")}'")
+        }
+    }
+
+    private fun fail(message: String): Nothing {
+        throw SandboxUnavailableException(SANDBOX_ID, "Windows sandbox unavailable: $message")
+    }
+
+    private fun firstLine(text: String, limit: Int = 200): String =
+        text.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(limit) ?: ""
+}

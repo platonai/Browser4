@@ -15,6 +15,17 @@ import org.slf4j.LoggerFactory
  *
  * The translation only applies when a sandbox is actually active: with `off`, an `Access is denied`
  * is an ordinary OS error and must not be attributed to a boundary that is not there.
+ *
+ * Two things made the translation skip exactly the case it exists for (run `4125acaa`, 2026-11-19):
+ * the markers were ASCII-only, so a Chinese Windows child reported `拒绝访问。` and nothing matched;
+ * and "is a sandbox active" was read from the bare `browser4.agent.sandbox` property, which reads
+ * `off` on a task whose chain selected `windows-low-il`. Both are fixed here — markers now cover the
+ * localized text, and the caller passes the task's own [ExecutionSandbox] through [sandboxId].
+ *
+ * A third shape was measured on 2026-11-20 (`permission-e2e` A06): PowerShell wraps the OS refusal in
+ * `UnauthorizedAccessException`, whose text is `Access to the path 'C:\…' is denied.` — the marker
+ * list did not contain that sentence (the word `access` is not adjacent to `is denied`), so the .NET
+ * text reached the model untranslated. The .NET phrasing and its `0x80070005` HRESULT are markers now.
  */
 internal object SandboxDenials {
 
@@ -23,6 +34,11 @@ internal object SandboxDenials {
     /**
      * Platform-shaped denial markers. Deliberately narrow: a build log that merely mentions
      * "permissions" must not be rewritten into a sandbox refusal.
+     *
+     * The localized forms are the ones `cmd.exe`/Node actually print on a non-English Windows
+     * (`拒绝访问。` from the Win32 message table, the same bytes a refused `CreateProcess` leaves in
+     * `stderr`). "找不到文件" is deliberately **not** included: a missing file is an ordinary
+     * command failure, and rewriting it would hide real mistakes.
      */
     private val MARKERS = listOf(
         "access is denied",
@@ -30,6 +46,18 @@ internal object SandboxDenials {
         "operation not permitted",
         "eacces",
         "eperm",
+        // .NET / PowerShell: UnauthorizedAccessException renders as
+        // "Access to the path 'C:\…' is denied." — the denial word is separated from `access` by the
+        // path, so none of the ASCII markers above match it (measured 2026-11-20, A06): the raw
+        // sentence reached the model with no `code=`.
+        "is denied",
+        "unauthorizedaccessexception",
+        // The Win32 HRESULT behind the same refusal (`E_ACCESSDENIED`), as shells and exception
+        // messages print it when the localized prose is not English.
+        "0x80070005",
+        // zh-CN: 拒绝访问 / 无权限访问
+        "拒绝访问",
+        "无权限访问",
     )
 
     private const val NEEDED =
@@ -39,24 +67,51 @@ internal object SandboxDenials {
         "keep the command inside the workspace and its granted roots; the sandbox does not fall back"
 
     /**
+     * The low-integrity backend's own failure mode, seen on 2026-11-19.
+     *
+     * A directory that carries an object ACE for an **AppContainer package SID** (`S-1-15-2-…`,
+     * left behind by a container run) cannot be read by a low-integrity restricted token at all:
+     * enumeration reports "file not found", `CreateProcess` on a binary inside it reports "access
+     * denied". Both halves of the npm global root failed that way while the toolchain worked from a
+     * normal shell. Naming the cause and the exact `icacls` line turns a dead end into one command.
+     */
+    private const val LOW_IL_HINT =
+        "if the refused path is a toolchain root (the npm global root, node/java/bin folders), check " +
+            "it for a stale container ACL: an `S-1-15-2-...` entry in `icacls <dir>` makes that whole " +
+            "tree unreadable to the low-integrity token — remove it with " +
+            "`icacls <dir> /remove *<sid>`; `b4.run` (the product CLI channel) keeps working either way"
+
+    /**
      * The structured refusal that replaces a raw denial, or `null` when nothing should be rewritten.
      *
      * @param tool the entry point, e.g. `coding.shell` / `coding.runCode`
      * @param command what was attempted (the model already knows it; it goes into the detail)
      * @param evidence the raw child output, kept in the log only
+     * @param sandboxId the backend the calling task actually runs under (see
+     *   [ai.platon.pulsar.coding.SandboxStatus.effectiveIdOf]); `null` falls back to the
+     *   process-wide property
      */
-    fun envelope(tool: String, command: String, evidence: String): String? {
-        val sandboxId = activeSandboxId() ?: return null
+    fun envelope(
+        tool: String,
+        command: String,
+        evidence: String,
+        sandboxId: String? = null,
+    ): String? {
+        val id = (sandboxId ?: activeSandboxId())
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() && it != OffSandbox.id }
+            ?: return null
         if (!isDenial(evidence)) return null
         logger.info(
             "sandbox denied: sandbox={} tool={} command='{}' evidence={}",
-            sandboxId, tool, command, evidence.trim(),
+            id, tool, command, evidence.trim(),
         )
+        val hint = if (id == WindowsLowIntegritySandbox.SANDBOX_ID) "$HINT; $LOW_IL_HINT" else HINT
         return PermissionAudit.denied(
             tool = tool,
             code = PermissionAudit.CODE_SANDBOX_DENIED,
-            detail = "the '$sandboxId' sandbox refused the command (the OS denied access)",
-            hint = HINT,
+            detail = "the '$id' sandbox refused the command (the OS denied access)",
+            hint = hint,
             needed = NEEDED,
         )
     }
@@ -64,7 +119,7 @@ internal object SandboxDenials {
     /** True when [text] carries one of the platform's denial markers. */
     fun isDenial(text: String): Boolean = MARKERS.any { text.contains(it, ignoreCase = true) }
 
-    /** The active sandbox id, or `null` for `off` / an unreadable configuration. */
+    /** The process-wide sandbox id, or `null` for `off` / an unreadable configuration. */
     private fun activeSandboxId(): String? =
         runCatching { ExecutionSandboxes.current().id }
             .getOrNull()

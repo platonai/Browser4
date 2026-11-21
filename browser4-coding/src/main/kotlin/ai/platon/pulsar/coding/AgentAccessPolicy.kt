@@ -102,6 +102,16 @@ class ToolAccessDeniedException(
 data class AgentAccessPolicy(
     val preset: AccessPreset = AccessPreset.FULL,
     /**
+     * What kind of work this task is — and therefore what its OS boundary should look like.
+     *
+     * Set from the CLI's task-type flag (`agent run --coding`); browse is the default, matching
+     * `help.rs` ("Task type: browser by default (never auto-detected)"). The mode is not a preset:
+     * the preset says how much of a fixed surface is granted, the mode says what that surface is
+     * (`docs/agent-permissions-redesign.md`), and [CodingComponents.sandbox] turns it into a backend
+     * choice.
+     */
+    val mode: AgentMode = AgentMode.BROWSE,
+    /**
      * When true this task runs with the current OS user's own permissions.
      *
      * Every policy rail becomes pass-through: the preset gate, `allowExternalAccess`,

@@ -1,5 +1,6 @@
 package ai.platon.pulsar.coding
 
+import ai.platon.pulsar.coding.sandbox.SandboxFileOps
 import org.slf4j.LoggerFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -7,7 +8,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.nio.ByteBuffer
-import java.nio.charset.CharacterCodingException
 import java.nio.charset.Charset
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
@@ -125,6 +125,29 @@ class CodingAgentFileSystem(
      * and the credential guard below still refuses the sensitive locations.
      */
     private val additionalDirs: Set<Path> = emptySet(),
+    /**
+     * Plan P3-6 — the **write-side OS boundary** for this file system. When the provider returns a
+     * [SandboxFileOps], every mutating operation ([writeFile]/[appendFile]/[replaceInFile]/[delete]/
+     * [mkdir]/[copy]/[move]/[revert]/…) hands the actual filesystem change to a helper that runs
+     * *inside* the task's sandbox, so the boundary is the kernel's decision and not this class's path
+     * guard. `null` keeps the historical in-process path.
+     *
+     * It is a provider rather than an instance because the backend is resolved per task and the
+     * ambient `browser4.agent.sandbox` may change between tasks. A provider that *can* return a
+     * boundary but fails to start it throws: the tool call is then refused, never performed
+     * unconfined (see [SandboxFileOps]).
+     */
+    private val mutationOpsProvider: (() -> SandboxFileOps?)? = null,
+    /**
+     * The backend the calling task actually runs under, used by the refusals' boundary clause.
+     *
+     * A refusal that names the wrong layer is worse than one that names none: on run `4125acaa`
+     * (2026-11-19) the hint read "no OS sandbox is active" next to a task whose children were
+     * demonstrably low-integrity, which reads as "the boundary is only advisory, try harder". The
+     * production wiring ([CodingComponents.fs]) passes the task's resolved backend; a direct
+     * construction falls back to the process-wide property.
+     */
+    private val sandboxIdProvider: () -> String = { SandboxStatus.effectiveId },
 ) {
     /**
      * The boundary [Authorizer] actually in effect — the injected shared instance, or the
@@ -132,6 +155,16 @@ class CodingAgentFileSystem(
      * "would this path be allowed?" without executing the operation.
      */
     val activeBoundaryAuthorizer: Authorizer get() = boundaryAuthorizer ?: fallbackBoundaryAuthorizer
+
+    /**
+     * One decoded read: the text plus whether the bytes were **not** valid UTF-8.
+     *
+     * [recoded] is a display fact, not a content fact: the tool layer that answers a human or a
+     * model announces it, while [readFile] — which also feeds parsers that read `VERSION`,
+     * `pom.xml` and source files — returns [text] unchanged.
+     */
+    data class TextRead(val text: String, val recoded: Boolean = false)
+
     companion object {
         const val MAX_READ_SIZE_BYTES = 5 * 1024 * 1024L // 5 MB
         const val MAX_GLOB_RESULTS = 10_000
@@ -594,25 +627,44 @@ class CodingAgentFileSystem(
      * Read a text file. Path is resolved relative to [workspaceRoot], or absolute
      * when [allowExternalAccess] is true.
      */
-    suspend fun readFile(path: String, encoding: Charset = StandardCharsets.UTF_8): String {
-        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
-        if (!resolved.exists()) return errorResult("File not found: $path")
-        if (resolved.isDirectory()) return errorResult("Path is a directory: $path")
+    suspend fun readFile(path: String, encoding: Charset = StandardCharsets.UTF_8): String =
+        readFileText(path, encoding).text
+
+    /**
+     * A decoded file read: [text] as [readFile] returns it, plus whether the bytes were **not**
+     * valid UTF-8 and had to be decoded leniently.
+     *
+     * The flag is separate from [text] on purpose: `readFile` also feeds parsers
+     * (`RepoConsistencyReporter` reads `VERSION` / `pom.xml`, `coding.verify`'s trap check reads
+     * source files), so a note prepended to the content would corrupt a value. Only the tool layer
+     * that talks to a human/model may announce it (see `CodingToolExecutor`).
+     */
+    suspend fun readFileText(path: String, encoding: Charset = StandardCharsets.UTF_8): TextRead {
+        val resolved = resolvePath(path) ?: return TextRead(errorResult(unresolvedPath(path)))
+        if (!resolved.exists()) return TextRead(errorResult("File not found: $path"))
+        if (resolved.isDirectory()) return TextRead(errorResult("Path is a directory: $path"))
         if (Files.size(resolved) > MAX_READ_SIZE_BYTES) {
-            return errorResult("File too large (${Files.size(resolved)} bytes, max $MAX_READ_SIZE_BYTES): $path")
+            return TextRead(errorResult("File too large (${Files.size(resolved)} bytes, max $MAX_READ_SIZE_BYTES): $path"))
         }
 
         val ext = resolved.extension.lowercase()
         if (ext in BINARY_EXTENSIONS) {
-            return "[Binary file: $path (${Files.size(resolved)} bytes, type: $ext)]"
+            return TextRead("[Binary file: $path (${Files.size(resolved)} bytes, type: $ext)]")
         }
 
         return try {
             withContext(Dispatchers.IO) {
-                Files.readString(resolved, encoding)
-            }.let { truncateForContext(it, path = path) }
+                val bytes = Files.readAllBytes(resolved)
+                if (encoding != StandardCharsets.UTF_8) return@withContext TextRead(String(bytes, encoding))
+                // Lenient decode: a strict decoder turns a GBK build log (or `cmd.exe` output) into
+                // `Failed to read …: Input length = 1`, which reads like a broken tool rather than
+                // "this file is not UTF-8" (run `4125acaa`, 2026-11-19: a Chinese `拒绝访问。` in
+                // `.b4scratch/dump.err` was unreadable exactly when it mattered).
+                val decoded = decodeText(bytes, detectTextEncoding(bytes))
+                TextRead(decoded.text, decoded.recoded)
+            }.let { TextRead(truncateForContext(it.text, path = path), it.recoded) }
         } catch (e: IOException) {
-            errorResult("Failed to read '$path': ${e.message}")
+            TextRead(errorResult("Failed to read '$path': ${e.message}"))
         }
     }
 
@@ -627,19 +679,38 @@ class CodingAgentFileSystem(
         startLine: Int = 1,
         endLine: Int = -1,
         maxChars: Int = DEFAULT_MAX_OUTPUT_CHARS,
-    ): String {
-        val resolved = resolvePath(path) ?: return errorResult(unresolvedPath(path))
-        if (!resolved.exists()) return errorResult("File not found: $path")
+    ): String = readFileLinesText(path, startLine, endLine, maxChars).text
+
+    /** [readFileLines] with the lenient-decode flag, for the tool layer that may announce it. */
+    suspend fun readFileLinesText(
+        path: String,
+        startLine: Int = 1,
+        endLine: Int = -1,
+        maxChars: Int = DEFAULT_MAX_OUTPUT_CHARS,
+    ): TextRead {
+        val resolved = resolvePath(path) ?: return TextRead(errorResult(unresolvedPath(path)))
+        if (!resolved.exists()) return TextRead(errorResult("File not found: $path"))
 
         return try {
             withContext(Dispatchers.IO) {
-                val lines = Files.readAllLines(resolved)
+                val bytes = Files.readAllBytes(resolved)
+                val decoded = decodeText(bytes, detectTextEncoding(bytes))
+                val text = decoded.text
+                // An empty file has no lines at all, so the old `coerceIn(0, lines.size - 1)` threw
+                // "Cannot coerce value to an empty range: maximum -1 is less than minimum 0" — the
+                // tool then reported that internal message as the *reason* it could not read the
+                // file, hiding "the file is empty" (run `4125acaa`, 2026-11-19: a zero-byte
+                // `.b4scratch/posts.json`).
+                val lines = text.split('\n').let { if (it.size == 1 && it[0].isEmpty()) emptyList() else it }
+                    .let { if (it.isNotEmpty() && it.last().isEmpty()) it.dropLast(1) else it }
+                    .map { it.removeSuffix("\r") }
+                if (lines.isEmpty()) return@withContext TextRead("", decoded.recoded)
                 val s = (startLine - 1).coerceIn(0, lines.size - 1)
                 val e = if (endLine < 0) lines.size else endLine.coerceIn(s, lines.size)
-                lines.subList(s, e).joinToString("\n")
-            }.let { truncateForContext(it, maxChars, path) }
+                TextRead(lines.subList(s, e).joinToString("\n"), decoded.recoded)
+            }.let { TextRead(truncateForContext(it.text, maxChars, path), it.recoded) }
         } catch (e: IOException) {
-            errorResult("Failed to read '$path': ${e.message}")
+            TextRead(errorResult("Failed to read '$path': ${e.message}"))
         }
     }
 
@@ -939,7 +1010,10 @@ class CodingAgentFileSystem(
                     // Snapshot existed but content was null (binary or unreadable) — leave untouched
                     return@withContext
                 } else {
-                    Files.deleteIfExists(resolved)
+                    // A file that did not exist before this task must be gone again: a delete is a
+                    // write like any other, so it goes through the boundary when there is one.
+                    val ops = mutationOps()
+                    if (ops != null) ops.delete(resolved, recursive = false) else Files.deleteIfExists(resolved)
                 }
             }
             changeCounter.incrementAndGet()
@@ -998,6 +1072,14 @@ class CodingAgentFileSystem(
     suspend fun delete(path: String, recursive: Boolean = false): String {
         mutationViolation()?.let { return errorResult(it) }
         if (!allowDestructive) return errorResult("Destructive operations disabled")
+        // The link guard runs on the lexical path first: `resolvePath` judges the *target*, so a
+        // junction pointing outside the workspace is refused as PATH_DENIED and the caller never
+        // learns that the entry it tried to delete is a link (observed by
+        // `CodingAgentFileSystemLinkGuardTest.refusesToDeleteJunction`).
+        val lexical = lexicalPath(path)
+        if (lexical.startsWith(canonicalRoot)) {
+            linkDeleteRefusal(path, lexical)?.let { return errorResult(it) }
+        }
         val resolved = resolvePath(path, write = true) ?: return errorResult(unresolvedPath(path))
         if (!resolved.exists()) return errorResult("Not found: $path")
 
@@ -1019,12 +1101,8 @@ class CodingAgentFileSystem(
         // target tree. Observed in practice: an agent deleted the
         // `browser4-coding` junction inside its workspace while trying to "fix"
         // a Maven reactor problem.
-        resolveLinkTarget(resolved)?.let { target ->
-            return errorResult(
-                "Refusing to delete a link or junction: $path (it points at $target). " +
-                    "Delete the target explicitly if that is really intended."
-            )
-        }
+        resolveLinkTarget(resolved)?.let { return errorResult(linkRefusal(path, it)) }
+
         // A recursive delete must not walk through a link either: one junction
         // inside a directory turns "delete this folder" into "wipe a checkout".
         if (recursive && resolved.isDirectory()) {
@@ -1050,7 +1128,12 @@ class CodingAgentFileSystem(
         return try {
             snapshotFile(resolved)
             withContext(Dispatchers.IO) {
-                if (resolved.isDirectory() && recursive) {
+                // Through the boundary when there is one: a delete is a write the OS must judge, and
+                // the string layer above is a fast-fail check in front of it, not a substitute.
+                val ops = mutationOps()
+                if (ops != null) {
+                    ops.delete(resolved, resolved.isDirectory() && recursive)
+                } else if (resolved.isDirectory() && recursive) {
                     resolved.toFile().deleteRecursively()
                 } else {
                     Files.delete(resolved)
@@ -1067,6 +1150,27 @@ class CodingAgentFileSystem(
     /** Version-control metadata directory names that recursive deletes must not touch. */
     private fun hasVcsChild(dir: Path): Boolean =
         VCS_DIRS.any { vcs -> Files.isDirectory(dir.resolve(vcs)) }
+
+    /**
+     * [path] as it was written, with no link followed.
+     *
+     * Relative paths resolve against the workspace, exactly like [resolvePath], but the result keeps
+     * a junction as the junction instead of turning into its target — which is what the delete guard
+     * has to look at.
+     */
+    private fun lexicalPath(path: String): Path {
+        val p = Path.of(path)
+        return if (p.isAbsolute) p.normalize() else canonicalRoot.resolve(path).normalize()
+    }
+
+    /** The message a delete returns when the entry itself is a link to [target]. */
+    private fun linkRefusal(path: String, target: Path): String =
+        "Refusing to delete a link or junction: $path (it points at $target). " +
+            "Delete the target explicitly if that is really intended."
+
+    /** [linkRefusal] when [candidate] is a link/junction, `null` otherwise. */
+    private fun linkDeleteRefusal(path: String, candidate: Path): String? =
+        resolveLinkTarget(candidate)?.let { linkRefusal(path, it) }
 
     /**
      * The link/junction target behind [path], or null when [path] is a plain
@@ -1105,7 +1209,8 @@ class CodingAgentFileSystem(
 
         return try {
             withContext(Dispatchers.IO) {
-                Files.createDirectories(resolved)
+                val ops = mutationOps()
+                if (ops != null) ops.mkdirs(resolved) else Files.createDirectories(resolved)
             }
             "✓ Created directory: $path"
         } catch (e: IOException) {
@@ -1128,7 +1233,10 @@ class CodingAgentFileSystem(
 
         return try {
             withContext(Dispatchers.IO) {
-                if (src.isDirectory()) {
+                val ops = mutationOps()
+                if (ops != null) {
+                    ops.copy(src, dst, src.isDirectory())
+                } else if (src.isDirectory()) {
                     src.toFile().copyRecursively(dst.toFile(), overwrite = true)
                 } else {
                     Files.createDirectories(dst.parent)
@@ -1162,8 +1270,13 @@ class CodingAgentFileSystem(
         return try {
             snapshotFile(src)
             withContext(Dispatchers.IO) {
-                Files.createDirectories(dst.parent)
-                Files.move(src, dst, StandardCopyOption.REPLACE_EXISTING)
+                val ops = mutationOps()
+                if (ops != null) {
+                    ops.move(src, dst)
+                } else {
+                    Files.createDirectories(dst.parent)
+                    Files.move(src, dst, StandardCopyOption.REPLACE_EXISTING)
+                }
             }
             changeCounter.incrementAndGet()
             recordMutation("move", dst, true)
@@ -1829,9 +1942,11 @@ class CodingAgentFileSystem(
     /**
      * Decode [bytes] as [encoding], never throwing on malformed input.
      *
-     * UTF-8 is attempted strictly first so the usual case stays byte-exact; a file that fails
-     * is re-decoded with replacement ([DecodedText.recoded] = true) instead of being dropped,
-     * so the ASCII part of a GBK/Shift-JIS source file still matches a symbol search.
+     * UTF-8 is attempted strictly first so the usual case stays byte-exact; a file that fails is
+     * re-decoded — first as **GB18030** (a GBK superset, i.e. what a Chinese Windows writes into a
+     * console log), then with replacement ([DecodedText.recoded] = true). Replacement alone kept the
+     * ASCII part readable but turned the interesting part of a build log into `����`; a strict
+     * decoder was worse still, failing the whole read with `Input length = 1`.
      */
     private fun decodeText(bytes: ByteArray, encoding: TextEncoding): DecodedText {
         val offset = when {
@@ -1848,15 +1963,24 @@ class CodingAgentFileSystem(
             TextEncoding.UTF16BE ->
                 DecodedText(String(bytes, offset, length, StandardCharsets.UTF_16BE), false)
 
-            TextEncoding.UTF8 -> try {
-                val decoder = StandardCharsets.UTF_8.newDecoder()
-                    .onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT)
-                DecodedText(decoder.decode(ByteBuffer.wrap(bytes, offset, length)).toString(), false)
-            } catch (_: CharacterCodingException) {
-                DecodedText(String(bytes, offset, length, StandardCharsets.UTF_8), true)
+            TextEncoding.UTF8 -> runCatching {
+                decodeStrict(bytes, offset, length, StandardCharsets.UTF_8)
+            }.map { DecodedText(it, false) }.getOrElse {
+                val gb18030 = runCatching { Charset.forName("GB18030") }.getOrNull()
+                val viaGb = gb18030?.let { charset ->
+                    runCatching { decodeStrict(bytes, offset, length, charset) }.getOrNull()
+                }
+                DecodedText(viaGb ?: String(bytes, offset, length, StandardCharsets.UTF_8), true)
             }
         }
+    }
+
+    /** Strict decode of `bytes[offset, offset+length)` — throws on malformed input. */
+    private fun decodeStrict(bytes: ByteArray, offset: Int, length: Int, charset: Charset): String {
+        val decoder = charset.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+        return decoder.decode(ByteBuffer.wrap(bytes, offset, length)).toString()
     }
 
     /**
@@ -2339,7 +2463,9 @@ class CodingAgentFileSystem(
             node.put("checksum", snapshot.checksum)
             node.put("trackedAtMillis", snapshot.trackedAtMillis)
             snapshot.content?.let { node.put("content", it) }
-            writeAtomic(snapshotDir.resolve(snapshotFileName(snapshot.path)), node.toString())
+            // Bookkeeping, not a deliverable: the store lives inside the workspace and its path is
+            // chosen here, so it stays on the in-process path even when the task has a boundary.
+            writeBookkeepingAtomic(snapshotDir.resolve(snapshotFileName(snapshot.path)), node.toString())
         }
     }
 
@@ -2370,17 +2496,35 @@ class CodingAgentFileSystem(
     }
 
     /**
-     * Atomically replace [target] with [content].
+     * Atomically replace [target] with [content] — **inside the OS boundary** when the task has one.
      *
-     * Writes a sibling temp file and moves it into place: `ATOMIC_MOVE` on the
-     * same filesystem is a rename, so readers see either the old or the new
-     * file — never a truncated one. Falls back to a plain replace move where the
-     * filesystem cannot do atomic moves (some container/FUSE mounts).
+     * Every agent-facing content mutation funnels through here (write/append/replace/edit/insert/
+     * revert), so routing this one method is what turns `coding.write` from a policy-layer promise
+     * into a kernel decision. Bookkeeping writes use [writeBookkeepingAtomic] instead: their paths are
+     * chosen by this class, not by the model, and paying a sandboxed launch per snapshot would tax
+     * every edit for no boundary gain.
      *
-     * The temp file is always cleaned up, including when the move throws — a
-     * crashed write must not leave `.b4-*.tmp` litter in the repository.
+     * @throws IOException when the boundary refuses or cannot start; the callers already turn that
+     *   into the structured tool error, so a refused write can never look like a successful one.
      */
     private fun writeAtomic(
+        target: Path,
+        content: String,
+        encoding: Charset = StandardCharsets.UTF_8,
+    ) {
+        val ops = mutationOps()
+        if (ops != null) {
+            ops.write(target, content.toByteArray(encoding))
+            return
+        }
+        writeBookkeepingAtomic(target, content, encoding)
+    }
+
+    /**
+     * The in-process atomic write, used for the two cases that must not pay a sandboxed launch: no
+     * boundary at all, and this class's own bookkeeping (`<workspace>/.browser4/coding-snapshots/`).
+     */
+    private fun writeBookkeepingAtomic(
         target: Path,
         content: String,
         encoding: Charset = StandardCharsets.UTF_8,
@@ -2403,6 +2547,20 @@ class CodingAgentFileSystem(
         } finally {
             runCatching { Files.deleteIfExists(tmp) }
         }
+    }
+
+    /**
+     * The sandboxed write path in force for this task, or `null` when the historical in-process path
+     * applies (no backend, or one that cannot execute file operations inside its boundary).
+     *
+     * A provider failure is deliberately **not** swallowed: it is turned into an [IOException] (the
+     * shape every caller already reports) naming the real cause. Treating "the sandbox could not
+     * start" as "write it myself" is the one behaviour this seam must never have.
+     */
+    private fun mutationOps(): SandboxFileOps? = try {
+        mutationOpsProvider?.invoke()
+    } catch (e: RuntimeException) {
+        throw IOException("the OS boundary for file operations could not be resolved: ${e.message}", e)
     }
 
     /**
@@ -2520,9 +2678,13 @@ class CodingAgentFileSystem(
         hint = "writes go under the workspace or under a folder granted with `agent run --add-dir` " +
             "(coding.permissions lists them); reading is allowed for the readable roots listed by " +
             "coding.permissions (add your own with -Dbrowser4.agent.readPaths=...), and the " +
-            "deprecated allowExternalAccess opt-in still relaxes the boundary check only — the OS " +
-            "sandbox still enforces the boundary, and credential locations stay refused either way",
+            "deprecated allowExternalAccess opt-in still relaxes the boundary check only — " +
+            SandboxStatus.boundaryClauseFor(effectiveSandboxId()) + ", and credential locations stay refused either way",
     )
+
+    /** The backend this file system's task runs under, for the refusals' boundary clause. */
+    private fun effectiveSandboxId(): String =
+        runCatching { sandboxIdProvider() }.getOrDefault(SandboxStatus.effectiveId)
 
     /**
      * Reject destructive ops on repo-governance files (VERSION, AGENTS.md, poms, ...)

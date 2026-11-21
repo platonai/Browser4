@@ -142,7 +142,12 @@ pub struct CommandDef {
     pub category: Category,
     pub hidden: bool,
     /// Whether this command can be used in batch mode.
-    /// Only commands in Core, Navigation, Keyboard, Export, and Tabs categories are supported.
+    ///
+    /// Decided per command, not per category: a batch step is a page/DOM action plus `goto`, so
+    /// a command whose effect outlives the tab (a browser-level CDP call such as `download`, a
+    /// session, harness or install command) stays `false` even when its category looks
+    /// DOM-shaped. The same category can hold both (Core and Snapshot do); new commands default
+    /// to `false` and are enabled only once the batch tests cover them.
     pub batch_supported: bool,
     /// Ordered list of positional argument definitions.
     pub args: &'static [ArgDef],
@@ -1150,7 +1155,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- webminer (WebMiner, bundled skill) ----
         CommandDef {
             name: "webminer",
-            description: "Run webminer (WebMiner): cluster downloaded HTML pages into interactive views. Subcommands: install, update, version, uninstall, run-example, all, views. Other commands are forwarded to scent-miner.jar (runs locally, no Browser4 server needed).",
+            description: "Run webminer (WebMiner): cluster downloaded HTML pages into interactive views. Subcommands: install, update, version, uninstall, run example, all, views. Other commands are forwarded to scent-miner.jar (runs locally, no Browser4 server needed).",
             category: Category::WebMiner,
             hidden: false,
             batch_supported: false,
@@ -2335,7 +2340,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "eval",
-            description: "Evaluate JavaScript expression on page or element. The result goes to stdout: there is NO --output option, so write it to a file with the shell (`eval --file x.js > out.json`) when it is large. Prefer --file or --stdin on Windows to avoid shell quoting issues. Use --await for async code (fetch, Promises). Use --wait-selector for pages that render content asynchronously (React/SPA). Objects and arrays are serialized as JSON; use --json to JSON-wrap scalar results.",
+            description: "Evaluate JavaScript expression on page or element. The result goes to stdout: there is NO --output option, so write it to a file with the shell (`eval --file x.js > out.json`) when it is large. Prefer --file or --stdin on Windows to avoid shell quoting issues. Use --await for async code (fetch, Promises) — one evaluate cannot exceed the driver's fixed 30s page-evaluate deadline (--timeout does not widen it; use `wait --fn` or `wait <ms>` for a longer wait). Use --wait-selector for pages that render content asynchronously (React/SPA). Objects and arrays are serialized as JSON; use --json to JSON-wrap scalar results.",
             category: Category::Core,
             hidden: false,
             batch_supported: true,
@@ -2350,7 +2355,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "js", description: "Shorthand for --stdin: read JavaScript expression from stdin", is_bool: true, short: None },
                 OptionDef { name: "base64", description: "Decode the expression argument as base64 before execution (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "json", description: "Serialize the result as JSON with native types: strings stay quoted strings; numbers/booleans/null/objects/arrays keep their JSON types", is_bool: true, short: None },
-                OptionDef { name: "await", description: "Wait for the evaluated expression's Promise to resolve before returning the result", is_bool: true, short: None },
+                OptionDef { name: "await", description: "Wait for the evaluated expression's Promise to resolve before returning the result (one evaluate cannot exceed the driver's fixed 30s page-evaluate deadline — --timeout does not widen it; use `wait --fn`/`wait <ms>` for longer waits)", is_bool: true, short: None },
                 OptionDef { name: "wait-selector", description: "Wait for a CSS selector to appear in the DOM before evaluating (use for async-rendered content like React/SPA pages)", is_bool: false, short: None },
                 OptionDef { name: "wait-timeout", description: "Max time in ms to wait for --wait-selector (default: 30000)", is_bool: false, short: None },
                 OptionDef { name: "world", description: "JavaScript world to evaluate in: main (default) = the page's own world, where page-defined globals like window.myApp resolve; isolated = the driver's runtime world (__browser4_runtime__), which page scripts cannot see or modify", is_bool: false, short: None },
@@ -2671,7 +2676,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "json", description: "Tool arguments as a JSON object string, e.g. '{\"type\": \"RECAPTCHA_V2\", \"siteKey\": \"...\"}'", is_bool: false, short: None },
-                OptionDef { name: "fail-on-error", description: "Exit non-zero when the tool reports a failure in its payload (success:false or a non-empty error field), so shell scripts can branch on the exit code", is_bool: true, short: None },
+                OptionDef { name: "fail-on-error", description: "Exit non-zero when the tool reports a failure in its payload (success:false, isError:true, a non-empty error field, or a leading PERMISSION_DENIED refusal), so shell scripts can branch on the exit code", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |args| get_str(args, "name").unwrap_or_default().to_string(),
@@ -3656,7 +3661,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "window-new",
-            description: "Create an additional tab (a new browser target) and make it the active one, then navigate it to <url>. Managed and headless sessions model every target as a tab, so this is what `tab-new` does plus the selection; `tab-list`/`tab-select` switch between tabs, and popups opened by the page (window.open / target=_blank) appear in the same tab list.",
+            description: "Create an additional tab (a new browser target) and make it the active one, then navigate it to <url>. Managed and headless sessions model every target as a tab, so this is what `tab new` does plus the selection; `tab list`/`tab select` switch between tabs, and popups opened by the page (window.open / target=_blank) appear in the same tab list.",
             category: Category::Tabs,
             hidden: false,
             batch_supported: true,
@@ -3677,9 +3682,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             category: Category::Tabs,
             hidden: false,
             batch_supported: true,
-            args: &[ArgDef { name: "index", description: "Zero-based tab index from tab-list output. If omitted, current tab is closed.", optional: true }],
+            args: &[ArgDef { name: "index", description: "Zero-based tab index from tab list output. If omitted, current tab is closed.", optional: true }],
             options: &[
-                OptionDef { name: "guid", description: "Close by GUID instead of index (from tab-list output)", is_bool: false, short: None },
+                OptionDef { name: "guid", description: "Close by GUID instead of index (from tab list output)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_tabs".to_string(),
@@ -3701,7 +3706,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "index", description: "Zero-based tab index", optional: true }],
             options: &[
-                OptionDef { name: "guid", description: "Select by GUID instead of index (from tab-list output)", is_bool: false, short: None },
+                OptionDef { name: "guid", description: "Select by GUID instead of index (from tab list output)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_tabs".to_string(),
@@ -4253,6 +4258,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "add-dir <dir>", description: "Grant this task's agent an extra folder besides its workspace: readable, writable and usable as a shell working directory. Repeatable (one flag per folder); relative paths resolve against the current shell directory and ~ expands to the home directory. The folder must already exist on the backend machine, and the OS credential stores (~/.ssh, ~/.aws, ~/.gnupg, ~/.config/gcloud) stay refused. The grant lasts for this task only and is reset when it ends", is_bool: false, short: None },
                 OptionDef { name: "unrestricted", description: "Run this task with the current OS user's own permissions: full preset, external access, network, destructive commands, no protected rails, no OS sandbox, and the shell's command allow-list is off too (inline scripts and PowerShell cmdlets run as written; shapes the checker cannot decompose are handed to the platform shell in every mode). The OS credential stores (~/.ssh, ~/.aws, ~/.gnupg, ~/.config/gcloud) stay refused, as do the commands that would kill or rebuild this backend. Opt-in per task, audited, inherited by --resume; with -i it applies to every task of the session", is_bool: true, short: None },
                 OptionDef { name: "resume", description: "Resume an interrupted task by id: the new run is seeded with that task's instruction, workspace and files already written (the checkpoint must exist on the same backend). The task description may be omitted. After a budget abort, pass a larger --token-budget too, otherwise the run stops at the same cap", is_bool: false, short: None },
+                OptionDef { name: "rewind", description: "Rewind this session's CONVERSATION to the point where the given task began, then run the new task from there: what the abandoned branch tried is summarized and carried along, so the next task does not repeat it. Needs the live session on the same backend (the conversation is in memory); use --resume <task-id> instead when the backend restarted. Cannot be combined with --resume", is_bool: false, short: None },
                 OptionDef { name: "token-budget", description: "Cache-miss token budget for THIS task (uncached prompt + output; prompt-cache reads do not count), overriding agent.token.budget.total for this run only (0 = unlimited). A per-run override, never a process-wide config change; the next task keeps the configured default", is_bool: false, short: None },
                 OptionDef { name: "engine", description: "Deprecated compatibility option: the CLI tool loop is the only agent engine. `cli` is accepted; the removed `observe-act` engine is rejected", is_bool: false, short: None },
                 OptionDef { name: "follow", description: "Stream the task's steps (tool calls, model text, failures) while waiting, then print the result. Implies waiting; a slow tool or failure is always reported, successful fast tools are not", is_bool: true, short: None },
@@ -12224,7 +12230,7 @@ mod tests {
         assert!(!cmd.hidden, "bare webminer should be visible in help");
         // Describes the subcommand surface so `help webminer` is useful.
         let description = cmd.description.to_lowercase();
-        for sub in ["install", "update", "version", "uninstall", "run-example", "all", "views"] {
+        for sub in ["install", "update", "version", "uninstall", "run example", "all", "views"] {
             assert!(
                 description.contains(sub),
                 "webminer description should mention '{sub}'"

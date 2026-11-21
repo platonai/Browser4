@@ -249,6 +249,18 @@ object WorkspaceMirror {
             }
         }
 
+        // Record what this pass actually linked, so the boundary can trust a manifest instead of
+        // re-scanning the workspace topology (2026-11-20 review, issue S1: a scanned link made any
+        // checkout the agent pointed at a writable root). Entries that already existed are included
+        // when they still resolve to the module they mirror, otherwise a second pass would shrink
+        // the grant to the modules it created itself.
+        val mirroredModules = sortedModules
+            .associateWith { source.resolve(it) }
+            .filter { (module, moduleTarget) -> isLinkTo(target.resolve(module), moduleTarget) }
+        if (mirroredModules.isNotEmpty()) {
+            MirrorRoots.writeManifest(target, source, mirroredModules)
+        }
+
         if (linked.isNotEmpty() || errors.isNotEmpty()) {
             logger.info(
                 "workspace mirror {}: linked=[{}] copied=[{}] skipped={} unavailable={}",
@@ -375,6 +387,21 @@ object WorkspaceMirror {
 
     private fun isSamePath(a: Path, b: Path): Boolean =
         if (IS_WINDOWS) a.toString().equals(b.toString(), ignoreCase = true) else a == b
+
+    /**
+     * Whether [link] is a link that currently resolves to [target].
+     *
+     * Used to decide which modules the manifest may claim: an entry that is a plain directory, or a
+     * link pointing somewhere else, must not become a grant even if this pass created it earlier in
+     * another account's workspace.
+     */
+    private fun isLinkTo(link: Path, target: Path): Boolean {
+        if (!Files.exists(link, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return false
+        val real = runCatching { link.toRealPath() }.getOrNull() ?: return false
+        val expected = runCatching { target.toRealPath() }.getOrNull() ?: return false
+        if (isSamePath(real, link.toAbsolutePath().normalize())) return false
+        return isSamePath(real, expected)
+    }
 
     private val MODULE_TAG = Regex("<module>\\s*([^<]+?)\\s*</module>")
 }

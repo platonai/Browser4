@@ -192,7 +192,7 @@ class CodingToolExecutorTest {
         @Test
         @DisplayName("read calls fs.readFile with path")
         fun testRead() = runBlocking {
-            coEvery { fs.readFile(any()) } returns "file content"
+            coEvery { fs.readFileText(any()) } returns CodingAgentFileSystem.TextRead("file content")
 
             val tc = ToolCall(
                 domain = "coding",
@@ -201,14 +201,34 @@ class CodingToolExecutorTest {
             )
 
             val result = executor.callFunctionOn(tc, target)
-            coVerify { fs.readFile("src/main.kt") }
+            coVerify { fs.readFileText("src/main.kt") }
             assertEquals("file content", result.value)
+        }
+
+        @Test
+        @DisplayName("read announces a lenient decode in the tool output, not in the file content")
+        fun testReadAnnouncesLenientDecode() = runBlocking {
+            // A GBK log (a Chinese `拒绝访问。` from cmd.exe) is decoded leniently, so the model has
+            // to know the non-ASCII part may be re-coded. The note belongs to this layer: `readFile`
+            // also feeds parsers (VERSION / pom.xml / verify's trap check), where a leading note
+            // would corrupt the value.
+            coEvery { fs.readFileText(any()) } returns CodingAgentFileSystem.TextRead("拒绝访问。", recoded = true)
+
+            val tc = ToolCall(
+                domain = "coding",
+                method = "read",
+                arguments = mutableMapOf("path" to "dump.err")
+            )
+
+            val text = executor.callFunctionOn(tc, target).value as String
+            assertTrue(text.contains("not valid UTF-8"), "the decode must be announced: $text")
+            assertTrue(text.endsWith("拒绝访问。"), "the note leads, the decoded content follows: $text")
         }
 
         @Test
         @DisplayName("readLines calls fs.readFileLines with defaults")
         fun testReadLinesDefaults() = runBlocking {
-            coEvery { fs.readFileLines(any(), any(), any()) } returns "lines 1-10"
+            coEvery { fs.readFileLinesText(any(), any(), any()) } returns CodingAgentFileSystem.TextRead("lines 1-10")
 
             val tc = ToolCall(
                 domain = "coding",
@@ -217,14 +237,14 @@ class CodingToolExecutorTest {
             )
 
             val result = executor.callFunctionOn(tc, target)
-            coVerify { fs.readFileLines("log.txt", 1, -1) }
+            coVerify { fs.readFileLinesText("log.txt", 1, -1) }
             assertEquals("lines 1-10", result.value)
         }
 
         @Test
         @DisplayName("readLines calls fs.readFileLines with explicit line range")
         fun testReadLinesWithRange() = runBlocking {
-            coEvery { fs.readFileLines(any(), any(), any()) } returns "lines 5-15"
+            coEvery { fs.readFileLinesText(any(), any(), any()) } returns CodingAgentFileSystem.TextRead("lines 5-15")
 
             val tc = ToolCall(
                 domain = "coding",
@@ -233,14 +253,14 @@ class CodingToolExecutorTest {
             )
 
             val result = executor.callFunctionOn(tc, target)
-            coVerify { fs.readFileLines("log.txt", 5, 15) }
+            coVerify { fs.readFileLinesText("log.txt", 5, 15) }
             assertEquals("lines 5-15", result.value)
         }
 
         @Test
         @DisplayName("read with startLine/endLine routes to fs.readFileLines")
         fun testReadWithLineRange() = runBlocking {
-            coEvery { fs.readFileLines(any(), any(), any()) } returns "lines 5-15"
+            coEvery { fs.readFileLinesText(any(), any(), any()) } returns CodingAgentFileSystem.TextRead("lines 5-15")
 
             val tc = ToolCall(
                 domain = "coding",
@@ -249,7 +269,7 @@ class CodingToolExecutorTest {
             )
 
             val result = executor.callFunctionOn(tc, target)
-            coVerify { fs.readFileLines("src/main.kt", 5, 15) }
+            coVerify { fs.readFileLinesText("src/main.kt", 5, 15) }
             assertEquals("lines 5-15", result.value)
         }
 

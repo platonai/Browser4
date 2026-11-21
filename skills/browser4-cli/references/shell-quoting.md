@@ -184,8 +184,8 @@ de-converted command to re-run. Its check covers the bare form, the part after `
 
 **Workarounds:**
 - Prefer `./b4w.sh` (conversion disabled for all arguments).
-- Omit the flag when its default is already a `/` value — `cookie-set --path` defaults to `/`:
-  `./b4w.ps1 cookie-set session_id abc123 --domain localhost --httpOnly --secure`.
+- Omit the flag when its default is already a `/` value — `cookie set --path` defaults to `/`:
+  `./b4w.ps1 cookie set session_id abc123 --domain localhost --httpOnly --secure`.
 - Use a value that does not start with `/`: `-olp "product/"` (instead of `-olp "/product/"`),
   `-olp "ec/dp"`.
 - Or export the exclusion yourself before invoking anything:
@@ -193,8 +193,8 @@ de-converted command to re-run. Its check covers the bare form, the part after `
 
 Applies to any value that legitimately starts with `/` and is not an existing file path — `-olp`/`--out-link-pattern` (e.g. `/product/`), `snapshot grep` patterns like `/ec/dp/`, and similar. The CLI prints a warning when a pattern value looks like a mangled Windows path (contains `:/`).
 
-`cookie-set --path /` is the same case, and its `--path=/` spelling is rewritten identically —
-both need the same workaround (or just omit the flag: `cookie-set --path` defaults to `/`).
+`cookie set --path /` is the same case, and its `--path=/` spelling is rewritten identically —
+both need the same workaround (or just omit the flag: `cookie set --path` defaults to `/`).
 
 ## Inside an agent run: who parses the line?
 

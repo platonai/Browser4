@@ -125,7 +125,7 @@ from task execution traces.  It exposes four CLI commands:
 | `experience save`       | Fast Learning: save trace + update stats     | ~tens of ms  |
 | `experience query`      | Intent-based knowledge retrieval             | ~single-digit ms |
 | `experience list`       | List stored knowledge by domain/intent       | ~ms          |
-| `experience deep-learn` | Deep Learning: analyze, build facts, promote | ~seconds     |
+| `experience deep learn` | Deep Learning: analyze, build facts, promote | ~seconds     |
 
 ## How to Call Experience Commands
 
@@ -155,7 +155,7 @@ Positional args: none.
 Options: `--filter` (domain filter), `--intent-filter` (intent filter),
 `--page` (default 1), `--page-size` (default 20, max 100).
 
-**experience deep-learn `<url>` `<intent>`**
+**experience deep learn `<url>` `<intent>`**
 Positional args: `url` (target URL), `intent` (free-text intent).
 Options: `--force` (boolean flag, bypasses sampling check).
 
@@ -214,7 +214,7 @@ Before starting the sequence, verify the experience commands are available:
 __CLI__ help | grep experience
 ```
 
-Expected: four commands listed: `experience deep-learn`, `experience list`,
+Expected: four commands listed: `experience deep learn`, `experience list`,
 `experience query`, `experience save`.  If none appear, record a **Critical
 Reliability** issue — the experience CLI subcommands are not registered.
 
@@ -250,9 +250,11 @@ __CLI__ help | grep experience
 ```
 
 Verify:
-- Exactly 4 commands appear: `experience deep-learn`, `experience list`,
+- Exactly 4 commands appear: `experience deep learn`, `experience list`,
   `experience query`, `experience save`.
-- The names use kebab-case, matching the `__CLI__ <command>` convention.
+- The names use the public spaced form (`experience deep learn`), the same
+  spelling the `--help` examples print — matching the `__CLI__ <command>`
+  convention.
 
 ## A.2 — Help for each command
 
@@ -271,7 +273,7 @@ Repeat for:
 ```
 __CLI__ experience query --help
 __CLI__ experience list --help
-__CLI__ experience deep-learn --help
+__CLI__ experience deep learn --help
 ```
 
 Verify each prints usage with its expected positional args and options.
@@ -491,7 +493,7 @@ Verify:
 
 ---
 
-# Part E — experience deep-learn (Deep Learning)
+# Part E — experience deep learn (Deep Learning)
 
 ## E.1 — Save enough traces to build confidence
 
@@ -509,7 +511,7 @@ Repeat for `https://httpbin.org/headers` and `https://httpbin.org/user-agent`.
 ## E.2 — Run deep_learn (first time — should create hypothesis)
 
 ```
-__CLI__ experience deep-learn "https://httpbin.org/get" "extract data" --force
+__CLI__ experience deep learn "https://httpbin.org/get" "extract data" --force
 ```
 
 Verify:
@@ -525,7 +527,7 @@ Verify:
 ## E.3 — Run deep_learn again (should skip or complete)
 
 ```
-__CLI__ experience deep-learn "https://httpbin.org/get" "extract data"
+__CLI__ experience deep learn "https://httpbin.org/get" "extract data"
 ```
 
 Verify:
@@ -538,7 +540,7 @@ Verify:
 ## E.4 — Force deep_learn (bypass sampling check)
 
 ```
-__CLI__ experience deep-learn "https://httpbin.org/get" "extract data" --force
+__CLI__ experience deep learn "https://httpbin.org/get" "extract data" --force
 ```
 
 Verify:
@@ -557,7 +559,7 @@ __CLI__ experience save "https://flaky-site.com/page" '{"url":"https://flaky-sit
 Repeat 2 more times (same domain+intent), then:
 
 ```
-__CLI__ experience deep-learn "https://flaky-site.com/page" "extract data" --force
+__CLI__ experience deep learn "https://flaky-site.com/page" "extract data" --force
 ```
 
 Verify:
@@ -602,7 +604,7 @@ Verify:
 ## F.3 — Missing required argument for deep_learn (intent)
 
 ```
-__CLI__ experience deep-learn "https://example.com"
+__CLI__ experience deep learn "https://example.com"
 ```
 
 Verify:
@@ -689,7 +691,7 @@ Verify:
 ## G.3 — E2E: Deep learn after form filling
 
 ```
-__CLI__ experience deep-learn "https://httpbin.org/forms/post" "fill out a form" --force
+__CLI__ experience deep learn "https://httpbin.org/forms/post" "fill out a form" --force
 ```
 
 Verify:
@@ -774,7 +776,7 @@ Verify:
     (no cross-contamination).
 11. Pagination works (`--page` / `--page-size` respected).
 
-### Deep Learning (experience deep-learn)
+### Deep Learning (experience deep learn)
 12. First deep_learn creates hypothesis-level facts.
 13. High-confidence skip works (confidence ≥ 0.90 → `completed: false` with
     clear message).
@@ -810,14 +812,14 @@ Verify:
   Wrap it in **single quotes** on the shell so the inner double quotes
   are preserved.  If the JSON contains single quotes, write it to a temp
   file and use `"$(cat /tmp/trace.json)"` instead.
-- The `experience save` and `experience deep-learn` commands do NOT require
+- The `experience save` and `experience deep learn` commands do NOT require
   a browser session — they operate on the knowledge store directly.  Only
   Part G (E2E) needs an active browser session for form filling.
 - The backend auto-starts with the first `__CLI__` command.  No manual
   server setup is needed.
 - Pay attention to the `retrieval_tier` field in query results — it documents
   which level of the 6-level fallback chain resolved the query.
-- The `--force` flag on `experience deep-learn` is a boolean flag — just
+- The `--force` flag on `experience deep learn` is a boolean flag — just
   include it, no `=true` needed.
 - Record any confusing output, misleading messages, or discoverability issues
   as you encounter them.

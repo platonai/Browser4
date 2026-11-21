@@ -1,10 +1,13 @@
 package ai.platon.pulsar.coding
 
+import org.slf4j.LoggerFactory
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 
 /**
- * Derives the real paths of a workspace's mirrored module roots.
+ * Derives the real paths of a workspace's mirrored module roots **from the mirror's own manifest**.
  *
  * [WorkspaceMirror] links `<workspace>/<module>` to `<sourceRepo>/<module>` via a Windows junction or
  * a Unix symbolic link. When the file tools judge a path by its **real** location (see
@@ -13,23 +16,41 @@ import java.nio.file.Path
  * out of scope — the whole point of `--fresh-workspace` is to keep the checkout writable through the
  * mirror.
  *
- * This object looks for directory entries that are links (junctions or symlinks) and resolves where
- * they really point. A target that still lives inside the workspace is not a mirror and is ignored.
- * Links are never descended into, so the walk never traverses the source tree.
+ * ## Why a manifest and not a scan
+ *
+ * The result is a **grant**: the boundary authorizer treats every returned root as writable, and
+ * `windows-low-il` lowers its mandatory label so the sandboxed child can write there. Deriving it by
+ * scanning the workspace for links let the *agent* decide what was granted — a task that created a
+ * junction to an unrelated checkout turned that checkout into a writable root (and, through
+ * [sourceRoot], potentially into a whole-checkout grant). 2026-11-20 review, issue S1.
+ *
+ * The manifest is written by the backend itself at mirror time, next to the workspace and therefore
+ * **outside** it (`<parent>/<workspaceName>.mirror-manifest`), where neither the string layer nor the
+ * sandbox account can reach it. It records the exact `link → target` pairs that were created, so
+ * [derive] can require that a link still resolves to **the target the backend linked**, and that the
+ * target still lives inside the recorded checkout. Anything else — a stale entry, a re-pointed
+ * junction, a link the agent added — is ignored, so the grant follows what the backend did rather
+ * than the workspace's current topology.
  *
  * ## Bounded on purpose
  *
- * The result feeds the boundary [Authorizer] built on the first tool call, so this walk runs on
- * every cold [CodingAgentFileSystem] / [CodingAgentShell] instance. An unbounded recursive walk was
- * fine for a mirror workspace (a handful of links) but catastrophic for a workspace that **is** a
- * large checkout: measured on a 198k-file / 3.4 GB tree, `derive` took 100 s and `sourceRoot` 186 s,
- * i.e. the first `coding.grep` of the session spent minutes before scanning anything.
- *
- * The walk is therefore bounded by [MAX_DERIVE_DEPTH] and [MAX_DERIVE_ENTRIES]: a mirror link can
- * only live a couple of directories below the workspace root, and files are skipped entirely (they
- * cannot be mirrored roots), so the cost follows the directory count and not the file count.
+ * A manifest is a handful of lines; the walk this object used to perform (bounded by depth and entry
+ * budget) is gone, which also removes its cost from the first tool call of a session. A recorded
+ * link deeper than [MAX_MODULE_DEPTH] is ignored: a mirror can never live there.
  */
 internal object MirrorRoots {
+
+    private val logger = LoggerFactory.getLogger(MirrorRoots::class.java)
+
+    /** Suffix of the manifest that sits next to (never inside) the workspace. */
+    const val MANIFEST_SUFFIX = ".mirror-manifest"
+
+    /** First line of a manifest written by this schema. */
+    private const val MANIFEST_HEADER = "browser4-mirror-manifest v1"
+
+    private const val SOURCE_PREFIX = "source="
+    private const val LINK_PREFIX = "link="
+    private const val TARGET_PREFIX = "target="
 
     /**
      * How deep below the workspace root a mirrored module can sit.
@@ -37,115 +58,196 @@ internal object MirrorRoots {
      * `WorkspaceMirror` links `<workspace>/<module>` and nested reactor modules such as
      * `<workspace>/browser4-plugins/browser4-testprobe`; one extra level is kept as margin.
      */
-    private const val MAX_DERIVE_DEPTH = 3
+    const val MAX_MODULE_DEPTH = 4
+
+    /** Depth limit for walking a nested module up to its reactor root. */
+    private const val MAX_SOURCE_ROOT_HOPS = 4
+
+    /** Files/dirs that make a directory a checkout root rather than a module or an accident. */
+    private val CHECKOUT_MARKERS = listOf(
+        "pom.xml", "Cargo.toml", "package.json", "pyproject.toml", "setup.py", "go.mod",
+        "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "Gemfile",
+    )
 
     /**
-     * Entry budget of one derivation.
+     * A checkout and the links [WorkspaceMirror] created into it.
      *
-     * A mirror workspace holds tens of entries, so this never truncates a real mirror; it only
-     * keeps a huge non-mirror workspace from paying a full walk on its first tool call. Measured
-     * on a 198k-file tree, 2,000 entries cost ~1 s (cold metadata); 5,000 cost 2.6 s.
+     * @property source the checkout the workspace mirrors
+     * @property entries link path relative to the workspace → absolute target it was linked to
      */
-    private const val MAX_DERIVE_ENTRIES = 2_000
+    data class Manifest(val source: Path, val entries: Map<String, Path>)
+
+    /**
+     * The manifest path for [workspaceRoot].
+     *
+     * The workspace is canonicalised first, so the same workspace reached through a symlink and
+     * through its real path resolve to one file. The file is a **sibling** of the workspace: a path
+     * inside it would be writable by the agent, which is exactly what this manifest must not be.
+     */
+    fun manifestFile(workspaceRoot: Path): Path {
+        val root = canonical(workspaceRoot)
+        val name = root.fileName?.toString() ?: return root.resolve(MANIFEST_SUFFIX)
+        return root.resolveSibling(name + MANIFEST_SUFFIX)
+    }
+
+    /**
+     * Records the `link → target` pairs [WorkspaceMirror] created for [workspaceRoot].
+     *
+     * Written atomically (temp file + rename) so a crash never leaves a half manifest that would be
+     * read as a shorter grant list. A failure is logged, not thrown: the mirror itself already
+     * worked, and the consequence — mirrored writes refused — is a loud, recoverable refusal.
+     */
+    fun writeManifest(workspaceRoot: Path, source: Path, entries: Map<String, Path>) {
+        val root = canonical(workspaceRoot)
+        val checkout = canonical(source)
+        val file = manifestFile(root)
+        val accepted = entries.asSequence()
+            .filter { (link, _) -> isSafeLinkPath(link) }
+            .sortedBy { it.key }
+            .toList()
+        val text = buildString {
+            appendLine(MANIFEST_HEADER)
+            append(SOURCE_PREFIX).appendLine(checkout)
+            for ((link, target) in accepted) {
+                append(LINK_PREFIX).appendLine(link)
+                append(TARGET_PREFIX).appendLine(canonical(target))
+            }
+        }
+        runCatching {
+            Files.createDirectories(file.parent)
+            val tmp = Files.createTempFile(file.parent, "mirror-", ".tmp")
+            try {
+                Files.writeString(tmp, text)
+                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING)
+            } finally {
+                runCatching { Files.deleteIfExists(tmp) }
+            }
+            logger.debug("mirror manifest written: {} ({} link(s))", file, accepted.size)
+        }.onFailure { logger.warn("could not record the mirror manifest {}: {}", file, it.message) }
+    }
+
+    /** The manifest of [workspaceRoot], or `null` when there is none or it is unreadable. */
+    fun readManifest(workspaceRoot: Path): Manifest? {
+        val file = manifestFile(workspaceRoot)
+        if (!Files.isRegularFile(file)) return null
+        val lines = runCatching { Files.readAllLines(file) }.getOrNull() ?: return null
+        if (lines.firstOrNull()?.trim() != MANIFEST_HEADER) return null
+        var source: Path? = null
+        var pendingLink: String? = null
+        val entries = LinkedHashMap<String, Path>()
+        for (line in lines.drop(1)) {
+            val text = line.trim()
+            when {
+                text.startsWith(SOURCE_PREFIX) ->
+                    source = runCatching { Path.of(text.removePrefix(SOURCE_PREFIX)) }.getOrNull()
+                text.startsWith(LINK_PREFIX) ->
+                    pendingLink = text.removePrefix(LINK_PREFIX).takeIf { isSafeLinkPath(it) }
+                text.startsWith(TARGET_PREFIX) -> {
+                    val link = pendingLink ?: continue
+                    val target = runCatching { Path.of(text.removePrefix(TARGET_PREFIX)) }.getOrNull() ?: continue
+                    entries[link] = target
+                    pendingLink = null
+                }
+            }
+        }
+        val checkout = source ?: return null
+        return Manifest(checkout, entries)
+    }
 
     /**
      * Real paths of the mirrored roots under [workspaceRoot].
      *
-     * @return the canonical real paths that the workspace's directory links point at, excluding any
-     *   that resolve back inside [workspaceRoot] itself.
+     * @return the canonical real paths the manifest's links were created to, each re-verified against
+     *   the recorded link and checkout; empty when there is no manifest, no link, or a link moved.
      */
     fun derive(workspaceRoot: Path): Set<Path> {
-        val realRoot = runCatching { workspaceRoot.toRealPath() }
-            .getOrDefault(workspaceRoot.toAbsolutePath().normalize())
-        if (!Files.isDirectory(realRoot)) return emptySet()
+        val root = canonical(workspaceRoot)
+        if (!Files.isDirectory(root)) return emptySet()
+        val manifest = readManifest(root) ?: return emptySet()
+        if (!Files.isDirectory(manifest.source)) return emptySet()
+        val checkout = canonical(manifest.source)
 
         val roots = linkedSetOf<Path>()
-        var budget = MAX_DERIVE_ENTRIES
-
-        fun visit(dir: Path, depth: Int) {
-            if (depth > MAX_DERIVE_DEPTH || budget <= 0) return
-            val entries = runCatching { Files.list(dir).use { it.toList() } }.getOrDefault(emptyList())
-            for (entry in entries) {
-                if (budget-- <= 0) return
-                // Only directories can be mirrored module roots. Skipping files keeps the walk
-                // proportional to the directory count instead of the file count.
-                if (runCatching { Files.isDirectory(entry) }.getOrDefault(false).not()) continue
-                // Detect a link (Unix symlink or Windows junction) by comparing the absolute path
-                // with its real path: a real directory resolves to itself, a link resolves to its
-                // target. This is the same trick CodingAgentFileSystem.resolveLinkTarget uses and it
-                // is the only cross-platform check that catches NTFS junctions (which NIO's
-                // isSymbolicLink / readSymbolicLink do not recognize).
-                val absolute = runCatching { entry.toAbsolutePath().normalize() }.getOrDefault(entry)
-                val real = runCatching { entry.toRealPath() }.getOrNull()
-                val isLink = real != null && !samePath(real, absolute)
-                if (isLink) {
-                    if (real != null && !real.startsWith(realRoot)) {
-                        roots.add(real.normalize())
-                    }
-                    continue // never descend into a linked tree
-                }
-                visit(entry, depth + 1)
-            }
+        for ((linkName, recorded) in manifest.entries) {
+            val link = runCatching { root.resolve(linkName).toAbsolutePath().normalize() }.getOrNull() ?: continue
+            if (!Files.exists(link, LinkOption.NOFOLLOW_LINKS)) continue
+            val real = runCatching { link.toRealPath() }.getOrNull() ?: continue
+            // A real directory resolves to itself: whatever sits there now is not the mirror's link.
+            if (samePath(real, link)) continue
+            // A link that resolves back inside the workspace grants nothing new.
+            if (real.startsWith(root)) continue
+            // The grant is for the target the backend linked — never for whatever a link happens to
+            // point at today (a re-pointed junction must not widen the boundary).
+            if (!samePath(real, recorded)) continue
+            // …and that target must still be inside the checkout the mirror recorded, so a manifest
+            // line cannot be reused to name a directory the workspace was never given.
+            if (!real.startsWith(checkout)) continue
+            if (!isCheckoutLinkedModule(real)) continue
+            roots.add(real.normalize())
         }
-
-        visit(realRoot, 0)
         return roots
     }
 
     /**
      * The checkout [workspaceRoot] mirrors, or `null` when the workspace is not a mirror.
      *
-     * The mirrored module roots are all paths *inside* one checkout, so the checkout is the common
-     * ancestor of the modules the workspace links. It is then walked up while the parent is itself a
-     * Maven project (`browser4-tests/pulsar-tests-common` is a module of `browser4-tests`, which is
-     * a module of the reactor), and only accepted when the result really looks like a checkout root
-     * ([CHECKOUT_MARKERS]) — a link to an unrelated directory must not turn its parent into a grant.
+     * The checkout comes from the manifest, so it is the one the backend chose for this task (the
+     * repository the backend runs from), not a common ancestor inferred from the links the workspace
+     * currently holds. It is accepted only while at least one manifest link still resolves to it,
+     * and only when it really looks like a checkout root ([CHECKOUT_MARKERS]) — a workspace whose
+     * links were replaced gains no source grant.
      *
-     * This is the "code this task is developing" root: the mirror makes the scratch workspace *look*
-     * like the repository, but only the real checkout has `.git`, the non-module folders (`bin/`,
-     * `cli/`, `docs/`) and the untracked fixtures a self-development task has to edit. Its write
-     * scope is a boundary grant ([CodingComponents.scopeManifest]'s `SOURCE` entry); the protected
-     * files/dirs and the credential rails stay in force.
+     * Its write scope is a boundary grant ([CodingComponents.scopeManifest]'s `SOURCE` entry); the
+     * protected files/dirs and the credential rails stay in force.
      *
      * @param workspaceRoot the agent workspace (`<app data>/agent/<date>/<uuid>/workspace.<task>`)
      */
     fun sourceRoot(workspaceRoot: Path): Path? {
-        val mirrors = derive(workspaceRoot)
-        if (mirrors.isEmpty()) return null
-        var candidate = commonAncestor(mirrors)?.toAbsolutePath()?.normalize() ?: return null
+        val root = canonical(workspaceRoot)
+        val manifest = readManifest(root) ?: return null
+        // No valid link ⇒ no mirror in force ⇒ no source grant.
+        if (derive(root).isEmpty()) return null
+        val source = canonical(manifest.source)
+        if (source.startsWith(root)) return null
+        return source.takeIf { isCheckoutRoot(it) }
+    }
+
+    /**
+     * Whether a link target is a module of a checkout, i.e. a real mirror rather than an arbitrary
+     * folder a workspace link points at.
+     *
+     * Kept as defense in depth on top of the manifest: even a recorded target is only a grant when it
+     * still carries the markers of a module that belongs to some checkout.
+     */
+    private fun isCheckoutLinkedModule(real: Path): Boolean {
+        if (!runCatching { Files.isDirectory(real) }.getOrDefault(false)) return false
+        var candidate: Path? = runCatching { real.toAbsolutePath().normalize() }.getOrNull() ?: return false
         var hops = 0
-        while (hops < MAX_SOURCE_ROOT_HOPS) {
-            val parent = candidate.parent ?: break
-            if (!Files.isRegularFile(parent.resolve("pom.xml"))) break
-            candidate = parent
+        while (candidate != null && hops <= MAX_SOURCE_ROOT_HOPS) {
+            if (isCheckoutRoot(candidate)) return true
+            candidate = candidate.parent
             hops++
         }
-        return candidate.takeIf { isCheckoutRoot(it) }
+        return false
     }
-
-    /** Depth limit for walking a nested module up to its reactor root. */
-    private const val MAX_SOURCE_ROOT_HOPS = 4
-
-    /** Files/dirs that make a directory a checkout root rather than a module or an accident. */
-    private val CHECKOUT_MARKERS = listOf("pom.xml", "Cargo.toml", "package.json")
 
     private fun isCheckoutRoot(dir: Path): Boolean =
-        Files.isDirectory(dir.resolve(".git")) || CHECKOUT_MARKERS.any { Files.isRegularFile(dir.resolve(it)) }
+        Files.isDirectory(dir.resolve(".git")) ||
+            Files.isRegularFile(dir.resolve(".git")) ||
+            CHECKOUT_MARKERS.any { Files.isRegularFile(dir.resolve(it)) }
 
-    /** The deepest directory that contains every path in [paths], or `null` for mixed roots. */
-    private fun commonAncestor(paths: Collection<Path>): Path? {
-        val normalized = paths.map { it.toAbsolutePath().normalize() }
-        val first = normalized.firstOrNull() ?: return null
-        var common: Path = first
-        for (path in normalized.drop(1)) {
-            var candidate: Path? = common
-            while (candidate != null && !path.startsWith(candidate)) {
-                candidate = candidate.parent
-            }
-            common = candidate ?: return null
-        }
-        return common
+    /** A link path must stay relative and shallow; anything else cannot be a mirror entry. */
+    private fun isSafeLinkPath(link: String): Boolean {
+        val normalized = link.trim().replace('\\', '/')
+        if (normalized.isEmpty() || normalized.startsWith("/") || normalized.contains(':')) return false
+        val parts = normalized.split('/')
+        if (parts.any { it.isEmpty() || it == "." || it == ".." }) return false
+        return parts.size <= MAX_MODULE_DEPTH
     }
+
+    /** The workspace as the OS knows it, so two spellings of one directory share one manifest. */
+    private fun canonical(path: Path): Path =
+        runCatching { path.toRealPath() }.getOrElse { path.toAbsolutePath().normalize() }
 
     private fun samePath(a: Path, b: Path): Boolean {
         val win = System.getProperty("os.name").lowercase().contains("win")

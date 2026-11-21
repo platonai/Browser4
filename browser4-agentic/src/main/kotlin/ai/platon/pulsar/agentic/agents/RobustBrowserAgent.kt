@@ -74,6 +74,17 @@ private const val CLI_TOOL_PROGRESS_EVENT_INTERVAL = 5
 private const val CLI_STEERING_PREFIX =
     "[User steering — the user sent this while the task is running. Apply it from now on; " +
         "it overrides the earlier plan.]"
+
+/**
+ * Header of a delivered FOLLOW-UP message (see [RobustBrowserAgent.followUpSource]).
+ *
+ * The follow-up arrives when the model thought the task was finishing. The header says
+ * so: the run continues, and this is the user's next instruction in the same
+ * conversation — not a new task, and not a correction to the finished step.
+ */
+private const val CLI_FOLLOW_UP_PREFIX =
+    "[User follow-up — sent while this task was finishing. The task continues with it; " +
+        "it is the next instruction in this same conversation.]"
 /**
  * Explicit tool domains exposed to the CLI engine (design v0.2 §4.4; memory §7.1).
  *
@@ -548,6 +559,40 @@ open class RobustBrowserAgent(
         private set
 
     /**
+     * The session's earlier conversation, handed in by the task runner before a run.
+     *
+     * This is pi's continuous-conversation carrier: the next task really continues the
+     * session's message list instead of being told about it. The runner sets it only
+     * while the session still has an in-process conversation (after a backend restart
+     * the disk transcript takes over), and the loop appends this task's user message
+     * after these messages. The system prompt is never inherited — it is rebuilt per
+     * task from the current workspace/access/memory state.
+     */
+    @Volatile
+    var sessionMessages: List<ChatMessage>? = null
+
+    /**
+     * The conversation the last run produced, without its system prompt, for the
+     * runner to keep as the session's conversation.
+     *
+     * `null` before the first run and for a run that produced nothing. Set on every
+     * exit path (completion, failure, cancellation), so a failed attempt is still part
+     * of what the next task inherits.
+     */
+    @Volatile
+    var capturedMessages: List<ChatMessage>? = null
+        private set
+
+    /**
+     * Take (and clear) the conversation the last run produced.
+     *
+     * The runner stores it as the session's conversation before the per-task state is
+     * detached; taking is atomic so a later run cannot pick up an older conversation.
+     * `null` when the run produced nothing.
+     */
+    fun takeCapturedMessages(): List<ChatMessage>? = capturedMessages.also { capturedMessages = null }
+
+    /**
      * Per-agent scratch workspace for CLI-engine (browser) tasks. Helper files
      * the model writes via coding.* and b4.run land here — never the backend
      * working directory / repository root (workspace isolation, P1).
@@ -605,6 +650,18 @@ open class RobustBrowserAgent(
      */
     @Volatile
     var steeringSource: (() -> List<String>)? = null
+
+    /**
+     * Drain for the current run's FOLLOW-UP messages, set by the task runner.
+     *
+     * Unlike [steeringSource] (injected at the next model round-trip), a follow-up is
+     * delivered only when the loop is about to stop — the model answered without tool
+     * calls. It is appended as a real user message and the loop continues the same
+     * conversation, so "type while it finishes, I have one more thing" neither
+     * interrupts the running step nor becomes a second task (pi's `followUp` queue).
+     */
+    @Volatile
+    var followUpSource: (() -> List<String>)? = null
 
     /**
      * Test/runtime override of the agent memory root directory (defaults to
@@ -1063,6 +1120,24 @@ open class RobustBrowserAgent(
         cliRunStartedAt = startTime
         val completionRef = AtomicReference<ActionDescription?>()
         val toolExecutions = AtomicInteger(0)
+        // Continuous conversation (pi's loop): the task runner may hand in the earlier
+        // messages of this session, and this run hands its own back. Only a carrier for
+        // the message list — the system prompt is rebuilt per task (workspace, memory).
+        val conf = session.sessionConfig
+        val continuousMessages = runCatching {
+            conf.getBoolean("browser4.agent.session.continuousMessages", true)
+        }.getOrDefault(true)
+        val carryRoundMessages = runCatching {
+            conf.getBoolean("browser4.agent.toolLoop.carryRoundMessages", true)
+        }.getOrDefault(true)
+        val inheritedMessages: List<ChatMessage> = if (continuousMessages) {
+            sessionMessages.orEmpty().filterNot { it is SystemMessage }
+        } else {
+            emptyList()
+        }
+        // Declared outside the try so the finally can hand the conversation back on
+        // every exit path (completion, failure, cancellation).
+        var messages: List<ChatMessage> = emptyList()
         try {
             val action = initActionOptions.copy(fromRunLoop = true)
             // Initialize the agent memory BEFORE building the tool loop: the
@@ -1117,13 +1192,18 @@ open class RobustBrowserAgent(
                     sourceRepo = isolation?.repoRoot,
                 )
             }.getOrNull().orEmpty()
-            var messages: List<ChatMessage> = listOf(
-                SystemMessage.from(cliAgentSystemPrompt() + inheritedSection + memorySection),
+            messages = buildList {
+                add(SystemMessage.from(cliAgentSystemPrompt() + inheritedSection + memorySection))
+                // The session's earlier conversation, exactly as the model saw it last
+                // time (assistant tool calls and their results included). Consecutive
+                // user messages are accepted by the providers this engine targets — the
+                // loop has always appended them (continuation, steering).
+                addAll(inheritedMessages)
                 // Task inputs the instruction references but that live outside the
                 // isolated workspace are copied into `.b4inputs/` here; the message
                 // names their workspace paths (no-op when nothing was copied).
-                UserMessage.from(materializeTaskInputs(action.action, context.sid)),
-            )
+                add(UserMessage.from(materializeTaskInputs(action.action, context.sid)))
+            }
             var textOnlyStreak = 0
             var turn = 0
             val maxTurns = config.maxSteps.coerceAtLeast(1)
@@ -1326,7 +1406,16 @@ open class RobustBrowserAgent(
                 } else {
                     CLI_CONTINUE_NUDGE
                 }
-                messages = when {
+                messages = if (carryRoundMessages && response.modelError == null) {
+                    // pi's loop keeps ONE message list for the whole run: the next
+                    // outer round continues from exactly what the model just saw —
+                    // assistant tool calls WITH their results — so it never re-executes
+                    // a tool whose output it already has. The per-round decorations
+                    // (scratchpad, coding nudge) are request-only, so only the messages
+                    // the loop appended beyond them are kept.
+                    val volatileTail = (roundMessages.size - messages.size).coerceAtLeast(0)
+                    messages + loop.finalMessages.drop(messages.size + volatileTail)
+                } else when {
                     // Overflow: the inner loop's message list dies with the
                     // generate() call, so without this hand-off the model would
                     // restart the whole round from scratch and re-execute every
@@ -1405,6 +1494,15 @@ open class RobustBrowserAgent(
             agentMemory.sink.failed(context.sid, uuid.toString(), e.message ?: e.javaClass.simpleName)
             agentMemory.consolidator?.schedule(context.sid)
             throw handleResolutionFailure(e, context, startTime)
+        } finally {
+            // Hand the conversation this run produced back to the session (pi's
+            // continuous conversation). The fresh system prompt is dropped — the next
+            // task rebuilds it with its own workspace/memory sections. Non-suspending,
+            // so a failed or cancelled run still leaves the session what it saw; a run
+            // that produced nothing leaves the previous conversation untouched.
+            if (continuousMessages && messages.size > 1) {
+                capturedMessages = messages.drop(1)
+            }
         }
     }
 
@@ -1760,6 +1858,10 @@ open class RobustBrowserAgent(
                     }
                 }
             },
+            // Follow-ups are delivered only when the loop would stop: appending them
+            // here (and returning true) keeps the SAME conversation going, exactly like
+            // pi's stop-point drain. A message typed mid-run does not interrupt the step.
+            onStop = { innerMessages -> drainFollowUps { innerMessages.add(it) } > 0 },
         )
     }
 
@@ -1848,6 +1950,36 @@ open class RobustBrowserAgent(
         emitRunEvent(AgentRunEvent(AgentRunEvent.STEER, text = text))
         logger.info(
             "🧭 cli-agent.steer agent={} lines={} text='{}'",
+            uuid, lines.size, Strings.compactInline(text, 100)
+        )
+        return lines.size
+    }
+
+    /**
+     * Deliver queued follow-up messages at the loop's stop point.
+     *
+     * The stop point is "the model answered without tool calls", i.e. the moment the run
+     * would otherwise be accepted as finished. Appending the follow-up as a real user
+     * message makes the loop continue the SAME conversation, so nothing is interrupted
+     * and no second task is created (pi's `followUp` queue).
+     *
+     * @param sink receives one [UserMessage] carrying all pending lines
+     * @return the number of delivered lines (0 when nothing was queued)
+     */
+    private fun drainFollowUps(sink: (ChatMessage) -> Unit): Int {
+        val lines = runCatching { followUpSource?.invoke() }
+            .getOrNull()
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            .orEmpty()
+        if (lines.isEmpty()) return 0
+
+        val text = lines.joinToString("\n")
+        runCatching { sink(UserMessage.from("$CLI_FOLLOW_UP_PREFIX\n$text")) }
+            .onFailure { logger.warn("cli-agent.followUp injection failed: {}", it.message) }
+        emitRunEvent(AgentRunEvent(AgentRunEvent.FOLLOW_UP, text = text))
+        logger.info(
+            "↪ cli-agent.followUp agent={} lines={} text='{}'",
             uuid, lines.size, Strings.compactInline(text, 100)
         )
         return lines.size
@@ -2227,12 +2359,30 @@ open class RobustBrowserAgent(
     ): ToolLoopCompressor? {
         val conf = session.sessionConfig
         if (!conf.getBoolean("browser4.agent.toolLoop.compressionEnabled", true)) return null
+        // Model-window-aware pressure, as in pi: `contextWindow - reserveTokens`. The
+        // engine carries no per-model window metadata, so the window is configured;
+        // `windowTokens=0` keeps the legacy flat threshold. The reserve covers what the
+        // conversation is not (next response's output and the tool specs).
+        val windowTokens = conf.getLong("browser4.agent.context.windowTokens", 0L)
+        val reserveTokens = conf.getLong("browser4.agent.context.reserveTokens", 16_384L)
+        val configuredThreshold = conf.getLong("browser4.agent.toolLoop.compressionThresholdTokens", 60_000L)
+            .coerceAtLeast(1_000L)
+        val thresholdTokens = ToolLoopCompressor.effectiveThresholdTokens(
+            windowTokens, reserveTokens, configuredThreshold
+        )
+        // A retained tail that cannot fit below the threshold leaves nothing foldable
+        // (the failure mode on a small window), so it is capped at half the threshold.
+        val configuredRetain = conf.getLong("browser4.agent.toolLoop.retainTokens", 24_000L)
+            .coerceAtLeast(1_000L)
+        val retainTokens = ToolLoopCompressor.effectiveRetainTokens(configuredRetain, thresholdTokens)
+        logger.debug(
+            "🧹 compaction pressure: threshold={} (window={}, reserve={}, configured={}), retain={} (configured={})",
+            thresholdTokens, windowTokens, reserveTokens, configuredThreshold, retainTokens, configuredRetain,
+        )
         return ToolLoopCompressor(
             enabled = true,
-            thresholdTokens = conf.getLong("browser4.agent.toolLoop.compressionThresholdTokens", 60_000L)
-                .coerceAtLeast(1_000L),
-            retainTokens = conf.getLong("browser4.agent.toolLoop.retainTokens", 24_000L)
-                .coerceAtLeast(1_000L),
+            thresholdTokens = thresholdTokens,
+            retainTokens = retainTokens,
             pruneThresholdChars = conf.getLong("browser4.agent.toolLoop.pruneThresholdChars", 1_500L)
                 .toInt().coerceAtLeast(100),
             pruneHeadChars = conf.getLong("browser4.agent.toolLoop.pruneHeadChars", 800L)
@@ -2291,7 +2441,10 @@ open class RobustBrowserAgent(
             .getLong("browser4.agent.toolLoop.summarizationMaxTokens", 2_048L)
             .toInt().coerceIn(128, 16_384)
         val request = ChatRequest.builder()
-            .messages(prefix + UserMessage.from(ToolLoopCompressor.COMPACTION_INSTRUCTION))
+            // An existing `<compacted-summary>` in the prefix means this is a second
+            // fold of the same conversation: use pi's update instruction so the older
+            // facts survive the merge instead of being re-summarized away.
+            .messages(prefix + UserMessage.from(ToolLoopCompressor.compactionInstructionFor(prefix)))
             .toolSpecifications(toolSpecifications)
             .maxOutputTokens(maxTokens)
             .build()
@@ -2495,6 +2648,12 @@ open class RobustBrowserAgent(
                 claimedVerdictJson = extractVerdictJson(action.summary),
                 actualVerdictJson = (lastVerificationVerdict?.toJson() ?: lastInnerVerdictJson),
                 gitDeletedFiles = workspace?.let { gitDeletedFiles(it) },
+                // Folders the operator granted for THIS task (`agent run --add-dir`). A file under
+                // one of them is a legitimate deliverable git can never corroborate (it lives
+                // outside the checkout), so the gate must accept the grant as evidence — otherwise
+                // an honest report fails while hiding the file passes (issue 20261120-0156).
+                grantedRoots = agentToolManager.accessPolicy.additionalDirs
+                    .map { it.toAbsolutePath().normalize() },
             )
         )
     }
@@ -2838,6 +2997,48 @@ open class RobustBrowserAgent(
             SummarizeResult(
                 context, modelResponse = ModelResponse("Failed to generate summary: ${e.message}", ResponseState.OTHER)
             )
+        }
+    }
+
+    /**
+     * Compact a session's transcript into a memory block, using [systemInstruction].
+     *
+     * The interactive session inherits the ACTUAL conversation of its earlier tasks
+     * (`command.run`'s `## Session context` block). That block rides in every prompt, so
+     * once it crosses `browser4.agent.session.contextTokens` the runner asks the model —
+     * with the session-memory instruction built by `SessionConversation` — to fold the
+     * older turns into a bounded memory that keeps the goal, the corrections, the facts
+     * and the open problems. The result is stored by the caller and replaces those turns.
+     *
+     * A failed call returns `null` and is logged: the caller then sends the transcript
+     * uncompressed, because losing the session's memory is worse than a long prompt.
+     * Cancellation propagates — a cancelled task must not leave a compaction running.
+     *
+     * @param systemInstruction the compression instruction (what to keep, what to drop)
+     * @param transcript the rendered transcript (older turns plus any earlier memory)
+     * @return the memory block, or `null` when the model produced nothing usable
+     */
+    suspend fun compressSessionMemory(systemInstruction: String, transcript: String): String? {
+        if (transcript.isBlank()) return null
+        return try {
+            val started = Instant.now()
+            val response = cta.chatModel.callUmSm(transcript, systemInstruction)
+            val memory = response.content?.trim().orEmpty()
+            if (memory.isBlank()) {
+                logger.warn("🧠❌ session.memory.compacted returned no text")
+                null
+            } else {
+                logger.info(
+                    "🧠 session.memory.compacted chars={} elapsed={} ms",
+                    memory.length, java.time.Duration.between(started, Instant.now()).toMillis(),
+                )
+                memory
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("🧠❌ session.memory.compaction failed: {}", e.message)
+            null
         }
     }
 }

@@ -451,10 +451,28 @@ class HTMLSnapshotToolExecutor(
     private fun requireArchivableActivePage(address: String?, action: String): String {
         val archivable = address?.takeIf { isArchivableAddress(it) }
         require(archivable != null) {
-            "Nothing to $action: the active tab shows <${address ?: "no page"}>. Navigate to an http(s) " +
-                "or file:// page first — about:blank and browser error pages have no snapshot. " +
-                "If you were already on such a page, the tab lost its document: re-navigate it with " +
-                "`goto <url>` (a navigation is cheap and restores the tab), then retry."
+            // A browser-internal (WebUI) page is the one case where "navigate somewhere else"
+            // is not the actionable answer: the caller usually wants what the page *shows*,
+            // and the a11y capture reads WebUI pages this family cannot serialize (observed
+            // on a chrome://downloads run: `snapshot grep` returned the download rows while
+            // `htmlsnapshot get` could only report "nothing to read").
+            // `about:` is deliberately *not* in this set: a tab showing about:blank has usually
+            // lost its document, and "re-navigate it with goto" is the answer there, not "this is
+            // a WebUI page".
+            val scheme = address?.substringBefore(':')?.lowercase()
+            val browserInternal = scheme == "chrome" || scheme == "edge"
+            if (browserInternal) {
+                "Nothing to $action: the active tab shows <$address>. That is a browser-internal " +
+                    "(WebUI) page and htmlsnapshot serializes a page document, which it cannot " +
+                    "read. Use `snapshot` or `snapshot grep` for this page (the a11y capture works " +
+                    "on chrome:// pages), or `goto <url>` an http(s) page when you need the html."
+            } else {
+                "Nothing to $action: the active tab shows <${address ?: "no page"}>. Navigate to an " +
+                    "http(s) or file:// page first — about:blank and browser error pages have no " +
+                    "snapshot. If you were already on such a page, the tab lost its document: " +
+                    "re-navigate it with `goto <url>` (a navigation is cheap and restores the tab), " +
+                    "then retry."
+            }
         }
         return archivable
     }

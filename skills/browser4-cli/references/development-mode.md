@@ -118,7 +118,7 @@ other workspaces running. It also closes the browsers **those** backends
 launched — a force-stopped backend cannot do it, and the `PULSAR_CHROME` root
 keeps pointing at a parent pid that no longer exists, so nothing later could
 attribute it to this checkout. Browsers belonging to another workspace are
-never touched. `browser4-cli kill-all` remains the global hammer that clears
+never touched. `browser4-cli kill all` remains the global hammer that clears
 every managed backend and browser, across workspaces.
 
 ## Escape Hatches

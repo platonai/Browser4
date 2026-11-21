@@ -11,8 +11,8 @@ tier: procedure
 ```bash
 browser4-cli skills list              # bundled skills available to the agent
 browser4-cli skills get browser4-cli  # unpack a bundled skill's files to disk
-browser4-cli skill-list               # skills installed on the server
-browser4-cli skill-install <id>       # install a backend skill
+browser4-cli skill list               # skills installed on the server
+browser4-cli skill install <id>       # install a backend skill
 ```
 
 ## When to Use
@@ -34,8 +34,8 @@ browser4-cli skills get browser4-cli   # unpack the skill files to disk
 ### Install / uninstall a backend skill
 
 ```bash
-browser4-cli skill-install <id>        # install from the server registry
-browser4-cli skill-uninstall <id>      # remove it again
+browser4-cli skill install <id>        # install from the server registry
+browser4-cli skill uninstall <id>      # remove it again
 ```
 
 ## Flags
@@ -47,7 +47,7 @@ Browser4 has two independent skill systems — know which one you need:
 | System | Commands | What it manages | Where skills live |
 |--------|----------|-----------------|-------------------|
 | **Bundled skills** | `skills`, `skills get`, `skills path`, `skills unpack` | AI agent instruction files embedded in the CLI binary | Compiled into `browser4-cli` at build time |
-| **Backend skills** | `skill-list`, `skill-info`, `skill-install`, `skill-uninstall`, `skill-reload` | User-installed skills on the Browser4 server | Backend skill registry (server-side) |
+| **Backend skills** | `skill list`, `skill info`, `skill install`, `skill uninstall`, `skill reload` | User-installed skills on the Browser4 server | Backend skill registry (server-side) |
 
 > **Rule of thumb:** Use bundled-skill commands (`skills ...`) to refresh the
 > AI agent's local instruction files.  Use backend-skill commands
@@ -85,7 +85,7 @@ At build time, `build.rs` scans the `skills/` directory and embeds every file
 into the binary as static strings.  The `skills` command reads from these
 embedded strings — it never touches the network.
 
-- **`skills` (and `skills-list`)** — prints the names of all bundled skills.
+- **`skills` / `skills list`** — prints the names of all bundled skills.
 - **`skills get <name>`** — prints the SKILL.md content for a skill.  With
   `--full`, concatenates all bundled files for that skill (references, extra
   docs).
@@ -167,24 +167,24 @@ Unlike bundled skills, these are installed from directories containing a
 ### Quick start
 
 ```bash
-browser4-cli skill-list                          # List installed skills
-browser4-cli skill-info my-skill                 # Show details for one skill
-browser4-cli skill-install /path/to/skill-dir    # Install a skill
-browser4-cli skill-uninstall my-skill            # Remove a skill
-browser4-cli skill-reload my-skill               # Reload from source directory
+browser4-cli skill list                          # List installed skills
+browser4-cli skill info my-skill                 # Show details for one skill
+browser4-cli skill install /path/to/skill-dir    # Install a skill
+browser4-cli skill uninstall my-skill            # Remove a skill
+browser4-cli skill reload my-skill               # Reload from source directory
 ```
 
 ### Commands
 
-#### `skill-list`
+#### `skill list`
 
 List all skills installed on the server.  No arguments.
 
 ```
-browser4-cli skill-list
+browser4-cli skill list
 ```
 
-#### `skill-info`
+#### `skill info`
 
 Show metadata for a specific skill.
 
@@ -193,10 +193,10 @@ Show metadata for a specific skill.
 | `id` | Yes | Skill identifier |
 
 ```
-browser4-cli skill-info web-scraping
+browser4-cli skill info web-scraping
 ```
 
-#### `skill-install`
+#### `skill install`
 
 Install a skill from a local directory.  The directory must contain a
 `SKILL.md` file with valid YAML frontmatter (`name:` field).
@@ -210,11 +210,11 @@ Install a skill from a local directory.  The directory must contain a
 | `--overwrite` | Overwrite an existing skill with the same ID |
 
 ```
-browser4-cli skill-install /home/user/my-custom-skill
-browser4-cli skill-install /home/user/my-custom-skill --overwrite
+browser4-cli skill install /home/user/my-custom-skill
+browser4-cli skill install /home/user/my-custom-skill --overwrite
 ```
 
-#### `skill-uninstall`
+#### `skill uninstall`
 
 Remove a skill from the server by ID.
 
@@ -223,10 +223,10 @@ Remove a skill from the server by ID.
 | `id` | Yes | Skill identifier |
 
 ```
-browser4-cli skill-uninstall web-scraping
+browser4-cli skill uninstall web-scraping
 ```
 
-#### `skill-reload`
+#### `skill reload`
 
 Reload a skill from its original source directory.  Useful during skill
 development when you've edited the skill files and want the server to pick up
@@ -237,7 +237,7 @@ changes without reinstalling.
 | `id` | Yes | Skill identifier |
 
 ```
-browser4-cli skill-reload my-skill
+browser4-cli skill reload my-skill
 ```
 
 ### Common patterns
@@ -245,23 +245,23 @@ browser4-cli skill-reload my-skill
 #### Install and verify a custom skill
 
 ```bash
-browser4-cli skill-install ./my-extraction-skill
-browser4-cli skill-info my-extraction-skill
+browser4-cli skill install ./my-extraction-skill
+browser4-cli skill info my-extraction-skill
 ```
 
 #### Development loop: edit → reload → test
 
 ```bash
 # Edit SKILL.md in your skill directory, then:
-browser4-cli skill-reload my-skill
-browser4-cli skill-info my-skill   # verify changes took effect
+browser4-cli skill reload my-skill
+browser4-cli skill info my-skill   # verify changes took effect
 ```
 
 #### Clean up unused skills
 
 ```bash
-browser4-cli skill-list
-browser4-cli skill-uninstall old-experiment
+browser4-cli skill list
+browser4-cli skill uninstall old-experiment
 ```
 
 ---
@@ -273,7 +273,7 @@ browser4-cli skill-uninstall old-experiment
 | `Skill not found: <name>` (skills get) | Name doesn't match a bundled skill | Run `browser4-cli skills` to see available names |
 | `BROWSER4_SKILLS_DIR starts with '-'` | Env var set to a CLI flag value | Unset or correct the variable |
 | `Failed to create directory` | No write permission to skills dir | Check permissions or use `BROWSER4_SKILLS_DIR` to point elsewhere |
-| `Skill directory must contain SKILL.md` | `skill-install` target missing SKILL.md | Ensure the directory has a valid SKILL.md |
+| `Skill directory must contain SKILL.md` | `skill install` target missing SKILL.md | Ensure the directory has a valid SKILL.md |
 | `Skill already exists` | Installing a skill with a duplicate ID | Use `--overwrite` or uninstall first |
 
 ## See also

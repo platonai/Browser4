@@ -137,7 +137,12 @@ class UserCommandExecutor(
                 // Confine the agent run to the bounded dispatcher: MAX_CONCURRENT_COMMANDS
                 // only gated page visits before — agent tasks ran on unbounded
                 // Dispatchers.IO, so "10 concurrent commands" silently did not cover them.
-                runDispatcher = commandDispatcher
+                runDispatcher = commandDispatcher,
+                // The cross-task conversation is persisted under this id, so a backend
+                // restart does not silently wipe the context of a live session. The
+                // runner itself keeps the anonymous DEFAULT pool in memory (see its
+                // `persistableContextKey`).
+                contextKey = sessionId,
             )
         }
     }
@@ -193,6 +198,7 @@ class UserCommandExecutor(
         tokenBudget: Long? = null,
         addDirs: List<Path> = emptyList(),
         unrestricted: Boolean? = null,
+        rewindTaskId: String? = null,
     ): CommandStatus {
         // A resume may omit the task text entirely: the instruction comes from the
         // interrupted task's checkpoint on the backend.
@@ -206,7 +212,7 @@ class UserCommandExecutor(
                 freshWorkspace = freshWorkspace, sharedWorkspace = sharedWorkspace,
                 access = access, unattended = unattended,
                 resumeTaskId = resumeTaskId, tokenBudget = tokenBudget, addDirs = addDirs,
-                unrestricted = unrestricted,
+                unrestricted = unrestricted, rewindTaskId = rewindTaskId,
             )
             .toCommandStatus()
     }
@@ -235,6 +241,7 @@ class UserCommandExecutor(
         tokenBudget: Long? = null,
         addDirs: List<Path> = emptyList(),
         unrestricted: Boolean? = null,
+        rewindTaskId: String? = null,
     ): String {
         val command = plainCommand.trim()
 
@@ -249,7 +256,7 @@ class UserCommandExecutor(
 
         return submitAgentTask(
             sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId,
-            tokenBudget, addDirs, unrestricted,
+            tokenBudget, addDirs, unrestricted, rewindTaskId,
         )
     }
 
@@ -283,6 +290,7 @@ class UserCommandExecutor(
         tokenBudget: Long? = null,
         addDirs: List<Path> = emptyList(),
         unrestricted: Boolean? = null,
+        rewindTaskId: String? = null,
     ): String {
         val runner = ensureAgentRunner(sessionId)
         val status = runner.create()
@@ -296,7 +304,7 @@ class UserCommandExecutor(
         )
         runner.submit(
             plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId,
-            tokenBudget, addDirs, unrestricted,
+            tokenBudget, addDirs, unrestricted, rewindTaskId,
         )
         return status.id
     }
@@ -416,18 +424,20 @@ class UserCommandExecutor(
         .firstNotNullOfOrNull { runner -> runner.stats(id) }
 
     /**
-     * Queue a steering message for the running agent task [id].
+     * Queue a user message for the running agent task [id].
      *
-     * The message reaches the agent at its next model round-trip. A task that
-     * already finished, a page visit, or an unknown id is rejected — nothing
-     * would ever drain its queue.
+     * Two delivery modes: `steer` (the default) reaches the agent at its next model
+     * round-trip and is meant to redirect the current step; `followUp` is delivered only
+     * when the agent would stop, and continues the same conversation with the new
+     * instruction instead of starting a second task. A task that already finished, a
+     * page visit, or an unknown id is rejected — nothing would ever drain its queue.
      *
      * @return true when a live agent task accepted the message
      */
-    fun sendInput(id: String, text: String): Boolean {
-        val accepted = agentRunners.values.any { runner -> runner.enqueueInput(id, text) }
+    fun sendInput(id: String, text: String, deliverAs: String = StatefulAgentRunner.DELIVER_STEER): Boolean {
+        val accepted = agentRunners.values.any { runner -> runner.enqueueInput(id, text, deliverAs) }
         if (accepted) {
-            logger.info("Queued steering message for agent task {}", id)
+            logger.info("Queued {} message for agent task {}", deliverAs, id)
         } else {
             logger.debug("Agent task {} is not accepting input", id)
         }

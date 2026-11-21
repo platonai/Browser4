@@ -250,6 +250,40 @@ class WindowsSandboxBootstrap(
         credentials ?: WindowsCredentialStore(target = "browser4:$accountName", runner = runner)
 
     /**
+     * Whether this machine could use the sandbox **right now**: Windows, a usable account and a
+     * readable credential. It applies nothing — the ACL matrix is provisioned lazily on the first
+     * command, and this check exists so the *default* never switches the boundary on underneath an
+     * installation that cannot use it.
+     *
+     * Motivation (2026-11-16 review of run `966a5f2e`): `SandboxDefaults` upgrades installations
+     * whose historical `off` was never a decision. Doing that without this check would turn every
+     * later `coding.shell` command into a hard [SandboxUnavailableException] on a machine where no
+     * administrator has provisioned the account yet — a self-inflicted outage, not a boundary.
+     * "Off because it cannot be provisioned" is reported loudly instead, and re-probed on the next
+     * start, so provisioning the account later upgrades automatically.
+     */
+    fun isReady(): Boolean {
+        val os = System.getProperty("os.name", "")
+        if (!os.lowercase().contains("win")) return false
+        val account = runner.run(listOf("net", "user", accountName), ACCOUNT_TIMEOUT_SECONDS)
+        if (!account.ok) {
+            logger.info(
+                "sandbox account '{}' is not provisioned yet (net user exit={}): {}",
+                accountName, account.exitCode, firstLine(account.output),
+            )
+            return false
+        }
+        val secret = credentials.read()
+        if (secret == null || secret.isEmpty()) {
+            logger.info("no credential registered for sandbox account '{}'", accountName)
+            return false
+        }
+        // The check never keeps the plaintext around; provisioning reads it again on first use.
+        secret.fill('\u0000')
+        return true
+    }
+
+    /**
      * Verifies and prepares [workspace] for the sandbox account.
      *
      * The credential is read before any ACL change so a misconfigured credential does not leave a

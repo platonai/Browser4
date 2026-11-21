@@ -84,7 +84,9 @@ class AgentAccessController(
     /**
      * Denies one pending request.
      *
-     * `reason` is recorded in the audit entry and defaults to the model's own stated reason.
+     * `reason` is recorded in the audit entry as the operator's decision reason. When omitted the
+     * decision carries none: the model's own reason stays on the request as what it asked for, not
+     * as why an operator refused it.
      */
     @PostMapping("/{taskId}/access/{requestId}/deny")
     fun deny(

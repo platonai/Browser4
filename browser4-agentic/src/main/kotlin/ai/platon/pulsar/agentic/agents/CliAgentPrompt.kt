@@ -2,6 +2,7 @@ package ai.platon.pulsar.agentic.agents
 
 import ai.platon.pulsar.coding.AccessPreset
 import ai.platon.pulsar.coding.AgentAccessPolicy
+import ai.platon.pulsar.coding.CodingComponents
 import java.nio.file.Path
 
 /**
@@ -62,7 +63,12 @@ internal object CliAgentPrompt {
         val shell = if (windows) {
             "coding.shell runs through cmd.exe (use `dir`, `type`, `findstr`, `more`; " +
                 "POSIX tools such as `head`, `sed`, `grep` are NOT available) and each call " +
-                "starts in a fresh process — pass `workingDir` instead of a `cd /d … &&` prefix."
+                "starts in a fresh process — pass `workingDir` instead of a `cd /d … &&` prefix. " +
+                "Write `.ps1` files for `pwsh`, not for `powershell.exe`: Windows PowerShell 5.1 " +
+                "reads a BOM-less script as ANSI, so a Chinese literal in the script is corrupted " +
+                "before it runs (measured 2026-11-20: the same file prints 中文 under `pwsh` and " +
+                "涓枃 under `powershell`); if 5.1 is required, keep the script ASCII or put the " +
+                "non-ASCII text in a data file."
         } else {
             "coding.shell runs through sh -c and each call starts in a fresh process — " +
                 "pass `workingDir` instead of a `cd … &&` prefix."
@@ -293,6 +299,7 @@ internal object CliAgentPrompt {
                         "-Dbrowser4.agent.readPaths=…. A write there is refused — do not retry it " +
                         "against a readable root."
                 )
+                appendLine("- ${osSandboxNote(policy)}")
                 if (added.isNotEmpty()) appendLine(added)
                 appendLine(
                     "- A refusal is structural: do NOT retry it with different quoting, a `..` prefix, " +
@@ -317,9 +324,9 @@ internal object CliAgentPrompt {
             "boundary) can never be approved away — never route around them."
         val boundary = if (policy.allowExternalAccess) "" else
             "Paths outside the workspace are refused for writes (`PERMISSION_DENIED | code=PATH_DENIED`); " +
-                "absolute paths, `..` traversal and interpreters do not get around it. Browser4's own " +
-                "data/temp/code folders are the exception, and are READ-ONLY — coding.permissions " +
-                "lists them."
+                "absolute paths and `..` traversal are matched. ${osSandboxNote(policy)} " +
+                "Browser4's own data/temp/code folders are the exception, and are READ-ONLY — " +
+                "coding.permissions lists them."
         return buildString {
             appendLine()
             appendLine()
@@ -357,6 +364,42 @@ internal object CliAgentPrompt {
                     "than looping."
             )
         }.trimEnd()
+    }
+
+    /**
+     * What actually confines a shell command, for the permissions block.
+     *
+     * The block used to claim that "interpreters do not get around" the workspace boundary. They do,
+     * by design: an inline script is a program, not a command line, so the string guards do not read
+     * it — what confines it is the OS sandbox. On an installation where that sandbox resolves to
+     * `off` the claim was simply false (2026-11-16, run `966a5f2e`: `python -c` read `D:\` and the
+     * credential guards only covered what the tool layer matched). The prompt therefore states the
+     * effective layer instead of a promise nobody keeps.
+     *
+     * The backend is resolved **per mode**, not read off the raw property: `agent run --coding`
+     * walks the coding chain even when the installation default is `off` (P1.5), so the property
+     * alone told a genuinely sandboxed task it had no boundary — the same class of inaccuracy this
+     * block exists to remove. On a backend that executes them, the file writes are inside the
+     * boundary too (P3-6), and the note says so: a refused `coding.write` there is the OS refusing.
+     */
+    private fun osSandboxNote(policy: AgentAccessPolicy): String {
+        val sandbox = runCatching { CodingComponents.sandbox(policy) }.getOrNull()
+        val id = sandbox?.id?.takeIf { it.isNotBlank() } ?: "off"
+        return if (id == "off") {
+            "No OS sandbox is active (`browser4.agent.sandbox=off`), so an interpreter or script is " +
+                "NOT confined to the workspace — the rule is on you: read through the file tools, " +
+                "and never reach around a refusal with `python -c`, a script file or a variable " +
+                "expansion."
+        } else {
+            val fileWrites = if (sandbox != null && sandbox.executesFileOps) {
+                " It also performs every file write (`coding.write`/`replace`/`delete`/…), so a " +
+                    "refused mutation is the OS refusing, not a string check."
+            } else {
+                ""
+            }
+            "The OS sandbox (`$id`) is what a process cannot cross; the string " +
+                "checks are a fast fail in front of it.$fileWrites"
+        }
     }
 
     /**
