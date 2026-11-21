@@ -231,6 +231,27 @@ class HTMLSnapshotToolExecutorTest {
     }
 
     @Test
+    @DisplayName("a chrome:// tab is refused with the a11y alternative, not just 'navigate elsewhere'")
+    fun chromePagesAreRefusedWithTheA11yAlternative() = runBlocking<Unit> {
+        // A chrome:// tab is the one refusal where "navigate somewhere else" is not the
+        // actionable answer: the caller wants what the page shows, and `snapshot` can read it
+        // (observed on a chrome://downloads run — `snapshot grep` returned the download rows
+        // while `htmlsnapshot get` could only say there was nothing to read).
+        val bound = sessionShowing(tab("chrome://downloads/"))
+
+        val exception = assertThrows<IllegalArgumentException> {
+            runBlocking {
+                executor().call("capture", mapOf("sessionId" to "s"), ManagedSession("s", bound, null))
+            }
+        }
+
+        val message = exception.message!!
+        assertTrue(message.contains("chrome://downloads/"), "the refusal must name the address: $message")
+        assertTrue(message.contains("`snapshot`"), "the refusal must point at the a11y capture: $message")
+        verify(bound, never()).capture(any(), anyOrNull(), anyOrNull())
+    }
+
+    @Test
     @DisplayName("a read of the active page captures it first and reads the snapshot it just took")
     fun aReadOfTheActivePageReadsTheSnapshotItJustCaptured() = runBlocking<Unit> {
         val address = "https://example.com/form"
