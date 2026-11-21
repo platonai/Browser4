@@ -308,6 +308,25 @@ N-1 个任务做过什么。按「每个任务一条摘要 bullet」的做法能
 **session**：`-i` 的 `/new` 递增 generation 得到新 sessionId ⇒ 新 runner ⇒ 新上下文，语义正好对齐。
 不带 `-s` 的 `-i` 用**本进程自己的** `interactive-<hash>`（CLI 侧 `interactive_session_base()`，由
 pid+启动时间派生），不再落到后端 DEFAULT 池——否则两个无关的 `-i` 会互相继承上下文并互相排队。
+
+### 9.1.1 连续会话载体（2026-11-21，对照 pi）
+
+转录仍是"重启后的续接"，但**进程内**改为 pi 的连续会话语义（`browser4.agent.session.continuousMessages`，默认 true）：
+
+| 环节 | 位置 | 说明 |
+|---|---|---|
+| 注入 | `RobustBrowserAgent.doRunCliAgentLoop` | `sessionMessages`（runner 从 `SessionConversation.messageHistory()` 取）插在 system 与本次任务 user 之间；system 每次重建，**不继承**旧 system。有消息时 runner 不再拼 `## Session context` 文本块（`StatefulAgentRunner.sessionBlockFor` 提前返回 ""）。 |
+| 轮次续跑 | 同上 + `AgentToolCallLoop.finalMessages` | `browser4.agent.toolLoop.carryRoundMessages`（默认 true）：外层下一轮直接接上本轮 `finalMessages`（assistant tool-call + 全部 tool result），只丢弃本轮装饰消息（scratchpad、coding nudge）。不再需要 nudge+digest；`--follow` 的 digest 事件不受影响。 |
+| 回收 | 同上的 `finally` | `capturedMessages = messages.drop(1)`（去 system）；runner 在 per-task 清理处 `takeCapturedMessages()` 交给 `SessionConversation.adoptConversationMessages`，然后清空 `sessionMessages`。失败/取消的运行也会被继承。 |
+| 压缩 | `ToolLoopCompressor`（复用） | 会话列表里现在有真实 tool 轮次 ⇒ `findRounds` 能识别、按轮边界折叠；阈值走 `windowTokens - reserveTokens`，决策优先 provider 实测 usage。**不再**为跨任务单独调用自由格式压缩指令。 |
+| 重启 | 落盘转录 | `conversationMessages` 只在内存；后端重启后为空 ⇒ 回退到 9.1 的转录（压缩记忆 + turns），语义上"重启丢消息细节、不丢任务脉络"。 |
+
+**分支/回溯（同日）**：`SessionConversation.beginTask(instruction, taskId)` 在任务开始时把**当时的会话消息列表**存为检查点（`rewindStartOf(taskId)`，最多 `MAX_REWIND_CHECKPOINTS=8` 条，最旧先淘汰；仅内存）。`command.run(rewindTaskId=…)`（CLI：`agent run --rewind <id>` / `-i` `/rewind <id>`）在 `executeSerialized` 开头装回该检查点，并先用 `branchSummaryInstruction()` + `compressSessionMemory` 把**被放弃的分支**（当前会话去掉检查点前缀）折成一条 branch summary 附在目标处，然后正常跑新任务；`replaceConversationMessages` 允许"空检查点"（回到第一个任务前），并用 `rewoundConversation` 阻止转录回退。与 `--resume` 互斥（后者是从某任务工作区重开新 run）；检查点随进程消失，重启后 rewind 报明确错误。
+
+**`followUp` 队列（同日）**：`POST /api/commands/{id}/input` 带 `deliverAs`（`steer` 默认 / `followUp`）。follow-up 不进 steering 队列，而是在 `AgentToolCallLoop` 的停止点（模型返回无 tool call、即将 return 时）drain，作为真实 user 消息追加后 `continue` 同一轮（事件 `follow_up`），因此不打断当前步骤、也不变成第二个任务；任务结束后才到的 follow-up 发 `follow_up.undelivered` 并写入会话转录。CLI 入口 `/followup <text>`（无运行任务时按普通任务提交）。
+
+已知边界：连续消息列表没有单独落盘（重启回退），`/new` 仍是新 session ⇒ 新 runner ⇒ 空列表；关闭两个开关即可回到 2026-11-21 之前的"纯转录 + digest"行为。真实浏览器 e2e（成本、完成门禁、页面快照体积）尚未在本轮执行，发布前需补跑一次多轮 `-i` 任务。
+
 ### 9.2 下一步预测（`nextSuggestions` → 编号菜单）
 
 旧行为是三个内部指令（`/result --json`、`/stats`、`/new`）。现在换成**用户可能想做的后续任务**：

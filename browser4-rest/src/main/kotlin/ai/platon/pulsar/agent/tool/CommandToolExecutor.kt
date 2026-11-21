@@ -286,7 +286,8 @@ class CommandToolExecutor(
                     args,
                     allowed = setOf(
                         "command", "async", "noopLimit", "engine", "coding", "freshWorkspace", "sharedWorkspace",
-                        "access", "unattended", "resumeTaskId", "tokenBudget", "addDirs", "unrestricted",
+                        "access", "unattended", "resumeTaskId", "rewindTaskId", "tokenBudget", "addDirs",
+                        "unrestricted",
                     ) + SESSION_ARG,
                     // `agent run --resume <id>` may omit the task text: the instruction
                     // comes from the interrupted task's checkpoint. Validated below.
@@ -299,6 +300,9 @@ class CommandToolExecutor(
                 // backend must know the id; an unknown one fails the task loudly in
                 // the runner instead of quietly starting from the bare instruction.
                 val resumeTaskId = paramString(args, "resumeTaskId", functionName, required = false, default = null)
+                // `agent run --rewind <task-id>`: continue this session's conversation from
+                // the point where that task began (the abandoned branch is summarized).
+                val rewindTaskId = paramString(args, "rewindTaskId", functionName, required = false, default = null)
                 require(command.isNotBlank() || !resumeTaskId.isNullOrBlank()) {
                     "command is required (or resumeTaskId, to resume an interrupted task)"
                 }
@@ -353,12 +357,12 @@ class CommandToolExecutor(
                 if (isAsync) {
                     service.submitPlainCommand(
                         sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
-                        resumeTaskId, tokenBudget, addDirs, unrestricted,
+                        resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId,
                     )
                 } else {
                     val status = service.executePlainCommand(
                         sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
-                        resumeTaskId, tokenBudget, addDirs, unrestricted,
+                        resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId,
                     )
                     pulsarObjectMapper().writeValueAsString(status)
                 }

@@ -4,6 +4,7 @@ import ai.platon.pulsar.agentic.agents.AgentRunEvent
 import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.common.ResourceStatus
+import dev.langchain4j.data.message.UserMessage
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -469,6 +470,70 @@ class SessionConversationTest {
         stripSessionBlockFromHistory(clean.agentHistory)
         assertEquals("another task", clean.agentHistory!!.states.first().instruction)
         stripSessionBlockFromHistory(null)
+    }
+
+    @Test
+    @DisplayName("the in-process conversation is carried between tasks and cleared with the session")
+    fun theInProcessConversationIsCarried() {
+        val conversation = SessionConversation()
+        assertFalse(conversation.hasConversationMessages())
+        assertTrue(conversation.messageHistory().isEmpty())
+
+        // A run that produced nothing must not erase the session's memory.
+        conversation.adoptConversationMessages(null)
+        conversation.adoptConversationMessages(emptyList())
+        assertFalse(conversation.hasConversationMessages())
+
+        val messages = listOf<UserMessage>(
+            UserMessage.from("first task"),
+            UserMessage.from("second task"),
+        )
+        conversation.adoptConversationMessages(messages)
+        assertTrue(conversation.hasConversationMessages())
+        assertEquals(messages, conversation.messageHistory())
+
+        // A new session must not inherit the old list.
+        conversation.clear()
+        assertFalse(conversation.hasConversationMessages())
+    }
+
+    @Test
+    @DisplayName("beginTask checkpoints the conversation so a later task can rewind to it")
+    fun beginTaskCheckpointsTheConversation() {
+        val conversation = SessionConversation()
+        val first = listOf<UserMessage>(UserMessage.from("first task"))
+        conversation.adoptConversationMessages(first)
+
+        conversation.beginTask("second task", "task-2")
+
+        // The checkpoint of a task is the conversation as it was BEFORE that task ran.
+        assertEquals(first, conversation.rewindStartOf("task-2"))
+        assertNull(conversation.rewindStartOf("unknown"))
+        assertTrue(conversation.branchSummaryInstruction().contains("## What not to repeat"))
+
+        // A rewind replaces the conversation even when the checkpoint is empty: the
+        // compacted transcript must not re-inject what the user just rewound away from.
+        conversation.replaceConversationMessages(emptyList())
+        assertTrue(
+            conversation.hasConversationMessages(),
+            "an empty rewound conversation is still a deliberate conversation",
+        )
+        assertTrue(conversation.messageHistory().isEmpty())
+
+        conversation.clear()
+        assertEquals(0, conversation.rewindCheckpointCount)
+    }
+
+    @Test
+    @DisplayName("rewind checkpoints are bounded, the oldest dropped first")
+    fun rewindCheckpointsAreBounded() {
+        val conversation = SessionConversation()
+        val last = SessionConversation.MAX_REWIND_CHECKPOINTS + 3
+        (1..last).forEach { index -> conversation.beginTask("task $index", "task-$index") }
+
+        assertEquals(SessionConversation.MAX_REWIND_CHECKPOINTS, conversation.rewindCheckpointCount)
+        assertNull(conversation.rewindStartOf("task-1"), "the oldest checkpoint is dropped first")
+        assertNotNull(conversation.rewindStartOf("task-$last"))
     }
 
     @Test

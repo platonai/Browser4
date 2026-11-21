@@ -804,6 +804,48 @@ class StatefulAgentRunnerTest {
     }
 
     @Test
+    @DisplayName("a follow-up queues separately from steering and drains exactly once")
+    fun followUpQueueIsSeparateFromSteering() {
+        val runner = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))
+        try {
+            val status = runner.create()
+
+            // Same endpoint, two delivery points: steering is injected at the next
+            // model round, a follow-up only when the loop would stop.
+            assertTrue(
+                runner.enqueueInput(status.id, "steer me", deliverAs = StatefulAgentRunner.DELIVER_STEER)
+            )
+            assertTrue(
+                runner.enqueueInput(status.id, "then this", deliverAs = StatefulAgentRunner.DELIVER_FOLLOW_UP)
+            )
+            assertEquals(listOf("steer me"), runner.drainInputs(status.id))
+            assertEquals(listOf("then this"), runner.drainFollowUps(status.id))
+            assertTrue(runner.drainFollowUps(status.id).isEmpty(), "draining is destructive")
+
+            // Delivery-mode casing/labels are forgiving (HTTP clients vary).
+            assertTrue(runner.enqueueInput(status.id, "more", deliverAs = "follow_up"))
+            assertEquals(listOf("more"), runner.drainFollowUps(status.id))
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("a follow-up is rejected for a finished task, like steering")
+    fun followUpIsRejectedForAFinishedTask() {
+        val runner = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))
+        try {
+            val status = runner.create()
+            status.done()
+
+            assertFalse(runner.enqueueInput(status.id, "too late", deliverAs = StatefulAgentRunner.DELIVER_FOLLOW_UP))
+            assertTrue(runner.drainFollowUps(status.id).isEmpty())
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
     @DisplayName("steering that arrives after the last model round is reported, not dropped")
     fun undeliveredSteeringIsReported() = runBlocking {
         // The mock agent never drains (a real one does on every model round), so the

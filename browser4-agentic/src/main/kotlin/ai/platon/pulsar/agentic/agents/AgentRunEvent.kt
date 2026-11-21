@@ -82,6 +82,14 @@ data class AgentRunEvent(
         const val STEER = "steer"
 
         /**
+         * A queued follow-up message was delivered at the stop point.
+         *
+         * The model had answered without tool calls; the follow-up is appended as a real
+         * user message and the loop continues the same conversation (pi's `followUp`).
+         */
+        const val FOLLOW_UP = "follow_up"
+
+        /**
          * One successful model request, with the usage the provider reported.
          *
          * The task runner counts these as the run's LLM calls and sums their

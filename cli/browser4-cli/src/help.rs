@@ -2304,6 +2304,17 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push("    /noop-limit tune the other knobs live.".to_string());
         lines.push(
+            "    A bare line while a task runs steers it at the next model round; /followup <text>".to_string(),
+        );
+        lines.push(
+            "    instead delivers when the task would finish, so the same task continues with it."
+                .to_string(),
+        );
+        lines.push(
+            "    /rewind <task-id> continues this session's conversation from where that task began".to_string(),
+        );
+        lines.push("    (the abandoned branch is summarized); /rewind off cancels it.".to_string());
+        lines.push(
             "  - A finished task's payload is rendered as sections (Summary / Key findings / Files".to_string(),
         );
         lines.push(

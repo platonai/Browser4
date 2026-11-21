@@ -803,9 +803,53 @@ docker run -d -p 18182:18182 `
   it is reported (`⚠ steering not delivered — the task ended first`) and appended to the
   transcript as an undelivered user instruction, so the next task still honors it.
 
+  **While the process lives, the next task continues the real conversation.** The session
+  also keeps its actual message list: the runner hands it to the next run, which appends the
+  new task as a user message, so the model sees the earlier tasks' assistant messages and
+  their tool calls **with the results** instead of a text rendering, and never re-executes a
+  tool whose output it already has. That list is measured and folded by the tool loop's
+  compressor (round boundaries, window-aware pressure, provider usage — see
+  `browser4.agent.context.windowTokens`), so it grows under the same rules as a single
+  task's history. It is not persisted: after a backend restart the compacted transcript
+  above is the continuation. Set `browser4.agent.session.continuousMessages=false` to keep
+  the transcript-only behaviour, and `browser4.agent.toolLoop.carryRoundMessages=false` to
+  keep each outer round on the bounded digest instead of the real round messages.
+
   ```bash
   BROWSER4_SERVER_OPTS="-Dbrowser4.agent.session.contextTokens=48000 -Dbrowser4.agent.session.memoryTokens=3000" browser4-cli open
   ```
+
+* **`browser4.agent.context.windowTokens`** *(default: `0` = unknown)* and
+  **`browser4.agent.context.reserveTokens`** *(default: `16384`)*
+  The in-task tool-loop compaction pressure point. When the model's context window is configured,
+  the threshold becomes `windowTokens - reserveTokens` (pi's `shouldCompact`), so a 200k model
+  compacts near 184k instead of at a flat value and a small model does not overflow first; the
+  reserve covers what the conversation is not (the next response's output and the tool
+  specifications re-sent with every request). `windowTokens=0` keeps the legacy flat
+  `browser4.agent.toolLoop.compressionThresholdTokens` (default `60000`). The retained tail is
+  capped at half the threshold, so a small window still leaves a foldable region. The pressure
+  decision prefers the **provider-reported** context size of the last request (prompt + completion,
+  cache reads included) over the char estimate (`length/3.5`, which under-counts CJK and tool JSON),
+  and falls back to the estimate after every compaction; the estimate still covers the messages
+  appended after the measured request. A second fold of the same conversation uses the incremental
+  merge instruction (`<compacted-summary>` present) so older facts survive instead of being
+  re-summarized away. Budget aborts during summarization are rethrown, never disguised as
+  compaction failures.
+
+  ```bash
+  BROWSER4_SERVER_OPTS="-Dbrowser4.agent.context.windowTokens=200000 -Dbrowser4.agent.context.reserveTokens=16384" browser4-cli open
+  ```
+
+* **`browser4.agent.session.continuousMessages`** *(default: `true`)* and
+  **`browser4.agent.toolLoop.carryRoundMessages`** *(default: `true`)*
+  Continuous conversation (pi's model): the session's real message list is handed to the
+  next task, and each outer round continues from the assistant tool-call messages plus
+  their tool results instead of a bounded digest. Both keep the tool-call/tool-result pairs
+  intact, which is what lets `ToolLoopCompressor` fold that history at round boundaries and
+  what stops the model from re-running a tool it already ran. `continuousMessages=false`
+  returns to the transcript-only continuation; `carryRoundMessages=false` returns each outer
+  round to the digest + nudge form (the pre-2026-11-21 behaviour). Neither changes the
+  per-task token budget or the model's output cap.
 
 * **`browser4.agent.copyTaskInputs`** *(default: `true`)*
   Before a task runs, copy the files its instruction references but that live outside the agent

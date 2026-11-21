@@ -15959,6 +15959,20 @@ fn apply_resume_task_id(extra: &mut Value, resume_task_id: Option<&str>) {
     }
 }
 
+/// Forward `--rewind <task-id>` into the `command.run` payload.
+///
+/// Unlike `--resume` (which starts a new run from a task's workspace and files), a rewind
+/// continues this session's CONVERSATION from the point where that task began: the
+/// backend installs that checkpoint, summarizes the branch it abandons, and runs the new
+/// task from there. The checkpoint lives in the backend process, so a restarted backend
+/// answers with a loud "no conversation checkpoint" failure instead of silently starting
+/// from zero; a blank value is not an id and is therefore dropped.
+fn apply_rewind_task_id(extra: &mut Value, rewind_task_id: Option<&str>) {
+    if let Some(id) = rewind_task_id.map(str::trim).filter(|s| !s.is_empty()) {
+        extra["rewindTaskId"] = json!(id);
+    }
+}
+
 /// The `--add-dir` values of a parsed `agent run` payload.
 ///
 /// The command definition builds a JSON array; a single value may still arrive as a
@@ -16168,6 +16182,12 @@ async fn handle_agent_run(
         tool_params.get("tokenBudget").and_then(|v| v.as_i64()),
     );
     apply_resume_task_id(&mut extra, resume_task_id);
+    // `--rewind <task-id>`: continue this session's conversation from that task's start.
+    // Mutually exclusive with --resume (the backend rejects the combination loudly).
+    apply_rewind_task_id(
+        &mut extra,
+        tool_params.get("rewind").and_then(|v| v.as_str()),
+    );
     apply_add_dirs(&mut extra, &add_dirs_of(tool_params.get("addDirs")));
     apply_unrestricted(
         &mut extra,

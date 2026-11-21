@@ -7,6 +7,10 @@ import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import dev.langchain4j.data.message.AiMessage
+import dev.langchain4j.data.message.ChatMessage
+import dev.langchain4j.data.message.ToolExecutionResultMessage
+import dev.langchain4j.data.message.UserMessage
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
@@ -131,6 +135,129 @@ internal class SessionConversation(
 
     private val turns = mutableListOf<SessionTurn>()
 
+    /**
+     * The session's live message list (pi's continuous conversation), empty after a
+     * backend restart.
+     *
+     * This is what the next task actually inherits when it exists: the runner hands it
+     * to the agent, which appends the new task to it, so the model sees the real prior
+     * messages (tool calls and their results included) instead of a text rendering.
+     * It is deliberately not persisted: a restored session falls back to the compacted
+     * `turns` transcript, which is what survives a restart.
+     */
+    private var conversationMessages: List<ChatMessage> = emptyList()
+
+    /**
+     * True once `agent run --rewind` replaced the conversation, even with an EMPTY list.
+     *
+     * Rewinding to the start of the first task legitimately yields "no messages"; the
+     * transcript fallback must not then re-inject what the user just rewound away from.
+     */
+    private var rewoundConversation = false
+
+    /** True when this session still carries the in-process conversation. */
+    fun hasConversationMessages(): Boolean = conversationMessages.isNotEmpty() || rewoundConversation
+
+    /** The in-process conversation the next task should continue. */
+    fun messageHistory(): List<ChatMessage> = conversationMessages
+
+    /**
+     * Adopt the conversation a run produced; `null`/empty leaves the previous one in
+     * place (a run that produced nothing must not erase the session's memory).
+     */
+    fun adoptConversationMessages(messages: List<ChatMessage>?) {
+        if (!messages.isNullOrEmpty()) {
+            conversationMessages = messages
+        }
+    }
+
+    /**
+     * Replace the conversation unconditionally — the rewind path.
+     *
+     * An empty list is meaningful here ("back to before the first task"), which is why
+     * this is separate from [adoptConversationMessages].
+     */
+    fun replaceConversationMessages(messages: List<ChatMessage>) {
+        conversationMessages = messages
+        rewoundConversation = true
+    }
+
+    /**
+     * Conversation checkpoints of this session, keyed by the task they started.
+     *
+     * A checkpoint is the session's message list exactly as it was when that task
+     * began, which is what `agent run --rewind <task-id>` restores — pi's
+     * `navigateTree`: the user goes back to an earlier point of the session and
+     * continues from there, instead of starting a new session or re-running the
+     * aborted branch. In-memory only (like [conversationMessages]): after a backend
+     * restart the checkpoints are gone and rewind fails loudly.
+     *
+     * Bounded to [MAX_REWIND_CHECKPOINTS]; the oldest checkpoint is dropped first.
+     */
+    private val rewindCheckpoints = LinkedHashMap<String, List<ChatMessage>>()
+
+    /** The conversation as it was when [taskId] began, or `null` when unknown. */
+    fun rewindStartOf(taskId: String): List<ChatMessage>? = rewindCheckpoints[taskId]
+
+    /** Take (and clear) the checkpoint of [taskId] — for diagnostics and tests. */
+    fun removeRewindCheckpoint(taskId: String): List<ChatMessage>? = rewindCheckpoints.remove(taskId)
+
+    /** How many rewind checkpoints this session currently holds. */
+    val rewindCheckpointCount: Int get() = rewindCheckpoints.size
+
+    /**
+     * The branch-summary instruction for `agent run --rewind <task-id>`.
+     *
+     * The user goes back to an earlier point of the session; the branch being left is not
+     * lost, it is folded into this summary and attached to the rewound conversation
+     * (pi's `BRANCH_SUMMARY_PROMPT`), so the next task knows what the branch tried and
+     * what not to repeat.
+     */
+    fun branchSummaryInstruction(): String = """
+        You summarize ONE abandoned branch of a long browser-automation session.
+        The user rewound the session to an earlier point, and the transcript below is what
+        the branch tried AFTER that point: attempts, tool calls and their results. The next
+        task continues from the rewound point and must not repeat this branch blindly.
+
+        Keep it short and factual. Preserve exact paths, commands, URLs, selectors, error
+        strings and ids. Output only these sections, "(none)" for an empty one:
+
+        ## What this branch tried
+        ## What it learned (facts later work can reuse)
+        ## Why it may have been abandoned (only what the conversation states)
+        ## What not to repeat
+    """.trimIndent()
+
+    /**
+     * Render a conversation (or a tail of one) as text for the branch summary.
+     *
+     * This is the input of [compressionSystemInstruction]-style summarization: the
+     * abandoned branch is folded into one user message so the rewound conversation
+     * keeps what the branch learned without carrying its tool traffic.
+     */
+    fun renderMessagesForSummary(messages: List<ChatMessage>): String = messages.mapNotNull { message ->
+        val role = when (message) {
+            is UserMessage -> "user"
+            is AiMessage -> "assistant"
+            is ToolExecutionResultMessage -> "tool"
+            else -> "system"
+        }
+        val text = when (message) {
+            is UserMessage -> message.singleText() ?: ""
+            is AiMessage -> buildString {
+                append(message.text() ?: "")
+                message.toolExecutionRequests()?.forEach { request ->
+                    append(" [tool ").append(request.name()).append(' ')
+                    append((request.arguments() ?: "{}").take(ARGS_CHARS)).append(']')
+                }
+            }
+
+            is ToolExecutionResultMessage -> message.text()
+            else -> message.toString()
+        }.trim()
+        if (text.isEmpty()) null else "[$role] ${text.take(SUMMARY_MESSAGE_CHARS)}"
+    }.joinToString("\n")
+
     /** How many tasks this session has begun (turn labels are `#1`, `#2`, …). */
     private var taskCount = 0
 
@@ -161,6 +288,9 @@ internal class SessionConversation(
         compressed = null
         taskCount = 0
         currentTaskStart = 0
+        conversationMessages = emptyList()
+        rewoundConversation = false
+        rewindCheckpoints.clear()
         persist()
     }
 
@@ -202,7 +332,16 @@ internal class SessionConversation(
      * The instruction is the user's own text (never the `## Session context` block the
      * runner appends), so the transcript carries what was actually asked.
      */
-    fun beginTask(instruction: String) {
+    fun beginTask(instruction: String, taskId: String? = null) {
+        // Checkpoint the conversation as it is BEFORE this task: `agent run --rewind
+        // <taskId>` restores exactly this state and continues from there (pi's
+        // navigateTree). Bounded, oldest first; the in-memory list is the only copy.
+        if (!taskId.isNullOrBlank()) {
+            rewindCheckpoints[taskId] = conversationMessages
+            while (rewindCheckpoints.size > MAX_REWIND_CHECKPOINTS) {
+                rewindCheckpoints.remove(rewindCheckpoints.keys.first())
+            }
+        }
         currentTaskStart = turns.size
         taskCount++
         // Same redaction and line-collapsing as the live event log: this text is
@@ -257,12 +396,15 @@ internal class SessionConversation(
      * steering turn would be; it is kept here as an explicit user instruction so the
      * next task still honors it (and the live view reports it, see
      * [AgentTaskEvent.TYPE_STEER_UNDELIVERED]).
+     *
+     * @param kind what was typed — `steering` (mid-run) or `follow-up` (at the stop
+     *   point); the transcript names it so the next task can tell them apart
      */
-    fun noteUserInput(messages: List<String>) {
+    fun noteUserInput(messages: List<String>, kind: String = "steering") {
         var changed = false
         messages.forEach { message ->
             val text = AgentTaskEventSanitizer.preview(message, STEER_CHARS) ?: return@forEach
-            turns += SessionTurn(USER, "steering (not delivered — the task ended first): $text")
+            turns += SessionTurn(USER, "$kind (not delivered — the task ended first): $text")
             changed = true
         }
         if (changed) persist()
@@ -493,6 +635,19 @@ internal class SessionConversation(
 
         /** Bound on one remembered tool-call argument JSON. */
         internal const val ARGS_CHARS = 300
+
+        /** Bound on one message line inside a branch summary's input. */
+        internal const val SUMMARY_MESSAGE_CHARS = 800
+
+        /**
+         * How many rewind checkpoints a session keeps (oldest dropped first).
+         *
+         * Each checkpoint is a reference to that task's starting message list, not a
+         * copy, so the cost is a map entry plus whatever lists the session already
+         * holds. A handful is enough to go back a few tasks; an unbounded map would keep
+         * every intermediate conversation alive for the whole session.
+         */
+        const val MAX_REWIND_CHECKPOINTS = 8
 
         /** Bound on one remembered tool result. */
         internal const val RESULT_CHARS = 300

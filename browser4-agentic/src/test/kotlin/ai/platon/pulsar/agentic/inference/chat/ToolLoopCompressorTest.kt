@@ -634,4 +634,115 @@ class ToolLoopCompressorTest {
         assertEquals(1, calls.get(), "the retry loop must not re-spend a budget breach")
         assertEquals(before, messages, "an aborted compaction leaves the conversation untouched")
     }
+
+    // ---- provider-measured context (pi's estimateContextTokens) ------------------
+
+    @Test
+    @DisplayName("provider usage decides the pressure, not the under-counting char estimate")
+    fun measuredUsageDrivesThePressureDecision() {
+        // Small messages: the char estimate is far below the threshold, and there is
+        // still something to fold (the retained tail covers only the newest rounds).
+        val messages = baseConversation(rounds = 4)
+        val estimate = compressor().estimateTotal(messages)
+        assertTrue(estimate < 500L, "the fixture must stay below the threshold by estimate: $estimate")
+
+        // ... but the provider reported a context this large, so pressure is real.
+        val measured = compressor()
+        measured.noteMeasuredContext(messages.size, 900L)
+
+        assertTrue(runBlocking { measured.compressIfNeeded(messages) }, "measured usage must trigger compaction")
+    }
+
+    @Test
+    @DisplayName("measured usage is added to the estimate of what was appended after it")
+    fun measuredUsageCountsTheTrailingMessages() {
+        val messages = baseConversation(rounds = 3)
+        val c = compressor()
+        // Pretend the provider measured a request that ended at message 3; the two
+        // tool results appended afterwards are not part of that number.
+        c.noteMeasuredContext(3, 400L)
+
+        val expected = 400L + c.estimateTotal(messages.drop(3))
+        assertEquals(expected, c.effectiveContextTokens(messages))
+        assertTrue(c.effectiveContextTokens(messages) > 400L)
+    }
+
+    @Test
+    @DisplayName("a commit invalidates the measurement so the next decision uses the estimate again")
+    fun aCommitInvalidatesTheMeasurement() {
+        val messages = baseConversation(rounds = 4)
+        val c = compressor()
+        c.noteMeasuredContext(messages.size, 900L)
+
+        assertTrue(runBlocking { c.compressIfNeeded(messages) }, "the measured size triggers the first fold")
+        // The measured list no longer exists: without a new response the estimate rules,
+        // and the compacted list is below the threshold again.
+        assertTrue(c.effectiveContextTokens(messages) <= c.estimateTotal(messages) + 1L)
+        assertFalse(runBlocking { c.compressIfNeeded(messages) }, "an invalidated measurement must not re-trigger")
+    }
+
+    @Test
+    @DisplayName("a measurement larger than the rewritten list falls back to the estimate")
+    fun aShrunkListFallsBackToTheEstimate() {
+        val messages = baseConversation(rounds = 2)
+        val c = compressor()
+        // A measurement of a longer list that no longer exists (e.g. after a rewrite).
+        c.noteMeasuredContext(messages.size + 10, 900L)
+
+        assertEquals(c.estimateTotal(messages), c.effectiveContextTokens(messages))
+    }
+
+    // ---- model-window-aware thresholds -------------------------------------------
+
+    @Test
+    @DisplayName("the threshold follows the model window when it is configured")
+    fun theThresholdFollowsTheWindow() {
+        // 200k window, 16k reserve → the pressure point is the window minus the reserve,
+        // not the flat 60k.
+        assertEquals(183_616L, ToolLoopCompressor.effectiveThresholdTokens(200_000L, 16_384L, 60_000L))
+        // Unknown window keeps the configured threshold.
+        assertEquals(60_000L, ToolLoopCompressor.effectiveThresholdTokens(0L, 16_384L, 60_000L))
+        // A window smaller than the reserve is not usable: keep the configured value.
+        assertEquals(60_000L, ToolLoopCompressor.effectiveThresholdTokens(8_000L, 16_384L, 60_000L))
+        // Never a non-positive threshold.
+        assertEquals(1L, ToolLoopCompressor.effectiveThresholdTokens(0L, 0L, 0L))
+    }
+
+    @Test
+    @DisplayName("the retained tail never exceeds half the threshold")
+    fun theRetainedTailIsCapped() {
+        // A 24k tail cannot sit under a 16k threshold: the fold would keep everything.
+        assertEquals(8_000L, ToolLoopCompressor.effectiveRetainTokens(24_000L, 16_000L))
+        assertEquals(12_000L, ToolLoopCompressor.effectiveRetainTokens(12_000L, 100_000L))
+        assertEquals(0L, ToolLoopCompressor.effectiveRetainTokens(0L, 100_000L))
+    }
+
+    // ---- incremental checkpoint merge (pi's update prompt) -----------------------
+
+    @Test
+    @DisplayName("a second fold uses the merge instruction so older facts survive")
+    fun aSecondFoldUsesTheMergeInstruction() {
+        val plain = listOf<UserMessage>(UserMessage.from("instruction"))
+        assertEquals(
+            ToolLoopCompressor.COMPACTION_INSTRUCTION,
+            ToolLoopCompressor.compactionInstructionFor(plain),
+        )
+
+        // A prefix that already carries a checkpoint is an incremental update, not a
+        // fresh summary of the whole conversation.
+        val withCheckpoint = listOf(
+            UserMessage.from(
+                ToolLoopCompressor.CHECKPOINT_PREAMBLE + "\n\n" +
+                    ToolLoopCompressor.SUMMARY_OPEN_TAG + "\n" + validSummary() + "\n" +
+                    ToolLoopCompressor.SUMMARY_CLOSE_TAG
+            ),
+            UserMessage.from("continue"),
+        )
+        val instruction = ToolLoopCompressor.compactionInstructionFor(withCheckpoint)
+
+        assertEquals(ToolLoopCompressor.COMPACTION_UPDATE_INSTRUCTION, instruction)
+        assertTrue(instruction.contains("PRESERVE every still-true fact"), instruction)
+        assertTrue(instruction.contains("ADD what the newer messages did"), instruction)
+        assertTrue(instruction.contains("## Page State"), "the required structure still applies")
+    }
 }

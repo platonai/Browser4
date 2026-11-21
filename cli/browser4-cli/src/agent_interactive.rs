@@ -895,6 +895,27 @@ impl Renderer {
                         .join("\n"),
                 )
             }
+            "follow_up" => {
+                // Delivered at the stop point: the task did not end, it continues with
+                // this message in the same conversation.
+                let text = event.text.as_deref().unwrap_or_default();
+                let gutter = format!("{}   ↪ follow-up delivered: ", self.time_prefix());
+                Some(
+                    wrap_with_gutter(&truncate(text, MODEL_TEXT_PREVIEW), &gutter, self.width)
+                        .join("\n"),
+                )
+            }
+            "follow_up.undelivered" => {
+                let text = event.text.as_deref().unwrap_or_default();
+                let gutter = format!(
+                    "{}   ⚠ follow-up not delivered — the task ended first: ",
+                    self.time_prefix()
+                );
+                Some(
+                    wrap_with_gutter(&truncate(text, MODEL_TEXT_PREVIEW), &gutter, self.width)
+                        .join("\n"),
+                )
+            }
             "run.usage" => self.format_usage(event),
             _ => None,
         }
@@ -2765,6 +2786,10 @@ struct Repl {
     /// What the last task's payload said (files, findings, problems, the model's own
     /// suggested next steps) — the evidence the follow-up block is predicted from.
     last_digest: crate::agent_result::ResultDigest,
+    /// `/rewind <task-id>`: the next task continues the session's conversation from the
+    /// point where that task began. Consumed by [`Repl::start_task`], so it applies to
+    /// exactly one submission.
+    pending_rewind: Option<String>,
 }
 
 impl Repl {
@@ -2832,6 +2857,7 @@ impl Repl {
             last_task_text: None,
             last_task_coding: false,
             last_digest: crate::agent_result::ResultDigest::default(),
+            pending_rewind: None,
         }
     }
 
@@ -3210,8 +3236,66 @@ impl Repl {
         ));
     }
 
+    /// `/followup <text>`: queue a message that is delivered when the task would
+    /// finish, continuing the SAME task with it (pi's follow-up queue).
+    ///
+    /// A line typed bare at the prompt is steering: it interrupts the running step and
+    /// the model sees it at its next round. A follow-up is for "one more thing" that
+    /// must not disturb the step in flight; it is appended to the conversation at the
+    /// stop point and the run continues, so the task id, the workspace and the whole
+    /// conversation stay the same. With no task running there is nothing to continue, so
+    /// the text is submitted as a normal task.
+    async fn follow_up(&mut self, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            self.out("usage: /followup <text> (delivered when the running task would finish)");
+            return;
+        }
+        let running = match self.current.as_ref().map(|follower| follower.task_id.clone()) {
+            Some(task_id) => Some(task_id),
+            None => self.running_task().await,
+        };
+        let Some(task_id) = running else {
+            self.out("no task is running — submitting it as a task instead");
+            if let Err(error) = self.start_task(text.to_string()).await {
+                self.out(&format!("✖ {error}"));
+                self.prompt_pending = true;
+            }
+            return;
+        };
+
+        match send_command_input(&self.client, &self.base_url, &task_id, text, "followUp").await {
+            Ok(response) if response.is_success() => {
+                let parsed: Value = serde_json::from_str(&response.body).unwrap_or(Value::Null);
+                if parsed.get("accepted").and_then(|v| v.as_bool()) == Some(true) {
+                    self.out(
+                        "↪ follow-up queued — the task continues with it when the current step \
+                         finishes (no new task)",
+                    );
+                    self.attach_if_detached(&task_id);
+                } else {
+                    let reason = parsed
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("the task is no longer accepting input");
+                    self.out(&format!("⚠ not delivered: {reason}"));
+                }
+            }
+            Ok(response) if response.is_missing_endpoint() => self.out(
+                "⚠ this backend cannot accept follow-ups; the line was ignored \
+                 (upgrade the backend to deliver messages into a running task)",
+            ),
+            Ok(response) => self.out(&format!(
+                "⚠ follow-up failed: HTTP {} {}",
+                response.status,
+                truncate(response.body.trim(), 200)
+            )),
+            Err(error) => self.out(&format!("⚠ follow-up failed: {error}")),
+        }
+    }
+
     async fn steer(&mut self, task_id: &str, text: &str) {
-        match send_command_input(&self.client, &self.base_url, task_id, text).await {
+        match send_command_input(&self.client, &self.base_url, task_id, text, "steer").await {
             Ok(response) if response.is_success() => {
                 let parsed: Value = serde_json::from_str(&response.body).unwrap_or(Value::Null);
                 if parsed.get("accepted").and_then(|v| v.as_bool()) == Some(true) {
@@ -3246,6 +3330,9 @@ impl Repl {
         self.last_digest = crate::agent_result::ResultDigest::default();
         let extra = self.payload();
         let task_id = crate::submit_agent_task(&self.client, &self.base_url, &task, extra).await?;
+        // A rewind applies to exactly one submission: the next task continues the
+        // conversation from wherever this one ends.
+        self.pending_rewind = None;
         // The follow-up menu describes THIS task, so its text and coding flag have
         // to travel with the submission: left at their defaults, a `--coding`
         // session offered browse-shaped follow-ups and a non-resumable failure
@@ -3292,7 +3379,15 @@ impl Repl {
     /// applies; without a TTY nobody can answer an approval, so the backend's
     /// unattended default takes over (see plan P4-1).
     fn payload(&self) -> Value {
-        self.payload_with(self.token_budget)
+        let mut payload = self.payload_with(self.token_budget);
+        // `/rewind <task-id>`: the NEXT task continues the session's conversation from
+        // where that task began (the abandoned branch is summarized by the backend).
+        // Set only for this submission; `start_task` clears it once the task is accepted,
+        // so a second task is not silently rewound again.
+        if let Some(task_id) = self.pending_rewind.as_deref().map(str::trim).filter(|id| !id.is_empty()) {
+            payload["rewindTaskId"] = json!(task_id);
+        }
+        payload
     }
 
     /// [`Self::payload`] with an explicit token budget, so `/resume --budget N`
@@ -3318,10 +3413,47 @@ impl Repl {
         extra
     }
 
+    /// `/rewind [<task-id>|off]`: make the NEXT task continue the session's conversation
+    /// from the point where that task began (pi's navigateTree).
+    ///
+    /// The backend installs that conversation checkpoint, summarizes the branch the
+    /// session leaves, and runs the next task from there — so "that approach did not
+    /// work, go back and try this instead" does not need a new session (and does not
+    /// lose what the abandoned branch learned). With no argument it reports the armed
+    /// rewind; `off` cancels it.
+    fn set_rewind(&mut self, argument: &str) {
+        let argument = argument.trim();
+        match argument {
+            "" => match self.pending_rewind.as_deref() {
+                Some(task_id) => self.out(&format!(
+                    "rewind armed: the next task continues the conversation from before {task_id} \
+                     (/rewind off cancels)"
+                )),
+                None => self.out(
+                    "usage: /rewind <task-id> — the next task continues the conversation from where \
+                     that task began (the abandoned branch is summarized); /rewind off cancels",
+                ),
+            },
+            "off" | "none" | "cancel" => {
+                if self.pending_rewind.take().is_some() {
+                    self.out("rewind cancelled — the next task continues the current conversation");
+                } else {
+                    self.out("no rewind was armed");
+                }
+            }
+            task_id => {
+                self.pending_rewind = Some(task_id.to_string());
+                self.out(&format!(
+                    "rewind armed: the next task continues the conversation from before task {task_id}"
+                ));
+                self.out("  (the branch this session leaves is summarized and carried along)");
+            }
+        }
+    }
+
     /// `/resume [--budget <tokens>] [task-id]`: continue the last (or named) task
     /// with the workspace and files the interrupted run already produced.
-    async fn resume_command(&mut self, argument: &str) {
-        let (task_id, budget) = match parse_resume_args(argument) {
+    async fn resume_command(&mut self, argument: &str) {        let (task_id, budget) = match parse_resume_args(argument) {
             Ok(parsed) => parsed,
             Err(error) => {
                 self.out(&format!("✖ {error}"));
@@ -3592,10 +3724,16 @@ impl Repl {
             // `/resume [--budget <tokens>] [task-id]`: continue an interrupted
             // (or budget-aborted) task with its workspace and files.
             "resume" => self.resume_command(argument).await,
+            // `/rewind <task-id>`: arm the next task to continue the conversation from
+            // that task's start; the abandoned branch is summarized.
+            "rewind" => self.set_rewind(argument),
             "new" => self.new_session(),
             "coding" => self.set_coding(argument),
             "add-dir" => self.add_dir(argument),
             "dirs" => self.print_dirs(argument),
+            // `/followup <text>`: delivered when the task would stop; it continues the
+            // SAME task instead of interrupting it (bare text is steering).
+            "followup" | "follow-up" => self.follow_up(argument).await,
             "quiet" => self.set_quiet(argument),
             "verbose" => self.set_verbose(argument),
             "noop-limit" => self.set_noop_limit(argument),
@@ -3797,10 +3935,13 @@ impl Repl {
         self.out("                     re-print the last finished task's result (--json: pretty envelope, --full: everything)");
         self.out("  /resume [--budget <n>] [task-id]");
         self.out("                     continue an interrupted/stalled task (a budget abort needs a bigger --budget)");
+        self.out("  /rewind <task-id>  continue this session's CONVERSATION from where that task began");
+        self.out("                     (the abandoned branch is summarized); /rewind off cancels");
         self.out("  /cancel            cancel the running task (same as Ctrl+C)");
         self.out("  /new               start a new session (fresh agent context)");
         self.out("  /session           print the current session id");
         self.out("  /coding [on|off]   treat following tasks as coding tasks");
+        self.out("  /followup <text>   deliver it when the running task would finish (same task, not a new one)");
         self.out("  /add-dir <dir>     grant the following tasks an extra folder (no argument: list)");
         self.out("  /dirs [clear]      list the folders granted in this session, or drop them all");
         self.out("  /quiet [on|off]    silence the session's human lines (like -q)");
@@ -4516,6 +4657,25 @@ mod tests {
         assert!(!line.contains("steering delivered"), "{line}");
     }
 
+    /// Follow-ups are a different delivery point from steering (stop point vs next
+    /// model round), so the live view must label them differently.
+    #[test]
+    fn renderer_distinguishes_follow_ups_from_steering() {
+        let mut renderer = Renderer::new(Instant::now(), false, false);
+        renderer.width = 200;
+
+        let mut delivered = event("follow_up");
+        delivered.text = Some("also fetch the enterprise page".to_string());
+        let line = renderer.format(&delivered).expect("delivered follow-up renders");
+        assert!(line.contains("follow-up delivered"), "{line}");
+        assert!(!line.contains("steering"), "{line}");
+
+        let mut late = event("follow_up.undelivered");
+        late.text = Some("also fetch the enterprise page".to_string());
+        let line = renderer.format(&late).expect("undelivered follow-up renders");
+        assert!(line.contains("follow-up not delivered"), "{line}");
+    }
+
     /// P1-1/P1-2: prose wraps under its marker, and the emoji that is a tofu box
     /// on conhost is gone.
     #[test]
@@ -4713,6 +4873,25 @@ mod tests {
         let payload = repl.payload();
         assert!(payload.get("coding").is_none());
         assert!(payload.get("noopLimit").is_none());
+    }
+
+    /// `/rewind <task-id>` arms exactly one task: the payload carries it, a resume
+    /// payload never does, and `off` clears it again.
+    #[test]
+    fn rewind_arms_only_the_next_task_payload() {
+        let client = Client::new();
+        let params = serde_json::json!({});
+        let mut repl = Repl::new(&client, "http://127.0.0.1:1", &params, Some("work"));
+        assert!(repl.payload().get("rewindTaskId").is_none());
+
+        repl.set_rewind("task-42");
+        assert_eq!(repl.payload()["rewindTaskId"], "task-42");
+        // Resume and rewind are different continuation mechanisms; the backend rejects
+        // the combination, so a resume payload must never carry an armed rewind.
+        assert!(repl.resume_payload("task-7", None).get("rewindTaskId").is_none());
+
+        repl.set_rewind("off");
+        assert!(repl.payload().get("rewindTaskId").is_none());
     }
 
     #[test]
