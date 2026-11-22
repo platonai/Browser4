@@ -606,5 +606,5 @@ P0-A…P0-F 全部落地，全部为**新增可空字段 / 新增事件类型 / 
 | P2 `agent trace <id>` | `cli/browser4-cli/src/agent_trace.rs`（列表/分页/JSON 三种投影）+ `agent trace` 命令（`--file/--offset/--limit/--json`）+ mock-server e2e；REST 端点改为 `GET /{id}/trace/file?name=`（`/` 不能出现在 Spring 路径变量里，prompt 转储在 `cli-prompt/` 下） | 把"完整过程"送到用户手上：`agent events` 是摘要，trace 才是审计面。列表与分页都只读既有端点，`--json` 原样输出后端信封；缺 trace 时报出两个原因（tracing 关闭 / 保留策略已删），而不是打印空面板 |
 ### 9.4 未做（仍留在 §7 后续路线）
 
-`b4.run` 子进程 span、结构化目标/计划检查点。
+`b4.run` 子进程 span、结构化目标/计划检查点 —— 这两项已拆到 [#653](https://github.com/platonai/Browser4/issues/653) 跟踪。
 这些属于 P1/P2，不阻断"外部智能体监督"。
