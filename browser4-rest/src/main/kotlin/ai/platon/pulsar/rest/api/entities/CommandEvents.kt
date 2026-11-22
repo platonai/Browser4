@@ -152,9 +152,15 @@ data class CommandInputRequest(
  * @property taskId the task the message was aimed at
  * @property accepted true when the message was queued for a live task
  * @property message why it was or was not accepted
+ * @property inputId correlation id of the queued message (`null` when it was not
+ *   accepted). The delivered step repeats it in `detail.inputIds` (`steer` at the next
+ *   model round-trip, `follow_up` at the stop point), so `accepted=true` is no longer
+ *   the only thing a caller can prove — it can recognise its own message in the stream
+ *   (issue #652, P1-5)
  * */
 data class CommandInputResponse(
     val taskId: String,
     val accepted: Boolean,
     val message: String? = null,
+    val inputId: String? = null,
 )

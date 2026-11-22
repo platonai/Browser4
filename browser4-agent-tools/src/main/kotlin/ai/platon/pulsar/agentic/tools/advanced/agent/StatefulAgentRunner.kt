@@ -5,6 +5,7 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.agents.AgentRunEvent
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
+import ai.platon.pulsar.agentic.agents.PendingUserMessage
 import ai.platon.pulsar.agentic.agents.RobustBrowserAgent
 import ai.platon.pulsar.agentic.agents.RunPhase
 import ai.platon.pulsar.agentic.agents.RunPhaseClock
@@ -37,6 +38,7 @@ import java.io.Closeable
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
@@ -133,11 +135,15 @@ open class StatefulAgentRunner(
      * keyed by task id. Drained at every model round-trip by
      * [RobustBrowserAgent.steeringSource] and removed when the task ends.
      *
+     * Each entry carries the correlation id the client was told when the line was
+     * accepted, so the delivered `steer` step can prove which message it is
+     * (issue #652, P1-5).
+     *
      * Only messages for a *live* task are accepted ([enqueueInput]); a task id
      * that already finished is rejected so a stale terminal id cannot grow the
      * map forever.
      */
-    private val pendingInputs = ConcurrentHashMap<String, ConcurrentLinkedQueue<String>>()
+    private val pendingInputs = ConcurrentHashMap<String, ConcurrentLinkedQueue<PendingUserMessage>>()
 
     /**
      * Follow-up messages queued for a running task, keyed by task id.
@@ -151,7 +157,7 @@ open class StatefulAgentRunner(
      * A follow-up that arrives after the task really ended can no longer be delivered;
      * [drainUndeliveredSteering] reports it and keeps it for the next task.
      */
-    private val pendingFollowUps = ConcurrentHashMap<String, ConcurrentLinkedQueue<String>>()
+    private val pendingFollowUps = ConcurrentHashMap<String, ConcurrentLinkedQueue<PendingUserMessage>>()
 
     /** Guards [pendingInputs] so an enqueue can never race a drain (see [enqueueInput]). */
     private val inputLock = Any()
@@ -461,15 +467,24 @@ open class StatefulAgentRunner(
      * A `round.start` step also refreshes the task's live progress gauges, so the
      * 2-second `command.status` poll shows "tool calls vs files changed" without
      * fetching `/stats` — and the throttled JSONL row carries them too.
+     *
+     * A `tool.result` step keeps the TAIL of its text when it has to truncate: the
+     * compiler error or the failing `Tests run:` line lives at the end, and the
+     * head-only preview cut away exactly what a supervisor needed (issue #652, P1-1).
      */
     internal fun recordRunEvent(taskId: String, event: AgentRunEvent) {
+        val text = if (event.type == AgentRunEvent.TOOL_RESULT) {
+            AgentTaskEventSanitizer.previewKeepingTail(event.text)
+        } else {
+            AgentTaskEventSanitizer.preview(event.text)
+        }
         eventLog(taskId).append(
             type = event.type,
             tool = event.tool,
             arguments = AgentTaskEventSanitizer.arguments(event.tool, event.arguments),
             ok = event.ok,
             durationMs = event.durationMs,
-            text = AgentTaskEventSanitizer.preview(event.text),
+            text = text,
             turn = event.turn,
             inputTokens = event.inputTokens,
             outputTokens = event.outputTokens,
@@ -548,14 +563,18 @@ open class StatefulAgentRunner(
      * [RobustBrowserAgent.steeringSource]); a task that already finished is
      * rejected, because nothing will ever drain its queue.
      *
-     * @return true when the task is live in this runner and the message was queued
+     * @return the correlation id of the queued message (repeated in the delivered
+     *   `steer` step's `detail.inputIds`), or `null` when the task is unknown, already
+     *   finished, or the text is blank — "accepted" used to be all a caller got, which
+     *   proved nothing about the step it later observed (issue #652, P1-5)
      */
-    fun enqueueInput(id: String, text: String, deliverAs: String = DELIVER_STEER): Boolean {
+    fun enqueueInput(id: String, text: String, deliverAs: String = DELIVER_STEER): String? {
         val message = text.trim()
-        if (message.isEmpty()) return false
+        if (message.isEmpty()) return null
         val followUp = deliverAs.trim().lowercase().replace("_", "").replace("-", "") == "followup"
-        val status = statusCache.getIfPresent(id) ?: return false
-        if (status.isDone) return false
+        val status = statusCache.getIfPresent(id) ?: return null
+        if (status.isDone) return null
+        val inputId = UUID.randomUUID().toString()
         // Enqueue and drain take the same lock: an `add` racing a drain could land
         // on a queue the drain had already detached, losing the message.
         synchronized(inputLock) {
@@ -564,16 +583,16 @@ open class StatefulAgentRunner(
             // `pendingInputs` has no entry — adding one here would leak a queue that
             // nobody ever drains (and silently swallow the line). The terminal path
             // sets `isDone` before it drains, so one of the two orderings always wins.
-            if (status.isDone) return false
+            if (status.isDone) return null
             val queue = if (followUp) pendingFollowUps else pendingInputs
-            queue.computeIfAbsent(id) { ConcurrentLinkedQueue() }.add(message)
+            queue.computeIfAbsent(id) { ConcurrentLinkedQueue() }.add(PendingUserMessage(inputId, message))
         }
         logger.info(
-            "Queued {} message for agent task {} (agentSession={}, {} chars)",
+            "Queued {} message for agent task {} (agentSession={}, {} chars, inputId={})",
             if (followUp) "follow-up" else "steering",
-            id, session.uuid, message.length
+            id, session.uuid, message.length, inputId
         )
-        return true
+        return inputId
     }
 
     /**
@@ -583,18 +602,7 @@ open class StatefulAgentRunner(
      * the agent reports the returned lines as one injected message, and an empty
      * list means "nothing new".
      */
-    fun drainInputs(id: String): List<String> {
-        val drained = ArrayList<String>(1)
-        synchronized(inputLock) {
-            val queue = pendingInputs[id] ?: return emptyList()
-            while (true) {
-                val next = queue.poll() ?: break
-                drained += next
-            }
-            if (queue.isEmpty()) pendingInputs.remove(id, queue)
-        }
-        return drained
-    }
+    fun drainInputs(id: String): List<PendingUserMessage> = drainQueue(pendingInputs, id)
 
     /**
      * Drain the follow-up messages queued for [id].
@@ -604,15 +612,21 @@ open class StatefulAgentRunner(
      * with the new user message, exactly like steering arriving mid-run — the
      * difference is only the delivery point.
      */
-    fun drainFollowUps(id: String): List<String> {
-        val drained = ArrayList<String>(1)
+    fun drainFollowUps(id: String): List<PendingUserMessage> = drainQueue(pendingFollowUps, id)
+
+    /** Poll one task's queue to empty, under [inputLock]. */
+    private fun drainQueue(
+        queues: ConcurrentHashMap<String, ConcurrentLinkedQueue<PendingUserMessage>>,
+        id: String,
+    ): List<PendingUserMessage> {
+        val drained = ArrayList<PendingUserMessage>(1)
         synchronized(inputLock) {
-            val queue = pendingFollowUps[id] ?: return emptyList()
+            val queue = queues[id] ?: return emptyList()
             while (true) {
                 val next = queue.poll() ?: break
                 drained += next
             }
-            if (queue.isEmpty()) pendingFollowUps.remove(id, queue)
+            if (queue.isEmpty()) queues.remove(id, queue)
         }
         return drained
     }
@@ -651,9 +665,16 @@ open class StatefulAgentRunner(
                 status.id, leftover.size
             )
             leftover.take(MAX_UNDELIVERED_EVENTS).forEach {
-                recordLifecycle(status, AgentTaskEvent.TYPE_STEER_UNDELIVERED, it)
+                // The undelivered step names the same input id the client was told, so
+                // "accepted" and "delivered" can be told apart from one message (#652).
+                recordStructuredEvent(
+                    status,
+                    AgentTaskEvent.TYPE_STEER_UNDELIVERED,
+                    detail = mapOf("inputId" to it.id),
+                    text = it.text,
+                )
             }
-            conversation?.noteUserInput(leftover)
+            conversation?.noteUserInput(leftover.map { it.text })
         }
         if (followUps.isNotEmpty()) {
             logger.info(
@@ -661,20 +682,25 @@ open class StatefulAgentRunner(
                 status.id, followUps.size
             )
             followUps.take(MAX_UNDELIVERED_EVENTS).forEach {
-                recordLifecycle(status, AgentTaskEvent.TYPE_FOLLOW_UP_UNDELIVERED, it)
+                recordStructuredEvent(
+                    status,
+                    AgentTaskEvent.TYPE_FOLLOW_UP_UNDELIVERED,
+                    detail = mapOf("inputId" to it.id),
+                    text = it.text,
+                )
             }
-            conversation?.noteUserInput(followUps, "follow-up")
+            conversation?.noteUserInput(followUps.map { it.text }, "follow-up")
         }
     }
 
     /** Poll a queue to empty, preserving order. */
-    private fun ConcurrentLinkedQueue<String>.drainAll(): List<String> {
-        val lines = ArrayList<String>(1)
+    private fun ConcurrentLinkedQueue<PendingUserMessage>.drainAll(): List<PendingUserMessage> {
+        val pending = ArrayList<PendingUserMessage>(1)
         while (true) {
             val next = poll() ?: break
-            lines += next
+            pending += next
         }
-        return lines
+        return pending
     }
 
     /**

@@ -305,6 +305,44 @@ class AgentTaskEventSanitizerTest {
         assertEquals(true, detail[AgentTaskEventSanitizer.DETAIL_TRUNCATED])
     }
 
+    @Test
+    @DisplayName("a tail-preserving preview keeps the failing lines at the end")
+    fun previewKeepingTailKeepsTheVerdict() {
+        // A coding tool result is read for its verdict: the compiler error and the
+        // `Tests run:` line are at the END, the head is a session banner. The head-only
+        // preview cut away exactly what a supervisor needed (issue #652, P1-1).
+        val banner = "Session: devshell-3 · cwd=/w · " + "x".repeat(400)
+        val diagnostic = "[ERROR] Foo.kt:42: unresolved reference: bar"
+        val summary = "Tests run: 12, Failures: 1"
+
+        val preview = AgentTaskEventSanitizer.previewKeepingTail("$banner $diagnostic $summary")!!
+
+        assertTrue(preview.startsWith("Session: devshell-3"), "the head still gives context: $preview")
+        assertTrue(preview.contains("…"), "the cut is visible: $preview")
+        assertTrue(
+            preview.endsWith(summary),
+            "the verdict line at the tail must survive: $preview",
+        )
+        assertTrue(
+            preview.length <= AgentTaskEventSanitizer.MAX_PREVIEW_CHARS,
+            "the budget is shared, not exceeded: ${preview.length}",
+        )
+    }
+
+    @Test
+    @DisplayName("a tail-preserving preview never splits a surrogate pair and leaves short text alone")
+    fun previewKeepingTailHandlesEdges() {
+        assertEquals("a b c", AgentTaskEventSanitizer.previewKeepingTail("  a\n\n b\tc  "))
+        assertNull(AgentTaskEventSanitizer.previewKeepingTail("   "))
+        assertNull(AgentTaskEventSanitizer.previewKeepingTail(null))
+
+        val grin = "\uD83D\uDE00"
+        val long = "x".repeat(200) + grin + "y".repeat(200)
+        val preview = AgentTaskEventSanitizer.previewKeepingTail(long, maxChars = 100)!!
+        assertNoUnpairedSurrogate(preview)
+        assertTrue(preview.length <= 100, "${preview.length}")
+    }
+
     /** A code unit that is half of a surrogate pair cannot be represented in JSON. */
     private fun assertNoUnpairedSurrogate(text: String) {
         var i = 0

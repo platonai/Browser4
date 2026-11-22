@@ -632,14 +632,14 @@ class CommandToolExecutorTest {
     }
 
     @Test
-    @DisplayName("command.input steers a live task and reports a finished one inline")
+    @DisplayName("command.input steers a live task, returns its correlation id, and reports a finished one inline")
     fun inputSteersALiveTask() {
-        `when`(runner.sendInput("t1", "focus on the failing test", "steer")).thenReturn(true)
-        `when`(runner.sendInput("t2", "too late", "steer")).thenReturn(false)
+        `when`(runner.sendInput("t1", "focus on the failing test", "steer")).thenReturn("input-7")
+        `when`(runner.sendInput("t2", "too late", "steer")).thenReturn(null)
         `when`(runner.getStatus("s1", "t1")).thenReturn(
             status(statusCode = ResourceStatus.SC_PROCESSING, processState = "in_progress")
         )
-        `when`(runner.sendInput("t3", "then summarize", "followUp")).thenReturn(true)
+        `when`(runner.sendInput("t3", "then summarize", "followUp")).thenReturn("input-8")
         `when`(runner.getStatus("s1", "t3")).thenReturn(
             status(statusCode = ResourceStatus.SC_PROCESSING, processState = "in_progress")
         )
@@ -647,10 +647,13 @@ class CommandToolExecutorTest {
         val accepted = json("input", mapOf("id" to "t1", "text" to "focus on the failing test", "sessionId" to "s1"))
         assertEquals(true, accepted["accepted"])
         assertTrue(accepted["message"].toString().contains("next model round"), accepted["message"].toString())
+        // "queued" is verifiable: the delivered step repeats this id (#652, P1-5).
+        assertEquals("input-7", accepted["inputId"])
 
         // "The agent finished while you typed" is a normal race, reported in the payload.
         val rejected = json("input", mapOf("id" to "t2", "text" to "too late", "sessionId" to "s1"))
         assertEquals(false, rejected["accepted"])
+        assertFalse(rejected.containsKey("inputId"), "nothing queued, nothing to correlate")
         assertTrue(rejected["message"].toString().contains("not running"), rejected["message"].toString())
 
         // deliverAs is normalized, so the CLI's `follow-up` spelling reaches the queue.

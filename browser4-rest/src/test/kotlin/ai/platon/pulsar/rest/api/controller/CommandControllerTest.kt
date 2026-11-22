@@ -381,14 +381,17 @@ class CommandControllerTest {
     @Test
     @DisplayName("steering input is accepted for a live task and reported inline otherwise")
     fun steeringInputIsAcceptedOrReportedInline() {
-        whenever(executor.sendInput("agent-1", "focus on the tests")).thenReturn(true)
-        whenever(executor.sendInput("agent-2", "too late")).thenReturn(false)
+        whenever(executor.sendInput("agent-1", "focus on the tests")).thenReturn("input-7")
+        whenever(executor.sendInput("agent-2", "too late")).thenReturn(null)
 
         val accepted = assertNotNull(
             controller.postInput("agent-1", CommandInputRequest("focus on the tests")).body
         )
         assertTrue(accepted.accepted)
         assertEquals("agent-1", accepted.taskId)
+        // The caller can recognise its own message later: the delivered `steer` step
+        // repeats this id in `detail.inputIds` (issue #652, P1-5).
+        assertEquals("input-7", accepted.inputId)
 
         // "The task finished while the user was typing" is a race, not an error:
         // the CLI prints the reason and keeps the session open.
@@ -396,6 +399,7 @@ class CommandControllerTest {
             controller.postInput("agent-2", CommandInputRequest("too late")).body
         )
         assertEquals(false, rejected.accepted)
+        assertNull(rejected.inputId)
         assertNotNull(rejected.message)
 
         val blank = controller.postInput("agent-1", CommandInputRequest("   "))

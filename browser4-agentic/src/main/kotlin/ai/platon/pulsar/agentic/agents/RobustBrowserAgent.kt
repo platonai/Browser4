@@ -432,6 +432,23 @@ internal fun codingProgressNudge(readOnlyRounds: Int, limit: Int = CLI_CODING_RE
         "then run coding.verify on the module. If something genuinely blocks the edit, state exactly what it is."
 }
 
+/**
+ * The `detail` payload of a delivered [AgentRunEvent.STEER] / [AgentRunEvent.FOLLOW_UP] step.
+ *
+ * `POST /api/commands/{id}/input` answers `accepted=true` (plus an `inputId`) the moment
+ * the line enters the queue; the delivery happens later, at the agent's next model
+ * round-trip or stop point. Repeating the ids on the delivered step is what closes that
+ * loop: a caller can prove the `steer` step it observes is its own message instead of
+ * guessing from the text (issue #652, P1-5).
+ *
+ * A drain can carry several messages (they are injected as one user message), so the
+ * payload is a list; it is always non-empty (the caller returns early otherwise).
+ *
+ * @param pending the messages the agent just injected, oldest first
+ */
+internal fun deliveredInputDetail(pending: List<PendingUserMessage>): Map<String, Any?> =
+    mapOf("inputIds" to pending.map { it.id })
+
 /** Budget percentage at which the run is told to wrap up ([budgetPressureNudge]). */
 internal const val CLI_BUDGET_FINISH_PERCENT = 80
 
@@ -649,7 +666,7 @@ open class RobustBrowserAgent(
      * also removes the queue when the task ends.
      */
     @Volatile
-    var steeringSource: (() -> List<String>)? = null
+    var steeringSource: (() -> List<PendingUserMessage>)? = null
 
     /**
      * Drain for the current run's FOLLOW-UP messages, set by the task runner.
@@ -661,7 +678,7 @@ open class RobustBrowserAgent(
      * interrupts the running step nor becomes a second task (pi's `followUp` queue).
      */
     @Volatile
-    var followUpSource: (() -> List<String>)? = null
+    var followUpSource: (() -> List<PendingUserMessage>)? = null
 
     /**
      * Test/runtime override of the agent memory root directory (defaults to
@@ -1990,17 +2007,27 @@ open class RobustBrowserAgent(
      * @return the number of injected lines (0 when nothing was queued)
      */
     private fun drainSteering(sink: (ChatMessage) -> Unit): Int {
-        val lines = runCatching { steeringSource?.invoke() }
+        val pending = runCatching { steeringSource?.invoke() }
             .getOrNull()
-            ?.map { it.trim() }
-            ?.filter { it.isNotEmpty() }
+            ?.map { PendingUserMessage(it.id, it.text.trim()) }
+            ?.filter { it.text.isNotEmpty() }
             .orEmpty()
-        if (lines.isEmpty()) return 0
+        if (pending.isEmpty()) return 0
 
+        val lines = pending.map { it.text }
         val text = lines.joinToString("\n")
         runCatching { sink(UserMessage.from("$CLI_STEERING_PREFIX\n$text")) }
             .onFailure { logger.warn("cli-agent.steer injection failed: {}", it.message) }
-        emitRunEvent(AgentRunEvent(AgentRunEvent.STEER, text = text))
+        // The correlation ids travel with the delivered step: "accepted=true" only proved
+        // the line was QUEUED, so this is what lets a caller recognise its own message
+        // (issue #652, P1-5).
+        emitRunEvent(
+            AgentRunEvent(
+                AgentRunEvent.STEER,
+                text = text,
+                detail = deliveredInputDetail(pending),
+            )
+        )
         logger.info(
             "🧭 cli-agent.steer agent={} lines={} text='{}'",
             uuid, lines.size, Strings.compactInline(text, 100)
@@ -2020,22 +2047,28 @@ open class RobustBrowserAgent(
      * @return the number of delivered lines (0 when nothing was queued)
      */
     private fun drainFollowUps(sink: (ChatMessage) -> Unit): Int {
-        val lines = runCatching { followUpSource?.invoke() }
+        val pending = runCatching { followUpSource?.invoke() }
             .getOrNull()
-            ?.map { it.trim() }
-            ?.filter { it.isNotEmpty() }
+            ?.map { PendingUserMessage(it.id, it.text.trim()) }
+            ?.filter { it.text.isNotEmpty() }
             .orEmpty()
-        if (lines.isEmpty()) return 0
+        if (pending.isEmpty()) return 0
 
-        val text = lines.joinToString("\n")
+        val text = pending.joinToString("\n") { it.text }
         runCatching { sink(UserMessage.from("$CLI_FOLLOW_UP_PREFIX\n$text")) }
             .onFailure { logger.warn("cli-agent.followUp injection failed: {}", it.message) }
-        emitRunEvent(AgentRunEvent(AgentRunEvent.FOLLOW_UP, text = text))
+        emitRunEvent(
+            AgentRunEvent(
+                AgentRunEvent.FOLLOW_UP,
+                text = text,
+                detail = deliveredInputDetail(pending),
+            )
+        )
         logger.info(
             "↪ cli-agent.followUp agent={} lines={} text='{}'",
-            uuid, lines.size, Strings.compactInline(text, 100)
+            uuid, pending.size, Strings.compactInline(text, 100)
         )
-        return lines.size
+        return pending.size
     }
 
     /**

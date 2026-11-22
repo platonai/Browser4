@@ -160,3 +160,22 @@ data class AgentRunEvent(
         const val NUDGE_BUDGET = "budget"
     }
 }
+
+/**
+ * One user message waiting for its delivery point, with the id the client was told.
+ *
+ * Steering and follow-ups are asynchronous by design: the API answers "queued" when the
+ * line enters the queue, and the delivery happens later (steering at the agent's next
+ * model round-trip, a follow-up at its stop point). Without an id, `accepted=true`
+ * proves nothing — the `steer` step a client observes could belong to anyone's message
+ * (issue #652, P1-5). [id] is what closes that loop: it is reported to the caller by
+ * `POST /api/commands/{id}/input` / `command.input`, and repeated in the delivered
+ * step's `detail.inputIds`.
+ *
+ * @property id opaque correlation id assigned when the message was accepted
+ * @property text the message itself (already trimmed)
+ */
+data class PendingUserMessage(
+    val id: String,
+    val text: String,
+)

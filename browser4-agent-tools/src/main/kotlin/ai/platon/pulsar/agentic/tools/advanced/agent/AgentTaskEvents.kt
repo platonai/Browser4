@@ -807,13 +807,64 @@ object AgentTaskEventSanitizer {
     }
 
     /**
+     * Preview that keeps the **end** of a long text as well as its beginning.
+     *
+     * Tool output is read for its verdict, not its preamble: a compiler error, a
+     * `Tests run: 12, Failures: 1 …` line and a shell's exit message all sit at the
+     * tail, while the head is usually a session banner (`Session: devshell-3`). The
+     * plain [preview] keeps the head only, so the one line a supervisor needed was
+     * exactly the part cut away (issue #652, P1-1: "the 240-char preview cuts off the
+     * two things supervision needs most").
+     *
+     * The result is `head…tail`: still one line, still within the budget, still free of
+     * unpaired surrogates (both cuts land on code-point boundaries).
+     *
+     * @param maxChars total budget in UTF-16 code units (the head and tail share it)
+     * @param tailShare fraction of the budget the tail gets (`0.45` = the failing lines
+     *   survive while the first ~130 characters of context stay readable)
+     */
+    fun previewKeepingTail(
+        text: String?,
+        maxChars: Int = MAX_PREVIEW_CHARS,
+        tailShare: Double = 0.45,
+    ): String? {
+        val collapsed = text?.replace(WHITESPACE, " ")?.trim() ?: return null
+        if (collapsed.isEmpty()) return null
+        val whole = replaceUnpairedSurrogates(collapsed)
+        if (whole.length <= maxChars) return whole
+
+        val share = tailShare.coerceIn(0.1, 0.8)
+        val tailBudget = (maxChars * share).toInt().coerceIn(1, maxChars)
+        val headBudget = (maxChars - tailBudget - 1).coerceAtLeast(1)
+
+        val head = cutHead(whole, headBudget)
+        val tail = cutTail(whole, tailBudget)
+        return if (head.isEmpty()) "…$tail" else "$head…$tail"
+    }
+
+    /** The first [budget] code units of [text], without splitting a surrogate pair. */
+    private fun cutHead(text: String, budget: Int): String {
+        if (budget <= 0) return ""
+        var end = budget.coerceAtMost(text.length)
+        if (end > 0 && Character.isHighSurrogate(text[end - 1])) end -= 1
+        return text.substring(0, end).trimEnd()
+    }
+
+    /** The last [budget] code units of [text], without starting on a low surrogate. */
+    private fun cutTail(text: String, budget: Int): String {
+        if (budget <= 0) return ""
+        var start = (text.length - budget).coerceAtLeast(0)
+        if (start > 0 && start < text.length && Character.isLowSurrogate(text[start])) start += 1
+        return text.substring(start).trimStart()
+    }
+
+    /**
      * Replace every unpaired surrogate in [text] with [REPLACEMENT_CHARACTER].
      *
      * Returns the same instance when the text is already well-formed, so the
      * common path allocates nothing. A well-formed pair is kept verbatim.
      * */
-    fun replaceUnpairedSurrogates(text: String): String {
-        var i = 0
+    fun replaceUnpairedSurrogates(text: String): String {        var i = 0
         while (i < text.length) {
             val c = text[i]
             if (Character.isHighSurrogate(c) && i + 1 < text.length && Character.isLowSurrogate(text[i + 1])) {

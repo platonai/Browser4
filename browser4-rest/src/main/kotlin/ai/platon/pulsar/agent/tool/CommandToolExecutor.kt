@@ -652,18 +652,21 @@ class CommandToolExecutor(
                     "Unknown deliverAs '$deliverAs': expected one of steering (steer) or followUp"
                 }
                 val followUp = normalized == "followup"
-                val accepted = service.sendInput(id, text, if (followUp) "followUp" else "steer")
+                val inputId = service.sendInput(id, text, if (followUp) "followUp" else "steer")
+                val accepted = inputId != null
                 val status = service.getStatus(sessionId, id) ?: CommandStatus.notFound(id)
-                pulsarObjectMapper().writeValueAsString(
-                    envelopeOf(status) + mapOf(
-                        "accepted" to accepted,
-                        "message" to when {
-                            !accepted -> "task is not running or does not accept input"
-                            followUp -> "queued: the agent continues with it when the current step finishes"
-                            else -> "queued: the agent sees it at its next model round"
-                        },
-                    )
+                val payload = linkedMapOf<String, Any>(
+                    "accepted" to accepted,
+                    "message" to when {
+                        !accepted -> "task is not running or does not accept input"
+                        followUp -> "queued: the agent continues with it when the current step finishes"
+                        else -> "queued: the agent sees it at its next model round"
+                    },
                 )
+                // The delivered step repeats this id in `detail.inputIds`, so "queued" is
+                // verifiable instead of merely claimed (issue #652, P1-5).
+                inputId?.let { payload["inputId"] = it }
+                pulsarObjectMapper().writeValueAsString(envelopeOf(status) + payload)
             }
 
             else -> throw IllegalArgumentException("Unsupported command method: $functionName(${args.keys})")

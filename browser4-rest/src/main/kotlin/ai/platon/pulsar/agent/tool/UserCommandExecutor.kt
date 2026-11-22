@@ -447,16 +447,21 @@ class UserCommandExecutor(
      * instruction instead of starting a second task. A task that already finished, a
      * page visit, or an unknown id is rejected — nothing would ever drain its queue.
      *
-     * @return true when a live agent task accepted the message
+     * @return the correlation id of the queued message, or `null` when nothing accepted
+     *   it. The same id appears in the delivered `steer` / `follow_up` step's
+     *   `detail.inputIds`, so a caller can prove the step it sees is its own message
+     *   (issue #652, P1-5)
      */
-    fun sendInput(id: String, text: String, deliverAs: String = StatefulAgentRunner.DELIVER_STEER): Boolean {
-        val accepted = agentRunners.values.any { runner -> runner.enqueueInput(id, text, deliverAs) }
-        if (accepted) {
-            logger.info("Queued {} message for agent task {}", deliverAs, id)
+    fun sendInput(id: String, text: String, deliverAs: String = StatefulAgentRunner.DELIVER_STEER): String? {
+        val inputId = agentRunners.values.firstNotNullOfOrNull { runner ->
+            runner.enqueueInput(id, text, deliverAs)
+        }
+        if (inputId != null) {
+            logger.info("Queued {} message for agent task {} (inputId={})", deliverAs, id, inputId)
         } else {
             logger.debug("Agent task {} is not accepting input", id)
         }
-        return accepted
+        return inputId
     }
 
     /**

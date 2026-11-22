@@ -791,12 +791,15 @@ class StatefulAgentRunnerTest {
         try {
             val status = runner.create()
 
-            assertTrue(runner.enqueueInput(status.id, "  focus on the tests  "))
-            assertTrue(runner.enqueueInput(status.id, "then stop"))
-            assertEquals(
-                listOf("focus on the tests", "then stop"),
-                runner.drainInputs(status.id),
-            )
+            val firstId = assertNotNull(runner.enqueueInput(status.id, "  focus on the tests  "))
+            val secondId = assertNotNull(runner.enqueueInput(status.id, "then stop"))
+            assertNotEquals(firstId, secondId, "every accepted message gets its own correlation id")
+
+            val drained = runner.drainInputs(status.id)
+            assertEquals(listOf("focus on the tests", "then stop"), drained.map { it.text })
+            // The ids the caller was told travel with the message, so the delivered
+            // `steer` step can prove which line it is (issue #652, P1-5).
+            assertEquals(listOf(firstId, secondId), drained.map { it.id })
             assertTrue(runner.drainInputs(status.id).isEmpty(), "draining is destructive")
         } finally {
             runner.close()
@@ -812,19 +815,19 @@ class StatefulAgentRunnerTest {
 
             // Same endpoint, two delivery points: steering is injected at the next
             // model round, a follow-up only when the loop would stop.
-            assertTrue(
+            assertNotNull(
                 runner.enqueueInput(status.id, "steer me", deliverAs = StatefulAgentRunner.DELIVER_STEER)
             )
-            assertTrue(
+            assertNotNull(
                 runner.enqueueInput(status.id, "then this", deliverAs = StatefulAgentRunner.DELIVER_FOLLOW_UP)
             )
-            assertEquals(listOf("steer me"), runner.drainInputs(status.id))
-            assertEquals(listOf("then this"), runner.drainFollowUps(status.id))
+            assertEquals(listOf("steer me"), runner.drainInputs(status.id).map { it.text })
+            assertEquals(listOf("then this"), runner.drainFollowUps(status.id).map { it.text })
             assertTrue(runner.drainFollowUps(status.id).isEmpty(), "draining is destructive")
 
             // Delivery-mode casing/labels are forgiving (HTTP clients vary).
-            assertTrue(runner.enqueueInput(status.id, "more", deliverAs = "follow_up"))
-            assertEquals(listOf("more"), runner.drainFollowUps(status.id))
+            assertNotNull(runner.enqueueInput(status.id, "more", deliverAs = "follow_up"))
+            assertEquals(listOf("more"), runner.drainFollowUps(status.id).map { it.text })
         } finally {
             runner.close()
         }
@@ -838,7 +841,7 @@ class StatefulAgentRunnerTest {
             val status = runner.create()
             status.done()
 
-            assertFalse(runner.enqueueInput(status.id, "too late", deliverAs = StatefulAgentRunner.DELIVER_FOLLOW_UP))
+            assertNull(runner.enqueueInput(status.id, "too late", deliverAs = StatefulAgentRunner.DELIVER_FOLLOW_UP))
             assertTrue(runner.drainFollowUps(status.id).isEmpty())
         } finally {
             runner.close()
@@ -865,7 +868,7 @@ class StatefulAgentRunnerTest {
             withTimeout(5_000) {
                 while (status.startedTime == null) delay(10)
             }
-            assertTrue(runner.enqueueInput(status.id, "no, use CSV not XLSX"))
+            assertNotNull(runner.enqueueInput(status.id, "no, use CSV not XLSX"))
 
             gate.complete(Unit)
             withTimeout(5_000) {
@@ -934,9 +937,9 @@ class StatefulAgentRunnerTest {
             val status = runner.create()
             status.done()
 
-            assertFalse(runner.enqueueInput(status.id, "too late"), "a finished task has no drainer")
-            assertFalse(runner.enqueueInput("unknown-task", "hello"))
-            assertFalse(runner.enqueueInput(status.id, "   "))
+            assertNull(runner.enqueueInput(status.id, "too late"), "a finished task has no drainer")
+            assertNull(runner.enqueueInput("unknown-task", "hello"))
+            assertNull(runner.enqueueInput(status.id, "   "))
             assertTrue(runner.drainInputs(status.id).isEmpty())
         } finally {
             runner.close()
@@ -1054,6 +1057,41 @@ class StatefulAgentRunnerTest {
     }
 
     @Test
+    @DisplayName("a long tool result keeps its tail so the failing line survives truncation")
+    fun longToolResultsKeepTheirTail() {
+        val runner = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))
+        try {
+            val status = runner.create()
+            // A real coding tool result: a banner, a lot of output, then the verdict.
+            val output = "Session: devshell-3 " + "compile output ".repeat(60) +
+                "Tests run: 12, Failures: 1, Errors: 0"
+            runner.recordRunEvent(
+                status.id,
+                AgentRunEvent(AgentRunEvent.TOOL_RESULT, tool = "coding.mvnTest", ok = false, text = output),
+            )
+            // A model message keeps the head-only preview: its beginning is the point.
+            runner.recordRunEvent(
+                status.id,
+                AgentRunEvent(AgentRunEvent.MODEL_TEXT, text = "Plan: " + "step ".repeat(200)),
+            )
+
+            val events = runner.events(status.id)
+            val result = events.last { it.type == AgentRunEvent.TOOL_RESULT }
+            assertTrue(
+                result.text!!.endsWith("Tests run: 12, Failures: 1, Errors: 0"),
+                "the verdict at the tail must survive: ${result.text}",
+            )
+            assertTrue(result.text!!.length <= AgentTaskEventSanitizer.MAX_PREVIEW_CHARS, "${result.text!!.length}")
+
+            val modelText = events.last { it.type == AgentRunEvent.MODEL_TEXT }
+            assertTrue(modelText.text!!.startsWith("Plan:"), modelText.text)
+            assertTrue(modelText.text!!.endsWith("…"), "a model message is still head-truncated: ${modelText.text}")
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
     @DisplayName("a terminal task leaves no steering queue behind")
     fun terminalTaskDoesNotLeakSteeringQueue() = runBlocking {
         val agent = mockAgent(AgentHistory(), "run-1")
@@ -1063,7 +1101,7 @@ class StatefulAgentRunnerTest {
             val status = runner.execute("finish quickly")
             // The queue is dropped when the run ends, so a message typed after the
             // completion can never be drained by a later task of the same session.
-            assertFalse(runner.enqueueInput(status.id, "late"))
+            assertNull(runner.enqueueInput(status.id, "late"))
             assertTrue(runner.drainInputs(status.id).isEmpty())
         } finally {
             runner.close()

@@ -383,7 +383,8 @@ class CommandController(
                 .body(CommandInputResponse(id, accepted = false, message = "text must not be blank"))
         }
 
-        val accepted = commandExecutor.sendInput(id, text, request.deliverAs)
+        val inputId = commandExecutor.sendInput(id, text, request.deliverAs)
+        val accepted = inputId != null
         val followUp = request.deliverAs.trim().lowercase().replace("_", "").replace("-", "") == "followup"
         return ResponseEntity.ok(
             CommandInputResponse(
@@ -394,6 +395,9 @@ class CommandController(
                     followUp -> "queued: the agent continues with it when the current step finishes"
                     else -> "queued: the agent sees it at its next model round"
                 },
+                // The id the delivered `steer` / `follow_up` step will repeat, so a
+                // caller can prove the step it observes is its own message.
+                inputId = inputId,
             )
         )
     }
