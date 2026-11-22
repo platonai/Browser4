@@ -1282,13 +1282,25 @@ pub async fn get_agent_access_view(
     base_url: &str,
     task_id: &str,
 ) -> Result<RestResponse, String> {
-    let url = build_endpoint_url(base_url, &format!("/api/agent/{task_id}/access"));
-    send_rest_response(
-        client
-            .get(url)
-            .timeout(std::time::Duration::from_secs(30)),
+    get_agent_access_view_with_timeout(
+        client,
+        base_url,
+        task_id,
+        std::time::Duration::from_secs(30),
     )
     .await
+}
+
+/// The same call with a caller-chosen budget: the interactive session polls this
+/// while a task runs, and a display convenience must never wait on a slow backend.
+pub async fn get_agent_access_view_with_timeout(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+    timeout: std::time::Duration,
+) -> Result<RestResponse, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/agent/{task_id}/access"));
+    send_rest_response(client.get(url).timeout(timeout)).await
 }
 
 /// Post the operator's decision on a pending access request:

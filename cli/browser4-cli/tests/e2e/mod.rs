@@ -998,6 +998,9 @@ struct MockBrowser4State {
     agent_cancel_calls: Vec<String>,
     /// Recorded `POST /api/commands/{id}/input` steering messages: (task id, text).
     command_input_calls: Vec<(String, String)>,
+    /// Session ids every `command_run` submission carried, in order — what
+    /// `-i --continue` is asserted against.
+    plain_command_sessions: Vec<String>,
     /// Scripted step events per task id, served by `GET /api/commands/{id}/events`.
     custom_command_events: HashMap<String, Vec<serde_json::Value>>,
     /// Scripted run counters per task id, served by `GET /api/commands/{id}/stats`
@@ -1010,6 +1013,10 @@ struct MockBrowser4State {
     /// Recorded `/api/agent/{id}/access...` calls as "METHOD route" (the
     /// interactive session's `/access`, `/approve` and `/deny` commands).
     agent_access_calls: Vec<String>,
+    /// Scripted `GET /api/agent/{id}/access` bodies per task id. Unscripted tasks
+    /// report nothing pending, so the session's periodic poll stays quiet unless a
+    /// test asks for a request.
+    agent_access_views: HashMap<String, serde_json::Value>,
     /// Task ids whose events endpoint keeps reporting `running` until a steering
     /// input arrives (the interactive-steering scenario).
     command_events_await_input: Vec<String>,
@@ -1250,6 +1257,20 @@ impl MockBrowser4Server {
             .insert(task_id.to_string(), stats);
     }
 
+    /// Script the access view `GET /api/agent/{id}/access` serves for [task_id]:
+    /// the pending requests and grants an operator would see.
+    ///
+    /// Unscripted tasks answer "nothing pending" — the session polls this endpoint
+    /// while a coding task runs, and an unconditional pending request would put an
+    /// approval notice in every interactive scenario.
+    fn set_agent_access_view(&self, task_id: &str, view: serde_json::Value) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .agent_access_views
+            .insert(task_id.to_string(), view);
+    }
+
     /// Pretend this backend predates the stats endpoint (404), so `/stats`
     /// exercises its local-counting fallback.
     fn disable_command_stats(&self) {
@@ -1265,6 +1286,16 @@ impl MockBrowser4Server {
             .lock()
             .expect("mock Browser4 state mutex poisoned")
             .command_stats_calls
+            .clone()
+    }
+
+    /// Session ids the `command_run` submissions carried, in order — what
+    /// `-i --continue` is asserted against.
+    fn plain_command_sessions(&self) -> Vec<String> {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .plain_command_sessions
             .clone()
     }
 
@@ -1564,6 +1595,11 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                         .unwrap_or_default()
                         .trim()
                         .to_string();
+                    let session_id = arguments
+                        .get("sessionId")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
                     let task_id = if command == "task missing llm key" {
                         state
                             .lock()
@@ -1574,6 +1610,7 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                     } else {
                         let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
                         guard.plain_commands.push(command.clone());
+                        guard.plain_command_sessions.push(session_id);
                         if command.starts_with("http://") || command.starts_with("https://") {
                             guard.next_swarm_task_id += 1;
                             format!("swarm-task-{}", guard.next_swarm_task_id)
@@ -1806,11 +1843,22 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 .status_queries
                 .push(task_id.to_string());
 
-            let response = serde_json::json!({
-                "id": task_id,
-                "status": "RUNNING",
-            })
-            .to_string();
+            // A scripted envelope wins, so a scenario can state the step count and
+            // message `/status` renders; unscripted tasks stay "RUNNING".
+            let scripted = state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .custom_command_statuses
+                .get(task_id)
+                .cloned();
+            let response = match scripted {
+                Some(scripted) => scripted.to_string(),
+                None => serde_json::json!({
+                    "id": task_id,
+                    "status": "RUNNING",
+                })
+                .to_string(),
+            };
             write_http_response(&mut stream, "200 OK", "application/json", &response);
         }
         _ if method == "GET"
@@ -2279,23 +2327,25 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 .expect("mock Browser4 state mutex poisoned")
                 .agent_access_calls
                 .push(format!("{method} {route}"));
-            let response = serde_json::json!({
-                "taskId": task_id,
-                "state": "pending",
-                "pending": [
-                    {
-                        "requestId": "req-1",
-                        "effect": "fs.write",
-                        "target": "src/generated",
-                        "reason": "need to write generated code",
-                    }
-                ],
-                "grants": [
-                    {"id": "op-req-9", "effects": ["fs.exec"], "expiresAt": "task-end"}
-                ],
-                "report": "1 pending request(s), 1 active grant(s)",
-            })
-            .to_string();
+            // A scripted view wins; an unscripted task reports nothing pending, so
+            // the session's periodic poll stays quiet unless a test asks for a
+            // request to be announced.
+            let view = state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .agent_access_views
+                .get(task_id)
+                .cloned()
+                .unwrap_or_else(|| {
+                    serde_json::json!({
+                        "taskId": task_id,
+                        "state": "idle",
+                        "pending": [],
+                        "grants": [],
+                        "report": "0 pending request(s), 0 active grant(s)",
+                    })
+                });
+            let response = view.to_string();
             write_http_response(&mut stream, "200 OK", "application/json", &response);
         }
         // ---- agent access decision: POST /api/agent/{task}/access/{request}/{approve|deny} ----

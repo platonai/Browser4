@@ -260,6 +260,12 @@ fn maybe_pretty_print_json(text: &str) -> String {
 /// pipe as a normal "stop writing" signal so the CLI unwinds cleanly and its
 /// cleanup paths (managed-process registry, startup-log teardown) still run.
 fn print_stdout_line(line: &str) {
+    // An interactive session owns the prompt line: it clears it before the line
+    // and draws it again afterwards, so streamed steps never land on top of what
+    // the user is typing. Every other mode has no console and writes directly.
+    if crate::agent_interactive::write_human_line(line) {
+        return;
+    }
     use std::io::Write;
     let mut stdout = std::io::stdout().lock();
     let _ = writeln!(stdout, "{line}");
@@ -16140,6 +16146,20 @@ async fn handle_agent_run(
         }
         return agent_interactive::run_interactive(client, base_url, tool_params, session_name)
             .await;
+    }
+
+    // `--continue` resumes the recorded interactive session; a one-shot run has no
+    // session to resume, and silently ignoring the flag would run a fresh task while
+    // the user believes it continues the last conversation.
+    if tool_params
+        .get("continueSession")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return Err(
+            "--continue resumes an interactive session: add -i (agent run -i --continue)"
+                .to_string(),
+        );
     }
 
     // A pasted task line carries the same terminal escapes as an interactive

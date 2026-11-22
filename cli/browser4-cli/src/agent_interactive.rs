@@ -17,6 +17,7 @@
 //! Nothing here is allowed to change the default `agent run` behaviour: adding
 //! events must be invisible unless `--follow` / `--ndjson` / `-i` is passed.
 
+use std::collections::HashSet;
 use std::io::{self, BufRead, IsTerminal, Read};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -27,12 +28,20 @@ use serde_json::{json, Value};
 #[path = "line_editor.rs"]
 mod line_editor;
 
-use line_editor::Editor;
+use line_editor::{Console, Input};
 
 use crate::http::{
-    cancel_command_task, get_agent_access_view, get_command_events, get_command_result,
-    get_command_stats, get_command_status, post_agent_access_decision, send_command_input,
+    cancel_command_task, get_agent_access_view, get_agent_access_view_with_timeout,
+    get_command_events, get_command_result, get_command_stats, get_command_status,
+    post_agent_access_decision, send_command_input,
 };
+
+/// How often a running task's pending access requests are polled.
+const ACCESS_POLL_INTERVAL: Duration = Duration::from_millis(2_500);
+
+/// Budget of that poll — and of the one taken when a task ends: a display
+/// convenience never waits on a slow backend.
+const ACCESS_POLL_TIMEOUT: Duration = Duration::from_millis(1_500);
 
 /// How often the follower asks for new events while a task is running.
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(400);
@@ -251,6 +260,34 @@ impl TaskEvent {
             obj["resumable"] = json!(resumable);
         }
         obj
+    }
+
+    /// One line naming the step, for `/status`.
+    ///
+    /// `None` for the steps that do not describe work (`round.start`, the
+    /// terminal events): `/status` answers "what is it doing", not "how is the
+    /// loop structured".
+    fn status_label(&self) -> Option<String> {
+        match self.kind.as_str() {
+            "tool.call" => {
+                let tool = self.tool.as_deref().unwrap_or("tool");
+                let args = self
+                    .arguments
+                    .as_deref()
+                    .map(format_tool_arguments)
+                    .unwrap_or_default();
+                Some(format!("{tool}{args}"))
+            }
+            "tool.result" => {
+                let tool = self.tool.as_deref().unwrap_or("tool");
+                let verdict = if self.ok == Some(false) { "failed" } else { "ok" };
+                Some(format!("{tool} {verdict}"))
+            }
+            "model.text" => self.text.as_deref().map(|text| truncate(text, 80)),
+            "steer" => Some("steering delivered".to_string()),
+            "follow_up" => Some("follow-up delivered".to_string()),
+            _ => None,
+        }
     }
 }
 
@@ -1089,6 +1126,17 @@ fn human_output_enabled(quiet: bool) -> bool {
     !quiet && !crate::json_active()
 }
 
+/// Whether this session may draw — and therefore own — the prompt line.
+///
+/// Both ends have to be terminals. `-i | tee log` has a TTY stdin and a pipe for
+/// stdout: taking the terminal there wrote the prompt and its `\r\x1b[J` redraw
+/// into the log, so the file was neither readable nor machine-parseable. With
+/// `--quiet` / `--json` stdout belongs to the machine, and a session fed by a
+/// pipe has no prompt line to draw at all.
+fn prompt_owner(stdin_is_tty: bool, stdout_is_tty: bool, human_output: bool) -> bool {
+    stdin_is_tty && stdout_is_tty && human_output
+}
+
 /// True when a follower may print an out-of-band notice (retry, fallback).
 ///
 /// NDJSON is machine output end to end: a prose line would make the stream
@@ -1610,6 +1658,29 @@ fn action_selection(line: &str, count: usize) -> Option<usize> {
     (1..=count).contains(&selected).then(|| selected - 1)
 }
 
+/// `/result [<task-id>] [--json] [--full]` → `(task id, raw, full)`.
+///
+/// A bare word is a task id: any task of this session can be re-read, so the
+/// alternative is leaving the session for `agent result <id>`.
+fn parse_result_args(argument: &str) -> Result<(Option<String>, bool, bool), String> {
+    let mut raw = false;
+    let mut full = crate::pretty_active();
+    let mut named: Option<String> = None;
+    for token in argument.split_whitespace() {
+        match token {
+            "--json" | "-j" => raw = true,
+            "--full" | "-f" => full = true,
+            other if other.starts_with('-') => {
+                return Err(format!(
+                    "usage: /result [<task-id>] [--json] [--full] (got '{other}')"
+                ));
+            }
+            other => named = Some(other.to_string()),
+        }
+    }
+    Ok((named, raw, full))
+}
+
 /// `/resume [--budget <tokens>] [task-id]` → `(task-id, budget)`.
 ///
 /// Deliberately tiny: the command owns no state, and an unknown flag or a
@@ -1659,12 +1730,30 @@ fn parse_budget_value(raw: &str) -> Result<i64, String> {
 /// The old line glued the message on with a space, so an absent message left a
 /// trailing space and the task id had no label. Both made the line awkward to
 /// read and to copy (format plan P1-9).
-fn status_line(task_id: &str, progress: &StatusProgress) -> String {
+fn status_line(
+    task_id: &str,
+    progress: &StatusProgress,
+    elapsed: Option<Duration>,
+    last_step: Option<(&str, Duration)>,
+) -> String {
     let mut line = format!("task {task_id} · {}", progress.word);
     if progress.tools > 0 {
         line.push_str(&format!(" · {} step(s)", progress.tools));
     }
-    if let Some(message) = progress
+    if let Some(elapsed) = elapsed {
+        line.push_str(&format!(
+            " · {}",
+            format_run_duration(elapsed.as_millis() as u64)
+        ));
+    }
+    // What it is doing beats what the backend calls it: "Agent is working" is the
+    // same line for every run, while the last step names the actual work.
+    if let Some((step, silent_for)) = last_step {
+        line.push_str(&format!(
+            " — {step} ({} ago)",
+            format_silence(silent_for)
+        ));
+    } else if let Some(message) = progress
         .message
         .as_deref()
         .map(str::trim)
@@ -1695,6 +1784,232 @@ fn parse_toggle(argument: &str) -> Option<Option<bool>> {
         "off" | "false" | "0" | "no" => Some(Some(false)),
         _ => None,
     }
+}
+
+/// The session commands: name, group, and a one-line description.
+///
+/// One table serves the grouped `/help`, `/help <command>` and Tab completion, so
+/// a command cannot be added to one of them and forgotten in the others. Aliases
+/// (`h`, `?`, `q`, `stop`, `exit`, `follow-up`) stay out: the canonical name is
+/// what help and completion should teach.
+const SESSION_HELP: &[(&str, &str, &str)] = &[
+    (
+        "status",
+        "observe",
+        "status of the running (or last) task: steps, elapsed time, last step",
+    ),
+    (
+        "result",
+        "observe",
+        "re-print a finished result ([<task-id>] [--json] [--full])",
+    ),
+    (
+        "stats",
+        "observe",
+        "run statistics: LLM rounds/requests, tokens, tool calls ([task-id])",
+    ),
+    (
+        "events",
+        "observe",
+        "raw JSON of the last n steps (default 20)",
+    ),
+    (
+        "access",
+        "observe",
+        "pending access requests and active grants ([task-id])",
+    ),
+    (
+        "cancel",
+        "task control",
+        "cancel the running task (same as Ctrl+C)",
+    ),
+    (
+        "resume",
+        "task control",
+        "continue an interrupted task ([--budget <n>] [task-id])",
+    ),
+    (
+        "rewind",
+        "task control",
+        "continue the conversation from where a task began (<task-id> | off)",
+    ),
+    (
+        "followup",
+        "task control",
+        "deliver <text> when the running task would finish (same task)",
+    ),
+    (
+        "approve",
+        "task control",
+        "approve a pending access request ([request-id] [task-id])",
+    ),
+    (
+        "deny",
+        "task control",
+        "deny a pending access request ([request-id] [task-id])",
+    ),
+    (
+        "help",
+        "session",
+        "this list; /help <command> describes one command",
+    ),
+    (
+        "tasks",
+        "session",
+        "the tasks this session ran, newest first ([n])",
+    ),
+    (
+        "new",
+        "session",
+        "start a new session (fresh agent context)",
+    ),
+    ("session", "session", "print the current session id"),
+    (
+        "coding",
+        "session",
+        "treat following tasks as coding tasks ([on|off])",
+    ),
+    (
+        "add-dir",
+        "session",
+        "grant the following tasks an extra folder (<dir>)",
+    ),
+    (
+        "dirs",
+        "session",
+        "list the granted folders, or drop them ([clear])",
+    ),
+    (
+        "quiet",
+        "session",
+        "silence the session's human lines ([on|off])",
+    ),
+    (
+        "verbose",
+        "session",
+        "also print round markers and fast successful tools ([on|off])",
+    ),
+    (
+        "noop-limit",
+        "session",
+        "consecutive no-op abort threshold (<n>; blank resets)",
+    ),
+    (
+        "history",
+        "session",
+        "tasks typed in earlier sessions ([n] | clear)",
+    ),
+    ("quit", "session", "leave the session"),
+];
+
+/// The groups `/help` prints, in order.
+const HELP_GROUPS: &[&str] = &["observe", "task control", "session"];
+
+/// The closest session command to `name`, when it is close enough to be a typo.
+///
+/// At most two edits, so `/stat` suggests `/stats` while a random word gets no
+/// guess at all.
+fn suggest_command(name: &str) -> Option<&'static str> {
+    let name = name.trim().trim_start_matches('/');
+    if name.is_empty() {
+        return None;
+    }
+    let mut best: Option<(usize, &'static str)> = None;
+    for (command, _, _) in SESSION_HELP {
+        let distance = edit_distance(name, command);
+        if distance <= 2 && best.map(|(closest, _)| distance < closest).unwrap_or(true) {
+            best = Some((distance, command));
+        }
+    }
+    best.map(|(_, command)| command)
+}
+
+/// Levenshtein distance between two short strings, in characters.
+fn edit_distance(left: &str, right: &str) -> usize {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0usize; right.len() + 1];
+    for (row, left_char) in left.iter().enumerate() {
+        current[0] = row + 1;
+        for (column, right_char) in right.iter().enumerate() {
+            let substitution = previous[column] + usize::from(left_char != right_char);
+            current[column + 1] = substitution
+                .min(previous[column + 1] + 1)
+                .min(current[column] + 1);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[right.len()]
+}
+
+/// The longest prefix every candidate shares (in characters).
+fn longest_common_prefix(candidates: &[String]) -> String {
+    let Some(first) = candidates.first() else {
+        return String::new();
+    };
+    let mut common: Vec<char> = first.chars().collect();
+    for candidate in &candidates[1..] {
+        let chars: Vec<char> = candidate.chars().collect();
+        let keep = common
+            .iter()
+            .zip(chars.iter())
+            .take_while(|(left, right)| left == right)
+            .count();
+        common.truncate(keep);
+        if common.is_empty() {
+            break;
+        }
+    }
+    common.into_iter().collect()
+}
+
+/// Directories `token` could name — `/add-dir` takes an existing folder.
+///
+/// `~` expands like the command itself expands it, and every candidate ends with a
+/// separator so repeated Tab walks down the tree.
+fn directory_candidates(token: &str) -> Vec<String> {
+    let expanded = if token == "~" || token.starts_with("~/") || token.starts_with("~\\") {
+        match dirs::home_dir() {
+            Some(home) => {
+                let rest = token
+                    .trim_start_matches('~')
+                    .trim_start_matches(['/', '\\']);
+                if rest.is_empty() {
+                    format!("{}/", home.display())
+                } else {
+                    format!("{}/{rest}", home.display())
+                }
+            }
+            None => token.to_string(),
+        }
+    } else {
+        token.to_string()
+    };
+    // Split at the last separator: the left half is listed, the right half filters.
+    let (directory_part, prefix) = match expanded.rfind(['/', '\\']) {
+        Some(index) => (&expanded[..=index], &expanded[index + 1..]),
+        None => ("", expanded.as_str()),
+    };
+    let directory = if directory_part.is_empty() {
+        std::path::PathBuf::from(".")
+    } else {
+        std::path::PathBuf::from(directory_part)
+    };
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    let mut candidates: Vec<String> = entries
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            name.starts_with(prefix)
+                .then(|| format!("{directory_part}{name}/"))
+        })
+        .collect();
+    candidates.sort();
+    candidates
 }
 
 /// `3 round(s) · 39 tool(s) · 54.4k tokens`, or `""` when nothing is known.
@@ -2013,6 +2328,12 @@ struct TaskFollower {
     /// When the last heartbeat was printed, cleared by every new step so the
     /// next silence starts its own window.
     last_heartbeat_at: Option<Instant>,
+    /// Steering messages the backend has settled — delivered (`steer`) or reported
+    /// undeliverable (`steering.undelivered`). The session subtracts this from the
+    /// steers it sent to show how many are still waiting (`steer[2]> `).
+    resolved_steers: u64,
+    /// The last step worth naming in `/status`, and when it arrived.
+    last_step: Option<String>,
 }
 
 impl TaskFollower {
@@ -2034,6 +2355,8 @@ impl TaskFollower {
             observed: RunStats::default(),
             last_step_at: started,
             last_heartbeat_at: None,
+            resolved_steers: 0,
+            last_step: None,
         }
     }
 
@@ -2268,6 +2591,14 @@ impl TaskFollower {
         // Counted in both output modes: `/stats` must answer the same whether
         // the steps were rendered or streamed as NDJSON.
         self.observed.observe(event);
+        // A steering line is settled when it is delivered or declared
+        // undeliverable: the prompt's pending count is what the user is watching.
+        if matches!(event.kind.as_str(), "steer" | "steering.undelivered") {
+            self.resolved_steers = self.resolved_steers.saturating_add(1);
+        }
+        if let Some(label) = event.status_label() {
+            self.last_step = Some(label);
+        }
         if self.ndjson {
             let line = event.to_json(&self.task_id).to_string();
             crate::print_stdout_line(&line);
@@ -2668,26 +2999,38 @@ fn quiet_enabled() -> bool {
     crate::quiet_active()
 }
 
-/// The non-TTY closing summary of a task's pending access requests, or `None`
-/// when nothing is pending (nothing to report).
-fn format_pending_summary(task_id: &str, view: &Value) -> Option<String> {
-    let pending = view.get("pending")?.as_array()?;
+/// The lines reporting a task's still-pending access requests.
+///
+/// Empty when nothing is pending (nothing to say). `session_alive` decides the
+/// hint: a live session answers with `/approve <id>`, a session that is leaving
+/// can only name the REST call — the request outlives the prompt.
+fn pending_access_lines(task_id: &str, view: &Value, session_alive: bool) -> Vec<String> {
+    let Some(pending) = view.get("pending").and_then(|value| value.as_array()) else {
+        return Vec::new();
+    };
     if pending.is_empty() {
-        return None;
+        return Vec::new();
     }
     let mut lines = vec![format!(
-        "task {task_id}: {} pending access request(s):",
+        "⚠ task {task_id} has {} pending access request(s):",
         pending.len()
     )];
     for request in pending {
-        lines.push(format!(
-            "  {}  {}  {}",
-            string_field(request, "requestId").unwrap_or_default(),
-            string_field(request, "effect").unwrap_or_default(),
-            string_field(request, "target").unwrap_or_default()
-        ));
+        let request_id = string_field(request, "requestId").unwrap_or_default();
+        let effect = string_field(request, "effect").unwrap_or_default();
+        let target = string_field(request, "target").unwrap_or_default();
+        if session_alive {
+            lines.push(format!(
+                "  {request_id} · {effect} {target} — /approve {request_id} · /deny {request_id}"
+            ));
+        } else {
+            let endpoint = format!("/api/agent/{task_id}/access/{request_id}/approve");
+            lines.push(format!(
+                "  {request_id} · {effect} {target} — POST {endpoint}"
+            ));
+        }
     }
-    Some(lines.join("\n"))
+    lines
 }
 
 // ---------------------------------------------------------------------------
@@ -2723,6 +3066,44 @@ fn interactive_session_base() -> &'static str {
         let suffix: String = digest.iter().take(3).map(|byte| format!("{byte:02x}")).collect();
         format!("interactive-{suffix}")
     })
+}
+
+/// How long the backend keeps an idle session's conversation by default
+/// (`browser4.agent.session.contextTtlMinutes`, 720 minutes).
+///
+/// The CLI only uses it to be honest about a resumed session: `/new` and the
+/// per-session id make the conversation resumable, but the context itself is the
+/// backend's to keep.
+const INTERACTIVE_CONTEXT_TTL_MINUTES: i64 = 12 * 60;
+
+/// How long ago an interactive-session record was written, when its timestamp
+/// parses.
+fn recorded_age(recorded_at: &str) -> Option<chrono::Duration> {
+    let recorded = chrono::DateTime::parse_from_rfc3339(recorded_at).ok()?;
+    Some(chrono::Utc::now().signed_duration_since(recorded.with_timezone(&chrono::Utc)))
+}
+
+/// Which recorded session an interactive start resumes, if any.
+///
+/// `--continue` and `-s <name>` contradict each other — one resumes the recorded
+/// session, the other names a different one — so the pair is refused instead of
+/// silently running the task in a session the user did not mean.
+fn resolve_continued_session(
+    continue_session: bool,
+    session_name: Option<&str>,
+    recorded: Option<crate::state::InteractiveSessionNote>,
+) -> Result<Option<crate::state::InteractiveSessionNote>, String> {
+    if !continue_session {
+        return Ok(None);
+    }
+    if session_name.is_some() {
+        return Err(
+            "--continue resumes the recorded interactive session: drop -s, or pass the id it \
+             printed with -s"
+                .to_string(),
+        );
+    }
+    Ok(recorded)
 }
 
 /// The interactive session state: the task in flight (if any) plus the
@@ -2796,6 +3177,25 @@ struct Repl {
     /// point where that task began. Consumed by [`Repl::start_task`], so it applies to
     /// exactly one submission.
     pending_rewind: Option<String>,
+    /// The terminal console of this session, set by [`Repl::run`] when one owns the
+    /// prompt line. `/history` reads (and clears) the persisted list through it.
+    console: Option<Arc<Console>>,
+    /// Steering lines the backend accepted for the running task. The follower's
+    /// `steer` / `steering.undelivered` events settle them, so the prompt can say
+    /// how many are still waiting to be seen (`steer[2]> `).
+    accepted_steers: u64,
+    /// Access requests still pending on the running task — what turns the prompt
+    /// into `steer!> ` and makes `/approve` the next thing to type.
+    access_pending: usize,
+    /// Requests already announced, so the periodic poll prints each one once.
+    access_seen: HashSet<String>,
+    /// When the access view was last read (the poll is throttled).
+    last_access_poll: Option<Instant>,
+    /// Whether this session continues one an earlier process started
+    /// (`agent run -i --continue`).
+    resumed: bool,
+    /// When that earlier session was last used (RFC 3339), for the age warning.
+    resumed_at: Option<String>,
 }
 
 impl Repl {
@@ -2864,6 +3264,13 @@ impl Repl {
             last_task_coding: false,
             last_digest: crate::agent_result::ResultDigest::default(),
             pending_rewind: None,
+            console: None,
+            accepted_steers: 0,
+            access_pending: 0,
+            access_seen: HashSet::new(),
+            last_access_poll: None,
+            resumed: false,
+            resumed_at: None,
         }
     }
 
@@ -2874,6 +3281,26 @@ impl Repl {
     fn with_initial_session(mut self, initial_session_id: Option<String>) -> Self {
         self.initial_session_id = initial_session_id;
         self
+    }
+
+    /// Mark this session as the continuation of one an earlier process started.
+    ///
+    /// `recorded_at` is that process's timestamp: it is what the age warning is
+    /// derived from, because the backend drops an idle session's conversation after
+    /// `browser4.agent.session.contextTtlMinutes` (12 h by default).
+    fn with_resumed(mut self, recorded_at: Option<String>) -> Self {
+        self.resumed = recorded_at.is_some();
+        self.resumed_at = recorded_at;
+        self
+    }
+
+    /// Remember which session this process is using, so a later `-i --continue`
+    /// picks it up. Best-effort: an unwritable state directory must not fail a
+    /// session.
+    fn record_session(&self) {
+        if let Some(session_id) = self.session_id() {
+            crate::state::remember_interactive_session(&session_id);
+        }
     }
 
     /// The session this turn submits to: the CLI's recorded session id for the
@@ -2919,6 +3346,11 @@ impl Repl {
         // No engine field: the CLI tool loop is the only engine left, so naming it
         // on every banner would be noise.
         let mut line = format!("Browser4 agent · session={session}");
+        if self.resumed {
+            // Say it: a continued conversation behaves differently from a fresh one
+            // (the model already knows the earlier tasks).
+            line.push_str(" · resumed");
+        }
         if self.coding {
             line.push_str(" · coding=on");
         }
@@ -2946,15 +3378,63 @@ impl Repl {
         ]
     }
 
-    fn prompt(&mut self, editor: &Editor) {
+    fn prompt(&mut self, console: &Console) {
         if !self.tty || !human_output_enabled(self.quiet) {
             self.prompt_pending = false;
             return;
         }
-        // The line editor owns the prompt line in a TTY: it redraws the text the
-        // user is typing (and puts the caret back where it belongs).
-        editor.redraw();
+        // The console owns the prompt line: it draws the prompt and the draft the
+        // user is typing (and puts the caret back where it belongs). The prompt
+        // text itself says what the line will do.
+        self.refresh_prompt();
+        console.draw();
         self.prompt_pending = false;
+    }
+
+    /// What the next typed line means, as the prompt says it.
+    ///
+    /// `agent> ` is a task, `steer> ` a message to the running task, `steer[N]> `
+    /// how many of those the agent has not seen yet, and `steer!> ` that an access
+    /// request is waiting for the operator. The shape is what tells a user whether
+    /// typing interrupts the run — it used to be one fixed `agent> `.
+    fn prompt_text(&self) -> String {
+        if self.current.is_none() {
+            return line_editor::PROMPT.to_string();
+        }
+        if self.access_pending > 0 {
+            return "steer!> ".to_string();
+        }
+        let queued = self.queued_steers();
+        if queued > 0 {
+            return format!("steer[{queued}]> ");
+        }
+        "steer> ".to_string()
+    }
+
+    /// Steering lines accepted but not yet seen by the agent.
+    fn queued_steers(&self) -> u64 {
+        match self.current.as_ref() {
+            Some(follower) => self
+                .accepted_steers
+                .saturating_sub(follower.resolved_steers),
+            None => 0,
+        }
+    }
+
+    /// Point the prompt line at the current state, redrawing it in place when the
+    /// session already owns the terminal.
+    fn refresh_prompt(&self) {
+        if let Some(console) = self.console.as_ref() {
+            console.set_prompt(&self.prompt_text());
+        }
+    }
+
+    /// Start a task with no steers and no access requests observed yet.
+    fn reset_task_observations(&mut self) {
+        self.accepted_steers = 0;
+        self.access_pending = 0;
+        self.access_seen.clear();
+        self.last_access_poll = None;
     }
 
     fn out(&self, line: &str) {
@@ -2970,7 +3450,48 @@ impl Repl {
     /// while idle starts a task. Both paths are the interactive counterpart of
     /// the one-shot form, not a different execution path.
     async fn run(mut self, initial_task: Option<String>) -> Result<(), String> {
+        // The console owns the prompt line only when this session really draws it:
+        // a terminal on BOTH ends, and human output enabled. `--quiet` / `--json`
+        // leave stdout to the machine, and a pipe (`-i | tee log`) must not carry
+        // prompts or escape codes into the log — the old check looked at stdin
+        // alone, so the prompt and the `\r\x1b[J` redraw landed in the file.
+        let owns_prompt = prompt_owner(
+            self.tty,
+            io::stdout().is_terminal(),
+            human_output_enabled(self.quiet),
+        );
+        // cbreak before the reader thread starts, so the first key is decoded. The
+        // guard sits on THIS stack frame: `/quit` returns from the session and the
+        // process exits without joining the reader thread, so a guard living there
+        // was never dropped and the terminal stayed in `-icanon -echo`.
+        let raw = if owns_prompt {
+            line_editor::RawMode::enable()
+        } else {
+            None
+        };
+        let key_editing = raw.is_some();
+        let console = line_editor::Console::new(line_editor::PROMPT, owns_prompt, key_editing);
+        let _terminal = line_editor::ConsoleGuard::begin(&console, raw);
+        self.console = Some(Arc::clone(&console));
+
+        // Pin the session this process uses before anything is submitted: a later
+        // `agent run -i --continue` resumes it, and `/new` records its successor.
+        self.record_session();
         self.banner();
+        if self.resumed {
+            let session = self.session_id().unwrap_or_else(|| "default".to_string());
+            let age = self.resumed_at.as_deref().and_then(recorded_age);
+            match age.filter(|age| age.num_minutes() >= INTERACTIVE_CONTEXT_TTL_MINUTES) {
+                // The backend drops an idle session's conversation; saying "resumed"
+                // while the context is already gone would be a lie.
+                Some(age) => self.out(&format!(
+                    "↻ resumed session {session} — last used {}h ago, and the backend keeps a \
+                     session's conversation for 12h by default, so it may start empty",
+                    age.num_hours()
+                )),
+                None => self.out(&format!("↻ resumed session {session}")),
+            }
+        }
 
         if let Some(task) = initial_task.filter(|task| !task.trim().is_empty()) {
             // A bad initial task (a missing LLM key, a backend hiccup) must not
@@ -2980,26 +3501,55 @@ impl Repl {
             }
         }
 
-        // The line editor only takes over the terminal when this session actually
-        // draws the prompt line. Under `--quiet` / `--json` stdout belongs to the
-        // machine, so the terminal keeps its own (cooked) line editing — exactly
-        // the behaviour those modes had before the editor existed.
-        let owns_prompt = self.tty && human_output_enabled(self.quiet);
-        let (mut lines, editor) = spawn_stdin_reader(line_editor::PROMPT, owns_prompt);
+        let mut lines = spawn_stdin_reader(Arc::clone(&console), key_editing);
         let mut ctrl_c = Box::pin(tokio::signal::ctrl_c());
+        let mut termination = TerminationSignals::new();
         let mut ticker = tokio::time::interval(EVENT_POLL_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+        let mut terminated = false;
+        let mut failure: Option<String> = None;
+        // A Ctrl+C with nothing to cancel only warns; a second one leaves.
+        let mut last_ctrl_c: Option<Instant> = None;
         loop {
             if self.prompt_pending && self.current.is_none() {
-                self.prompt(&editor);
+                self.prompt(&console);
             }
 
             tokio::select! {
-                line = lines.recv() => {
-                    let Some(line) = line else { break };
-                    if !self.handle_line(line).await? {
-                        break;
+                input = lines.recv() => {
+                    let Some(input) = input else { break };
+                    match input {
+                        Input::Line(line) => {
+                            // A slash command that fails must not throw the user out of
+                            // the session without the closing lines: remember it, end the
+                            // loop, and return it after the same teardown every other path
+                            // gets.
+                            match self.handle_line(line).await {
+                                Ok(true) => {
+                                    // A line the session just acted on is the natural
+                                    // moment to say that a running coding task is waiting
+                                    // on an access request: the operator typed something,
+                                    // so the answer is worth putting on screen now.
+                                    self.poll_access_requests().await;
+                                }
+                                Ok(false) => break,
+                                Err(error) => {
+                                    failure = Some(error);
+                                    break;
+                                }
+                            }
+                        }
+                        // Tab: the editor stores the buffer, the session knows the
+                        // commands. Answer, then keep reading keys.
+                        Input::Complete { line, cursor } => {
+                            self.complete_line(&console, &line, cursor);
+                        }
+                        Input::Interrupt => {
+                            if self.interrupt(&console, &mut last_ctrl_c).await {
+                                break;
+                            }
+                        }
                     }
                 }
                 _ = ticker.tick() => {
@@ -3007,26 +3557,24 @@ impl Repl {
                     if let Some(follower) = self.current.as_mut() {
                         follower.emit_heartbeat();
                     }
+                    // Access requests a coding task is waiting on: the operator only
+                    // finds out because the session says so.
+                    self.poll_access_requests().await;
+                    self.refresh_prompt();
                 }
                 _ = ctrl_c.as_mut() => {
-                    match self.current.take() {
-                        Some(follower) => {
-                            let task_id = follower.task_id.clone();
-                            let outcome = cancel_task(&self.client, &self.base_url, &task_id).await;
-                            self.out(&format!("⏹ {outcome}"));
-                            self.release_current(follower, "cancelled", true);
-                            self.prompt_pending = true;
-                            // A cancelled run is resumable: offer the continue
-                            // choice instead of leaving the user to reconstruct
-                            // the resume command.
-                            self.last_digest = self.fetch_digest(&task_id).await;
-                            let progress =
-                                status_failure_progress(&self.client, &self.base_url, &task_id).await;
-                            self.offer_next_after("cancelled", progress.as_ref());
-                        }
-                        None => break,
+                    if self.interrupt(&console, &mut last_ctrl_c).await {
+                        break;
                     }
                     ctrl_c = Box::pin(tokio::signal::ctrl_c());
+                }
+                _ = termination.recv() => {
+                    // SIGTERM / SIGHUP: a killed interactive session used to leave the
+                    // terminal without echo. The guard restores it on the way out; say
+                    // so before the process goes away.
+                    terminated = true;
+                    self.out("⏹ session terminated by a signal — the terminal is restored");
+                    break;
                 }
             }
         }
@@ -3043,7 +3591,29 @@ impl Repl {
         }
 
         self.print_pending_summary_if_any().await;
+        // Name the way back: the conversation lives on under this session id for
+        // 12h by default, and `--continue` is one flag. A TTY-only line: piped
+        // sessions keep their byte-exact output.
+        if self.tty {
+            if let Some(session_id) = self.session_id() {
+                self.out(&format!(
+                    "↻ resume this session: agent run -i --continue (or -s {session_id})"
+                ));
+            }
+        }
         self.out("");
+        // The session is over: take the prompt line away so the shell's own
+        // prompt is not appended to a dangling `agent> `. The guard then restores
+        // the terminal settings.
+        console.release();
+        if let Some(failure) = failure {
+            return Err(failure);
+        }
+        if terminated {
+            // Not a clean `/quit`: the caller turns this into a non-zero exit, so a
+            // `timeout`/service manager that sent the signal sees a real failure.
+            return Err("interactive session terminated by a signal".to_string());
+        }
         Ok(())
     }
 
@@ -3245,6 +3815,7 @@ impl Repl {
         self.out(&format!(
             "… following task {task_id} again — live steps resume"
         ));
+        self.refresh_prompt();
     }
 
     /// `/followup <text>`: queue a message that is delivered when the task would
@@ -3310,8 +3881,10 @@ impl Repl {
             Ok(response) if response.is_success() => {
                 let parsed: Value = serde_json::from_str(&response.body).unwrap_or(Value::Null);
                 if parsed.get("accepted").and_then(|v| v.as_bool()) == Some(true) {
+                    self.accepted_steers = self.accepted_steers.saturating_add(1);
                     self.out("↪ steering queued — the agent sees it at its next model round");
                     self.attach_if_detached(task_id);
+                    self.refresh_prompt();
                 } else {
                     let reason = parsed
                         .get("message")
@@ -3375,7 +3948,16 @@ impl Repl {
         if let Some(follower) = self.current.as_mut() {
             follower.renderer.verbose = self.verbose;
         }
+        // A new task starts with no steers and no access requests: the prompt says
+        // `steer> ` and will move to `steer[N]> ` / `steer!> ` only when something
+        // actually happens.
+        self.reset_task_observations();
+        self.refresh_prompt();
         self.prompt_pending = false;
+        // A request that already exists (a resumed task, or one that asked while it
+        // was being submitted) is announced before the first page is pulled: that
+        // poll may complete the task, and a completed task no longer takes `/approve`.
+        self.poll_access_requests().await;
         // Pull the first page now instead of waiting for the next tick: the
         // opening steps show up immediately, and a task that already finished
         // renders its result before the next line of input is read. With piped
@@ -3643,8 +4225,19 @@ impl Repl {
             "isDone": is_done,
             "elapsedMs": elapsed_ms,
             "steps": steps,
+            // The text is what a person recognizes: `/tasks` names the task, not
+            // just its id, and the id alone is unusable a few tasks in.
+            "task": self
+                .last_task_text
+                .as_deref()
+                .map(task_label)
+                .unwrap_or_default(),
         }));
         crate::json_field("tasks", json!(&self.tasks_json));
+        // Nothing is running any more: the prompt goes back to `agent> ` and the
+        // pending-request count belongs to the finished task.
+        self.access_pending = 0;
+        self.refresh_prompt();
     }
 
     async fn complete_current(&mut self, status: String) -> Result<(), String> {
@@ -3725,6 +4318,12 @@ impl Repl {
             ));
         }
 
+        // A finished task may still hold requests nobody answered: name them while
+        // the session can still take `/approve`.
+        if self.access_may_be_requested() || !self.access_seen.is_empty() {
+            self.report_pending_access(&task_id, true).await;
+        }
+
         Ok(())
     }
 
@@ -3735,8 +4334,9 @@ impl Repl {
 
         match name {
             "quit" | "exit" | "q" => return Ok(false),
-            "help" | "h" | "?" => self.print_help(),
+            "help" | "h" | "?" => self.print_help_or_command(argument),
             "status" => self.print_status().await,
+            "tasks" => self.print_tasks(argument),
             "result" => self.print_result(argument).await,
             "cancel" | "stop" => self.cancel_current().await,
             // `/resume [--budget <tokens>] [task-id]`: continue an interrupted
@@ -3762,15 +4362,22 @@ impl Repl {
             "events" => self.print_events(argument).await,
             // `/stats [task-id]`: no argument means the running (or last) task.
             "stats" => self.print_stats(argument).await,
+            // `/history [n]` / `/history clear`: the tasks earlier sessions ran.
+            "history" => self.print_history(argument),
             // The access-approval commands are answered by the session itself,
             // straight against the agent-access REST endpoints — the model never
             // sees them.
             "access" => self.print_access(argument).await,
             "approve" => self.decide_access(argument, "approve").await,
             "deny" => self.decide_access(argument, "deny").await,
-            other => self.out(&format!(
-                "unknown command /{other} — type /help for the list"
-            )),
+            other => match suggest_command(other) {
+                Some(suggestion) => self.out(&format!(
+                    "unknown command /{other} — did you mean /{suggestion}? (/help lists them)"
+                )),
+                None => self.out(&format!(
+                    "unknown command /{other} — type /help for the list"
+                )),
+            },
         }
         self.prompt_pending = self.current.is_none();
         Ok(true)
@@ -3914,14 +4521,14 @@ impl Repl {
         }
     }
 
-    /// A non-TTY session cannot ask the operator, so it can only inform: once
-    /// the session ends, list the access requests still pending so the log
-    /// shows what the run was (or would have been) blocked on. Any failure —
-    /// no task, an unreachable backend, a 404 — stays silent.
-    async fn print_pending_summary_if_any(&self) {
-        if self.tty {
-            return;
-        }
+    /// Once the session ends, list the access requests still pending so the log
+    /// shows what the run was (or would have been) waiting on. Any failure — no
+    /// task, an unreachable backend, a 404 — stays silent.
+    ///
+    /// This used to run for a non-TTY session only, on the theory that a terminal
+    /// could ask at any time; in practice the one person who can approve was the
+    /// one never told.
+    async fn print_pending_summary_if_any(&mut self) {
         let Some(task_id) = self
             .current
             .as_ref()
@@ -3930,7 +4537,21 @@ impl Repl {
         else {
             return;
         };
-        let Ok(response) = get_agent_access_view(&self.client, &self.base_url, &task_id).await
+        self.report_pending_access(&task_id, false).await;
+    }
+
+    /// Announce the access requests a task still has pending.
+    ///
+    /// `session_alive` picks the hint: a live session can answer with
+    /// `/approve <id>`, one that is leaving can only name the REST call.
+    async fn report_pending_access(&mut self, task_id: &str, session_alive: bool) {
+        let Ok(response) = get_agent_access_view_with_timeout(
+            &self.client,
+            &self.base_url,
+            task_id,
+            ACCESS_POLL_TIMEOUT,
+        )
+        .await
         else {
             return;
         };
@@ -3940,41 +4561,127 @@ impl Repl {
         let Ok(view) = serde_json::from_str::<Value>(&response.body) else {
             return;
         };
-        if let Some(summary) = format_pending_summary(&task_id, &view) {
-            self.out(&summary);
+        for line in pending_access_lines(task_id, &view, session_alive) {
+            self.out(&line);
         }
     }
 
+    /// Announce access requests a running task is waiting on (`steer!> `).
+    ///
+    /// The agent asks for a grant and keeps going, so nothing else tells the
+    /// operator a request exists — until now only `/access` did, and a coding run
+    /// could log "pending" with no prompt saying so. Throttled, limited to tasks
+    /// that can produce a request, and silent on any failure: a display
+    /// convenience must never disturb the run.
+    async fn poll_access_requests(&mut self) {
+        let Some(task_id) = self
+            .current
+            .as_ref()
+            .map(|follower| follower.task_id.clone())
+        else {
+            self.access_pending = 0;
+            return;
+        };
+        if !self.access_may_be_requested() {
+            return;
+        }
+        let now = Instant::now();
+        if self
+            .last_access_poll
+            .map(|at| now.duration_since(at) < ACCESS_POLL_INTERVAL)
+            .unwrap_or(false)
+        {
+            return;
+        }
+        self.last_access_poll = Some(now);
+
+        let Ok(response) = get_agent_access_view_with_timeout(
+            &self.client,
+            &self.base_url,
+            &task_id,
+            ACCESS_POLL_TIMEOUT,
+        )
+        .await
+        else {
+            return;
+        };
+        if !response.is_success() {
+            return;
+        }
+        let Ok(view) = serde_json::from_str::<Value>(&response.body) else {
+            return;
+        };
+        let pending = view
+            .get("pending")
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+        self.access_pending = pending.len();
+        for request in &pending {
+            let request_id = string_field(request, "requestId").unwrap_or_default();
+            // One line per request, ever: a poll every 2.5s must not repaint the
+            // same announcement.
+            if request_id.is_empty() || !self.access_seen.insert(request_id.clone()) {
+                continue;
+            }
+            let effect = string_field(request, "effect").unwrap_or_default();
+            let target = string_field(request, "target").unwrap_or_default();
+            let hint = format!("/approve {request_id} · /deny {request_id}");
+            self.out(&format!(
+                "⚠ access request {request_id} · {effect} {target} — {hint}"
+            ));
+        }
+        self.refresh_prompt();
+    }
+
+    /// Whether this task can produce an access request at all.
+    ///
+    /// Only the coding tools ask (`coding.requestAccess`), so a plain browsing
+    /// session does not poll: every 2.5 s is cheap, but asking about a task that
+    /// cannot request anything is noise.
+    fn access_may_be_requested(&self) -> bool {
+        self.coding || self.access.is_some()
+    }
+
     fn print_help(&self) {
-        self.out("Commands:");
-        self.out("  /help              this list");
-        self.out("  /status            status of the running (or last) task");
-        self.out("  /result [--json] [--full]");
-        self.out("                     re-print the last finished task's result (--json: pretty envelope, --full: everything)");
-        self.out("  /resume [--budget <n>] [task-id]");
-        self.out("                     continue an interrupted/stalled task (a budget abort needs a bigger --budget)");
-        self.out("  /rewind <task-id>  continue this session's CONVERSATION from where that task began");
-        self.out("                     (the abandoned branch is summarized); /rewind off cancels");
-        self.out("  /cancel            cancel the running task (same as Ctrl+C)");
-        self.out("  /new               start a new session (fresh agent context)");
-        self.out("  /session           print the current session id");
-        self.out("  /coding [on|off]   treat following tasks as coding tasks");
-        self.out("  /followup <text>   deliver it when the running task would finish (same task, not a new one)");
-        self.out("  /add-dir <dir>     grant the following tasks an extra folder (no argument: list)");
-        self.out("  /dirs [clear]      list the folders granted in this session, or drop them all");
-        self.out("  /quiet [on|off]    silence the session's human lines (like -q)");
-        self.out("  /verbose [on|off]  also print round markers and fast successful tools");
-        self.out("  /noop-limit <n>    consecutive no-op abort threshold (blank resets)");
-        self.out("  /events [n]        raw JSON of the last n steps (default 20)");
-        self.out("  /stats [task-id]   run statistics: LLM rounds/requests, tokens, tool calls");
-        self.out("  /access [task-id]                 show pending access requests and active operator grants");
-        self.out("  /approve <request-id> [task-id]   approve a pending access request");
-        self.out("  /deny <request-id> [task-id]      deny a pending access request");
-        self.out("  /quit              leave the session");
+        self.out("Commands — /help <command> describes one:");
+        for group in HELP_GROUPS {
+            self.out(&format!("  {group}:"));
+            for (name, _, description) in SESSION_HELP.iter().filter(|(_, kind, _)| kind == group) {
+                self.out(&format!("    /{name:<12} {description}"));
+            }
+        }
         self.out("");
         self.out("Anything else is a task. While a task runs, a typed line steers it at its");
         self.out("next model round — /cancel the running task first to start a different one.");
         self.out("After a task ends, type 1–3 to pick a suggested next step.");
+        self.out("");
+        self.out("Editing: ←/→ Home/End · Ctrl+A/E ends · Ctrl+U/K/W delete · Alt+←/→ by word");
+        self.out("         Tab completes commands/ids/folders · ↑/↓ history · Ctrl+L clears");
+        self.out("         Ctrl+C clears the line (twice: leave) · Ctrl+D leaves · paste = 1 task");
+    }
+
+    /// `/help` (list) and `/help <command>` (one command, plus a suggestion when
+    /// the name is a typo).
+    fn print_help_or_command(&self, argument: &str) {
+        let name = argument.trim().trim_start_matches('/');
+        if name.is_empty() {
+            self.print_help();
+            return;
+        }
+        if let Some((command, _, description)) = SESSION_HELP
+            .iter()
+            .find(|(command, _, _)| *command == name)
+        {
+            self.out(&format!("/{command} — {description}"));
+            return;
+        }
+        match suggest_command(name) {
+            Some(suggestion) => self.out(&format!(
+                "no /{name} — did you mean /{suggestion}? (/help lists every command)"
+            )),
+            None => self.out(&format!("no /{name} — /help lists every command")),
+        }
     }
 
     async fn print_status(&mut self) {
@@ -3987,14 +4694,116 @@ impl Repl {
             self.out("no task yet — type a task to start one");
             return;
         };
+        // The live follower knows the elapsed time and the step in flight; the
+        // status endpoint answers how far the run has got. Together they answer
+        // "is it moving", which one of them alone cannot.
+        let live = self
+            .current
+            .as_ref()
+            .filter(|follower| follower.task_id == task_id)
+            .map(|follower| {
+                (
+                    follower.elapsed(),
+                    follower
+                        .last_step
+                        .clone()
+                        .map(|step| (step, follower.last_step_at.elapsed())),
+                )
+            });
 
         match get_command_status(&self.client, &self.base_url, &task_id).await {
             Ok(body) => {
                 let progress = parse_status_progress(&body);
-                self.out(&status_line(&task_id, &progress));
+                let (elapsed, last_step) = match &live {
+                    Some((elapsed, step)) => (
+                        Some(*elapsed),
+                        step.as_ref().map(|(step, silent)| (step.as_str(), *silent)),
+                    ),
+                    None => (None, None),
+                };
+                self.out(&status_line(&task_id, &progress, elapsed, last_step));
             }
             Err(error) => self.out(&format!("could not read status of {task_id}: {error}")),
         }
+    }
+
+    /// `/tasks [n]`: the tasks this session ran, newest first.
+    ///
+    /// `/result`, `/resume` and `/rewind` all take a task id, and until now nothing
+    /// in the session printed one: after a few tasks the earlier ones were only
+    /// reachable by leaving the session for `agent list`.
+    fn print_tasks(&mut self, argument: &str) {
+        let count = match argument.trim() {
+            "" => 10,
+            value => match value.parse::<usize>() {
+                Ok(count) if count > 0 => count,
+                _ => {
+                    self.out(&format!("usage: /tasks [n] (got '{value}')"));
+                    return;
+                }
+            },
+        };
+
+        let rows = self.task_rows();
+        if rows.is_empty() {
+            self.out("no task yet — type a task to start one");
+            return;
+        }
+        let total = rows.len();
+        self.out(&format!("tasks ({total}, newest first):"));
+        for (task_id, status, duration, label) in rows.iter().take(count) {
+            let label = one_line(label);
+            if label.is_empty() {
+                self.out(&format!("  {task_id}  {status:<9} {duration:>7}"));
+            } else {
+                self.out(&format!("  {task_id}  {status:<9} {duration:>7}  {label}"));
+            }
+        }
+        self.out("  /result <task-id> · /resume <task-id> · /rewind <task-id>");
+    }
+
+    /// The session's tasks, newest first: `(id, status, duration, task text)`.
+    ///
+    /// The running task comes from the follower (it is not released yet), the rest
+    /// from the session's own record — the same list `-i --json` exports.
+    fn task_rows(&self) -> Vec<(String, String, String, String)> {
+        let mut rows: Vec<(String, String, String, String)> = Vec::new();
+        if let Some(follower) = self.current.as_ref() {
+            rows.push((
+                follower.task_id.clone(),
+                "running".to_string(),
+                format_run_duration(follower.elapsed().as_millis() as u64),
+                self.last_task_text.clone().unwrap_or_default(),
+            ));
+        }
+        for value in self.tasks_json.iter().rev() {
+            let task_id = value
+                .get("taskId")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            if task_id.is_empty() || rows.iter().any(|(known, ..)| known == task_id) {
+                continue;
+            }
+            rows.push((
+                task_id.to_string(),
+                value
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string(),
+                value
+                    .get("elapsedMs")
+                    .and_then(|v| v.as_u64())
+                    .map(format_run_duration)
+                    .unwrap_or_default(),
+                value
+                    .get("task")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+            ));
+        }
+        rows
     }
 
     /// `/stats [task-id]`: what this run cost — LLM rounds and requests, tokens,
@@ -4097,21 +4906,19 @@ impl Repl {
     /// per-section cap (`/result` printed 10 of 25 findings and said "and 15 more",
     /// which is a dead end for the one command that exists to re-read the result).
     async fn print_result(&mut self, argument: &str) {
-        let mut raw = false;
-        let mut full = crate::pretty_active();
-        for token in argument.split_whitespace() {
-            match token {
-                "--json" | "-j" => raw = true,
-                "--full" | "-f" => full = true,
-                other => {
-                    self.out(&format!("usage: /result [--json] [--full] (got '{other}')"));
-                    return;
-                }
+        let (named, raw, full) = match parse_result_args(argument) {
+            Ok(parsed) => parsed,
+            Err(usage) => {
+                self.out(&usage);
+                return;
             }
-        }
-        let Some(task_id) = self.last_task.clone() else {
-            self.out("no finished task yet");
-            return;
+        };
+        let task_id = match named.or_else(|| self.last_task.clone()) {
+            Some(task_id) => task_id,
+            None => {
+                self.out("no finished task yet — /tasks lists the ones this session ran");
+                return;
+            }
         };
         match get_command_result(&self.client, &self.base_url, &task_id).await {
             Ok(result) if raw => {
@@ -4160,6 +4967,11 @@ impl Repl {
             self.out("no task is running");
             return;
         };
+        self.cancel_follower(follower).await;
+    }
+
+    /// Cancel one followed task and move the session back to idle.
+    async fn cancel_follower(&mut self, follower: TaskFollower) {
         let task_id = follower.task_id.clone();
         let outcome = cancel_task(&self.client, &self.base_url, &task_id).await;
         self.out(&format!("⏹ {outcome}"));
@@ -4167,9 +4979,224 @@ impl Repl {
         // backend when it has counters, from this session otherwise).
         self.release_current(follower, "cancelled", true);
         self.prompt_pending = true;
+        // A cancelled run is resumable: offer the continue choice instead of
+        // leaving the user to reconstruct the resume command.
         self.last_digest = self.fetch_digest(&task_id).await;
         let progress = status_failure_progress(&self.client, &self.base_url, &task_id).await;
         self.offer_next_after("cancelled", progress.as_ref());
+        // A cancelled task can still hold a request the operator never saw.
+        if self.access_may_be_requested() || !self.access_seen.is_empty() {
+            self.report_pending_access(&task_id, true).await;
+        }
+    }
+
+    /// Ctrl+C (or a piped 0x03). Returns whether the session should end.
+    ///
+    /// Three answers instead of one: cancel the running task; with nothing running
+    /// but text on the line, clear the line; with an empty line, warn once and
+    /// leave on a second press. Before this, Ctrl+C with no live follower ended the
+    /// session, so the natural way to throw away a half-typed task kicked the user
+    /// out instead.
+    async fn interrupt(&mut self, console: &Console, last_ctrl_c: &mut Option<Instant>) -> bool {
+        if self.current.is_none() {
+            // The live view may have been released while the task still runs (a
+            // backend hiccup): ask before deciding there is nothing to cancel.
+            if let Some(task_id) = self.running_task().await {
+                self.attach_if_detached(&task_id);
+            }
+        }
+        if let Some(follower) = self.current.take() {
+            self.cancel_follower(follower).await;
+            *last_ctrl_c = None;
+            return false;
+        }
+        if console.clear_draft() {
+            // No-echo mode never shows the ^C; say it happened.
+            self.out("^C");
+            self.prompt_pending = true;
+            *last_ctrl_c = None;
+            return false;
+        }
+        let repeat = last_ctrl_c
+            .map(|at| at.elapsed() < Duration::from_secs(2))
+            .unwrap_or(false);
+        if repeat {
+            return true;
+        }
+        *last_ctrl_c = Some(Instant::now());
+        self.out("press Ctrl+C again to leave the session (Ctrl+D also leaves)");
+        self.prompt_pending = true;
+        false
+    }
+
+    /// Tab: complete the token before the caret.
+    ///
+    /// The editor stores the buffer but knows nothing about the session's
+    /// commands, so completion lives here: command names, toggle values, task ids
+    /// and the folders `/add-dir` may take. One candidate replaces the token (with
+    /// the trailing space that lets the user keep typing); several extend it to the
+    /// longest common prefix, and when that changes nothing they are listed.
+    fn complete_line(&mut self, console: &Console, line: &str, cursor: usize) {
+        let chars: Vec<char> = line.chars().collect();
+        let cursor = cursor.min(chars.len());
+        let mut start = cursor;
+        while start > 0 && !chars[start - 1].is_whitespace() {
+            start -= 1;
+        }
+        let token: String = chars[start..cursor].iter().collect();
+        let head: String = chars[..start].iter().collect();
+        let tail: String = chars[cursor..].iter().collect();
+        let command = head.split_whitespace().next().unwrap_or_default();
+
+        let (candidates, suffix) = if head.trim().is_empty() {
+            if !token.starts_with('/') {
+                return;
+            }
+            let candidates = SESSION_HELP
+                .iter()
+                .map(|(name, _, _)| format!("/{name}"))
+                .filter(|candidate| candidate.starts_with(&token))
+                .collect::<Vec<_>>();
+            (candidates, " ")
+        } else {
+            match command {
+                "/coding" | "/quiet" | "/verbose" => (
+                    ["on", "off"]
+                        .iter()
+                        .map(|value| value.to_string())
+                        .filter(|value| value.starts_with(&token))
+                        .collect(),
+                    " ",
+                ),
+                "/dirs" | "/history" => (
+                    ["clear"]
+                        .iter()
+                        .map(|value| value.to_string())
+                        .filter(|value| value.starts_with(&token))
+                        .collect(),
+                    " ",
+                ),
+                "/add-dir" => (directory_candidates(&token), ""),
+                "/result" | "/resume" | "/rewind" | "/stats" | "/access" | "/approve"
+                | "/deny" => (
+                    self.task_id_candidates()
+                        .into_iter()
+                        .filter(|candidate| candidate.starts_with(&token))
+                        .collect(),
+                    "",
+                ),
+                _ => (Vec::new(), ""),
+            }
+        };
+
+        self.apply_completion(console, &head, &token, &tail, &candidates, suffix);
+    }
+
+    /// Put one completion on the line, or list what the token could be.
+    fn apply_completion(
+        &mut self,
+        console: &Console,
+        head: &str,
+        token: &str,
+        tail: &str,
+        candidates: &[String],
+        suffix: &str,
+    ) {
+        match candidates.len() {
+            0 => {}
+            1 => {
+                let candidate = &candidates[0];
+                // A trailing separator is only useful when nothing follows the
+                // caret; completing mid-line must not insert a space.
+                let separator = if tail.is_empty() { suffix } else { "" };
+                let completed = format!("{head}{candidate}{separator}{tail}");
+                let caret = head.chars().count()
+                    + candidate.chars().count()
+                    + separator.chars().count();
+                console.set_text(&completed, caret);
+            }
+            _ => {
+                let common = longest_common_prefix(candidates);
+                if common.chars().count() > token.chars().count() {
+                    let completed = format!("{head}{common}{tail}");
+                    let cursor = head.chars().count() + common.chars().count();
+                    console.set_text(&completed, cursor);
+                    return;
+                }
+                self.out(&format!("{} candidates:", candidates.len()));
+                for candidate in candidates {
+                    self.out(&format!("  {candidate}"));
+                }
+            }
+        }
+    }
+
+    /// The ids this session can name: the running task, the last one, then the
+    /// session's own history newest first.
+    fn task_id_candidates(&self) -> Vec<String> {
+        let mut ids: Vec<String> = Vec::new();
+        if let Some(follower) = self.current.as_ref() {
+            ids.push(follower.task_id.clone());
+        }
+        if let Some(task_id) = self.last_task.as_ref() {
+            if !ids.iter().any(|known| known == task_id) {
+                ids.push(task_id.clone());
+            }
+        }
+        for value in self.tasks_json.iter().rev() {
+            if let Some(task_id) = value.get("taskId").and_then(|v| v.as_str()) {
+                if !ids.iter().any(|known| known == task_id) {
+                    ids.push(task_id.to_string());
+                }
+            }
+        }
+        ids
+    }
+
+    /// `/history [n]` / `/history clear`: what earlier sessions were asked to do.
+    fn print_history(&mut self, argument: &str) {
+        let Some(console) = self.console.as_ref().map(Arc::clone) else {
+            self.out("history is kept only for an interactive terminal session");
+            return;
+        };
+        if !console.key_editing() {
+            // Piped stdin, `--quiet`, `--json`: no prompt line, so nothing is
+            // recorded and nothing should pretend to be.
+            self.out("history is kept only when the session owns a terminal; this one has none");
+            return;
+        }
+        let argument = argument.trim();
+        if argument == "clear" {
+            console.clear_history();
+            self.out("history cleared");
+            return;
+        }
+        let count = match argument {
+            "" => 20,
+            value => match value.parse::<usize>() {
+                Ok(count) if count > 0 => count,
+                _ => {
+                    self.out(&format!(
+                        "usage: /history [n] | /history clear (got '{value}')"
+                    ));
+                    return;
+                }
+            },
+        };
+        let entries = console.history();
+        if entries.is_empty() {
+            self.out("no history yet — tasks submitted from now on are remembered");
+            return;
+        }
+        let start = entries.len().saturating_sub(count);
+        self.out(&format!(
+            "history ({} of {}):",
+            entries.len() - start,
+            entries.len()
+        ));
+        for (offset, entry) in entries[start..].iter().enumerate() {
+            self.out(&format!("  {:>3}  {}", start + offset + 1, one_line(entry)));
+        }
     }
 
     fn new_session(&mut self) {
@@ -4179,6 +5206,8 @@ impl Repl {
         self.out(&format!(
             "new session: {session} (the next task starts a fresh agent context)"
         ));
+        // The newest generation is what a later `--continue` should resume.
+        self.record_session();
     }
 
     fn set_coding(&mut self, argument: &str) {
@@ -4506,38 +5535,98 @@ fn sanitize_stdin_bytes(bytes: &[u8]) -> String {
     sanitize_stdin_line(text.trim_end_matches(['\n', '\r']))
 }
 
+/// SIGTERM / SIGHUP as one awaitable, so a killed session restores the terminal.
+///
+/// Terminating without a handler leaves the tty in cbreak mode (the settings are
+/// device state, not process state). Windows has neither signal: there the future
+/// never resolves and Ctrl+C / `/quit` remain the only exits.
+struct TerminationSignals {
+    #[cfg(unix)]
+    terminate: Option<tokio::signal::unix::Signal>,
+    #[cfg(unix)]
+    hangup: Option<tokio::signal::unix::Signal>,
+}
+
+impl TerminationSignals {
+    fn new() -> Self {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            Self {
+                terminate: signal(SignalKind::terminate()).ok(),
+                hangup: signal(SignalKind::hangup()).ok(),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            Self {}
+        }
+    }
+
+    /// Resolves on the first termination signal (or never).
+    async fn recv(&mut self) {
+        #[cfg(unix)]
+        {
+            match (self.terminate.as_mut(), self.hangup.as_mut()) {
+                (Some(terminate), Some(hangup)) => {
+                    tokio::select! {
+                        _ = terminate.recv() => {}
+                        _ = hangup.recv() => {}
+                    }
+                }
+                (Some(terminate), None) => {
+                    terminate.recv().await;
+                }
+                (None, Some(hangup)) => {
+                    hangup.recv().await;
+                }
+                (None, None) => std::future::pending::<()>().await,
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            std::future::pending::<()>().await
+        }
+    }
+}
+
+/// Route one human line through the interactive console, when a session owns the
+/// terminal.
+///
+/// Returns `false` when no console is installed — piped sessions, `--json`, and
+/// every non-interactive command — so the caller writes the line itself and the
+/// machine-facing output stays byte-exact.
+pub(crate) fn write_human_line(line: &str) -> bool {
+    line_editor::write_human_line(line)
+}
+
 /// Read stdin lines on a dedicated thread and forward them to the async loop.
 ///
 /// A plain thread (not `spawn_blocking`) because the read is blocking for the
 /// whole session: the thread exits at EOF, and the process exits when the
 /// session ends, so a pending read can never leak past the CLI.
 ///
-/// `owns_prompt` says the REPL draws the prompt line: only then does the
-/// returned [`Editor`] put the terminal into cbreak mode and turn key bytes
-/// into line edits. Piped stdin, and the machine-output modes, keep the
-/// line-oriented reader.
+/// `key_editing` says the terminal hands us individual keys (cbreak mode is on):
+/// then the console decodes them into line edits. Piped stdin — and a console
+/// that never entered cbreak mode — keeps the line-oriented reader and its
+/// sanitiser.
 fn spawn_stdin_reader(
-    prompt: &str,
-    owns_prompt: bool,
-) -> (tokio::sync::mpsc::UnboundedReceiver<String>, Arc<Editor>) {
+    console: Arc<Console>,
+    key_editing: bool,
+) -> tokio::sync::mpsc::UnboundedReceiver<Input> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let editor = Editor::new(prompt, owns_prompt && io::stdin().is_terminal());
-    let thread_editor = Arc::clone(&editor);
     std::thread::spawn(move || {
         let mut stdin = io::stdin().lock();
         // A TTY hands us the bytes of special keys: read them one key at a time
-        // and let the editor turn ←/→/Home/Del/Shift+Space into line edits.
-        // Piped input has no keys, so keep the line-oriented reader (and its
-        // sanitiser) there.
-        if let Some(_cbreak) = thread_editor.enabled().then(line_editor::RawMode::enable).flatten() {
-            thread_editor.redraw();
+        // and let the console turn ←/→/Home/Del/Shift+Space into line edits.
+        if key_editing && console.enabled() {
             let mut buffer = [0u8; 256];
             loop {
                 match stdin.read(&mut buffer) {
                     Ok(0) => return,
                     Ok(read) => {
-                        for line in thread_editor.feed(&buffer[..read]) {
-                            if tx.send(line).is_err() {
+                        for input in console.feed(&buffer[..read]) {
+                            if tx.send(input).is_err() {
                                 return;
                             }
                         }
@@ -4552,7 +5641,7 @@ fn spawn_stdin_reader(
             match stdin.read_until(b'\n', &mut buffer) {
                 Ok(0) => return,
                 Ok(_) => {
-                    if tx.send(sanitize_stdin_bytes(&buffer)).is_err() {
+                    if tx.send(Input::Line(sanitize_stdin_bytes(&buffer))).is_err() {
                         return;
                     }
                 }
@@ -4560,7 +5649,7 @@ fn spawn_stdin_reader(
             }
         }
     });
-    (rx, editor)
+    rx
 }
 
 /// Run the interactive session (`agent run -i`).
@@ -4578,10 +5667,34 @@ pub async fn run_interactive(
         .get("task")
         .and_then(|v| v.as_str())
         .map(str::to_string);
-    // The first turn runs in the CLI's current session (attached browser / `-s`
-    // slot / SWARM); `/new` derives a fresh generation instead.
+    let continue_session = params
+        .get("continueSession")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    // Read the record only when asked to continue: a plain `-i` must not depend on
+    // the state directory for the session it submits to.
+    let recorded = if continue_session {
+        crate::state::read_interactive_session()
+    } else {
+        None
+    };
+    let resumed = resolve_continued_session(continue_session, session_name, recorded)?;
+    if continue_session && resumed.is_none() {
+        crate::print_stdout_line(
+            "no interactive session recorded yet — starting a new one (the next /quit records \
+             it, and --continue resumes it)",
+        );
+    }
+    // The first turn runs in the recorded session when continuing, else in the
+    // CLI's current session (attached browser / `-s` slot / SWARM); `/new` derives a
+    // fresh generation instead.
+    let initial_session = resumed
+        .as_ref()
+        .map(|note| note.session_id.clone())
+        .or_else(|| crate::resolve_agent_session_id(session_name));
     Repl::new(client, base_url, params, session_name)
-        .with_initial_session(crate::resolve_agent_session_id(session_name))
+        .with_initial_session(initial_session)
+        .with_resumed(resumed.map(|note| note.recorded_at))
         .run(initial_task)
         .await
 }
@@ -4615,6 +5728,303 @@ mod tests {
             repl.session_id(),
             Some(format!("{}-1", interactive_session_base()))
         );
+    }
+
+    /// The prompt line is drawn only on a terminal on both ends.
+    ///
+    /// `-i | tee log` used to be enough to take the terminal (stdin was a TTY),
+    /// and the prompt plus the erase/redraw escape sequences ended up in the log.
+    #[test]
+    fn a_piped_stdout_never_gets_the_prompt_line() {
+        assert!(prompt_owner(true, true, true));
+        assert!(
+            !prompt_owner(true, false, true),
+            "`agent run -i | tee log` must not draw a prompt into the pipe"
+        );
+        assert!(!prompt_owner(false, true, true), "piped stdin has no prompt line");
+        assert!(!prompt_owner(true, true, false), "--quiet / --json leave stdout to the machine");
+    }
+
+    /// A console a test can drive: enabled, key-editing, output thrown away.
+    fn test_console() -> Arc<line_editor::Console> {
+        line_editor::Console::with_sink("agent> ", true, true, 100, Box::new(std::io::sink()))
+    }
+
+    fn test_repl() -> Repl {
+        let client = Client::new();
+        let params = serde_json::json!({});
+        Repl::new(&client, "http://127.0.0.1:1", &params, None)
+    }
+
+    /// Tab completes a command name the user started, with the trailing space that
+    /// lets them keep typing its argument.
+    #[test]
+    fn tab_completes_a_session_command() {
+        let mut repl = test_repl();
+        let console = test_console();
+        repl.complete_line(&console, "/rewi", 5);
+        assert_eq!(console.text(), "/rewind ");
+        assert_eq!(console.cursor(), 8);
+    }
+
+    /// Several candidates: the line grows to the longest common prefix, and a
+    /// second Tab (nothing more to add) lists them instead of guessing.
+    #[test]
+    fn tab_extends_a_command_to_the_common_prefix() {
+        let mut repl = test_repl();
+        let console = test_console();
+        repl.complete_line(&console, "/sta", 4);
+        assert_eq!(console.text(), "/stat");
+        assert_eq!(console.cursor(), 5);
+    }
+
+    /// A toggle takes on/off, so `/coding on<Tab>` finishes the word.
+    #[test]
+    fn tab_completes_a_toggle_value() {
+        let mut repl = test_repl();
+        let console = test_console();
+        repl.complete_line(&console, "/coding on", 10);
+        assert_eq!(console.text(), "/coding on ");
+    }
+
+    /// The ids `/result`, `/resume`, `/rewind` and `/stats` accept are the ones
+    /// this session ran, so Tab offers them instead of asking the user to retype.
+    #[test]
+    fn tab_completes_a_task_id_from_this_session() {
+        let mut repl = test_repl();
+        repl.tasks_json.push(json!({"taskId": "5b0c3f2a", "status": "done"}));
+        let console = test_console();
+        repl.complete_line(&console, "/result 5b", 10);
+        assert_eq!(console.text(), "/result 5b0c3f2a");
+        assert_eq!(console.cursor(), 16);
+    }
+
+    /// A task (not a command) has no grammar to complete: Tab must not rewrite it.
+    #[test]
+    fn tab_leaves_a_task_alone() {
+        let mut repl = test_repl();
+        let console = test_console();
+        repl.complete_line(&console, "summarize the page", 18);
+        assert_eq!(console.text(), "");
+    }
+
+    #[test]
+    fn the_common_prefix_of_completions_is_what_they_share() {
+        let candidates = vec!["/status".to_string(), "/stats".to_string()];
+        assert_eq!(longest_common_prefix(&candidates), "/stat");
+        let distinct = vec!["/new".to_string(), "/quit".to_string()];
+        assert_eq!(longest_common_prefix(&distinct), "/");
+        assert_eq!(longest_common_prefix(&[]), "");
+    }
+
+    /// `/add-dir` only takes existing folders, so Tab lists subdirectories and
+    /// leaves the separator on for another Tab.
+    #[test]
+    fn tab_completes_a_folder_for_add_dir() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::create_dir_all(dir.path().join("alpha")).expect("mkdir");
+        std::fs::create_dir_all(dir.path().join("beta")).expect("mkdir");
+        std::fs::write(dir.path().join("not-a-folder.txt"), b"x").expect("file");
+
+        let token = format!("{}/a", dir.path().display());
+        let candidates = directory_candidates(&token);
+        assert_eq!(candidates.len(), 1, "{candidates:?}");
+        assert!(
+            candidates[0].ends_with("/alpha/") || candidates[0].ends_with("\\alpha/"),
+            "{candidates:?}"
+        );
+    }
+
+    /// Ctrl+C with a typed line clears the line instead of ending the session; on
+    /// an empty line it warns once and the second press leaves.
+    #[tokio::test]
+    async fn ctrl_c_clears_a_typed_line_then_leaves_on_the_second_empty_press() {
+        let mut repl = test_repl();
+        let console = test_console();
+        console.feed(b"half a task");
+        let mut last_ctrl_c = None;
+
+        assert!(
+            !repl.interrupt(&console, &mut last_ctrl_c).await,
+            "clearing a line must not end the session"
+        );
+        assert_eq!(console.text(), "");
+        assert!(last_ctrl_c.is_none(), "the first press does not arm the exit");
+
+        assert!(
+            !repl.interrupt(&console, &mut last_ctrl_c).await,
+            "the first press on an empty line only warns"
+        );
+        assert!(last_ctrl_c.is_some());
+        assert!(
+            repl.interrupt(&console, &mut last_ctrl_c).await,
+            "a second press leaves"
+        );
+    }
+
+    /// The prompt is not decoration: it says whether the next line is a task or a
+    /// message to the running one, how many messages are still queued, and whether
+    /// an access request is waiting for the operator.
+    #[test]
+    fn the_prompt_says_what_the_next_line_will_do() {
+        let mut repl = test_repl();
+        assert_eq!(repl.prompt_text(), "agent> ");
+        repl.current = Some(TaskFollower::new("t1", false, false, false));
+        assert_eq!(repl.prompt_text(), "steer> ");
+        repl.accepted_steers = 2;
+        assert_eq!(repl.prompt_text(), "steer[2]> ");
+        if let Some(follower) = repl.current.as_mut() {
+            follower.resolved_steers = 1;
+        }
+        assert_eq!(repl.prompt_text(), "steer[1]> ");
+        repl.access_pending = 1;
+        assert_eq!(repl.prompt_text(), "steer!> ");
+        repl.current = None;
+        assert_eq!(repl.prompt_text(), "agent> ");
+    }
+
+    /// `/tasks`: the running task first, then this session's tasks newest first,
+    /// each with the text a person recognizes.
+    #[test]
+    fn session_tasks_are_listed_newest_first_with_their_text() {
+        let mut repl = test_repl();
+        repl.tasks_json.push(json!({
+            "taskId": "old", "status": "done", "elapsedMs": 18400, "task": "collect prices"
+        }));
+        repl.tasks_json.push(json!({
+            "taskId": "new", "status": "failed", "elapsedMs": 2100, "task": "compare plans"
+        }));
+        repl.current = Some(TaskFollower::new("live", false, false, false));
+        repl.last_task_text = Some("running task".to_string());
+
+        let rows = repl.task_rows();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].0, "live");
+        assert_eq!(rows[0].1, "running");
+        assert_eq!(rows[0].3, "running task");
+        assert_eq!(rows[1].0, "new");
+        assert_eq!(rows[1].1, "failed");
+        assert_eq!(rows[1].3, "compare plans");
+        assert_eq!(rows[2].0, "old");
+        assert_eq!(rows[2].2, "18.4s");
+    }
+
+    /// `/result` takes a task id, so an earlier task's payload is reachable from
+    /// inside the session.
+    #[test]
+    fn result_arguments_pick_a_task_and_the_flags() {
+        let (named, raw, full) = parse_result_args("5b0c3f2a --json").unwrap();
+        assert_eq!(named.as_deref(), Some("5b0c3f2a"));
+        assert!(raw);
+        assert!(!full);
+        assert!(parse_result_args("--full").unwrap().2);
+        assert_eq!(parse_result_args("").unwrap().0, None);
+        assert!(parse_result_args("--nope").is_err());
+    }
+
+    /// A mistyped command names the one that was meant; a random word does not
+    /// pretend to know.
+    #[test]
+    fn a_mistyped_command_gets_the_nearest_one() {
+        assert_eq!(suggest_command("stat"), Some("stats"));
+        assert_eq!(suggest_command("stats"), Some("stats"));
+        assert_eq!(suggest_command("quite"), Some("quit"));
+        assert_eq!(suggest_command("summarize the page"), None);
+        assert_eq!(suggest_command(""), None);
+        assert_eq!(edit_distance("abc", "abc"), 0);
+        assert_eq!(edit_distance("abc", "abd"), 1);
+        assert_eq!(edit_distance("", "abc"), 3);
+    }
+
+    /// One table feeds `/help`, `/help <command>` and Tab completion: it has to be
+    /// complete, grouped, and free of duplicates.
+    #[test]
+    fn the_help_table_is_complete_and_grouped() {
+        let mut names: Vec<&str> = SESSION_HELP.iter().map(|(name, _, _)| *name).collect();
+        let count = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), count, "a command is listed twice");
+
+        for (name, group, description) in SESSION_HELP {
+            assert!(
+                HELP_GROUPS.contains(group),
+                "/{name} is in group '{group}', which /help never prints"
+            );
+            assert!(!description.is_empty(), "/{name} needs a description");
+        }
+        for expected in [
+            "status", "tasks", "result", "history", "approve", "quit",
+        ] {
+            assert!(
+                SESSION_HELP.iter().any(|(name, _, _)| *name == expected),
+                "/{expected} is missing from the help table"
+            );
+        }
+    }
+
+    /// Only a coding task can ask for a grant, so a plain browsing session does not
+    /// spend a poll per tick asking about one.
+    #[test]
+    fn access_requests_are_polled_only_for_tasks_that_can_ask() {
+        let mut repl = test_repl();
+        assert!(!repl.access_may_be_requested());
+        repl.access = Some("read".to_string());
+        assert!(repl.access_may_be_requested());
+        repl.access = None;
+        repl.coding = true;
+        assert!(repl.access_may_be_requested());
+    }
+
+    /// A resumed session submits to the recorded id and says so; `--continue` and
+    /// `-s` name different sessions, so the pair is refused.
+    #[test]
+    fn continue_resumes_the_recorded_session() {
+        let recorded = crate::state::InteractiveSessionNote {
+            session_id: "interactive-old".to_string(),
+            recorded_at: "2026-11-22T00:00:00Z".to_string(),
+        };
+
+        // Not asking to continue: the record is ignored.
+        assert!(resolve_continued_session(false, None, Some(recorded.clone()))
+            .unwrap()
+            .is_none());
+
+        // Continuing uses the recorded session …
+        let resumed = resolve_continued_session(true, None, Some(recorded.clone()))
+            .unwrap()
+            .expect("the recorded session");
+        assert_eq!(resumed.session_id, "interactive-old");
+
+        // … or starts fresh when nothing was recorded (the caller says so).
+        assert!(resolve_continued_session(true, None, None).unwrap().is_none());
+
+        // `--continue` + `-s` contradict each other.
+        let error = resolve_continued_session(true, Some("work"), Some(recorded)).unwrap_err();
+        assert!(error.contains("--continue"), "{error}");
+
+        // A continued session submits to the recorded id and says so in the banner.
+        let client = Client::new();
+        let params = serde_json::json!({});
+        let repl = Repl::new(&client, "http://127.0.0.1:1", &params, None)
+            .with_initial_session(Some("interactive-old".to_string()))
+            .with_resumed(Some("2026-11-22T00:00:00Z".to_string()));
+        assert_eq!(repl.session_id().as_deref(), Some("interactive-old"));
+        assert!(
+            repl.banner_lines()[0].contains("· resumed"),
+            "{:?}",
+            repl.banner_lines()
+        );
+    }
+
+    #[test]
+    fn a_record_age_is_measured_from_its_timestamp() {
+        let old = recorded_age("2020-01-01T00:00:00Z").expect("parses");
+        assert!(old.num_minutes() >= INTERACTIVE_CONTEXT_TTL_MINUTES);
+        assert!(recorded_age("not a timestamp").is_none());
+
+        let fresh = recorded_age(&chrono::Utc::now().to_rfc3339()).expect("parses");
+        assert!(fresh.num_minutes() < INTERACTIVE_CONTEXT_TTL_MINUTES);
     }
 
     /// Without a recorded session the interactive form submits its OWN session id:
@@ -4980,21 +6390,35 @@ mod tests {
             "grants": [{"id": "op-req-9", "effects": ["fs.exec"], "expiresAt": "task-end"}],
         });
 
-        let summary = format_pending_summary("task-1", &view).expect("pending requests render");
-        assert!(summary.starts_with("task task-1: 2 pending access request(s):"));
-        assert!(summary.contains("\n  req-1  fs.write  src/generated"));
-        assert!(summary.contains("\n  req-2  fs.exec  cargo build"));
+        let lines = pending_access_lines("task-1", &view, true);
+        assert_eq!(
+            lines[0], "⚠ task task-1 has 2 pending access request(s):",
+            "the operator must be told how many are waiting"
+        );
+        assert_eq!(
+            lines[1], "  req-1 · fs.write src/generated — /approve req-1 · /deny req-1",
+            "a live session answers with /approve"
+        );
+        assert!(lines[2].starts_with("  req-2 · fs.exec cargo build — /approve req-2"));
+
+        // A session that is leaving can only name the REST call.
+        let leaving = pending_access_lines("task-1", &view, false);
+        assert!(
+            leaving[1].contains("POST /api/agent/task-1/access/req-1/approve"),
+            "{:?}",
+            leaving
+        );
     }
 
     #[test]
     fn pending_summary_is_silent_when_nothing_is_pending() {
         let idle = serde_json::json!({"taskId": "task-1", "state": "idle", "pending": [], "grants": []});
-        assert!(format_pending_summary("task-1", &idle).is_none());
+        assert!(pending_access_lines("task-1", &idle, true).is_empty());
 
         // A view without the field at all (an older backend's envelope) is
         // equally silent.
         let bare = serde_json::json!({"taskId": "task-1", "state": "idle"});
-        assert!(format_pending_summary("task-1", &bare).is_none());
+        assert!(pending_access_lines("task-1", &bare, true).is_empty());
     }
 
     #[test]
@@ -5749,7 +7173,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            status_line("5b0c3f2a", &running),
+            status_line("5b0c3f2a", &running, None, None),
             "task 5b0c3f2a · running · 12 step(s) — collecting product details"
         );
 
@@ -5758,8 +7182,11 @@ mod tests {
             word: "running".to_string(),
             ..Default::default()
         };
-        assert_eq!(status_line("5b0c3f2a", &idle), "task 5b0c3f2a · running");
-        assert!(!status_line("5b0c3f2a", &idle).ends_with(' '));
+        assert_eq!(
+            status_line("5b0c3f2a", &idle, None, None),
+            "task 5b0c3f2a · running"
+        );
+        assert!(!status_line("5b0c3f2a", &idle, None, None).ends_with(' '));
 
         // A blank message is the same as no message.
         let blank = StatusProgress {
@@ -5768,7 +7195,32 @@ mod tests {
             message: Some("  ".to_string()),
             ..Default::default()
         };
-        assert_eq!(status_line("5b0c3f2a", &blank), "task 5b0c3f2a · done · 3 step(s)");
+        assert_eq!(
+            status_line("5b0c3f2a", &blank, None, None),
+            "task 5b0c3f2a · done · 3 step(s)"
+        );
+
+        // A live run adds how long it has been going and the step in flight: the
+        // two things "is it moving?" actually needs, which a status word cannot say.
+        assert_eq!(
+            status_line(
+                "5b0c3f2a",
+                &running,
+                Some(Duration::from_secs(83)),
+                Some(("#7 b4.run(args=\"goto …\")", Duration::from_secs(12))),
+            ),
+            "task 5b0c3f2a · running · 12 step(s) · 1m23s — #7 b4.run(args=\"goto …\") (12s ago)"
+        );
+        // The last step wins over the backend's generic message.
+        assert!(
+            !status_line(
+                "5b0c3f2a",
+                &running,
+                Some(Duration::from_secs(83)),
+                Some(("b4.run", Duration::from_secs(2))),
+            )
+            .contains("collecting product details")
+        );
     }
 
     // ---- session chrome (P1-6 / P1-7 / P1-8 / P1-10) and the JSON array ------

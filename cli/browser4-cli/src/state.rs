@@ -1187,6 +1187,66 @@ pub fn take_closed_session_note_in(dir: &Path, name: &str) -> Option<ClosedSessi
     Some(note)
 }
 
+/// The interactive session `agent run -i` used most recently, so a later process
+/// can pick it up with `--continue`.
+///
+/// The conversation itself lives on the backend, keyed by the session id and kept
+/// for `browser4.agent.session.contextTtlMinutes` (12 h by default); all this
+/// record holds is *which* id that was. Without it every `-i` started a fresh
+/// `interactive-<hash>`, so closing the terminal also closed the conversation
+/// even though the backend still had it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InteractiveSessionNote {
+    /// Session id the last `agent run -i` submitted its tasks under.
+    pub session_id: String,
+    /// RFC 3339 timestamp of the last use — for humans, and for the age warning
+    /// that says the backend may already have dropped the conversation.
+    pub recorded_at: String,
+}
+
+/// File holding the [`InteractiveSessionNote`], next to `cli-state.json` so no
+/// session-directory reader mistakes it for a session record.
+fn interactive_session_file(dir: &Path) -> PathBuf {
+    dir.join("agent-interactive-session.json")
+}
+
+/// Record the session this interactive process is using.
+///
+/// The user can always return with `-s <id>` (the banner prints it); this is the
+/// one-flag shortcut, and it follows `/new` because a fresh generation is what
+/// the next `--continue` should resume.
+pub fn remember_interactive_session(session_id: &str) {
+    let (dir, _) = effective_state_dir();
+    remember_interactive_session_in(&dir, session_id);
+}
+
+/// The same, for a caller that already knows the state directory (tests).
+pub fn remember_interactive_session_in(dir: &Path, session_id: &str) {
+    let note = InteractiveSessionNote {
+        session_id: session_id.to_string(),
+        recorded_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let Ok(json) = serde_json::to_string_pretty(&note) else {
+        return;
+    };
+    if fs::create_dir_all(dir).is_ok() {
+        let _ = atomic_write(&interactive_session_file(dir), json.as_bytes());
+    }
+}
+
+/// The recorded interactive session, if one was ever started.
+pub fn read_interactive_session() -> Option<InteractiveSessionNote> {
+    let (dir, _) = effective_state_dir();
+    read_interactive_session_in(&dir)
+}
+
+/// The same, for a caller that already knows the state directory (tests).
+pub fn read_interactive_session_in(dir: &Path) -> Option<InteractiveSessionNote> {
+    fs::read_to_string(interactive_session_file(dir))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+}
+
 /// Clear the default CLI state plus all named session state files.
 pub fn clear_all_state(state_dir: Option<&Path>) {
     let dir = state_dir
@@ -2682,6 +2742,34 @@ mod tests {
         // it for a session record.
         assert!(dir.join("closed-sessions.json").is_file());
         assert!(!dir.join("sessions").join("closed-sessions.json").exists());
+    }
+
+    #[test]
+    fn the_interactive_session_is_recorded_for_continue() {
+        // `agent run -i --continue` resumes whatever the last interactive process
+        // recorded — the conversation itself is the backend's, keyed by this id.
+        let tmp = test_temp_dir();
+        let dir = tmp.path();
+        assert_eq!(read_interactive_session_in(dir), None);
+
+        remember_interactive_session_in(dir, "interactive-abc123");
+        let note = read_interactive_session_in(dir).expect("record is stored");
+        assert_eq!(note.session_id, "interactive-abc123");
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(&note.recorded_at).is_ok(),
+            "the record carries a timestamp the age warning can read: {}",
+            note.recorded_at
+        );
+
+        // The newest use wins: `/new` records its successor generation.
+        remember_interactive_session_in(dir, "interactive-abc123-1");
+        assert_eq!(
+            read_interactive_session_in(dir).map(|note| note.session_id),
+            Some("interactive-abc123-1".to_string())
+        );
+        // It sits next to `cli-state.json`, never under `sessions/`.
+        assert!(dir.join("agent-interactive-session.json").is_file());
+        assert!(!dir.join("sessions").join("agent-interactive-session.json").exists());
     }
 
     #[test]

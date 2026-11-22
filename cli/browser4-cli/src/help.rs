@@ -2312,6 +2312,37 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
+            "    The prompt says what the next line does: agent> a task, steer> steering,"
+                .to_string(),
+        );
+        lines.push(
+            "    steer[N]> N messages the agent has not seen yet, steer!> an access request waiting"
+                .to_string(),
+        );
+        lines.push(
+            "    for /approve (a pending request is announced as it appears, and /status reports"
+                .to_string(),
+        );
+        lines.push(
+            "    steps, elapsed time and the step in flight; /tasks lists the session's task ids)."
+                .to_string(),
+        );
+        lines.push(
+            "    agent run -i --continue resumes the session the last interactive run recorded"
+                .to_string(),
+        );
+        lines.push(
+            "    (the backend keeps its conversation for 12h by default; -s <id> is the explicit"
+                .to_string(),
+        );
+        lines.push("    form, and the banner prints the id).".to_string());
+        lines.push(
+            "    On Windows the console keeps its own line editing (no persisted history, Tab".to_string(),
+        );
+        lines.push(
+            "    completion or bracketed paste): everything else behaves the same.".to_string(),
+        );
+        lines.push(
             "    Inside the session, /add-dir <dir> grants the following tasks an extra folder and"
                 .to_string(),
         );
