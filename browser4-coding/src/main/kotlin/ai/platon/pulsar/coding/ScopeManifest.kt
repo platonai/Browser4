@@ -62,6 +62,17 @@ enum class ScopeKind {
      * that it should be dropped.
      */
     ADDED,
+
+    /**
+     * Another task's workspace ([TaskWorkspaces]).
+     *
+     * Carries both effects (read and write) in both boundary grants — a run may hand a deliverable
+     * to, or finish the work of, a different task. The list comes from the environment (which
+     * workspaces exist) rather than from a request, so it is not a narrowing candidate: "this run
+     * did not write there" says nothing about the next one. Only a directory that *is* a task
+     * workspace by layout is an entry; `workspace.archive` and the agent tree's `skills` never are.
+     */
+    TASK_WORKSPACE,
 }
 
 /**
@@ -124,7 +135,10 @@ object ScopeNarrowing {
         // source checkout is the code the task exists to change.
         .filter {
             it.kind != ScopeKind.WORKSPACE && it.kind != ScopeKind.READABLE &&
-                it.kind != ScopeKind.ADDED && it.kind != ScopeKind.SOURCE
+                it.kind != ScopeKind.ADDED && it.kind != ScopeKind.SOURCE &&
+                // Which sibling workspaces exist is the environment's answer, not this run's
+                // choice: "this task did not write there" is not evidence the next one should not.
+                it.kind != ScopeKind.TASK_WORKSPACE
         }
         .mapNotNull { entry ->
             val unused = consecutiveUnusedTasks[entry.id] ?: return@mapNotNull null

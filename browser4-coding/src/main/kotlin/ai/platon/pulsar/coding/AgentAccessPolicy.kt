@@ -94,6 +94,8 @@ class ToolAccessDeniedException(
  * @property protectedFiles workspace-relative paths that must never be written or deleted
  * @property additionalDirs extra folders granted to this task besides its workspace
  *   (`agent run --add-dir`); see [withAdditionalDirs]
+ * @property allowTaskWorkspaceWrites when true (default) the boundary also covers other tasks'
+ *   workspaces ([TaskWorkspaces]); the preset still decides whether they may be written
  * @property operatorGrants live operator-issued capabilities (plan P4-1). Read on every decision so
  *   an approval issued while a task runs takes effect on the next call. The grants widen what the
  *   preset refuses **within the rails** (deny tools, protected/sensitive paths, the workspace
@@ -143,6 +145,29 @@ data class AgentAccessPolicy(
     val sensitivePaths: Set<String> = CodingAgentFileSystem.DEFAULT_SENSITIVE_PATHS,
     /** Extra absolute folders this task may reach; empty keeps the workspace-only boundary. */
     val additionalDirs: Set<Path> = emptySet(),
+    /**
+     * Whether this task may **write into other tasks' workspaces**
+     * ([TaskWorkspaces]: `<app data>/agent/<date>/<agent-uuid>/workspace[.<task-id>]`).
+     *
+     * On by default, because handing a deliverable to the next task, or finishing the work of a
+     * previous one, is the normal collaboration shape and a run that can only read them cannot
+     * do either. What it does *not* relax:
+     *
+     * - the task's own boundary and the credential rails stay exactly as they were;
+     * - `workspace.archive` (aborted tasks' deliverables), `<app data>/agent/skills` (executable
+     *   skills) and every other folder under the agent tree stay refused — only a directory that
+     *   *is* a task workspace by layout is added;
+     * - the access preset still decides whether anything may be written at all, so `--access read`
+     *   keeps them read-only;
+     * - the OS sandbox gets the day directory of each granted workspace (one label/ACE per day
+     *   instead of per task), which is a superset by design — the string layer is the precise one.
+     *
+     * What it costs: a run can now overwrite or delete another task's deliverables, so
+     * `filesChanged` is no longer a proof that the files it names were *produced* by this run.
+     * `-Dbrowser4.agent.allowTaskWorkspaceWrites=false` restores the previous workspace-only
+     * write boundary; the window and the cap are [TaskWorkspaces.writeDays] / [TaskWorkspaces.MAX_ROOTS].
+     */
+    val allowTaskWorkspaceWrites: Boolean = true,
     /** Operator grants in effect for this task; empty when no approval channel is attached. */
     val operatorGrants: () -> List<Capability> = { emptyList() },
 ) {
@@ -475,6 +500,16 @@ data class AgentAccessPolicy(
         /** Legacy JVM property; prefer [PROP_ACCESS]. */
         const val PROP_ALLOW_DESTRUCTIVE = "browser4.agent.allowDestructive"
 
+        /**
+         * JVM property for [AgentAccessPolicy.allowTaskWorkspaceWrites] — on unless set to `false`.
+         *
+         * The default is on: a run has to be able to write into another task's workspace for the
+         * collaboration shapes (`hand this file to task X`, `finish task Y's deliverables`) to
+         * work. Set it to `false` to restore the workspace-only write boundary, for example on a
+         * shared or unattended installation where a task must never touch another task's files.
+         */
+        const val PROP_ALLOW_TASK_WORKSPACE_WRITES = "browser4.agent.allowTaskWorkspaceWrites"
+
         private const val CODING_DOMAIN = "coding"
 
         private const val SKILL_DOMAIN = "skill"
@@ -578,6 +613,8 @@ data class AgentAccessPolicy(
                     preset = preset,
                     allowExternalAccess = System.getProperty(PROP_ALLOW_EXTERNAL_ACCESS, "false").toBoolean(),
                     allowDestructive = System.getProperty(PROP_ALLOW_DESTRUCTIVE, "true") != "false",
+                    allowTaskWorkspaceWrites =
+                        System.getProperty(PROP_ALLOW_TASK_WORKSPACE_WRITES, "true").toBoolean(),
                 )
             }
 
@@ -616,6 +653,8 @@ data class AgentAccessPolicy(
                     allowExternalAccess = System.getProperty(PROP_ALLOW_EXTERNAL_ACCESS, "false").toBoolean(),
                     allowDestructive = System.getProperty(PROP_ALLOW_DESTRUCTIVE, "true") != "false",
                     allowNetwork = true,
+                    allowTaskWorkspaceWrites =
+                        System.getProperty(PROP_ALLOW_TASK_WORKSPACE_WRITES, "true").toBoolean(),
                 )
             }
     }

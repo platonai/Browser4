@@ -652,6 +652,17 @@ docker run -d -p 18182:18182 `
     Whether file tools may resolve paths outside the workspace; projected into every preset.
     Advisory only: it relaxes a string-layer check, so it does not widen what the OS sandbox
     (`browser4.agent.sandbox`) lets a process reach.
+  - `browser4.agent.allowTaskWorkspaceWrites` *(default: `true`)* — whether a run may write
+    **other tasks' workspaces** (`<app data>/agent/<date>/<agent-uuid>/workspace[.<task-id>]`), so a
+    deliverable can be handed to a next task or a previous run finished. Only directories that are
+    a task workspace by layout are added: `workspace.archive`, `<app data>/agent/skills` and
+    isolated coding worktrees stay out, the access preset still decides whether anything may be
+    written, and the credential rails are untouched. `false` restores the workspace-only write
+    boundary (the pre-4.16.11 behaviour). Cost: `filesChanged` then means "written by this run",
+    not "produced by it".
+  - `browser4.agent.taskWorkspaceWriteDays` *(default: `7`, clamped to `1..400`)* — how many of the
+    newest day directories the task-workspace scan looks at; at most
+    `TaskWorkspaces.MAX_ROOTS` (64) workspaces are in scope, newest first.
   - `browser4.agent.allowDestructive` *(default: `true`)* — **deprecated**, prefer `access`.
     When `false`, `delete`/`copy`/`move` are refused. It is **not** a read-only switch: `write`/
     `append`/`replace` stay allowed — use `access=read` (or `read-build`) for that.

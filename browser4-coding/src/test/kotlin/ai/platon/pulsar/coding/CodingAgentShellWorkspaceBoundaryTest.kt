@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.condition.EnabledOnOs
+import org.junit.jupiter.api.condition.OS
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
@@ -104,6 +106,9 @@ class CodingAgentShellWorkspaceBoundaryTest {
     }
 
     @Test
+    // `dir /b` is a Windows command: on Linux `/b` is an absolute path outside the workspace and
+    // is reported before the Downloads path, so the hint this test is about never gets a chance.
+    @EnabledOnOs(OS.WINDOWS)
     @DisplayName("a Downloads path is refused with the workspace download-dir hint")
     fun downloadsPathRefusedWithTheWorkspaceHint() {
         // Chrome saves downloads to the OS folder by default, so the generic "use a
