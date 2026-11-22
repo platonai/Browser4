@@ -342,6 +342,12 @@ const TIPS_AGENT: &[Tip] = &[
         text: "Every task runs in its own workspace — artifacts of an earlier run never show up in this run's `filesChanged`. `--resume <id>` reuses the interrupted task's workspace; `--shared-workspace` opts into the old shared directory",
     },
     Tip {
+        text: "`agent run <task> --workspace <dir>` works IN PLACE in a folder you name (it must already exist): nothing is copied, merged, archived or swept, so a `--coding` run there edits the directory directly — the backend's own checkout is refused, because that would bypass the isolated worktree and its verify-gated merge",
+    },
+    Tip {
+        text: "`agent run -i` prints a web console URL (`…/agent.html?session=<id>`): its sidebar lists every session this backend remembers, grouped by the workspace its tasks used (`--workspace`, otherwise 临时工作区), and clicking a session switches the page to it and restores its context",
+    },
+    Tip {
         text: "`agent run <task> --token-budget <n>` caps THIS task only (0 = unlimited); `config set agent.token.budget.total` changes every later run on the backend",
     },
     Tip {

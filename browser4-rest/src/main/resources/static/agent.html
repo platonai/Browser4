@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src http: https:; img-src data:; base-uri 'none'; form-action 'none'">
-<meta name="description" content="Browser4 Agent 控制台：在浏览器里提交 agent 任务、实时看每一步、插话、停止、读结果。">
-<title>Browser4 Agent 控制台 · agent run -i 的网页版</title>
+<meta name="description" content="Browser4：在浏览器里提交 agent 任务、实时看每一步、插话、停止、读结果。">
+<title>Browser4 · agent run -i 的网页版</title>
 <style>
   :root {
     --bg: #0f1419;
@@ -24,16 +24,24 @@
     --blue: #58a6ff;
     --purple: #bc8cff;
     --mono: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+    /* Left column width; 0 when the sidebar is collapsed (see body.sidebar-collapsed). */
+    --sidebar-w: 288px;
+    /* Measured from the docked composer at runtime (see observeComposer). */
+    --composer-h: 172px;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; }
+  html { scroll-padding-bottom: calc(var(--composer-h) + 28px); }
   body {
     min-height: 100vh;
     background: radial-gradient(1200px 600px at 80% -10%, #17222e 0%, var(--bg) 55%) fixed;
     color: var(--text);
     font: 14px/1.6 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
-    padding: 22px 22px 44px;
+    /* Right column: the sidebar offset plus the shell's own padding. */
+    padding: 22px 22px calc(var(--composer-h) + 34px) calc(var(--sidebar-w) + 26px);
+    transition: padding-left .16s ease;
   }
+  body.sidebar-collapsed { --sidebar-w: 0px; }
   a { color: var(--blue); text-decoration: none; }
   a:hover { text-decoration: underline; }
   code, kbd, pre, .mono { font-family: var(--mono); }
@@ -43,44 +51,119 @@
     border: 1px solid var(--border); border-bottom-width: 2px; background: var(--panel2);
   }
   .hidden { display: none !important; }
-  .wrap { max-width: 1440px; margin: 0 auto; }
-  .wrap-narrow { max-width: 1120px; }
+  .wrap { max-width: 1120px; margin: 0 auto; }
 
   /* ---------- header ---------- */
   header.top {
-    display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 18px;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 16px;
   }
   .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
   .logo {
-    width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center;
+    width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center;
     font: 800 15px/1 -apple-system, "Segoe UI", Roboto, sans-serif; letter-spacing: .3px; color: #0d1117;
     background: linear-gradient(135deg, #58a6ff, #3fb950); flex: none;
   }
-  h1 { font-size: 19px; line-height: 1.25; margin: 0; font-weight: 650; }
-  .sub { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; }
-  .top-right { margin-left: auto; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12.5px; }
-  .top-links { display: flex; gap: 14px; }
+  h1 { font-size: 18px; line-height: 1.25; margin: 0; font-weight: 650; }
+  .top-right { margin-left: auto; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12.5px; }
+  .top-links { display: flex; gap: 12px; }
   .top-links a { color: var(--muted); }
   .top-links a:hover { color: var(--blue); }
 
-  /* ---------- layout ---------- */
-  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: stretch; }
-  .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-  @media (max-width: 1040px) {
-    .layout { grid-template-columns: minmax(0, 1fr); }
-    .side { order: 2; }
-    body { padding: 16px 12px 32px; }
+  /* ---------- main ---------- */
+  .main {
+    display: flex; flex-direction: column; gap: 16px;
+    min-height: calc(100vh - 132px);
   }
-
-  /* ---------- cards ---------- */
+  /* Idle: the headline and the composer sit in the middle of the work area (the layout the
+     page opens with). The class lands on <body> when a task starts or a session is opened. */
+  body:not(.composer-docked) .main { justify-content: center; }
+  body:not(.composer-docked) #runPanel,
+  body:not(.composer-docked) #resultCard { display: none; }
+  body.composer-docked #idleHero { display: none; }
+  .idle-hero { text-align: center; max-width: 680px; margin: 0 auto 22px; }
+  .idle-logo {
+    width: 46px; height: 46px; margin: 0 auto 14px; border-radius: 14px; display: grid; place-items: center;
+    font: 800 17px/1 -apple-system, "Segoe UI", Roboto, sans-serif; letter-spacing: .3px; color: #0d1117;
+    background: linear-gradient(135deg, #58a6ff, #3fb950); box-shadow: 0 10px 30px rgba(63, 185, 80, .18);
+  }
+  .idle-hero h2 { margin: 0 0 8px; font-size: 24px; line-height: 1.3; font-weight: 680; letter-spacing: .2px; }
+  .idle-hero p { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.6; }
   .card {
     background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
-    padding: 16px 18px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
+    padding: 14px 16px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
   }
-  .card h2 { margin: 0; font-size: 15px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
-  .card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
-  .card-head .spacer { flex: 1; }
-  .card-head .sub { margin: 0; }
+
+  /* ---------- layout: a fixed session column on the left, content on the right ---------- */
+  .sidebar {
+    position: fixed; top: 0; bottom: 0; left: 0; z-index: 40;
+    width: var(--sidebar-w); display: flex; flex-direction: column; gap: 9px;
+    padding: 16px 12px 14px; overflow: hidden;
+    background: var(--panel); border-right: 1px solid var(--border);
+    box-shadow: 8px 0 30px rgba(0, 0, 0, 0.18);
+  }
+  body.sidebar-collapsed .sidebar { display: none; }
+  .sidebar-head { display: flex; align-items: center; gap: 6px; flex: none; }
+  .sidebar-title { font-size: 12.5px; font-weight: 650; letter-spacing: .2px; }
+  .sidebar-head .spacer { flex: 1; }
+  .sidebar-head .btn { padding: 2px 7px; }
+  .btn.spin { animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .session-tree { flex: 1 1 auto; overflow-y: auto; display: flex; flex-direction: column; gap: 7px; min-height: 40px; }
+  .ws-group { border: 1px solid var(--border-soft); border-radius: 10px; overflow: hidden; background: #0d131a; }
+  .ws-head {
+    width: 100%; display: flex; align-items: center; gap: 6px; padding: 6px 8px;
+    background: var(--panel2); color: var(--text); border: 0; font: inherit; font-size: 12px;
+    font-weight: 600; cursor: pointer; text-align: left;
+  }
+  .ws-head:hover { background: #1a2430; }
+  .ws-head .chev { color: var(--muted); font-size: 10px; transition: transform .12s ease; flex: none; }
+  .ws-group.collapsed .ws-head .chev { transform: rotate(-90deg); }
+  .ws-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ws-badge { margin-left: auto; font-size: 10.5px; color: var(--muted); font-weight: 500; }
+  .ws-path {
+    padding: 0 8px 5px; font-size: 10.5px; color: var(--muted2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ws-group.collapsed .ws-path, .ws-group.collapsed .ws-body { display: none; }
+  .ws-body { display: flex; flex-direction: column; }
+  .sess {
+    appearance: none; display: flex; flex-direction: column; gap: 1px; width: 100%;
+    padding: 6px 8px; text-align: left; cursor: pointer; color: var(--text);
+    background: transparent; border: 0; border-top: 1px solid var(--border-soft); font: inherit;
+  }
+  .sess:hover { background: var(--panel2); }
+  .sess.active { background: #10202f; box-shadow: inset 2px 0 0 var(--blue); }
+  .sess-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .sess-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: none; }
+  .sess-dot.live { background: var(--green); }
+  .sess-dot.running { background: var(--blue); animation: pulse 1.4s ease-in-out infinite; }
+  .sess-name { font-family: var(--mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sess-now { margin-left: auto; font-size: 10px; color: var(--blue); flex: none; }
+  .sess-meta { font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sidebar-empty { font-size: 11.5px; color: var(--muted); padding: 6px 2px; line-height: 1.5; }
+  .sidebar-foot { display: flex; gap: 7px; }
+  .sidebar-foot .btn { flex: 1; justify-content: center; }
+  /* A restored session reads like a transcript, not like a live run. */
+  .restore-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 2px 2px 8px; }
+  .restore-title { font-size: 12.5px; font-weight: 650; }
+  .restore-actions { margin-left: auto; display: flex; gap: 7px; flex-wrap: wrap; }
+  .turn-role {
+    font-size: 10px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase;
+    color: var(--muted); border: 1px solid var(--border-soft); border-radius: 5px; padding: 0 5px;
+  }
+  .turn-role.task { color: var(--green); border-color: #245c33; }
+  .turn-role.model { color: var(--purple); border-color: #4b3a6b; }
+  .turn-role.tool { color: var(--blue); border-color: #1f4c78; }
+  .turn-role.result { color: var(--muted2); }
+  .turn-role.user { color: var(--yellow); border-color: #5a4415; }
+  .turn-role.outcome { color: var(--muted); }
+  .turn-text { font-size: 12.5px; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+  @media (max-width: 940px) {
+    /* Narrow screens: the sidebar becomes a drawer over the content instead of a column. */
+    body { --sidebar-w: 0px; padding-left: 22px; }
+    .sidebar { width: min(330px, 86vw); z-index: 50; box-shadow: 12px 0 44px rgba(0, 0, 0, 0.55); }
+  }
 
   /* ---------- pills / badges / buttons ---------- */
   .pill {
@@ -135,25 +218,9 @@
   }
   .linkbtn:hover { text-decoration: underline; }
 
-  /* ---------- how-to strip ---------- */
-  .howto {
-    list-style: none; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px;
-    margin: 0 0 16px; padding: 0;
-  }
-  .howto li {
-    display: flex; align-items: flex-start; gap: 9px; padding: 9px 11px; border-radius: 10px;
-    background: var(--panel2); border: 1px solid var(--border-soft); font-size: 12.5px; color: var(--muted);
-  }
-  .howto b {
-    flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
-    background: #1f6feb; color: #fff; font-size: 11.5px; line-height: 1;
-  }
-  .howto span { color: var(--text); }
-  @media (max-width: 640px) { .howto { grid-template-columns: 1fr; } }
-
   /* ---------- banner ---------- */
   .banner {
-    display: flex; gap: 10px; align-items: flex-start; margin: 0 0 14px; padding: 11px 13px;
+    display: flex; gap: 10px; align-items: flex-start; padding: 11px 13px;
     border-radius: 10px; background: #2a1211; border: 1px solid #6a2624; color: #ffc9c6; font-size: 12.5px;
   }
   .banner .grow { flex: 1; min-width: 0; }
@@ -161,52 +228,28 @@
   .banner code { background: #1d0d0c; border-color: #5c2220; color: #ffd9d6; }
   .banner .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
 
-  /* ---------- intake ---------- */
-  label.field { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
-  label.field b { color: var(--text); }
-  textarea, input[type="text"], input[type="url"] {
-    width: 100%; background: #0c1218; color: var(--text); border: 1px solid var(--border);
-    border-radius: 10px; padding: 11px 12px; font: inherit; resize: vertical;
+  /* ---------- run panel (the execution log, collapsible) ---------- */
+  .run {
+    padding: 12px 14px 14px;
+    display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0;
   }
-  textarea { min-height: 92px; line-height: 1.55; }
-  textarea::placeholder, input::placeholder { color: #5f7383; }
-  textarea:disabled, input:disabled { opacity: .6; }
-  .examples { display: flex; flex-wrap: wrap; gap: 7px; margin: 9px 0 12px; }
-  .ex {
-    appearance: none; border: 1px dashed var(--border); background: transparent; color: var(--muted);
-    border-radius: 999px; padding: 4px 11px; font: inherit; font-size: 12px; cursor: pointer; text-align: left;
+  .run.collapsed { flex: 0 0 auto; }
+  .run-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .run-head .spacer { flex: 1; }
+  .run-toggle {
+    appearance: none; border: 0; background: none; color: var(--text); cursor: pointer;
+    display: inline-flex; align-items: center; gap: 7px; padding: 0; font: inherit;
   }
-  .ex:hover { color: var(--text); border-color: #3f5568; background: var(--panel2); }
-  .submit-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .hint { color: var(--muted2); font-size: 12px; }
-  .hint b { color: var(--muted); }
-  .note {
-    margin-top: 12px; padding: 9px 12px; border-radius: 9px; font-size: 12px; line-height: 1.55;
-    background: var(--panel2); border: 1px solid var(--border-soft); color: var(--muted);
-  }
-  .note b { color: var(--text); }
-  .note.warn { border-color: #5a4415; background: #241d0c; color: #dcc38a; }
-  .note.warn b { color: #ffdd9a; }
+  .run-title { font-size: 15px; font-weight: 650; line-height: 1.3; }
+  .run-toggle .chev { color: var(--muted2); font-size: 12px; transition: transform .15s ease; }
+  .run.collapsed .run-toggle .chev { transform: rotate(-90deg); }
+  .run-toggle:hover .run-title { color: var(--blue); }
+  .run.collapsed .run-body { display: none; }
+  .run.collapsed { padding-bottom: 12px; }
+  .run-hint { display: none; }
+  .run.collapsed .run-hint { display: inline; }
+  .run-elapsed { color: var(--muted); font-size: 12px; }
 
-  /* ---------- advanced ---------- */
-  details.advanced { margin-top: 12px; border-top: 1px solid var(--border-soft); padding-top: 10px; }
-  details.advanced > summary {
-    cursor: pointer; color: var(--muted); font-size: 12.5px; list-style: none; display: flex; gap: 6px; align-items: center;
-  }
-  details.advanced > summary::-webkit-details-marker { display: none; }
-  details.advanced > summary::before { content: "▸"; color: var(--muted2); }
-  details.advanced[open] > summary::before { content: "▾"; }
-  details.advanced > summary:hover { color: var(--text); }
-  .adv-grid { display: grid; gap: 12px; margin-top: 12px; }
-  .adv-grid label { font-size: 12px; color: var(--muted); display: block; }
-  .adv-grid label .hint { margin-left: 6px; }
-  .input-row { display: flex; gap: 6px; margin-top: 5px; }
-  .input-row input { flex: 1; min-width: 0; padding: 7px 10px; font-size: 12.5px; }
-  .input-row .btn { flex: none; }
-
-  /* ---------- live ---------- */
-  .live-top { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 8px; }
-  .live-top .spacer { flex: 1; }
   .switch { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; cursor: pointer; user-select: none; }
   .switch input { accent-color: #1f6feb; }
   .taskchip {
@@ -216,16 +259,23 @@
   }
   .taskchip:hover { color: var(--text); border-color: #3a4b5c; }
   .taskchip .copyhint { color: var(--blue); }
-  .live-note { margin: 2px 0 6px; font-size: 12.5px; color: var(--muted); min-height: 1.4em; }
+  .live-note { margin: 9px 0 4px; font-size: 12.5px; color: var(--muted); min-height: 1.4em; }
   .live-note.err { color: #ff9c98; }
-  .heartbeat { font-size: 11.5px; color: var(--muted2); min-height: 1.2em; margin-bottom: 6px; }
+  .heartbeat { font-size: 11.5px; color: var(--muted2); min-height: 1.2em; margin-bottom: 4px; }
 
+  .run-body { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
   .steps {
+    flex: 1 1 auto; position: relative;
     border: 1px solid var(--border); border-radius: 11px; background: #0b1117;
-    max-height: 56vh; min-height: 150px; overflow: auto; padding: 4px 2px; scroll-behavior: smooth;
+    max-height: calc(100vh - var(--composer-h) - 250px);
+    min-height: 160px; overflow: auto; padding: 4px 2px; scroll-behavior: smooth;
   }
-  .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 34px 18px; text-align: center; }
-  .empty .empty-icon { font-size: 30px; line-height: 1; margin-bottom: 4px; }
+  .empty {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+    padding: 30px 18px; text-align: center;
+  }
+  .empty .empty-icon { font-size: 28px; line-height: 1; margin-bottom: 2px; }
   .empty p { margin: 2px 0; color: var(--text); }
   .empty p.small, .empty p.muted { color: var(--muted); font-size: 12.5px; }
 
@@ -266,49 +316,64 @@
     background: #0a0f14; border: 1px solid var(--border-soft); color: #b9c8d4;
     font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere;
   }
-  .steps-foot { display: flex; justify-content: center; margin-top: 7px; }
+  .steps-foot { display: flex; justify-content: center; margin-top: 7px; min-height: 0; }
 
-  /* ---------- steer ---------- */
-  .steer {
-    margin-top: 11px; padding: 11px 12px; border-radius: 11px;
-    background: #12202d; border: 1px solid #1f4c78;
+  /* ---------- result (the payoff) ---------- */
+  .result {
+    border-color: #2d4d67;
+    background:
+      radial-gradient(900px 240px at 15% -20%, rgba(47,129,247,.20), transparent 70%),
+      linear-gradient(180deg, #17232f, var(--panel) 260px);
+    padding: 16px 18px 18px;
   }
-  .steer-label { font-size: 12.5px; color: #a9cdf5; margin-bottom: 7px; }
-  .steer-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .steer-row input[type="text"] { flex: 1; min-width: 200px; padding: 8px 10px; }
-  .steer-row .switch { white-space: nowrap; }
-
-  /* ---------- result ---------- */
-  .result-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
-  .result-meta { color: var(--muted); font-size: 12px; }
+  .result-hero { border-bottom: 1px solid var(--border-soft); padding-bottom: 12px; }
+  .result-hero-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .result-hero-top h2 { margin: 0; font-size: 16px; font-weight: 650; }
+  .result-hero-top .spacer { flex: 1; }
+  .result-headline { margin: 10px 0 0; font-size: 16.5px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .result-headline:empty { display: none; }
+  .result-headline .result-empty { margin: 0; color: var(--muted); font-size: 13px; }
+  .result-stats { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 11px; }
+  .stat-chip {
+    display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 11px; border-radius: 999px;
+    background: rgba(28, 37, 48, .85); border: 1px solid var(--border-soft);
+    font-size: 11.5px; color: var(--muted2); white-space: nowrap;
+  }
+  .stat-chip b { color: var(--text); font-size: 12.5px; font-weight: 650; }
   .alert {
-    padding: 10px 12px; border-radius: 9px; font-size: 12.5px; margin-bottom: 12px;
+    padding: 11px 13px; border-radius: 10px; font-size: 12.5px; margin-top: 12px;
     background: #2a1211; border: 1px solid #6a2624; color: #ffc9c6;
   }
   .alert b { color: #fff; }
   .alert .alert-actions { margin-top: 9px; }
   .alert.warn { background: #241d0c; border-color: #5a4415; color: #dcc38a; }
   .alert.warn b { color: #ffdd9a; }
-  .result-section { margin-top: 14px; }
+  .result-section {
+    margin-top: 14px; padding: 12px 14px; border-radius: 11px;
+    background: #121a22; border: 1px solid var(--border-soft);
+  }
   .result-section > h3 {
-    margin: 0 0 6px; font-size: 12px; font-weight: 650; letter-spacing: .4px; color: var(--muted);
+    margin: 0 0 8px; font-size: 11.5px; font-weight: 650; letter-spacing: .5px; color: var(--muted);
     text-transform: uppercase;
   }
   .summary { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
   .result-section ul { margin: 0; padding-left: 20px; }
-  .result-section li { margin: 3px 0; overflow-wrap: anywhere; }
+  .result-section li { margin: 4px 0; overflow-wrap: anywhere; }
   .result-section li.files { font-family: var(--mono); font-size: 12px; }
   .result-section table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
-  .result-section th, .result-section td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+  .result-section th, .result-section td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
   .result-section th { color: var(--muted); font-weight: 600; width: 30%; overflow-wrap: anywhere; }
   .path { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .next-grid { display: flex; flex-wrap: wrap; gap: 7px; }
+  .next-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 8px; }
   .next {
     appearance: none; text-align: left; cursor: pointer; font: inherit; font-size: 12.5px;
-    padding: 7px 11px; border-radius: 9px; color: var(--text);
-    background: var(--panel2); border: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 10px; color: var(--text);
+    background: var(--panel2); border: 1px solid var(--border); transition: border-color .12s ease, background .12s ease;
   }
-  .next:hover { border-color: #3f5568; background: var(--panel3); }
+  .next:hover { border-color: #3f6d94; background: var(--panel3); }
+  .next .next-text { flex: 1; min-width: 0; }
+  .next .next-go { color: var(--blue); font-size: 11.5px; white-space: nowrap; opacity: .85; }
+  .next:hover .next-go { opacity: 1; }
   details.raw { margin-top: 14px; }
   details.raw > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
   details.raw > summary:hover { color: var(--text); }
@@ -318,26 +383,98 @@
     white-space: pre-wrap; overflow-wrap: anywhere;
   }
 
-  /* ---------- help ---------- */
-  .help h2 { margin-bottom: 4px; }
-  .help .sub { margin-bottom: 12px; }
-  .help details {
-    border-bottom: 1px solid var(--border-soft); padding: 8px 0;
+  /* ---------- composer: centered while idle, docked to the bottom once a task runs ---------- */
+  .composer-wrap { position: static; padding: 0; background: none; }
+  body.composer-docked .composer-wrap {
+    position: fixed; left: var(--sidebar-w); right: 0; bottom: 0; z-index: 40;
+    padding: 12px 22px 16px;
+    background: linear-gradient(180deg, rgba(15,20,25,0), rgba(15,20,25,.86) 34%, rgba(15,20,25,.97));
+    backdrop-filter: blur(8px);
+    transition: left .16s ease;
   }
-  .help details:last-child { border-bottom: 0; }
-  .help details > summary { cursor: pointer; font-size: 12.5px; color: var(--text); list-style: none; display: flex; gap: 6px; }
-  .help details > summary::-webkit-details-marker { display: none; }
-  .help details > summary::before { content: "＋"; color: var(--muted2); }
-  .help details[open] > summary::before { content: "－"; }
-  .help details > summary:hover { color: var(--blue); }
-  .help details p, .help details li { font-size: 12px; color: var(--muted); margin: 6px 0; }
-  .help details ol, .help details ul { padding-left: 18px; margin: 6px 0; }
-  .help code { font-size: 11.5px; }
-  .side .sticky { position: sticky; top: 18px; }
+  .composer {
+    max-width: 780px; margin: 0 auto;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+    padding: 9px 12px 10px; box-shadow: 0 18px 50px rgba(0, 0, 0, .38);
+    transition: border-color .12s ease, box-shadow .12s ease, max-width .16s ease;
+  }
+  body.composer-docked .composer { max-width: 1120px; box-shadow: 0 -12px 44px rgba(0, 0, 0, .42); }
+  .composer:focus-within {
+    border-color: #33506a;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, .5), 0 0 0 1px rgba(88, 166, 255, .18);
+  }
+  .tips {
+    display: flex; align-items: center; gap: 7px; padding: 1px 3px 7px;
+    font-size: 12px; color: var(--muted2); min-height: 19px; transition: opacity .3s ease;
+  }
+  .tips.fade { opacity: .12; }
+  .tip-spark { color: var(--purple); font-size: 11px; flex: none; }
+  #taskInput {
+    width: 100%; background: #0c1218; color: var(--text); border: 1px solid var(--border);
+    border-radius: 11px; padding: 10px 12px; font: inherit; line-height: 1.55;
+    resize: none; min-height: 56px; max-height: 168px; overflow-y: auto; display: block;
+  }
+  #taskInput::placeholder { color: #5f7383; }
+  .examples { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+  .ex {
+    appearance: none; border: 1px dashed var(--border); background: transparent; color: var(--muted);
+    border-radius: 999px; padding: 3px 11px; font: inherit; font-size: 11.5px; cursor: pointer; text-align: left;
+  }
+  .ex:hover { color: var(--text); border-color: #3f5568; background: var(--panel2); }
+  /* The composer's control row: the workspace the next task runs in (the one dropdown this
+     layout keeps in the dialog), plus the send action on the right. */
+  .composer-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 9px; }
+  .composer-controls .spacer { flex: 1; }
+  .composer-controls .hint { color: var(--muted2); font-size: 12px; }
+  .composer-controls .hint b { color: var(--muted); }
+  .ws-pick { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 62%; }
+  .ws-pick-label { color: var(--muted); font-size: 11.5px; flex: none; }
+  .ws-pick select {
+    min-width: 0; max-width: 100%; padding: 4px 8px; font: inherit; font-size: 11.5px;
+    font-family: var(--mono); color: var(--text); background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 999px; text-overflow: ellipsis;
+  }
+  .ws-pick select:focus-visible { outline: 2px solid #1f4c78; outline-offset: 1px; }
+  .ex:disabled { opacity: .5; cursor: not-allowed; }
+  .composer-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 9px; }
+  .composer-actions .spacer { flex: 1; }
+  .composer-actions .hint { color: var(--muted2); font-size: 12px; }
+  .composer-actions .hint b { color: var(--muted); }
+  #submitBtn { min-width: 96px; }
+
+  /* ---------- settings dialog ---------- */
+  dialog.settings {
+    width: min(640px, calc(100vw - 32px)); margin: 9vh auto auto;
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 16px; padding: 18px 20px; box-shadow: 0 30px 80px rgba(0, 0, 0, .6);
+  }
+  dialog.settings::backdrop { background: rgba(5, 8, 11, .7); backdrop-filter: blur(3px); }
+  .settings-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .settings-head h2 { margin: 0; font-size: 15px; font-weight: 650; }
+  .settings-head .btn { margin-left: auto; }
+  .adv-grid { display: grid; gap: 14px; }
+  .adv-grid label { font-size: 12px; color: var(--muted); display: block; }
+  .adv-grid label > .mono { color: var(--text); }
+  .adv-grid .hint { font-size: 11.5px; color: var(--muted2); }
+  .input-row { display: flex; gap: 6px; margin-top: 6px; }
+  .input-row input { flex: 1; min-width: 0; padding: 7px 10px; font-size: 12.5px; }
+  .input-row select {
+    flex: 1; min-width: 0; padding: 7px 10px; font-size: 12.5px; font-family: var(--mono);
+    background: #0c1218; color: var(--text); border: 1px solid var(--border); border-radius: 9px;
+  }
+  .input-row .btn { flex: none; }
+  .note {
+    margin: 16px 0 0; padding: 9px 12px; border-radius: 9px; font-size: 12px; line-height: 1.55;
+    background: var(--panel2); border: 1px solid var(--border-soft); color: var(--muted);
+  }
+  .note b { color: var(--text); }
+  .note.warn { border-color: #5a4415; background: #241d0c; color: #dcc38a; }
+  .note.warn b { color: #ffdd9a; }
 
   /* ---------- toast ---------- */
   #toast {
-    position: fixed; right: 18px; bottom: 18px; z-index: 50; max-width: min(420px, calc(100vw - 36px));
+    position: fixed; right: 18px; bottom: calc(var(--composer-h) + 16px); z-index: 50;
+    max-width: min(420px, calc(100vw - 36px));
     padding: 10px 14px; border-radius: 10px; font-size: 12.5px; line-height: 1.5;
     background: #1c2a38; border: 1px solid #2f4a63; color: var(--text);
     box-shadow: 0 12px 30px rgba(0, 0, 0, .4); opacity: 0; transform: translateY(8px);
@@ -348,135 +485,100 @@
   #toast.warn { border-color: #5a4415; background: #241d0c; color: #ffdd9a; }
   #toast.err { border-color: #6a2624; background: #2a1211; color: #ffc9c6; }
 
-  footer.foot { margin-top: 18px; color: var(--muted2); font-size: 11.5px; text-align: center; }
-  footer.foot code { font-size: 11px; }
+  @media (max-width: 720px) {
+    body { padding-left: 12px; padding-right: 12px; }
+    .composer-wrap { padding-left: 10px; padding-right: 10px; }
+    .top-links { display: none; }
+    .run-head .switch { display: none; }
+    .result-headline { font-size: 15px; }
+  }
   @media (prefers-reduced-motion: reduce) {
     * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
   }
 </style>
 </head>
 <body>
+<!-- ---------- left column: workspaces -> sessions, full height ---------- -->
+<aside id="sidebar" class="sidebar" aria-label="工作区与会话">
+  <div class="sidebar-head">
+    <span class="sidebar-title">工作区 · 会话</span>
+    <span class="spacer"></span>
+    <button id="sidebarRefresh" class="btn small ghost" type="button" title="刷新会话列表">⟳</button>
+    <button id="sidebarCollapse" class="btn small ghost" type="button" title="收起侧边栏">‹</button>
+  </div>
+  <div id="sessionTree" class="session-tree" role="tree" aria-label="按工作区分组的会话"></div>
+  <div id="sidebarEmpty" class="sidebar-empty">还没有会话。提交一个任务，它就会出现在这里。</div>
+  <div class="sidebar-foot">
+    <button id="sidebarNewSession" class="btn small" type="button" title="开一个新会话">＋ 新会话</button>
+  </div>
+</aside>
+
+<!-- ---------- right column: header, run panel, result ---------- -->
 <div class="wrap">
   <header class="top">
     <div class="brand">
       <div class="logo" aria-hidden="true">B4</div>
-      <div>
-        <h1>Browser4 Agent 控制台</h1>
-        <p class="sub">在浏览器里用 <code>agent run -i</code> 的那套交互：写任务 → 看它做 → 随时插话 → 读结果</p>
-      </div>
+      <h1>Browser4</h1>
     </div>
     <div class="top-right">
+      <button id="sidebarToggle" class="btn small ghost" type="button" aria-expanded="true" aria-controls="sidebar"
+        title="收起 / 展开左侧的工作区与会话">☰ 收起会话</button>
       <span id="backendPill" class="pill idle">正在检查后端…</span>
       <div class="top-links">
         <a id="linkStatus" href="/status.html" target="_blank" rel="noopener">状态面板</a>
         <a id="linkPages" href="/pages.html" target="_blank" rel="noopener">页面截图</a>
       </div>
+      <button id="openSettingsBtn" class="btn small ghost" type="button" title="会话、后端地址与已有任务">⚙ 设置</button>
     </div>
   </header>
 
-  <div class="layout">
-    <div class="col">
-      <!-- ---------- 1. intake ---------- -->
-      <section class="card" aria-labelledby="intakeTitle">
-        <ol class="howto" aria-label="使用方法">
-          <li><b>1</b><span>写一句话，说清要它做什么</span></li>
-          <li><b>2</b><span>看它每一步在浏览器里做什么</span></li>
-          <li><b>3</b><span>结果不满意？接着追问就行</span></li>
-        </ol>
-
-        <div id="backendBanner" class="banner hidden" role="alert">
-          <div class="grow">
-            <b>连不上后端 <span id="backendBannerUrl" class="mono"></span></b>
-            <div>
-              后端没启动，或者地址/端口不对。在终端里运行
-              <code>browser4-cli open https://example.com</code>（源码树用
-              <code>pwsh ./b4w.ps1 open https://example.com</code>）即可拉起默认的
-              <code>18182</code> 端口。
-            </div>
-            <div class="actions">
-              <button id="retryBackendBtn" class="btn small">重新检测</button>
-              <button id="closeBannerBtn" class="btn small ghost">先不管</button>
-            </div>
-          </div>
+  <main class="main">
+    <!-- Idle: the headline + composer sit in the middle of the work area. Once a task runs
+         (or a session is opened) the composer docks to the bottom and this disappears. -->
+    <div id="idleHero" class="idle-hero">
+      <div class="idle-logo" aria-hidden="true">B4</div>
+      <h2>让 agent 在浏览器里替你做</h2>
+      <p>一句话说清要它做什么。它会在浏览器里打开页面、点击、读取，把结果和写出的文件交回来。</p>
+    </div>
+    <div id="backendBanner" class="banner hidden" role="alert">
+      <div class="grow">
+        <b>连不上后端 <span id="backendBannerUrl" class="mono"></span></b>
+        <div>
+          后端没启动，或者地址/端口不对。在终端里运行
+          <code>browser4-cli open https://example.com</code>（源码树用
+          <code>pwsh ./b4w.ps1 open https://example.com</code>）即可拉起默认的
+          <code>18182</code> 端口。
         </div>
-
-        <div class="card-head" style="margin-bottom:8px;">
-          <h2 id="intakeTitle">第 1 步 · 你想让它做什么？</h2>
-          <span class="sub">浏览器任务不需要写代码，用人话描述就行</span>
+        <div class="actions">
+          <button id="retryBackendBtn" type="button" class="btn small">重新检测</button>
+          <button id="closeBannerBtn" type="button" class="btn small ghost">先不管</button>
         </div>
+      </div>
+    </div>
 
-        <textarea id="taskInput" rows="3" spellcheck="false" aria-label="任务描述"
-          placeholder="例如：打开 https://example.com ，把页面标题和第一段文字告诉我。&#10;也可以让它：搜索、点按钮、填表单、翻页、把结果整理成表格……"></textarea>
-        <div class="examples" id="examples" aria-label="示例任务">
-          <button class="ex" data-task="打开 https://example.com ，告诉我页面标题和第一段文字。">打开一个网页并总结</button>
-          <button class="ex" data-task="打开 https://news.ycombinator.com ，把首页前 5 条新闻的标题和链接列出来。">列出一个页面的前 5 条内容</button>
-          <button class="ex" data-task="打开 https://www.bing.com ，搜索 “Browser4”，把第一条结果的标题和链接告诉我。">搜索一个关键词</button>
-        </div>
+    <!-- ---------- run: what it is doing, collapsible ---------- -->
+    <section id="runPanel" class="card run" aria-labelledby="runTitle">
+      <div class="run-head">
+        <button id="runToggle" type="button" class="run-toggle" aria-expanded="true" title="收起 / 展开执行过程">
+          <span class="chev" aria-hidden="true">▾</span>
+          <span id="runTitle" class="run-title">执行过程</span>
+        </button>
+        <span id="runPill" class="pill idle">空闲</span>
+        <span id="stepCount" class="hint"></span>
+        <span id="sourceBadge" class="badge info hidden" title="步骤的传输方式"></span>
+        <span class="hint run-hint">点标题展开每一步</span>
+        <button type="button" id="taskChip" class="taskchip hidden" title="点击复制完整任务 ID">
+          <span class="mono" id="taskIdShort"></span><span class="copyhint">复制</span>
+        </button>
+        <span class="spacer"></span>
+        <span id="elapsed" class="mono run-elapsed">—</span>
+        <label class="switch"><input type="checkbox" id="verboseToggle"> 技术细节</label>
+        <label class="switch"><input type="checkbox" id="autoScroll" checked> 自动滚动</label>
+        <button id="cancelBtn" type="button" class="btn danger small hidden">停止任务</button>
+      </div>
 
-        <div class="submit-row">
-          <button id="submitBtn" class="btn primary big">开始任务</button>
-          <span id="submitHint" class="hint"><b>Ctrl+Enter</b> 也能开始 · 任务写得越具体，结果越好</span>
-        </div>
-
-        <div class="note">
-          <b>第一次会慢一点。</b>后端要先拉起浏览器，通常 <b>10–60 秒</b> 才开始出步骤，这不是卡死。
-          任务跑完会把结论放在下面的「结果」里；想接着做，就在<b>同一个会话</b>里直接写下一句。
-        </div>
-        <div class="note warn">
-          <b>不会弹逐项审批。</b>这个页面按「无人值守」方式提交：写文件、跑命令会按后端的
-          <code>browser4.agent.access.unattended</code> 策略直接执行（默认 full，仍受工作区边界和受保护路径约束）。
-          想让每一步敏感操作都由你确认，请用终端 <code>agent run -i</code>。
-        </div>
-
-        <details class="advanced">
-          <summary>会话、连接与已有任务（一般不用动）</summary>
-          <div class="adv-grid">
-            <label>当前会话：<span id="sessionLabel" class="mono" style="color:var(--text);"></span>
-              <span class="hint">同一会话会记住上文；终端里可以用 <code>-s &lt;会话&gt;</code> 复用</span>
-              <div class="input-row">
-                <input id="sessionInput" type="text" class="mono" autocomplete="off" spellcheck="false">
-                <button id="copySessionBtn" class="btn small ghost">复制</button>
-                <button id="newSessionBtn" class="btn small ghost">新会话</button>
-              </div>
-            </label>
-            <label>后端地址：<span class="hint">默认本机 <code>18182</code>；只有用 <code>file://</code> 打开本页时才需要改</span>
-              <div class="input-row">
-                <input id="backendInput" type="url" class="mono" autocomplete="off" spellcheck="false">
-                <button id="saveBackendBtn" class="btn small ghost">保存并检测</button>
-              </div>
-            </label>
-            <label>查看已有任务：<span class="hint">粘贴 <code>agent run</code> 打印的任务 ID，可以看它的实时步骤</span>
-              <div class="input-row">
-                <input id="taskIdInput" type="text" class="mono" placeholder="例如 5b0c3f2a-…" autocomplete="off" spellcheck="false">
-                <button id="loadTaskBtn" class="btn small ghost">查看</button>
-              </div>
-            </label>
-          </div>
-        </details>
-      </section>
-
-      <!-- ---------- 2. live ---------- -->
-      <section class="card" aria-labelledby="liveTitle">
-        <div class="card-head" style="margin-bottom:6px;">
-          <h2 id="liveTitle">第 2 步 · 看它一步步做</h2>
-          <div class="spacer"></div>
-          <span id="runPill" class="pill idle">空闲</span>
-        </div>
-
-        <div class="live-top">
-          <span id="elapsed" class="mono" style="color:var(--muted);font-size:12px;">—</span>
-          <button type="button" id="taskChip" class="taskchip hidden" title="点击复制完整任务 ID">
-            <span class="mono" id="taskIdShort"></span><span class="copyhint">复制</span>
-          </button>
-          <span id="stepCount" class="hint"></span>
-          <span id="sourceBadge" class="badge info hidden" title="步骤的传输方式"></span>
-          <span class="spacer"></span>
-          <label class="switch"><input type="checkbox" id="verboseToggle"> 技术细节</label>
-          <label class="switch"><input type="checkbox" id="autoScroll" checked> 自动滚动</label>
-          <button id="cancelBtn" class="btn danger small hidden">停止任务</button>
-        </div>
-
-        <div id="liveNote" class="live-note" aria-live="polite">还没有任务。写好上面那句话，点「开始任务」。</div>
+      <div id="runBody" class="run-body">
+        <div id="liveNote" class="live-note" aria-live="polite">还没有任务。在下面写一句话，按 Ctrl+Enter 开始。</div>
         <div id="heartbeat" class="heartbeat"></div>
 
         <div id="steps" class="steps" role="log" aria-label="任务的实时步骤">
@@ -484,109 +586,102 @@
             <div class="empty-icon" aria-hidden="true">🤖</div>
             <p><b>它会在浏览器里替你做。</b></p>
             <p class="muted">每一步（打开页面、点击、读取、思考）都会出现在这里。</p>
-            <p class="muted small">第一次运行要先启动浏览器，等 10–60 秒是正常的。</p>
           </div>
         </div>
         <div class="steps-foot">
-          <button id="jumpBtn" class="btn small hidden">有新步骤 · 跳到最新 ↓</button>
+          <button id="jumpBtn" type="button" class="btn small hidden">有新步骤 · 跳到最新 ↓</button>
         </div>
-
-        <div id="steerBox" class="steer hidden">
-          <div class="steer-label">✍️ 插一句话（不打断当前任务；agent 会在下一轮看到它）</div>
-          <div class="steer-row">
-            <input id="steerInput" type="text" autocomplete="off" spellcheck="false" aria-label="插话内容"
-              placeholder="例如：用中文回答 · 只看前 3 条 · 别点广告 · 把结果整理成表格">
-            <label class="switch"><input type="checkbox" id="followupToggle"> 等当前步骤结束后再继续</label>
-            <button id="steerBtn" class="btn small primary">发送</button>
-          </div>
-        </div>
-      </section>
-
-      <!-- ---------- 3. result ---------- -->
-      <section id="resultCard" class="card hidden" aria-labelledby="resultTitle">
-        <div class="card-head" style="margin-bottom:8px;">
-          <h2 id="resultTitle">第 3 步 · 结果</h2>
-          <span class="spacer"></span>
-          <button id="copyResultBtn" class="btn small ghost">复制 JSON</button>
-        </div>
-        <div class="result-top">
-          <span id="resultBadge" class="pill idle">—</span>
-          <span id="resultStats" class="result-meta"></span>
-        </div>
-        <div id="resultBody"></div>
-        <details class="raw">
-          <summary>原始 JSON（给脚本用）</summary>
-          <pre id="rawJson"></pre>
-        </details>
-      </section>
-    </div>
-
-    <!-- ---------- side: help ---------- -->
-    <aside class="side">
-      <div class="sticky">
-        <section class="card help" aria-labelledby="helpTitle">
-          <h2 id="helpTitle">遇到问题？</h2>
-          <p class="sub">先看这里，大部分情况一句话就能解释。</p>
-
-          <details open>
-            <summary>点了开始，半天没反应？</summary>
-            <ol>
-              <li>第一次任务会先拉起浏览器，<b>10–60 秒</b> 才开始出步骤。</li>
-              <li>如果步骤里停在某个工具上，可能是页面加载慢或模型在思考，等 30 秒看看。</li>
-              <li>超过 2 分钟完全没有新步骤：点「停止任务」，换个更具体的说法再试。</li>
-              <li>还是不行，去「状态面板」看后端和浏览器是否正常。</li>
-            </ol>
-          </details>
-
-          <details>
-            <summary>提示没有 LLM / API key？</summary>
-            <p>后端需要配置一个模型 Key 才能跑任务。在启动后端的终端里设置环境变量之一，然后重启后端：</p>
-            <p><code>DEEPSEEK_API_KEY</code> · <code>OPENROUTER_API_KEY</code> · <code>VOLCENGINE_API_KEY</code> · <code>OPENAI_API_KEY</code></p>
-          </details>
-
-          <details>
-            <summary>它到底在哪儿开浏览器？我能看到吗？</summary>
-            <p>任务由本机后端执行。后端默认可能以无头模式运行浏览器，所以你看不到窗口，但可以打开顶部的
-              <a href="/pages.html" target="_blank" rel="noopener">页面截图</a> 看它当前在哪个页面；
-              也可以用 <code>browser4-cli open --headed</code> 之后重新提交，让浏览器带界面启动。</p>
-          </details>
-
-          <details>
-            <summary>它要写文件 / 跑命令，会先问我吗？</summary>
-            <p>不会。网页控制台按<b>无人值守</b>策略提交，没有逐项审批环节；权限由后端的
-              <code>browser4.agent.access.unattended</code> 决定（默认 full，工作区边界和敏感路径仍然有效）。
-              要每个敏感操作都经你同意，请在终端用：</p>
-            <p><code>browser4-cli agent run -i "你的任务"</code></p>
-            <p>运行中会用 <code>/approve</code> 让你确认每次授权。</p>
-          </details>
-
-          <details>
-            <summary>这个页面和终端 <code>agent run -i</code> 是什么关系？</summary>
-            <p>同一个后端、同一套会话记忆。页面做了 <code>-i</code> 最常用的几件事：提交任务、实时看步骤、
-              插话、停止、读结果。终端里 <code>-i</code> 的横幅会打印带会话的网页地址，
-              两边可以接着同一个会话继续聊；<code>/goal</code>、<code>/approve</code> 等高级命令仍在终端。</p>
-          </details>
-
-          <details>
-            <summary>会话是什么？为什么要记住它？</summary>
-            <p>会话就是它和你的对话上下文：同一个会话里的下一个任务会带着上文，比如「把刚才那 5 条整理成表格」。
-              会话 ID 在左边「会话、连接」里，也可以贴进终端：<code>agent run -i -s &lt;会话 ID&gt;</code>。</p>
-          </details>
-
-          <details>
-            <summary>结果里的文件在哪里？</summary>
-            <p>任务写出的文件路径会出现在结果里；「工作目录」就是它这次写盘的地方。
-              浏览类任务通常只返回结论，不写文件。</p>
-          </details>
-        </section>
       </div>
-    </aside>
-  </div>
+    </section>
 
-  <footer class="foot">
-    Browser4 Agent 控制台 · 只与你配置的后端通信（默认本机），不经过任何第三方 · 与 <code>agent run -i</code> 共享会话
-  </footer>
+    <!-- ---------- result: the main thing once the task ends ---------- -->
+    <section id="resultCard" class="card result hidden" aria-labelledby="resultTitle">
+      <div class="result-hero">
+        <div class="result-hero-top">
+          <h2 id="resultTitle">结果</h2>
+          <span id="resultBadge" class="pill idle">—</span>
+          <span class="spacer"></span>
+          <button id="copyResultBtn" type="button" class="btn small ghost">复制 JSON</button>
+        </div>
+        <div id="resultHeadline" class="result-headline"></div>
+        <div id="resultStats" class="result-stats"></div>
+      </div>
+      <div id="resultBody"></div>
+      <details class="raw">
+        <summary>原始 JSON（给脚本用）</summary>
+        <pre id="rawJson"></pre>
+      </details>
+    </section>
+
+    <!-- ---------- the one composer: centered while idle, docked once a task runs ---------- -->
+    <div id="composerWrap" class="composer-wrap">
+      <div id="composer" class="composer">
+        <div id="tips" class="tips" aria-live="off">
+          <span class="tip-spark" aria-hidden="true">✦</span>
+          <span id="tipText"></span>
+        </div>
+        <textarea id="taskInput" rows="2" spellcheck="false" aria-label="任务描述"
+          placeholder="用一句话说清要它做什么，例如：打开 https://example.com ，把页面标题和第一段文字告诉我。"></textarea>
+        <div id="composerControls" class="composer-controls">
+          <label class="ws-pick" title="新任务在哪个目录里就地读写（工作区必须已存在）">
+            <span class="ws-pick-label">工作区</span>
+            <select id="workspaceSelect" autocomplete="off">
+              <option value="">临时工作区（每个任务自己的目录）</option>
+            </select>
+          </label>
+          <button id="refreshWorkspacesBtn" class="btn small ghost" type="button" title="重新读取工作区列表">⟳</button>
+          <span class="spacer"></span>
+          <span id="submitHint" class="hint"><b>Ctrl+Enter</b> 开始任务</span>
+          <button id="submitBtn" class="btn primary" type="button">开始任务</button>
+        </div>
+        <div id="examples" class="examples" aria-label="示例任务">
+          <button class="ex" type="button" data-task="打开 https://example.com ，告诉我页面标题和第一段文字。">打开一个网页并总结</button>
+          <button class="ex" type="button" data-task="打开 https://news.ycombinator.com ，把首页前 5 条新闻的标题和链接列出来。">列出一个页面的前 5 条内容</button>
+          <button class="ex" type="button" data-task="打开 https://www.bing.com ，搜索 “Browser4”，把第一条结果的标题和链接告诉我。">搜索一个关键词</button>
+        </div>
+        <div class="composer-actions">
+          <label id="runningOptions" class="switch hidden"><input type="checkbox" id="followupToggle"> 等当前步骤结束后再继续</label>
+          <span class="spacer"></span>
+          <span id="composerSession" class="hint mono"></span>
+        </div>
+      </div>
+    </div>
+  </main>
 </div>
+
+<dialog id="settingsDialog" class="settings" aria-labelledby="settingsTitle">
+  <div class="settings-head">
+    <h2 id="settingsTitle">会话与连接</h2>
+    <button id="closeSettingsBtn" type="button" class="btn small ghost">关闭</button>
+  </div>
+  <div class="adv-grid">
+    <label>当前会话：<span id="sessionLabel" class="mono"></span>
+      <span class="hint">同一会话会记住上文；终端里可以用 <code>-s &lt;会话&gt;</code> 复用</span>
+      <div class="input-row">
+        <input id="sessionInput" type="text" class="mono" autocomplete="off" spellcheck="false">
+        <button id="copySessionBtn" type="button" class="btn small ghost">复制</button>
+        <button id="newSessionBtn" type="button" class="btn small ghost">新会话</button>
+      </div>
+    </label>
+    <label>后端地址：<span class="hint">默认本机 <code>18182</code>；用 <code>file://</code> 打开本页时才需要改</span>
+      <div class="input-row">
+        <input id="backendInput" type="url" class="mono" autocomplete="off" spellcheck="false">
+        <button id="saveBackendBtn" type="button" class="btn small ghost">保存并检测</button>
+      </div>
+    </label>
+    <label>查看已有任务：<span class="hint">粘贴 <code>agent run</code> 打印的任务 ID，可以看它的实时步骤</span>
+      <div class="input-row">
+        <input id="taskIdInput" type="text" class="mono" placeholder="例如 5b0c3f2a-…" autocomplete="off" spellcheck="false">
+        <button id="loadTaskBtn" type="button" class="btn small ghost">查看</button>
+      </div>
+    </label>
+  </div>
+  <p class="note">
+    <b>不会弹逐项审批。</b>这个页面按「无人值守」方式提交：写文件、跑命令会按后端的
+    <code>browser4.agent.access.unattended</code> 策略直接执行（默认 full，仍受工作区边界和受保护路径约束）。
+    想让每一步敏感操作都由你确认，请用终端 <code>agent run -i</code> 的 <code>/approve</code>。
+  </p>
+</dialog>
 
 <div id="toast" role="status" aria-live="polite"></div>
 
@@ -605,6 +700,12 @@
   const DEFAULT_BACKEND = 'http://127.0.0.1:18182';
   const STORE_SESSION = 'b4.agent.web.session';
   const STORE_BACKEND = 'b4.agent.web.backend';
+  /** The sidebar's own preferences (collapsed panel, folded workspace groups). */
+  const STORE_SIDEBAR = 'b4.agent.web.sidebar';
+  /** The workspace new tasks run in (`''` = per-task temporary directory). */
+  const STORE_WORKSPACE = 'b4.agent.web.workspace';
+  /** How often the workspace/session tree refreshes while the tab is visible. */
+  const SIDEBAR_REFRESH_MS = 15000;
 
   /** Event names the backend publishes on the SSE step stream. */
   const SSE_EVENT_TYPES = [
@@ -617,7 +718,28 @@
     'goal.pinned', 'plan.update', 'goal.changed',
   ];
 
-  const TASK_PLACEHOLDER = '例如：打开 https://example.com ，把页面标题和第一段文字告诉我。';
+  const TASK_PLACEHOLDER = '用一句话说清要它做什么，例如：打开 https://example.com ，把页面标题和第一段文字告诉我。';
+  const STEER_PLACEHOLDER = '插一句话：agent 会在下一轮看到它，不会打断当前任务。例如：用中文回答 · 只看前 3 条 · 结果整理成表格。';
+
+  /**
+   * Short hints rotated above the composer. They are deliberately not a fixed
+   * tutorial: the page shows one at a time and swaps it every few seconds.
+   */
+  const TIPS_IDLE = [
+    '写一句话说清要它做什么，例如：打开 example.com，告诉我页面标题。',
+    '也可以让它搜索、点按钮、填表单、翻页，用人话描述就行。',
+    '任务写得越具体，结果越好；需要的话把完整网址一起写上。',
+    '第一次运行要先启动浏览器，10–60 秒才开始出步骤，不是卡死。',
+    '结果里的「接着做」点一下就直接执行，同一个会话还记得上文。',
+    'Ctrl+Enter 也能开始任务。',
+  ];
+  const TIPS_RUNNING = [
+    '插一句话不会打断任务：agent 会在下一轮看到它。',
+    '勾选「等当前步骤结束后再继续」，它会在收尾前读你的补充。',
+    '步骤里的 🔧 是工具调用，💬 是模型的思路。',
+    '超过 20 秒没有新步骤通常是在等页面或模型，不是卡死。',
+    '点「执行过程」的标题可以收起这块，专心看结果。',
+  ];
 
   /** Storage that never throws: file:// pages and private modes can refuse it. */
   function readStore(key) {
@@ -650,8 +772,19 @@
     backendUp: null,
     resultRevealed: false,
     lastTaskText: '',
+    steering: false,
     toastTimer: null,
     ticker: null,
+    /** The workspace → session tree last read from `/api/agent/sessions`. */
+    sessionTree: null,
+    /** Serialized tree: a poll that changes nothing must not re-render (focus/scroll churn). */
+    sessionTreeSignature: '',
+    /** Whether the whole sidebar is collapsed (persisted, see [STORE_SIDEBAR]). */
+    sidebarCollapsed: false,
+    /** Folded workspace groups, keyed by group id (persisted with [STORE_SIDEBAR]). */
+    sidebarGroups: {},
+    /** The workspace new tasks run in: an absolute directory, or `''` for the per-task default. */
+    workspace: '',
   };
 
   // ---------------------------------------------------------------------------
@@ -687,6 +820,75 @@
   function atBottom() {
     const box = $('steps');
     return box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Layout: the collapsible run panel, the docked composer and the rotating tips
+  // ---------------------------------------------------------------------------
+  /** Collapse the execution log so the result owns the main area. */
+  function setRunCollapsed(collapsed) {
+    const panel = $('runPanel');
+    if (!panel) return;
+    const next = !!collapsed;
+    panel.classList.toggle('collapsed', next);
+    const toggle = $('runToggle');
+    if (toggle) toggle.setAttribute('aria-expanded', next ? 'false' : 'true');
+  }
+
+  /** Grow the one textarea to its content, up to a cap, so it stays a small dock. */
+  function autoGrow() {
+    const input = $('taskInput');
+    if (!input) return;
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 168) + 'px';
+  }
+
+  /**
+   * Publish the composer's real height as a CSS variable. The page body pads
+   * itself by that amount, so the dock never covers the last step or the result.
+   */
+  function observeComposer() {
+    const wrap = $('composerWrap');
+    if (!wrap) return;
+    const apply = () => {
+      const height = Math.ceil(wrap.getBoundingClientRect().height);
+      if (height > 0) document.documentElement.style.setProperty('--composer-h', height + 'px');
+    };
+    apply();
+    if (typeof ResizeObserver === 'function') new ResizeObserver(apply).observe(wrap);
+    window.addEventListener('resize', apply);
+  }
+
+  let tipTimer = null;
+  let tipIndex = 0;
+  let tipSet = TIPS_IDLE;
+
+  function renderTip() {
+    const node = $('tipText');
+    if (!node) return;
+    node.textContent = tipSet[tipIndex % tipSet.length];
+  }
+
+  function setTipsMode(mode) {
+    tipSet = mode === 'running' ? TIPS_RUNNING : TIPS_IDLE;
+    tipIndex = 0;
+    renderTip();
+  }
+
+  /** Rotate one hint at a time — guidance that never turns into a fixed wall of text. */
+  function startTips() {
+    renderTip();
+    if (tipTimer) return;
+    tipTimer = setInterval(() => {
+      const strip = $('tips');
+      if (!strip) return;
+      strip.classList.add('fade');
+      setTimeout(() => {
+        tipIndex += 1;
+        renderTip();
+        strip.classList.remove('fade');
+      }, 320);
+    }, 7000);
   }
 
   // ---------------------------------------------------------------------------
@@ -1336,19 +1538,32 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Task submission
+  // The one composer: a new task when idle, a steering message while a task runs
   // ---------------------------------------------------------------------------
   async function submitTask() {
-    if (state.running || state.submitting) return;
-    const text = $('taskInput').value.trim();
+    if (state.submitting) return;
+    const text = ($('taskInput').value || '').trim();
     if (!text) {
       setLiveNote('先写一句话：要它打开哪个页面、拿到什么。', true);
       $('taskInput').focus();
       return;
     }
-    state.lastTaskText = text;
+    if (state.running && state.taskId) {
+      await sendSteer(text);
+      return;
+    }
+    await startTask(text);
+  }
+
+  async function startTask(text) {
+    const task = String(text || '').trim();
+    if (!task || state.running || state.submitting) return;
+    state.lastTaskText = task;
 
     resetRunUi();
+    // The composer sinks to the bottom as soon as there is a run to watch: the centered
+    // hero is the idle page, not a place to read steps.
+    setComposerDocked(true);
     state.submitting = true;
     state.running = true;
     state.finished = false;
@@ -1360,11 +1575,15 @@
     $('elapsed').textContent = '⏱ 0 秒';
     $('submitBtn').disabled = true;
     $('submitBtn').textContent = '提交中…';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
 
     try {
+      // The workspace is chosen in the settings dialog (and follows the session that was
+      // switched to): it must be a query parameter because the body is the task text.
+      const workspaceQuery = state.workspace ? '&workspace=' + enc(state.workspace) : '';
       const response = await apiFetch(
-        '/api/commands/plain?async=true&sessionId=' + enc(state.session),
-        { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: text },
+        '/api/commands/plain?async=true&sessionId=' + enc(state.session) + workspaceQuery,
+        { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: task },
         180000,
       );
       const raw = await response.text();
@@ -1379,21 +1598,18 @@
       if (!taskId) throw new Error('后端没有返回任务 ID：' + shorten(raw || '(空响应)', 300));
 
       state.taskId = taskId;
-      state.submitting = false;
       $('taskInput').value = '';
-      $('taskInput').placeholder = '继续：它记得上文。接下来让它做什么？';
+      autoGrow();
       $('taskIdShort').textContent = taskId.slice(0, 8) + '…';
       show($('taskChip'), true);
       syncUrl();
-      $('submitBtn').textContent = '开始任务';
-      $('submitBtn').disabled = true;
-      setLiveNote('任务已提交，等待后端开始…（第一次运行会先启动浏览器，10–60 秒是正常的）');
       setRunPill('queued');
+      setLiveNote('任务已提交，正在等第一步…（第一次运行要先启动浏览器，可能 10–60 秒）');
       startFollowing();
       startTicker();
-      setLiveNote('任务已提交，正在等第一步…（第一次运行要先启动浏览器，可能 10–60 秒）');
+      // The session and its workspace appear (or change) with this task.
+      void loadSessions(false);
     } catch (error) {
-      state.submitting = false;
       state.running = false;
       setRunningUi(false);
       setRunPill('failed');
@@ -1405,12 +1621,13 @@
       if (hint) addRow({ icon: '💡', title: '可以这样处理', detail: hint, cls: 'bad' });
       if (!state.backendUp) show($('backendBanner'), true);
       toast('提交失败：' + message, 'err');
-      $('submitBtn').textContent = '开始任务';
     } finally {
-      $('submitBtn').disabled = state.running;
-      if (!state.running) $('submitBtn').textContent = '开始任务';
+      state.submitting = false;
+      $('submitBtn').disabled = false;
+      $('submitBtn').textContent = state.running ? '发送' : '开始任务';
     }
   }
+
 
   // ---------------------------------------------------------------------------
   // Finishing a task
@@ -1436,7 +1653,7 @@
     setRunPill(word === 'unknown' ? 'done' : word);
     $('elapsed').textContent = state.startedAt ? '⏱ ' + fmtDuration(Date.now() - state.startedAt) : '—';
     $('heartbeat').textContent = '';
-    setLiveNote(word === 'failed' ? '任务失败，原因见上面的红色行和下面的结果。' :
+    setLiveNote(word === 'failed' ? '任务失败，原因见结果的红色提示。' :
       word === 'cancelled' ? '任务已停止。已经完成的步骤仍保留在上面。' : '任务结束，正在读取结果…');
     // Keep the form locked until the result is rendered: submitting another task
     // mid-load would race the outcome of the previous one into the new view.
@@ -1463,10 +1680,10 @@
       if (state.taskId !== taskId) return;
       renderStats(stats);
       setLiveNote(finalWord === 'failed'
-        ? '任务失败。原因见上面的红色行；可以改一下任务再试。'
+        ? '任务失败。原因见结果的红色提示；可以改一下任务再试。'
         : finalWord === 'cancelled'
           ? '任务已停止。已经完成的步骤仍保留在上面。'
-          : '任务结束。结果见下面；想接着做，就在同一个会话里写下一句。');
+          : '任务结束。结果在下面的「结果」里；想接着做，就在同一个会话里写下一句，或点结果里的「接着做」。');
       if (finalWord === 'done') toast('任务完成', 'ok');
       else if (finalWord === 'failed') toast('任务失败，看看结果里的原因', 'err');
     } finally {
@@ -1474,6 +1691,9 @@
         $('submitBtn').disabled = false;
         $('submitBtn').textContent = '开始任务';
       }
+      // The task's terminal row is what the sidebar shows; refresh it now instead of
+      // waiting for the next poll.
+      void loadSessions(false);
     }
   }
 
@@ -1503,25 +1723,31 @@
   // ---------------------------------------------------------------------------
   function renderStats(stats) {
     state.stats = stats;
+    const box = $('resultStats');
+    clear(box);
     if (!stats) return;
     const counters = stats.stats || {};
-    const bits = [];
-    if (stats.elapsedMs != null) bits.push('耗时 ' + fmtDuration(stats.elapsedMs));
-    if (counters.rounds) bits.push(counters.rounds + ' 轮');
+    const chips = [];
+    if (stats.elapsedMs != null) chips.push(['耗时', fmtDuration(stats.elapsedMs)]);
+    if (counters.rounds) chips.push(['轮数', String(counters.rounds)]);
     if (counters.toolCalls) {
-      bits.push(counters.toolCalls + ' 次工具调用' +
-        (counters.toolFailures ? '（' + counters.toolFailures + ' 次失败）' : ''));
+      chips.push(['工具调用', counters.toolCalls +
+        (counters.toolFailures ? '（' + counters.toolFailures + ' 次失败）' : '')]);
     }
     if (counters.totalTokens) {
-      let tokenBit = fmtTokens(counters.totalTokens) + ' tokens';
+      chips.push(['tokens', fmtTokens(counters.totalTokens)]);
       if (counters.cacheReported && counters.inputTokens && counters.cachedInputTokens > 0) {
-        tokenBit += ' · 缓存命中 ' + Math.round(100 * counters.cachedInputTokens / counters.inputTokens) + '%';
+        chips.push(['缓存命中', Math.round(100 * counters.cachedInputTokens / counters.inputTokens) + '%']);
       }
-      bits.push(tokenBit);
     } else if (counters.modelRequests) {
-      bits.push(counters.modelRequests + ' 次模型请求（tokens 未上报）');
+      chips.push(['模型请求', counters.modelRequests + ' 次']);
     }
-    $('resultStats').textContent = bits.join(' · ');
+    chips.forEach(([label, value]) => {
+      const chip = el('span', 'stat-chip');
+      chip.appendChild(el('b', '', value));
+      chip.appendChild(document.createTextNode(label));
+      box.appendChild(chip);
+    });
   }
 
   function section(title, content) {
@@ -1533,15 +1759,11 @@
 
   function renderResult(result, status) {
     const card = $('resultCard');
+    const headline = $('resultHeadline');
     const body = $('resultBody');
+    clear(headline);
     clear(body);
     show(card, true);
-    if (!state.resultRevealed) {
-      state.resultRevealed = true;
-      // The payoff is below the step log: bring it into view once, without
-      // yanking the page on every later update.
-      setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
-    }
 
     const word = status ? statusWord(status) : (state.failure ? 'failed' : 'done');
     const badge = $('resultBadge');
@@ -1563,11 +1785,8 @@
         const actions = el('div', 'alert-actions');
         const retry = el('button', 'btn small', '重试这个任务');
         retry.addEventListener('click', () => {
-          $('taskInput').value = state.lastTaskText;
-          $('taskInput').placeholder = TASK_PLACEHOLDER;
-          $('taskInput').focus();
-          $('taskInput').scrollIntoView({ behavior: 'smooth', block: 'center' });
-          toast('任务已填回输入框，可以直接改一改再提交', 'ok');
+          toast('重新执行同一个任务', 'ok');
+          startTask(state.lastTaskText);
         });
         actions.appendChild(retry);
         alert.appendChild(actions);
@@ -1576,18 +1795,18 @@
     }
 
     if (!result) {
+      headline.appendChild(el('p', 'result-empty', '没有拿到结构化结果。上面的「执行过程」就是它这次做的全部动作。'));
       const empty = el('div', 'alert warn');
       empty.appendChild(el('b', '', '没有拿到结构化结果。'));
-      empty.appendChild(el('div', '', '上面的步骤就是它这次做的全部动作。'));
-      if (word === 'failed') {
-        empty.appendChild(el('div', '', '失败原因通常写在红色行里；也可以滚到下面看原始状态。'));
-      }
+      empty.appendChild(el('div', '', '上面的步骤就是它这次做的全部动作；失败原因通常写在红色行里。'));
       body.appendChild(empty);
       $('rawJson').textContent = status ? JSON.stringify(status, null, 2) : '';
+      // Without a structured result the step log is the evidence: leave it open.
+      finishResultLayout(false);
       return;
     }
 
-    if (result.summary) body.appendChild(section('结论', el('p', 'summary', result.summary)));
+    if (result.summary) headline.appendChild(el('p', '', result.summary));
     if (Array.isArray(result.keyFindings) && result.keyFindings.length) {
       const list = el('ul');
       result.keyFindings.forEach((item) => list.appendChild(el('li', '', item)));
@@ -1643,19 +1862,35 @@
     if (Array.isArray(result.nextSuggestions) && result.nextSuggestions.length) {
       const grid = el('div', 'next-grid');
       result.nextSuggestions.slice(0, 5).forEach((suggestion) => {
-        const button = el('button', 'next', suggestion);
+        const text = String(suggestion || '').trim();
+        if (!text) return;
+        const button = el('button', 'next');
+        button.title = '点击直接执行：' + text;
+        button.appendChild(el('span', 'next-text', text));
+        button.appendChild(el('span', 'next-go', '执行 →'));
         button.addEventListener('click', () => {
-          $('taskInput').value = suggestion;
-          $('taskInput').focus();
-          $('taskInput').scrollIntoView({ behavior: 'smooth', block: 'center' });
-          toast('已填进任务框，确认后点「开始任务」', 'ok');
+          toast('已开始：' + shorten(text, 60), 'ok');
+          startTask(text);
         });
         grid.appendChild(button);
       });
-      body.appendChild(section('让它接着做', grid));
+      if (grid.children.length) body.appendChild(section('接着做（点一下直接执行）', grid));
     }
 
     $('rawJson').textContent = JSON.stringify(result, null, 2);
+    finishResultLayout();
+  }
+
+  /**
+   * A finished run belongs to its result: collapse the execution log to a slim
+   * strip and bring the strip + the result underneath into view once.
+   */
+  function finishResultLayout(collapse) {
+    if (collapse !== false) setRunCollapsed(true);
+    if (state.resultRevealed) return;
+    state.resultRevealed = true;
+    const anchor = $('runPanel') || $('resultCard');
+    setTimeout(() => anchor && anchor.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
   }
 
   function failureHint(text, code) {
@@ -1686,15 +1921,18 @@
   // ---------------------------------------------------------------------------
   // Steering and cancelling
   // ---------------------------------------------------------------------------
-  async function sendSteer() {
+  /** Send the composer text to the running task instead of starting a new one. */
+  async function sendSteer(text) {
     if (!state.running || !state.taskId) {
       toast('当前没有在跑的任务；直接把它写成新任务吧', 'warn');
-      return;
+      return false;
     }
-    const input = $('steerInput');
-    const text = input.value.trim();
-    if (!text) { input.focus(); return; }
+    if (state.steering) return false;
+    state.steering = true;
     const deliverAs = $('followupToggle').checked ? 'followUp' : 'steer';
+    const button = $('submitBtn');
+    button.disabled = true;
+    button.textContent = '发送中…';
     try {
       const payload = await apiJson(inputPath(), {
         method: 'POST',
@@ -1702,14 +1940,21 @@
         body: JSON.stringify({ text, deliverAs }),
       }, 15000);
       if (payload && payload.accepted) {
-        input.value = '';
+        $('taskInput').value = '';
+        autoGrow();
         toast((payload.message || '已排队') + ' · 生效后会在步骤里出现', 'ok');
-      } else {
-        toast((payload && payload.message) || '任务已结束，这句没有送到', 'warn');
-        $('taskInput').value = text;
+        return true;
       }
+      // The text stays in the composer: the task ended while the user was typing.
+      toast((payload && payload.message) || '任务已结束，这句没有送到', 'warn');
+      return false;
     } catch (error) {
       toast('插话失败：' + friendlyError(error), 'err');
+      return false;
+    } finally {
+      state.steering = false;
+      button.disabled = false;
+      button.textContent = '发送';
     }
   }
 
@@ -1737,14 +1982,18 @@
   // ---------------------------------------------------------------------------
   function setRunningUi(running) {
     show($('cancelBtn'), running);
-    show($('steerBox'), running);
-    $('taskInput').disabled = running;
-    $('submitBtn').disabled = running || state.submitting;
-    document.querySelectorAll('#examples .ex').forEach((button) => { button.disabled = running; });
+    show($('runningOptions'), running);
+    show($('examples'), !running);
+    $('submitBtn').disabled = false;
+    $('submitBtn').textContent = running ? '发送' : '开始任务';
+    $('taskInput').placeholder = running ? STEER_PLACEHOLDER : TASK_PLACEHOLDER;
     $('submitHint').innerHTML = running
-      ? '<b>运行中：</b>可以在下面插话，或先停止任务；要换任务请等它结束。'
-      : '<b>Ctrl+Enter</b> 也能开始 · 任务写得越具体，结果越好';
+      ? '<b>Enter</b> 发送 · <b>Shift+Enter</b> 换行 · 插话不会打断当前任务'
+      : '<b>Ctrl+Enter</b> 开始任务 · 写得越具体，结果越好';
     $('runPill').classList.toggle('pulse', running);
+    document.querySelectorAll('#examples .ex').forEach((button) => { button.disabled = running; });
+    setTipsMode(running ? 'running' : 'idle');
+    autoGrow();
   }
 
   function resetRunUi() {
@@ -1761,6 +2010,7 @@
     state.failure = null;
     state.source = 'idle';
     state.resultRevealed = false;
+    setRunCollapsed(false);
     clear($('steps'));
     const empty = el('div', 'empty');
     empty.id = 'stepsEmpty';
@@ -1769,23 +2019,21 @@
     headline.appendChild(el('b', '', '它会在浏览器里替你做。'));
     empty.appendChild(headline);
     empty.appendChild(el('p', 'muted', '每一步（打开页面、点击、读取、思考）都会出现在这里。'));
-    empty.appendChild(el('p', 'muted small', '第一次运行要先启动浏览器，等 10–60 秒是正常的。'));
     $('steps').appendChild(empty);
 
     show($('taskChip'), false);
     show($('resultCard'), false);
     show($('jumpBtn'), false);
-    show($('steerBox'), false);
     show($('cancelBtn'), false);
     setSourceBadge('none');
     $('elapsed').textContent = '';
     $('heartbeat').textContent = '';
     $('stepCount').textContent = '';
-    setLiveNote('还没有任务。写好上面那句话，点「开始任务」。');
+    setLiveNote('还没有任务。在下面写一句话，按 Ctrl+Enter 开始。');
+    clear($('resultHeadline'));
     $('resultBody').innerHTML = '';
-    $('resultStats').textContent = '';
+    $('resultStats').innerHTML = '';
     $('rawJson').textContent = '';
-    $('steerInput').value = '';
     $('taskInput').placeholder = TASK_PLACEHOLDER;
     setRunPill('idle');
     setRunningUi(false);
@@ -1801,6 +2049,7 @@
       return;
     }
     resetRunUi();
+    setComposerDocked(true);
     state.taskId = taskId;
     state.running = true;
     state.finished = false;
@@ -1838,6 +2087,443 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Sidebar: workspaces -> sessions
+  // ---------------------------------------------------------------------------
+  /**
+   * The sidebar's own preferences: whether the panel is collapsed and which workspace
+   * groups are folded. Persisted because a folded workspace is a deliberate choice, not a
+   * per-visit accident.
+   */
+  function readSidebarPrefs() {
+    try {
+      const parsed = JSON.parse(readStore(STORE_SIDEBAR) || '{}');
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (ignored) {
+      return {};
+    }
+  }
+
+  function writeSidebarPrefs() {
+    writeStore(STORE_SIDEBAR, JSON.stringify({
+      collapsed: !!state.sidebarCollapsed,
+      groups: state.sidebarGroups || {},
+    }));
+  }
+
+  function applySidebarLayout() {
+    // One class on <body> drives the layout: it zeroes --sidebar-w (the content's left
+    // padding and the composer's left edge follow it) and hides the column.
+    document.body.classList.toggle('sidebar-collapsed', !!state.sidebarCollapsed);
+    const toggle = $('sidebarToggle');
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', String(!state.sidebarCollapsed));
+      toggle.textContent = state.sidebarCollapsed ? '☰ 会话' : '☰ 收起会话';
+      toggle.title = state.sidebarCollapsed ? '展开工作区与会话侧边栏' : '收起工作区与会话侧边栏';
+    }
+  }
+
+  function setSidebarCollapsed(collapsed) {
+    state.sidebarCollapsed = !!collapsed;
+    writeSidebarPrefs();
+    applySidebarLayout();
+  }
+
+  function initSidebar() {
+    const prefs = readSidebarPrefs();
+    state.sidebarCollapsed = prefs.collapsed === undefined ? window.innerWidth < 940 : !!prefs.collapsed;
+    state.sidebarGroups = prefs.groups && typeof prefs.groups === 'object' ? prefs.groups : {};
+    applySidebarLayout();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Task workspace: chosen in the settings dialog, sent with every submission
+  // ---------------------------------------------------------------------------
+  /**
+   * Fill the dialog's workspace select from the session tree.
+   *
+   * The tree's durable groups are exactly the directories a task may run in; a stored choice
+   * that is no longer listed (its sessions expired) stays selectable, so the operator sees
+   * what will be sent instead of it silently becoming "temporary".
+   */
+  function renderWorkspaceOptions() {
+    const select = $('workspaceSelect');
+    if (!select) return;
+    const current = state.workspace || '';
+    const paths = [];
+    ((state.sessionTree && state.sessionTree.workspaces) || []).forEach((group) => {
+      if (!group.temporary && group.path) paths.push(group.path);
+    });
+    clear(select);
+    const fallback = el('option', '', '临时工作区（默认，每个任务自己的目录）');
+    fallback.value = '';
+    select.appendChild(fallback);
+    paths.forEach((path) => {
+      const option = el('option', '', path);
+      option.value = path;
+      select.appendChild(option);
+    });
+    if (current && !paths.includes(current)) {
+      const stale = el('option', '', current + '（不在当前会话列表里）');
+      stale.value = current;
+      select.appendChild(stale);
+    }
+    select.value = current;
+  }
+
+  function setWorkspace(workspace) {
+    state.workspace = String(workspace || '').trim();
+    writeStore(STORE_WORKSPACE, state.workspace);
+    const select = $('workspaceSelect');
+    if (select) select.value = state.workspace;
+  }
+
+  /**
+   * A session's workspace is where its next task should write, so browsing a session adopts
+   * it. Only a **known** session says anything: an unknown/empty one leaves the persisted
+   * choice alone, because a brand-new session does not imply "temporary".
+   */
+  function adoptSessionWorkspace(context) {
+    setWorkspace(context && context.workspace ? context.workspace : '');
+    renderWorkspaceOptions();
+  }
+
+  /** The composer shows which session the next task joins (it is also in the sidebar). */
+  function syncComposerSession() {
+    const label = $('composerSession');
+    if (label) label.textContent = '会话 ' + sessionDisplayName(state.session);
+  }
+
+  /**
+   * Two composer modes, matching the reference layout: centered in the work area while the
+   * page is idle, docked to the bottom once there is a run to look at.
+   */
+  function setComposerDocked(docked) {
+    document.body.classList.toggle('composer-docked', !!docked);
+  }
+
+  function toggleWorkspaceGroup(groupId) {
+    if (!groupId) return;
+    state.sidebarGroups[groupId] = !state.sidebarGroups[groupId];
+    writeSidebarPrefs();
+    renderSessionTree();
+  }
+
+  /** A short, stable label for a session id; the full id stays in the tooltip. */
+  function shortSessionName(sessionId) {
+    const id = String(sessionId || '');
+    if (id.length <= 22) return id;
+    return id.slice(0, 12) + '…' + id.slice(-4);
+  }
+
+  /** The label the sidebar shows: the backend's anonymous pool gets a readable name. */
+  function sessionDisplayName(sessionId) {
+    const id = String(sessionId || '');
+    if (id === 'DEFAULT') return '默认会话';
+    return shortSessionName(id);
+  }
+
+  function fmtRelative(ms) {
+    const value = Number(ms) || 0;
+    if (!value) return '时间未知';
+    const delta = Math.max(0, Date.now() - value);
+    if (delta < 60000) return '刚刚';
+    if (delta < 3600000) return Math.floor(delta / 60000) + ' 分钟前';
+    if (delta < 86400000) return Math.floor(delta / 3600000) + ' 小时前';
+    return Math.floor(delta / 86400000) + ' 天前';
+  }
+
+  /** Task status word the page already knows how to label (`statusText`). */
+  function taskWord(task) {
+    if (!task) return 'unknown';
+    if (task.status === 'done') {
+      if (task.cancelled) return 'cancelled';
+      return Number(task.statusCode) === 200 ? 'done' : 'failed';
+    }
+    if (task.status === 'created') return 'queued';
+    if (task.status === 'in_progress') return 'running';
+    return 'unknown';
+  }
+
+  function taskBadgeKind(word) {
+    return { done: 'ok', failed: 'err', running: 'busy', queued: '', cancelled: 'warn' }[word] || '';
+  }
+
+  function renderSessionTree() {
+    const tree = $('sessionTree');
+    if (!tree) return;
+    const scrollTop = tree.scrollTop;
+    clear(tree);
+    const groups = (state.sessionTree && state.sessionTree.workspaces) || [];
+    if (!groups.length) {
+      const empty = $('sidebarEmpty');
+      if (empty) {
+        empty.textContent = '还没有会话。提交一个任务，它就会出现在这里；指定了 --workspace 的会话会归到对应的工作区。';
+        show(empty, true);
+      }
+      return;
+    }
+    const empty = $('sidebarEmpty');
+    if (empty) show(empty, false);
+    groups.forEach((group) => {
+      const folded = !!state.sidebarGroups[group.id];
+      const wrap = el('div', 'ws-group' + (folded ? ' collapsed' : ''));
+      const head = el('button', 'ws-head');
+      head.type = 'button';
+      head.title = group.temporary
+        ? '没有指定工作区（agent run --workspace）的会话：每次任务写在自己的临时目录里'
+        : '工作区 ' + (group.path || group.name);
+      head.appendChild(el('span', 'chev', '▾'));
+      head.appendChild(el('span', 'ws-name', group.name));
+      head.appendChild(el('span', 'ws-badge', String(group.sessions.length)));
+      head.addEventListener('click', () => toggleWorkspaceGroup(group.id));
+      wrap.appendChild(head);
+      if (group.path) {
+        const path = el('div', 'ws-path mono', group.path);
+        path.title = group.path;
+        wrap.appendChild(path);
+      }
+      const body = el('div', 'ws-body');
+      group.sessions.forEach((session) => body.appendChild(sessionRow(session)));
+      wrap.appendChild(body);
+      tree.appendChild(wrap);
+    });
+    // Paging through a long list must survive the 15s refresh.
+    tree.scrollTop = scrollTop;
+  }
+
+  function sessionRow(session) {
+    const active = session.sessionId === state.session;
+    const row = el('button', 'sess' + (active ? ' active' : ''));
+    row.type = 'button';
+    row.setAttribute('role', 'treeitem');
+    row.title = session.sessionId;
+    const top = el('div', 'sess-top');
+    const dotClass = session.running ? ' running' : (session.live ? ' live' : '');
+    top.appendChild(el('span', 'sess-dot' + dotClass));
+    top.appendChild(el('span', 'sess-name', sessionDisplayName(session.sessionId)));
+    if (active) top.appendChild(el('span', 'sess-now', '当前'));
+    row.appendChild(top);
+    const meta = [];
+    if (session.taskCount) meta.push(session.taskCount + ' 个任务');
+    else meta.push('还没有任务');
+    if (session.turnCount) meta.push(session.turnCount + ' 轮上下文');
+    if (session.running) meta.push('运行中');
+    meta.push(fmtRelative(session.lastActivity));
+    row.appendChild(el('div', 'sess-meta', meta.join(' · ')));
+    row.addEventListener('click', () => switchSession(session.sessionId));
+    return row;
+  }
+
+  /**
+   * Read the workspace → session tree.
+   *
+   * @param force true bypasses the backend's short reuse cache (the refresh button).
+   */
+  async function loadSessions(force) {
+    const button = $('sidebarRefresh');
+    if (button) button.classList.add('spin');
+    try {
+      const view = await apiJson('/api/agent/sessions' + (force ? '?refresh=true' : ''), {}, 10000);
+      // `generatedAt` changes on every response; only the tree itself may trigger a rebuild.
+      const signature = JSON.stringify((view && view.workspaces) || []);
+      state.sessionTree = view;
+      // The dialog's workspace picker is fed by the same tree; refreshing the tree must not
+      // leave the picker offering a directory that no longer exists.
+      renderWorkspaceOptions();
+      // A poll that changed nothing must not rebuild the DOM: re-rendering every 15s threw
+      // away focus and the tree's scroll position for no visible gain.
+      if (signature !== state.sessionTreeSignature) {
+        state.sessionTreeSignature = signature;
+        renderSessionTree();
+      }
+    } catch (error) {
+      const empty = $('sidebarEmpty');
+      if (empty) {
+        empty.textContent = '会话列表暂时读不到：' + friendlyError(error);
+        show(empty, true);
+      }
+    } finally {
+      if (button) button.classList.remove('spin');
+    }
+  }
+
+  /**
+   * Switch the page to another session: the URL, the stored session and the composer all
+   * follow, then the session's context is restored into the run panel. A running task
+   * belongs to the session that started it, so switching is refused while it runs — the
+   * same rule the settings dialog uses.
+   */
+  function switchSession(sessionId) {
+    if (!sessionId) return;
+    if (state.running) {
+      toast('先等当前任务结束，或点「停止任务」再切换会话', 'warn');
+      return;
+    }
+    const changed = sessionId !== state.session;
+    state.session = sessionId;
+    writeStore(STORE_SESSION, sessionId);
+    $('sessionInput').value = sessionId;
+    $('sessionLabel').textContent = sessionId;
+    syncComposerSession();
+    resetRunUi();
+    // A session view is a run view: the composer docks so the transcript gets the space.
+    setComposerDocked(true);
+    syncUrl();
+    renderSessionTree();
+    if (changed) void probeBackend(true);
+    void loadSessionContext(sessionId);
+  }
+
+  async function startNewSession() {
+    if (state.running) { toast('先等任务结束或停止它', 'warn'); return; }
+    state.session = newSessionId();
+    writeStore(STORE_SESSION, state.session);
+    $('sessionInput').value = state.session;
+    $('sessionLabel').textContent = state.session;
+    syncComposerSession();
+    resetRunUi();
+    // A brand-new session has nothing to show, so the page returns to its idle shape.
+    setComposerDocked(false);
+    syncUrl();
+    void probeBackend(true);
+    renderSessionTree();
+    void loadSessions(false);
+    toast('已换到新会话 ' + state.session, 'ok');
+  }
+
+  /**
+   * Restore one session's context into the run panel.
+   *
+   * What is restored is what the session actually remembers: the conversation turns the
+   * next task would inherit, plus the task rows (id, status, workspace, files) so a
+   * finished task's result is still reachable and a running one can be followed.
+   */
+  async function loadSessionContext(sessionId) {
+    if (!sessionId) return;
+    setRunPill('idle');
+    setLiveNote('正在恢复会话 ' + shortSessionName(sessionId) + ' 的上下文…');
+    try {
+      const context = await apiJson('/api/agent/sessions/' + enc(sessionId) + '/context', {}, 10000);
+      if (state.session !== sessionId) return;
+      // Where this session writes is where its next task should write: the dialog select and
+      // the composer chip follow the session the operator just opened.
+      adoptSessionWorkspace(context);
+      renderSessionContext(context);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        // Nothing to restore yet: keep the friendly empty state instead of replacing it with
+        // a lone divider, and say which session the next task will join.
+        setLiveNote('这个会话还没有可恢复的上下文。在下面写一句话，就会在会话 ' + shortSessionName(sessionId) + ' 里开始。');
+      } else {
+        setLiveNote('恢复会话上下文失败：' + friendlyError(error), true);
+      }
+    }
+  }
+
+  function renderSessionContext(context) {
+    // A restored session is a read-only transcript until the operator submits again: drop
+    // every trace of the previous run (followers, seen events, tool rows) first.
+    resetRunUi();
+    setComposerDocked(true);
+    clear($('steps'));
+    const runningTask = (context.tasks || []).find((task) => ['created', 'in_progress'].includes(task.status));
+    setRunPill('idle');
+    hideEmptyState();
+
+    const head = el('div', 'restore-head');
+    head.appendChild(el('span', 'restore-title', context.workspace
+      ? '工作区 · ' + context.workspace
+      : '临时工作区'));
+    if (context.temporary) head.appendChild(badge('临时', 'info'));
+    head.appendChild(badge((context.taskCount || 0) + ' 个任务'));
+    if (context.turnCount) head.appendChild(badge((context.turnCount || 0) + ' 轮上下文'));
+    if (context.compressed) head.appendChild(badge('含压缩记忆', 'info'));
+    const actions = el('div', 'restore-actions');
+    const newest = (context.tasks || [])[0];
+    if (newest) {
+      const view = el('button', 'btn small', runningTask ? '跟随运行中的任务' : '查看最新任务');
+      view.type = 'button';
+      view.addEventListener('click', () => { void loadExistingTask(newest.id); });
+      actions.appendChild(view);
+    }
+    const resume = el('button', 'btn small ghost', '在这个会话继续');
+    resume.type = 'button';
+    resume.addEventListener('click', () => { $('taskInput').focus(); });
+    actions.appendChild(resume);
+    head.appendChild(actions);
+    $('steps').appendChild(head);
+
+    const turns = context.turns || [];
+    addDivider('会话对话 · ' + (turns.length ? turns.length + ' 轮' : '没有记录')
+      + (context.turnsTruncated ? '（更早的已省略）' : ''));
+    turns.forEach((turn) => addTurnRow(turn));
+
+    const tasks = context.tasks || [];
+    if (tasks.length) {
+      addDivider('这个会话的任务 · ' + tasks.length + (runningTask ? ' · 有任务正在运行' : ''));
+      tasks.forEach((task) => addTaskRow(task));
+    }
+    updateStepCount();
+    setLiveNote(context.temporary
+      ? '已恢复会话（临时工作区）。在下面接着写，就会继续这个会话。'
+      : '已恢复会话。在下面接着写，就会继续这个会话。');
+  }
+
+  function turnLabel(role) {
+    return {
+      task: '任务', model: '模型', tool: '工具', result: '结果', user: '插话', outcome: '结局',
+    }[role] || (role || '记录');
+  }
+
+  function turnIcon(role) {
+    return { task: '🎯', model: '💬', tool: '🔧', result: '↩', user: '🗣', outcome: '🏁' }[role] || '•';
+  }
+
+  function addTurnRow(turn) {
+    const role = String((turn && turn.role) || '');
+    // Every turn is shown: the point of restoring the session is to see the context the
+    // next task inherits, not a filtered summary of it (the turns are already one bounded
+    // line each).
+    const row = el('div', 'step turn');
+    row.appendChild(el('div', 'step-icon', turnIcon(role)));
+    const content = el('div', 'step-content');
+    const top = el('div', 'step-top');
+    top.appendChild(el('span', 'turn-role ' + role, turnLabel(role)));
+    content.appendChild(top);
+    content.appendChild(el('div', 'turn-text', (turn && turn.text) || ''));
+    row.appendChild(content);
+    $('steps').appendChild(row);
+    afterAppend(row);
+  }
+
+  function addTaskRow(task) {
+    const word = taskWord(task);
+    const row = el('div', 'step');
+    row.appendChild(el('div', 'step-icon', '📌'));
+    const content = el('div', 'step-content');
+    const top = el('div', 'step-top');
+    const open = el('button', 'linkbtn', shorten(task.instruction || task.id, 120));
+    open.type = 'button';
+    open.title = '打开这个任务：' + task.id;
+    open.addEventListener('click', () => { void loadExistingTask(task.id); });
+    top.appendChild(open);
+    const badges = el('span', 'step-badges');
+    badges.appendChild(badge(statusText(word), taskBadgeKind(word)));
+    top.appendChild(badges);
+    content.appendChild(top);
+    const details = [];
+    if (task.workspace) details.push(task.workspace + (task.workspaceExplicit ? '' : '（临时目录）'));
+    if (task.filesChanged) details.push(task.filesChanged + ' 个文件');
+    if (task.finishedAt) details.push('完成于 ' + fmtRelative(task.finishedAt));
+    else if (task.lastActivity) details.push(fmtRelative(task.lastActivity));
+    content.appendChild(el('div', 'step-detail mono', details.join(' · ')));
+    row.appendChild(content);
+    row.appendChild(el('time', 'step-time mono', fmtClock(task.lastActivity)));
+    $('steps').appendChild(row);
+    afterAppend(row);
+  }
+
+  // ---------------------------------------------------------------------------
   // Init
   // ---------------------------------------------------------------------------
   function newSessionId() {
@@ -1857,9 +2543,12 @@
       .replace(/\/+$/, '');
     state.session = params.get('session') || params.get('s') || storedSession || newSessionId();
     writeStore(STORE_SESSION, state.session);
+    // The workspace the next task runs in: remembered across visits, `''` for the default.
+    state.workspace = readStore(STORE_WORKSPACE) || '';
 
     $('sessionInput').value = state.session;
     $('sessionLabel').textContent = state.session;
+    syncComposerSession();
     $('backendInput').value = state.backend;
     $('taskInput').placeholder = TASK_PLACEHOLDER;
     applyBackendLinks();
@@ -1869,30 +2558,41 @@
   }
 
   function bindEvents() {
-    $('submitBtn').addEventListener('click', submitTask);
-    $('taskInput').addEventListener('keydown', (event) => {
+    $('submitBtn').addEventListener('click', () => { void submitTask(); });
+
+    const input = $('taskInput');
+    input.addEventListener('input', autoGrow);
+    input.addEventListener('keydown', (event) => {
       if (event.isComposing) return;
-      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+      const enter = event.key === 'Enter';
+      const withModifier = event.ctrlKey || event.metaKey;
+      if (!enter && !withModifier) return;
+      if (withModifier) {
         event.preventDefault();
-        submitTask();
+        void submitTask();
+        return;
+      }
+      // While a task runs the box behaves like a chat line: Enter sends,
+      // Shift+Enter is a newline. Idle, Enter keeps making a new paragraph.
+      if (state.running && !event.shiftKey) {
+        event.preventDefault();
+        void submitTask();
       }
     });
     $('examples').addEventListener('click', (event) => {
       const button = event.target.closest('.ex');
       if (!button) return;
       $('taskInput').value = button.dataset.task || '';
+      autoGrow();
       $('taskInput').focus();
     });
 
-    $('steerBtn').addEventListener('click', sendSteer);
-    $('steerInput').addEventListener('keydown', (event) => {
-      if (event.isComposing) return;
-      if (event.key === 'Enter' || ((event.ctrlKey || event.metaKey) && event.key === 'Enter')) {
-        event.preventDefault();
-        sendSteer();
-      }
-    });
     $('cancelBtn').addEventListener('click', cancelTask);
+
+    $('runToggle').addEventListener('click', () => {
+      const panel = $('runPanel');
+      setRunCollapsed(!panel.classList.contains('collapsed'));
+    });
 
     $('autoScroll').addEventListener('change', () => {
       if ($('autoScroll').checked) scrollToBottom(true);
@@ -1918,17 +2618,25 @@
     $('copySessionBtn').addEventListener('click', async () => {
       toast((await copyText(state.session)) ? '会话 ID 已复制' : '复制失败，请手动选中', 'ok');
     });
-    $('newSessionBtn').addEventListener('click', () => {
-      if (state.running) { toast('先等任务结束或停止它', 'warn'); return; }
-      state.session = newSessionId();
-      writeStore(STORE_SESSION, state.session);
-      $('sessionInput').value = state.session;
-      $('sessionLabel').textContent = state.session;
-      resetRunUi();
-      syncUrl();
-      probeBackend(true);
-      toast('已换到新会话 ' + state.session, 'ok');
+
+    // ---- sidebar: workspace -> session tree ----
+    $('sidebarToggle').addEventListener('click', () => setSidebarCollapsed(!state.sidebarCollapsed));
+    $('sidebarCollapse').addEventListener('click', () => setSidebarCollapsed(true));
+    $('sidebarRefresh').addEventListener('click', () => { void loadSessions(true); });
+    $('sidebarNewSession').addEventListener('click', () => { void startNewSession(); });
+
+    // ---- task workspace picker (in the composer) ----
+    $('workspaceSelect').addEventListener('change', () => {
+      setWorkspace($('workspaceSelect').value);
+      renderWorkspaceOptions();
+      toast(state.workspace ? '新任务会写进 ' + state.workspace : '新任务使用临时工作区', 'ok');
     });
+    $('refreshWorkspacesBtn').addEventListener('click', () => {
+      void loadSessions(true);
+      renderWorkspaceOptions();
+    });
+
+    $('newSessionBtn').addEventListener('click', () => { void startNewSession(); });
     $('sessionInput').addEventListener('change', () => {
       const value = $('sessionInput').value.trim();
       if (!value) { $('sessionInput').value = state.session; return; }
@@ -1937,12 +2645,17 @@
         $('sessionInput').value = state.session;
         return;
       }
+      const changed = value !== state.session;
       state.session = value;
       writeStore(STORE_SESSION, state.session);
       $('sessionLabel').textContent = state.session;
+      syncComposerSession();
       resetRunUi();
       syncUrl();
       probeBackend(true);
+      renderSessionTree();
+      if (changed) void loadSessionContext(state.session);
+      void loadSessions(false);
     });
     $('backendInput').addEventListener('keydown', (event) => {
       if (event.key === 'Enter') $('saveBackendBtn').click();
@@ -1980,6 +2693,25 @@
     });
     $('closeBannerBtn').addEventListener('click', () => show($('backendBanner'), false));
 
+    const dialog = $('settingsDialog');
+    const openSettings = () => {
+      if (!dialog) return;
+      if (typeof dialog.showModal === 'function') dialog.showModal();
+      else dialog.setAttribute('open', '');
+    };
+    const closeSettings = () => {
+      if (!dialog) return;
+      if (typeof dialog.close === 'function') dialog.close();
+      else dialog.removeAttribute('open');
+    };
+    $('openSettingsBtn').addEventListener('click', openSettings);
+    $('closeSettingsBtn').addEventListener('click', closeSettings);
+    if (dialog && dialog.addEventListener) {
+      dialog.addEventListener('click', (event) => {
+        if (event.target === dialog) closeSettings();
+      });
+    }
+
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
         document.activeElement && document.activeElement.blur && document.activeElement.blur();
@@ -1989,11 +2721,23 @@
 
   async function init() {
     const { taskParam } = readInitialState();
+    initSidebar();
     bindEvents();
+    renderWorkspaceOptions();
     resetRunUi();
     // Restore the empty state's text after resetRunUi rebuilt it.
-    setLiveNote('还没有任务。写好上面那句话，点「开始任务」。');
+    setLiveNote('还没有任务。在下面写一句话，按 Ctrl+Enter 开始。');
+    startTips();
+    observeComposer();
+    autoGrow();
     probeBackend(true);
+    void loadSessions(true);
+    // A page opened on a session that already has context restores it, so a refresh (or a
+    // console link handed over from `-i`) does not look like a brand-new conversation.
+    if (!taskParam) void loadSessionContext(state.session);
+    // The tree is cheap to read and worth keeping current: a task started from another
+    // terminal shows up here without a reload. Hidden tabs skip it (no wasted requests).
+    setInterval(() => { if (!document.hidden) void loadSessions(false); }, SIDEBAR_REFRESH_MS);
     if (taskParam) {
       loadExistingTask(taskParam);
     }
