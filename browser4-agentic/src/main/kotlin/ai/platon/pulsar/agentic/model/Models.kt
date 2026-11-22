@@ -197,12 +197,18 @@ data class ToolSpec constructor(
  * @property resultTool MCP tool that returns the payload (`crawl_result`)
  * @property cancelTool MCP tool that cancels the task, when the domain has one
  * @property pollAfterMs suggested delay before the first status poll
+ * @property eventsTool MCP tool that pages the task's live step log, when the domain
+ *   has one. It belongs on the submit envelope because a client that only ever speaks
+ *   MCP otherwise cannot discover that supervision exists at all (issue #652, P0-3)
+ * @property statsTool MCP tool that reads the task's run counters, when the domain has one
  */
 data class TaskPolicy(
     val statusTool: String,
     val resultTool: String,
     val cancelTool: String? = null,
     val pollAfterMs: Long = 1_000,
+    val eventsTool: String? = null,
+    val statsTool: String? = null,
 )
 
 /**

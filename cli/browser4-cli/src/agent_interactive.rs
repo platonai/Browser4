@@ -160,7 +160,7 @@ const TOP_TOOLS: usize = 5;
 // ---------------------------------------------------------------------------
 
 /// One step of a task as served by `GET /api/commands/{id}/events`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 struct TaskEvent {
     seq: u64,
     kind: String,
@@ -189,6 +189,24 @@ struct TaskEvent {
     error_code: Option<String>,
     /// Whether `agent run --resume <id>` can continue the task.
     resumable: Option<bool>,
+    /// The id shared by a tool call and its result (`tool.call`/`tool.result`).
+    ///
+    /// The exact pairing key. The line numbering still falls back to the
+    /// name heuristic when a backend does not send it.
+    call_id: Option<String>,
+    /// Structured payload of a decision step (`gate.evaluated`, `verify.verdict`,
+    /// `repair.round`, `nudge`, `isolation.merge`, …).
+    ///
+    /// Held as raw JSON so `--ndjson` can forward it unchanged, and so the
+    /// renderer can pull one field (a violation count, a repair round) without a
+    /// typed struct per event.
+    detail: Option<Value>,
+    /// Version of the backend's event model (absent on rows written before it).
+    schema_version: Option<i64>,
+    /// Cumulative file mutations of the run as of this step (`round.start`; gauge).
+    mutations: Option<u64>,
+    /// Consecutive coding rounds without a mutation (`round.start`; gauge).
+    read_only_rounds: Option<i64>,
 }
 
 impl TaskEvent {
@@ -250,17 +268,43 @@ impl TaskEvent {
         if let Some(resumable) = self.resumable {
             obj["resumable"] = json!(resumable);
         }
+        // Supervision fields (issue #652): `--ndjson` is the machine view, so the
+        // decision payload, the call pairing key and the progress gauges must survive
+        // the trip unchanged — a follower that only sees tool names cannot tell two
+        // parallel calls apart, and one that only sees counters cannot see the gate.
+        if let Some(call_id) = &self.call_id {
+            obj["callId"] = json!(call_id);
+        }
+        if let Some(detail) = &self.detail {
+            obj["detail"] = detail.clone();
+        }
+        if let Some(version) = self.schema_version {
+            obj["schemaVersion"] = json!(version);
+        }
+        if let Some(mutations) = self.mutations {
+            obj["mutations"] = json!(mutations);
+        }
+        if let Some(rounds) = self.read_only_rounds {
+            obj["readOnlyRounds"] = json!(rounds);
+        }
         obj
     }
 }
 
 /// One page of the step log.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 struct EventsPage {
     status: String,
     done: bool,
     next_seq: u64,
     events: Vec<TaskEvent>,
+    /// Seq of the oldest step the backend still retains (0 = empty/unknown).
+    first_retained_seq: u64,
+    /// Steps the backend evicted from its bounded buffer over the log's lifetime.
+    dropped: u64,
+    /// True when our cursor had fallen behind the retained window: the page is a
+    /// tail, not a continuation, so steps were missed rather than never produced.
+    resynced: bool,
 }
 
 /// Parse a `GET /api/commands/{id}/events` body.
@@ -283,6 +327,15 @@ fn parse_events_page(body: &str) -> Result<EventsPage, String> {
         done: value.get("done").and_then(|v| v.as_bool()).unwrap_or(false),
         next_seq: value.get("nextSeq").and_then(|v| v.as_u64()).unwrap_or(0),
         events: Vec::new(),
+        first_retained_seq: value
+            .get("firstRetainedSeq")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        dropped: value.get("dropped").and_then(|v| v.as_u64()).unwrap_or(0),
+        resynced: value
+            .get("resynced")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
     };
 
     for item in value
@@ -321,6 +374,11 @@ fn parse_events_page(body: &str) -> Result<EventsPage, String> {
             cumulative_tokens: item.get("cumulativeTokens").and_then(|v| v.as_u64()),
             error_code: string_field(item, "errorCode"),
             resumable: item.get("resumable").and_then(|v| v.as_bool()),
+            call_id: string_field(item, "callId"),
+            detail: item.get("detail").filter(|v| !v.is_null()).cloned(),
+            schema_version: item.get("schemaVersion").and_then(|v| v.as_i64()),
+            mutations: item.get("mutations").and_then(|v| v.as_u64()),
+            read_only_rounds: item.get("readOnlyRounds").and_then(|v| v.as_i64()),
         });
     }
 
@@ -630,6 +688,15 @@ struct TaskStatsReport {
     /// True when [Self::stats] was counted by this session instead of served by
     /// the backend.
     local: bool,
+    /// Cumulative file mutations of the run (a gauge; `None` when the engine never
+    /// reported one — a browsing task does not track file mutations).
+    ///
+    /// Shown next to the tool-call count because that pair is the run's convergence
+    /// signal: hundreds of tool calls with zero mutations is a run that will not
+    /// reach the goal (issue #652).
+    mutations: Option<u64>,
+    /// Consecutive coding rounds that ran tools without changing a file (gauge).
+    read_only_rounds: Option<u64>,
 }
 
 /// Parse a `GET /api/commands/{id}/stats` body.
@@ -687,6 +754,9 @@ fn parse_task_stats(body: &str) -> Result<TaskStatsReport, String> {
             tool_counts,
         },
         local: false,
+        // Absent means "not tracked" (a browsing task), which is not 0 files changed.
+        mutations: stats.get("mutations").and_then(|v| v.as_u64()),
+        read_only_rounds: stats.get("readOnlyRounds").and_then(|v| v.as_u64()),
     })
 }
 
@@ -923,6 +993,61 @@ impl Renderer {
                 )
             }
             "run.usage" => self.format_usage(event),
+            // Decision steps (issue #652): the engine's own verdicts were log-only
+            // before, so a human watching `--follow` saw the tool lines but not why
+            // the run was about to be judged failed. Three lines, not one per gate:
+            // a pass stays silent (the completion line reports success), a rejection
+            // is the thing worth interrupting the scroll for.
+            "gate.evaluated" => {
+                let detail = event.detail.as_ref()?;
+                if detail.get("passed").and_then(|v| v.as_bool()) != Some(false) {
+                    return None;
+                }
+                let violations = detail
+                    .get("violations")
+                    .and_then(|v| v.as_array())
+                    .map(Vec::len)
+                    .unwrap_or(0);
+                let first = detail
+                    .get("violations")
+                    .and_then(|v| v.as_array())
+                    .and_then(|items| items.first())
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("the completion report did not hold");
+                Some(format!(
+                    "{}   ⏱ gate rejected: {} violation(s) — {}",
+                    self.time_prefix(),
+                    violations,
+                    truncate(first, 160)
+                ))
+            }
+            "repair.round" => {
+                let detail = event.detail.as_ref()?;
+                let round = detail.get("round").and_then(|v| v.as_i64()).unwrap_or(0);
+                let max = detail.get("maxRounds").and_then(|v| v.as_i64()).unwrap_or(0);
+                let reason = detail
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("verification did not pass");
+                Some(format!(
+                    "{}   🔁 repair round {round}/{max} — {}",
+                    self.time_prefix(),
+                    truncate(reason, 160)
+                ))
+            }
+            "finish.amend" => {
+                let added = event
+                    .detail
+                    .as_ref()
+                    .and_then(|detail| detail.get("added"))
+                    .and_then(|v| v.as_array())
+                    .map(Vec::len)
+                    .unwrap_or(0);
+                Some(format!(
+                    "{}   ✔ finish report amended from the mutation trace: +{added} file(s)",
+                    self.time_prefix()
+                ))
+            }
             _ => None,
         }
     }
@@ -1819,6 +1944,20 @@ fn format_stats_report(report: &TaskStatsReport) -> Vec<String> {
     }
     lines.push(tools);
 
+    // "tools ran, files changed" side by side: the earliest reliable sign of a run
+    // that will not converge (issue #652). Printed only when the engine reported a
+    // mutation gauge — a browsing task never does, and 0 there would be a lie.
+    if let Some(mutations) = report.mutations {
+        let mut files = format!("  files   {mutations} changed");
+        if let Some(rounds) = report.read_only_rounds.filter(|rounds| *rounds > 0) {
+            files.push_str(&format!(" · {rounds} round(s) without a change"));
+        }
+        if mutations == 0 && stats.tool_calls > 0 {
+            files.push_str("  ⚠ tools ran but nothing was written — this run is not converging");
+        }
+        lines.push(files);
+    }
+
     let mut steps = format!("  steps   {}", stats.events);
     if stats.dropped_events > 0 {
         steps.push_str(&format!(
@@ -2013,6 +2152,11 @@ struct TaskFollower {
     /// When the last heartbeat was printed, cleared by every new step so the
     /// next silence starts its own window.
     last_heartbeat_at: Option<Instant>,
+    /// Whether the "you fell behind the retained window" notice was printed.
+    ///
+    /// One line per follower, not per page: a long sleep resumes once, and the
+    /// `resynced` flag stays true only for the page that made up the gap.
+    resync_noted: bool,
 }
 
 impl TaskFollower {
@@ -2034,6 +2178,7 @@ impl TaskFollower {
             observed: RunStats::default(),
             last_step_at: started,
             last_heartbeat_at: None,
+            resync_noted: false,
         }
     }
 
@@ -2125,6 +2270,7 @@ impl TaskFollower {
         // Back off the narrowing now that pages parse again: a long coding run
         // must not stay limited to the one step that isolated a bad page.
         self.page_limit = self.page_limit.saturating_mul(2).min(EVENTS_PAGE_LIMIT);
+        self.note_resync(&page);
         for event in &page.events {
             self.emit(event);
         }
@@ -2258,6 +2404,43 @@ impl TaskFollower {
             });
         }
         Ok(PollOutcome::Running)
+    }
+
+    /// Report a cursor that fell behind the backend's retained step window.
+    ///
+    /// Until the backend started sending `resynced`, a follower that slept past the
+    /// 1000-step buffer got an empty page with an unchanged cursor — the same answer as
+    /// "no new steps" — so it silently lost a stretch of the run and could conclude the
+    /// agent had stalled (issue #652, P0-D). One notice per follower: the flag is only
+    /// true for the page that made up the gap, and repeating it on every poll would bury
+    /// the steps it is describing.
+    fn note_resync(&mut self, page: &EventsPage) {
+        if !page.resynced || self.resync_noted {
+            return;
+        }
+        self.resync_noted = true;
+        if self.ndjson {
+            // Machine output end to end: a prose warning would break the stream, so the
+            // gap travels as a step-shaped record with the facts in `detail`.
+            let marker = json!({
+                "taskId": self.task_id,
+                "type": "events.resynced",
+                "firstRetainedSeq": page.first_retained_seq,
+                "dropped": page.dropped,
+                "after": self.after,
+            });
+            crate::print_stdout_line(&marker.to_string());
+            return;
+        }
+        if !notice_enabled(self.ndjson, self.renderer.quiet) {
+            return;
+        }
+        self.renderer.print(&format!(
+            "{}   ⚠ fell behind the retained step window — {} step(s) dropped, resumed at seq {}",
+            self.renderer.time_prefix(),
+            page.dropped,
+            page.first_retained_seq
+        ));
     }
 
     fn emit(&mut self, event: &TaskEvent) {
@@ -3632,6 +3815,9 @@ impl Repl {
             elapsed_ms: Some(elapsed_ms),
             stats: observed,
             local: true,
+            // A locally tallied report never saw the backend's gauges.
+            mutations: None,
+            read_only_rounds: None,
         });
         // `-i --json` used to overwrite `task_id`/`raw`/`stats` on every task, so a
         // harness that ran two tasks could only see the last one. The scalars stay
@@ -4052,6 +4238,9 @@ impl Repl {
                 elapsed_ms: Some(follower.elapsed().as_millis() as u64),
                 stats: follower.observed.clone(),
                 local: true,
+                // A locally tallied report never saw the backend's gauges.
+                mutations: None,
+                read_only_rounds: None,
             });
         // The saved tally belongs to the LAST task: naming another id must not
         // report one task's numbers under another task's name.
@@ -4681,6 +4870,132 @@ mod tests {
         assert!(parse_events_page("<html>oops</html>").is_err());
     }
 
+    // ---- supervision fields (issue #652) ------------------------------------
+
+    #[test]
+    fn parse_events_page_reads_the_supervision_payload() {
+        // The full decision surface: a call id (pairing), a bounded detail payload (the
+        // verdict a supervisor judges), the model version, and the round gauges.
+        let body = r#"{
+            "taskId": "t1",
+            "status": "running",
+            "done": false,
+            "nextSeq": 43,
+            "firstRetainedSeq": 5,
+            "dropped": 4,
+            "resynced": true,
+            "events": [
+                {"seq": 42, "type": "verify.verdict", "schemaVersion": 1,
+                 "detail": {"passed": false, "module": "browser4-browser",
+                            "checks": [{"name": "compile", "ran": true, "ok": false, "exitCode": 1}]}},
+                {"seq": 43, "type": "round.start", "turn": 15, "mutations": 7, "readOnlyRounds": 0},
+                {"seq": 44, "type": "tool.call", "tool": "coding.read", "callId": "call-7"}
+            ]
+        }"#;
+
+        let page = parse_events_page(body).expect("page must parse");
+        assert_eq!(page.first_retained_seq, 5);
+        assert_eq!(page.dropped, 4);
+        assert!(page.resynced, "a fallen-behind cursor must be recognisable");
+
+        let verdict = &page.events[0];
+        assert_eq!(verdict.schema_version, Some(1));
+        let detail = verdict.detail.as_ref().expect("the verdict payload");
+        assert_eq!(detail.get("passed").and_then(|v| v.as_bool()), Some(false));
+        let checks = detail
+            .get("checks")
+            .and_then(|v| v.as_array())
+            .expect("the check list");
+        assert_eq!(
+            checks[0].get("name").and_then(|v| v.as_str()),
+            Some("compile")
+        );
+
+        assert_eq!(page.events[1].mutations, Some(7));
+        assert_eq!(page.events[1].read_only_rounds, Some(0));
+        assert_eq!(page.events[2].call_id.as_deref(), Some("call-7"));
+    }
+
+    #[test]
+    fn a_page_without_supervision_fields_stays_honest() {
+        // An older backend: no cursor facts, no gauges. Absent is "unknown", and the
+        // follower must not read it as "0 files changed, nothing dropped".
+        let page = parse_events_page(
+            r#"{"status":"running","done":false,"nextSeq":2,
+                "events":[{"seq":2,"type":"round.start","turn":1}]}"#,
+        )
+        .expect("page must parse");
+
+        assert_eq!(page.first_retained_seq, 0);
+        assert_eq!(page.dropped, 0);
+        assert!(!page.resynced);
+        assert_eq!(page.events[0].mutations, None);
+        assert_eq!(page.events[0].read_only_rounds, None);
+        assert_eq!(page.events[0].detail, None);
+    }
+
+    #[test]
+    fn ndjson_forwards_the_supervision_fields_unchanged() {
+        // `--ndjson` is the machine view: a decision payload, the call pairing key and the
+        // progress gauges must survive the trip, or a follower cannot judge the run.
+        let page = parse_events_page(
+            r#"{"status":"running","done":false,"nextSeq":43,
+                "events":[
+                  {"seq": 43, "type": "gate.evaluated", "schemaVersion": 1,
+                   "detail": {"passed": false, "violations": ["a file git does not show"]}},
+                  {"seq": 44, "type": "round.start", "mutations": 3, "readOnlyRounds": 2},
+                  {"seq": 45, "type": "tool.result", "tool": "coding.write", "ok": true, "callId": "c9"}
+                ]}"#,
+        )
+        .expect("page must parse");
+
+        let gate = page.events[0].to_json("t1");
+        assert_eq!(gate["type"], "gate.evaluated");
+        assert_eq!(gate["schemaVersion"], 1);
+        assert_eq!(gate["detail"]["passed"], false);
+        assert_eq!(gate["detail"]["violations"][0], "a file git does not show");
+
+        let round = page.events[1].to_json("t1");
+        assert_eq!(round["mutations"], 3);
+        assert_eq!(round["readOnlyRounds"], 2);
+
+        let tool = page.events[2].to_json("t1");
+        assert_eq!(tool["callId"], "c9");
+    }
+
+    #[test]
+    fn the_decision_steps_render_three_human_lines() {
+        let mut renderer = Renderer::new(Instant::now(), false, false);
+
+        let mut rejected = event("gate.evaluated");
+        rejected.detail = Some(serde_json::json!({
+            "passed": false,
+            "violations": ["filesChanged lists a file neither git nor the trace shows"],
+        }));
+        let line = renderer.format(&rejected).expect("a rejection is worth a line");
+        assert!(line.contains("gate rejected"), "{line}");
+        assert!(line.contains("1 violation(s)"), "{line}");
+
+        // A pass stays silent: the completion line already reports success.
+        let mut passed = event("gate.evaluated");
+        passed.detail = Some(serde_json::json!({"passed": true, "violations": []}));
+        assert_eq!(renderer.format(&passed), None);
+
+        let mut repair = event("repair.round");
+        repair.detail = Some(serde_json::json!({
+            "round": 1, "maxRounds": 3, "reason": "compile browser4-browser failed (exit 1)",
+        }));
+        let line = renderer.format(&repair).expect("a repair round is worth a line");
+        assert!(line.contains("repair round 1/3"), "{line}");
+        assert!(line.contains("compile browser4-browser failed"), "{line}");
+
+        let mut amended = event("finish.amend");
+        amended.detail = Some(serde_json::json!({"added": ["ev.js", "run.js"]}));
+        let line = renderer.format(&amended).expect("an amendment is worth a line");
+        assert!(line.contains("amended"), "{line}");
+        assert!(line.contains("+2 file(s)"), "{line}");
+    }
+
     #[test]
     fn parse_status_progress_prefers_the_shared_envelope() {
         let progress = parse_status_progress(
@@ -5171,6 +5486,9 @@ mod tests {
                 ],
             },
             local: false,
+            // Served by the backend: 4 mutations, no read-only streak.
+            mutations: Some(4),
+            read_only_rounds: Some(0),
         }
     }
 
@@ -6237,6 +6555,34 @@ mod tests {
     }
 
     #[test]
+    fn format_stats_report_pairs_tool_calls_with_file_mutations() {
+        // "39 tool calls / 4 files changed" is the convergence signal the report used to
+        // lack entirely (issue #652): the pair now comes from the backend's gauges.
+        let mut report = a_served_stats_report();
+        report.mutations = Some(4);
+        report.read_only_rounds = Some(2);
+        let lines = format_stats_report(&report).join("\n");
+        assert!(
+            lines.contains("files   4 changed · 2 round(s) without a change"),
+            "{lines}"
+        );
+
+        // A run that has changed nothing while running tools is called out.
+        report.mutations = Some(0);
+        report.read_only_rounds = Some(6);
+        let stalled = format_stats_report(&report).join("\n");
+        assert!(stalled.contains("files   0 changed"), "{stalled}");
+        assert!(stalled.contains("not converging"), "{stalled}");
+
+        // A backend that never reported a gauge prints no line at all: unknown is not
+        // "0 files changed" (a browsing task does not track mutations).
+        report.mutations = None;
+        report.read_only_rounds = None;
+        let silent = format_stats_report(&report).join("\n");
+        assert!(!silent.contains("files"), "{silent}");
+    }
+
+    #[test]
     fn parse_task_stats_reads_the_prompt_cache_breakdown() {
         let body = r#"{
             "taskId": "t3",
@@ -6347,6 +6693,8 @@ mod tests {
                 ..Default::default()
             },
             local: true,
+            mutations: None,
+            read_only_rounds: None,
         };
         let lines = format_stats_report(&report).join("\n");
         assert!(

@@ -155,7 +155,7 @@ class AgentToolCallLoopTest {
     }
 
     @Test
-    @DisplayName("onToolRequest callback receives name and arguments before execution")
+    @DisplayName("onToolRequest callback receives name, arguments and the call id before execution")
     fun onToolRequestCallbackReceivesNameAndArgs() = runBlocking {
         val model = mockk<BrowserChatModel>()
         val coordinator = mockk<ToolExecutionCoordinator>()
@@ -164,18 +164,20 @@ class AgentToolCallLoopTest {
         every { coordinator.execute(any()) } returns
             ToolExecutionResultMessage.from("c1", "coding.read", "ok")
 
-        val seen = mutableListOf<Pair<String, String>>()
+        // The call id is the pairing key a follower needs: name-based pairing cannot
+        // tell two parallel calls of the same tool apart (issue #652, P1-2).
+        val seen = mutableListOf<Triple<String, String, String?>>()
         val loop = AgentToolCallLoop(
             model = model,
             toolSpecifications = emptyList(),
             coordinator = coordinator,
             maxIterations = 1,
-            onToolRequest = { name, args -> seen += name to args },
+            onToolRequest = { name, args, callId -> seen += Triple(name, args, callId) },
         )
 
         loop.generate(listOf(UserMessage.from("do it")))
 
-        assertEquals(listOf("coding.read" to "{}"), seen)
+        assertEquals(listOf(Triple("coding.read", "{}", "c1")), seen)
     }
 
     @Test

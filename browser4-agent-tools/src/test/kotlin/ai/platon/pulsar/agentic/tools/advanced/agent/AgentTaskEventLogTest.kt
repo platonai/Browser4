@@ -250,4 +250,116 @@ class AgentTaskEventLogTest {
         assertEquals(1_700_000_000_000, stats.firstEpochMillis)
         assertEquals(1_700_000_041_300, stats.lastEpochMillis)
     }
+
+    // ---- decision events, progress gauges and cursor honesty (issue #652) ----
+
+    @Test
+    @DisplayName("a decision step keeps its structured detail and the model schema version")
+    fun appendKeepsDecisionPayload() {
+        val log = AgentTaskEventLog()
+        val event = log.append(
+            type = AgentTaskEvent.TYPE_GATE_EVALUATED,
+            detail = mapOf(
+                "passed" to false,
+                "strict" to true,
+                "violations" to listOf("filesChanged lists 1 file(s) neither git nor the trace shows"),
+            ),
+        )
+
+        assertEquals(AgentTaskEvent.TYPE_GATE_EVALUATED, event.type)
+        assertEquals(false, event.detail!!["passed"])
+        assertEquals(AgentTaskEvent.SCHEMA_VERSION, event.schemaVersion)
+        @Suppress("UNCHECKED_CAST")
+        val violations = event.detail!!["violations"] as List<String>
+        assertEquals(1, violations.size)
+    }
+
+    @Test
+    @DisplayName("a tool step keeps the call id that pairs it with its result")
+    fun appendKeepsCallId() {
+        val log = AgentTaskEventLog()
+        val call = log.append(AgentTaskEvent.TYPE_TOOL_CALL, tool = "coding.read", callId = "call-7")
+        val result = log.append(AgentTaskEvent.TYPE_TOOL_RESULT, tool = "coding.read", ok = true, callId = "call-7")
+
+        assertEquals("call-7", call.callId)
+        assertEquals(call.callId, result.callId, "call and result share one id, not one tool name")
+        assertNull(log.append(AgentTaskEvent.TYPE_ROUND).callId, "non-tool steps carry no call id")
+    }
+
+    @Test
+    @DisplayName("round gauges overwrite instead of accumulating")
+    fun progressGaugesAreGauges() {
+        val log = AgentTaskEventLog()
+        log.append(AgentTaskEvent.TYPE_ROUND, mutations = 1, readOnlyRounds = 0)
+        log.append(AgentTaskEvent.TYPE_ROUND, mutations = 3, readOnlyRounds = 1)
+        log.append(AgentTaskEvent.TYPE_ROUND, mutations = 3, readOnlyRounds = 2)
+
+        val stats = log.stats()
+
+        assertEquals(3L, stats.mutations, "a gauge is the newest value, not the sum (1+3+3)")
+        assertEquals(2, stats.readOnlyRounds)
+    }
+
+    @Test
+    @DisplayName("a run that never reported mutations says unknown, not zero")
+    fun progressGaugesStayNullWhenUnreported() {
+        val log = AgentTaskEventLog()
+        log.append(AgentTaskEvent.TYPE_ROUND)
+
+        assertNull(log.stats().mutations)
+        assertNull(log.stats().readOnlyRounds)
+    }
+
+    @Test
+    @DisplayName("lastOfType finds the newest decision step from the retained tail")
+    fun lastOfTypeFindsTheNewestDecision() {
+        val log = AgentTaskEventLog()
+        log.append(AgentTaskEvent.TYPE_VERIFY_VERDICT, detail = mapOf("passed" to false))
+        log.append(AgentTaskEvent.TYPE_VERIFY_VERDICT, detail = mapOf("passed" to true))
+
+        assertEquals(true, log.lastOfType(AgentTaskEvent.TYPE_VERIFY_VERDICT)!!.detail!!["passed"])
+        assertNull(log.lastOfType(AgentTaskEvent.TYPE_GATE_EVALUATED), "an unrecorded decision is absent")
+    }
+
+    @Test
+    @DisplayName("a page reports its retained window so a late follower cannot miss a gap")
+    fun pageReportsTheRetainedWindow() {
+        val log = AgentTaskEventLog(capacity = 3)
+        repeat(5) { log.append("event.$it") }
+
+        val tail = log.page(afterSeq = 0)
+        assertEquals(listOf(3L, 4L, 5L), tail.events.map { it.seq })
+        assertEquals(3L, tail.firstRetainedSeq)
+        assertEquals(2L, tail.dropped)
+        assertEquals(false, tail.resynced, "a caller that asked from the start never claims continuity")
+        assertEquals(5L, tail.nextSeq)
+
+        // Cursor 1 fell behind the retained window (oldest retained is 3): the page is a
+        // tail, not a continuation — the caller must re-read rather than append silently.
+        val behind = log.page(afterSeq = 1)
+        assertEquals(true, behind.resynced)
+        assertEquals(3L, behind.firstRetainedSeq)
+
+        // Cursor 2 is the insertion point: nothing was dropped between 2 and 3.
+        assertEquals(false, log.page(afterSeq = 2).resynced)
+
+        // A caught-up cursor gets an empty page whose cursor does not move backwards.
+        val caughtUp = log.page(afterSeq = 5)
+        assertTrue(caughtUp.events.isEmpty())
+        assertEquals(5L, caughtUp.nextSeq)
+        assertEquals(false, caughtUp.resynced)
+    }
+
+    @Test
+    @DisplayName("firstSeq is 0 for an empty log and reports the oldest retained step")
+    fun firstSeqTracksTheRetainedWindow() {
+        val log = AgentTaskEventLog(capacity = 2)
+        assertEquals(0L, log.firstSeq())
+
+        log.append("a")
+        log.append("b")
+        assertEquals(1L, log.firstSeq())
+        log.append("c")
+        assertEquals(2L, log.firstSeq(), "the retained window moved past the evicted step")
+    }
 }

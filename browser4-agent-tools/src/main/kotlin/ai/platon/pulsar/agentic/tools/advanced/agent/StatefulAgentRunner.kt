@@ -369,6 +369,29 @@ open class StatefulAgentRunner(
     }
 
     /**
+     * Append one of the runner's own structured decision steps for [status].
+     *
+     * The runner itself makes exactly one decision worth exporting — the isolation
+     * merge — and it happens outside the agent, so it cannot arrive through
+     * [recordRunEvent]. Every other decision event is emitted by the agent.
+     *
+     * @param status the task the decision belongs to
+     * @param type one of the `AgentTaskEvent.TYPE_*` constants
+     * @param detail bounded structured payload (redacted/previewed on the way in)
+     * @param text bounded human-readable rendering
+     */
+    internal fun recordStructuredEvent(
+        status: AgentTaskStatus,
+        type: String,
+        detail: Map<String, Any?>? = null,
+        text: String? = null,
+    ): AgentTaskEvent = eventLog(status.id).append(
+        type = type,
+        text = AgentTaskEventSanitizer.preview(text),
+        detail = detail,
+    )
+
+    /**
      * Append the terminal failure step, carrying the machine-readable reason.
      *
      * `task.failed` used to be prose only ("TokenBudgetExceededException: …"), so a
@@ -387,10 +410,57 @@ open class StatefulAgentRunner(
     }
 
     /**
+     * Fill [AgentTaskStatus.failureDetail] from the decision events the run recorded.
+     *
+     * Deliberately a separate step, run BEFORE the terminal row is persisted: the
+     * evidence has to travel with the row, or a `/result` read after a restart answers
+     * with prose only — which is exactly the gap issue #652 is about. Assembling it
+     * from the task's own event log keeps the producer of the evidence (the agent) from
+     * having to thread a map through the terminal path: a rejected completion emitted
+     * `gate.evaluated`, a failing verification emitted `verify.verdict`, and both are
+     * still in the retained tail when the task ends.
+     */
+    internal fun attachFailureDetail(status: AgentTaskStatus) {
+        if (!status.cancelled && status.failureReason == null) return
+        val code = status.errorCode ?: AgentTaskStatus.errorCodeOf(status.failureReason, status.cancelled)
+        status.failureDetail = failureDetailOf(status, code, eventLog(status.id))
+    }
+
+    /**
+     * Structured failure evidence: which gate rule objected, which check was red, and
+     * how many repair rounds were spent.
+     *
+     * Keys are present only when the corresponding decision was recorded — an absent
+     * `finishGate` means the gate was never consulted, not that it passed.
+     */
+    private fun failureDetailOf(
+        status: AgentTaskStatus,
+        errorCode: String?,
+        log: AgentTaskEventLog,
+    ): Map<String, Any?>? {
+        val detail = LinkedHashMap<String, Any?>()
+        errorCode?.let { detail["errorCode"] = it }
+        status.resumable?.let { detail["resumable"] = it }
+        log.lastOfType(AgentTaskEvent.TYPE_VERIFY_VERDICT)?.detail?.let { detail["verdict"] = it }
+        log.lastOfType(AgentTaskEvent.TYPE_GATE_EVALUATED)?.detail?.let { detail["finishGate"] = it }
+        // `repair.exhausted` is the terminal decision; a trailing `repair.round` is the
+        // fallback when the run failed for an unrelated reason after one repair.
+        (log.lastOfType(AgentTaskEvent.TYPE_REPAIR_EXHAUSTED)?.detail
+            ?: log.lastOfType(AgentTaskEvent.TYPE_REPAIR_ROUND)?.detail)?.let { detail["repair"] = it }
+        log.lastOfType(AgentTaskEvent.TYPE_ISOLATION_MERGE)?.detail?.let { detail["isolation"] = it }
+        status.failureReason?.let { detail["reason"] = AgentTaskEventSanitizer.preview(it) }
+        return detail.takeIf { it.isNotEmpty() }
+    }
+
+    /**
      * Translate one agent-reported step into the task's event log.
      *
      * `internal` (not private) so the runner's tests can exercise the
      * sanitize-on-the-way-in wiring without a real agent run.
+     *
+     * A `round.start` step also refreshes the task's live progress gauges, so the
+     * 2-second `command.status` poll shows "tool calls vs files changed" without
+     * fetching `/stats` — and the throttled JSONL row carries them too.
      */
     internal fun recordRunEvent(taskId: String, event: AgentRunEvent) {
         eventLog(taskId).append(
@@ -408,7 +478,19 @@ open class StatefulAgentRunner(
             cacheWriteInputTokens = event.cacheWriteInputTokens,
             budgetTokens = event.budgetTokens,
             cumulativeTokens = event.cumulativeTokens,
+            callId = event.callId,
+            detail = event.detail,
+            mutations = event.mutations,
+            readOnlyRounds = event.readOnlyRounds,
         )
+        if (event.type == AgentRunEvent.ROUND_START &&
+            (event.mutations != null || event.readOnlyRounds != null)
+        ) {
+            statusCache.getIfPresent(taskId)?.let { status ->
+                event.mutations?.let { status.mutations = it }
+                event.readOnlyRounds?.let { status.readOnlyRounds = it }
+            }
+        }
     }
 
     /**
@@ -439,6 +521,25 @@ open class StatefulAgentRunner(
         afterSeq: Long = 0L,
         limit: Int = AgentTaskEventLog.DEFAULT_PAGE_LIMIT,
     ): List<AgentTaskEvent> = eventLogs.getIfPresent(id)?.eventsAfter(afterSeq, limit) ?: emptyList()
+
+    /**
+     * One page of the live step log of [id], with the cursor-honesty facts a follower
+     * needs ([AgentTaskEventPage.resynced] / [AgentTaskEventPage.dropped]).
+     *
+     * `null` — distinct from an empty page — means this runner holds no log for the id:
+     * the task is unknown here, has another owner, or its log's idle TTL expired. That
+     * distinction is what lets the REST layer answer `404` and a follower answer
+     * "nothing new" without conflating them.
+     *
+     * @param id task id
+     * @param afterSeq cursor: return events with a strictly greater sequence
+     * @param limit maximum events in this page
+     */
+    fun eventsPage(
+        id: String,
+        afterSeq: Long = 0L,
+        limit: Int = AgentTaskEventLog.DEFAULT_PAGE_LIMIT,
+    ): AgentTaskEventPage? = eventLogs.getIfPresent(id)?.page(afterSeq, limit)
 
     /**
      * Queue a steering [text] for the running task [id].
@@ -988,6 +1089,20 @@ open class StatefulAgentRunner(
             "Agent task {}: merged {} file(s) into {} (patch: {})",
             status.id, outcome.changedFiles.size, isolation.repoRoot, outcome.patchPath
         )
+        // The gate's decision used to reach an observer only after the task ended, as
+        // `status.isolationMerge`. Exporting it as a step (issue #652) means a supervisor
+        // sees "the change was accepted into the checkout" while the run is finalizing —
+        // and, on a refusal, why, before the failure lands.
+        recordStructuredEvent(
+            status,
+            AgentTaskEvent.TYPE_ISOLATION_MERGE,
+            detail = mapOf(
+                "decision" to "applied",
+                "changedFiles" to outcome.changedFiles.size,
+                "patch" to outcome.patchPath,
+            ),
+            text = "merged ${outcome.changedFiles.size} file(s) into ${isolation.repoRoot}",
+        )
     }
 
     /** Fail the task and name where the unmerged change lives. */
@@ -1005,6 +1120,17 @@ open class StatefulAgentRunner(
         status.failureReason = detail
         status.message = detail
         status.deliverables = changedFiles.takeIf { it.isNotEmpty() } ?: status.deliverables
+        recordStructuredEvent(
+            status,
+            AgentTaskEvent.TYPE_ISOLATION_MERGE,
+            detail = mapOf(
+                "decision" to "refused",
+                "changedFiles" to changedFiles.size,
+                "reason" to reason,
+                "isolatedWorkspace" to isolation.isolatedRoot.toString(),
+            ),
+            text = "refused: $reason",
+        )
     }
 
     /**
@@ -1580,6 +1706,11 @@ open class StatefulAgentRunner(
             } else {
                 null
             }
+            // Structured failure evidence (issue #652, P0-C): assembled BEFORE the
+            // terminal row is written, so `/result` can answer "which rule, which
+            // files, which check" from the persisted row alone — no backend log needed.
+            runCatching { attachFailureDetail(status) }
+                .onFailure { logger.warn("assembling failure detail failed for {}: {}", status.id, it.message) }
             status.done()
             // Close the live feed: the terminal step is what makes a follower
             // stop. Steering that arrived after the last model round is drained HERE,

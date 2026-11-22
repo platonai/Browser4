@@ -51,7 +51,7 @@ class RoundTimingTest {
     private fun loop(
         model: BrowserChatModel,
         coordinator: ToolExecutionCoordinator,
-        onToolRequest: (String, String) -> Unit = { _, _ -> },
+        onToolRequest: (String, String, String?) -> Unit = { _, _, _ -> },
         onRoundTiming: (RoundTiming) -> Unit,
     ) = AgentToolCallLoop(
         model = model,
@@ -82,7 +82,7 @@ class RoundTimingTest {
         val startedAt = System.nanoTime()
         loop(
             model, coordinator,
-            onToolRequest = { _, _ -> Thread.sleep(5) },
+            onToolRequest = { _, _, _ -> Thread.sleep(5) },
             onRoundTiming = { timings += it },
         ).generate(listOf(UserMessage.from("do it")))
         val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000

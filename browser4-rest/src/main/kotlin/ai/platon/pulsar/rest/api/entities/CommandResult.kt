@@ -62,4 +62,15 @@ data class CommandResult(
      * re-deriving it from the backend's memory event log (plan N3).
      */
     var timings: Map<String, Any?>? = null,
+
+    /**
+     * Structured failure evidence (issue #652): the finish gate's `violations` /
+     * `unlistedFiles`, the verification `verdict.checks` that were red, the `repair`
+     * rounds spent, and the isolation `isolation` decision.
+     *
+     * Present only when the corresponding decision was recorded — an absent
+     * `finishGate` means the gate never ran, not that it passed. `null` for a
+     * successful task.
+     */
+    var failureDetail: Map<String, Any?>? = null,
 )

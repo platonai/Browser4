@@ -54,6 +54,28 @@ import com.fasterxml.jackson.databind.node.ObjectNode
  *   `TOKEN_BUDGET`, `NOOP_LIMIT`, `CANCELLED`, `TOOL_ERROR`
  * @property resumable whether `agent run --resume <id>` can continue the task
  *   ([TYPE_FAILED] only)
+ * @property callId stable id of one tool invocation, shared by its [TYPE_TOOL_CALL]
+ *   and [TYPE_TOOL_RESULT]; `null` on every non-tool event. Consumers must pair
+ *   call/result by this id, never by tool name (parallel calls of the same tool
+ *   are indistinguishable by name, and the CLI renderer's name heuristic was
+ *   documented as a workaround for exactly this gap).
+ * @property detail bounded structured payload of a decision event
+ *   ([TYPE_VERIFY_VERDICT], [TYPE_GATE_EVALUATED], [TYPE_REPAIR_ROUND], …).
+ *   Rendered prose stays in [text]; this is what a machine reads. Strings inside
+ *   are previewed and credential-redacted by [AgentTaskEventSanitizer.detail], and
+ *   an oversized payload is trimmed with `detail["truncated"] = true` — a
+ *   supervisor must be able to tell "the payload was cut" from "the payload ended".
+ * @property schemaVersion version of the event model that produced this row
+ *   ([SCHEMA_VERSION]); absent on rows written before 2026-11-22. A consumer
+ *   branches on it before interpreting [detail].
+ * @property mutations cumulative file mutations of the run as of this step: a
+ *   **gauge**, not a delta ([TYPE_ROUND] carries it). Together with
+ *   [readOnlyRounds] it answers "N tool calls / 0 files changed" — the earliest
+ *   reliable signal of a run that will not converge — without reading the trace.
+ * @property readOnlyRounds consecutive coding rounds that ran tools but recorded
+ *   no file mutation ([TYPE_ROUND] only; gauge). This is the number the engine's
+ *   own "stop surveying, start editing" nudge fires on, so a supervisor sees the
+ *   course correction before the model does.
  * */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class AgentTaskEvent(
@@ -77,6 +99,16 @@ data class AgentTaskEvent(
     val cumulativeTokens: Long? = null,
     val errorCode: String? = null,
     val resumable: Boolean? = null,
+    /** Stable id of one tool invocation, shared by its `tool.call` and `tool.result`. */
+    val callId: String? = null,
+    /** Bounded structured payload of a decision event (see the class KDoc). */
+    val detail: Map<String, Any?>? = null,
+    /** Version of the event model; `null` on rows written before 2026-11-22. */
+    val schemaVersion: Int? = null,
+    /** Cumulative file mutations of the run ([TYPE_ROUND] only; gauge). */
+    val mutations: Long? = null,
+    /** Consecutive coding rounds without a mutation ([TYPE_ROUND] only; gauge). */
+    val readOnlyRounds: Int? = null,
 ) {
     companion object {
         /** The task row was created (queued). */
@@ -142,6 +174,71 @@ data class AgentTaskEvent(
 
         /** The task was cancelled (explicit cancel, runner close, shutdown). */
         const val TYPE_CANCELLED = "task.cancelled"
+
+        // ── Decision events (issue #652, P0-A) ───────────────────────────────
+        //
+        // The signals the engine itself uses for course correction, exported so an
+        // external supervisor can judge "is this run approaching the goal, and is it
+        // about to be judged failed" while it is still running — instead of reading
+        // the backend log after the tokens are spent.
+        //
+        // All of them carry a bounded `detail` map; none of them change the meaning of
+        // the lifecycle/round/tool/model events above, and an existing consumer ignores
+        // an unknown type.
+
+        /**
+         * The structured verdict of one `coding.verify` run (`detail`:
+         * `passed`, `module`, `checks[{name, target, ran, ok, required, exitCode}]`).
+         *
+         * This is the engine's own "is the tree actually done" answer, recorded when
+         * the tool result is parsed rather than when the model claims completion.
+         */
+        const val TYPE_VERIFY_VERDICT = "verify.verdict"
+
+        /**
+         * One completion-report evaluation (`detail`: `passed`, `strict`,
+         * `violations[]`, `unlistedFiles[]`, `requiredGates[]`).
+         *
+         * Emitted for a pass as well as a rejection: a supervisor needs to see the
+         * gate was actually consulted, not infer it from the absence of a failure.
+         */
+        const val TYPE_GATE_EVALUATED = "gate.evaluated"
+
+        /** A verification failure was fed back for another round (`detail`: `round`, `maxRounds`, `reason`). */
+        const val TYPE_REPAIR_ROUND = "repair.round"
+
+        /** The repair budget is spent while verification still fails (`detail`: `roundsUsed`, `verdict`). */
+        const val TYPE_REPAIR_EXHAUSTED = "repair.exhausted"
+
+        /** A completion report omitted files the run wrote, and one repair round was asked for (`detail`: `round`, `missing[]`). */
+        const val TYPE_FINISH_REPAIR = "finish.repair"
+
+        /** The report's `filesChanged` was completed from the run's mutation trace (`detail`: `added[]`, `source`). */
+        const val TYPE_FINISH_AMEND = "finish.amend"
+
+        /**
+         * The engine injected a course-correction instruction into the run
+         * (`detail`: `kind` = `coding` (with `readOnlyRounds`) or `budget` (with
+         * `percent`, `consumed`, `limit`)).
+         */
+        const val TYPE_NUDGE = "nudge"
+
+        /**
+         * The isolation gate's merge decision (`detail`: `decision` = `applied|refused`,
+         * `changedFiles`, `reason`). It used to be visible only after the task ended,
+         * via `AgentTaskStatus.isolationMerge`.
+         */
+        const val TYPE_ISOLATION_MERGE = "isolation.merge"
+
+        /**
+         * Version stamped on every event this build writes (see
+         * [AgentTaskEvent.schemaVersion]).
+         *
+         * Bumped when the meaning of an existing field or `detail` payload changes; a
+         * new event type alone does not need a bump, because unknown types are ignored
+         * by construction.
+         */
+        const val SCHEMA_VERSION = 1
     }
 }
 
@@ -183,6 +280,10 @@ data class AgentTaskEvent(
  * @property lastEpochMillis wall-clock time of the newest step
  * @property toolCounts per-tool call counts, most-called first, capped to
  *   [MAX_TOOL_BREAKDOWN] entries
+ * @property mutations the run's newest reported file-mutation count (a gauge, not a
+ *   sum; `null` until the engine reported one — a browsing task never does)
+ * @property readOnlyRounds the newest reported count of consecutive coding rounds
+ *   without a file mutation (`null` when the engine never reported it)
  * */
 data class AgentTaskRunStats(
     val rounds: Long = 0,
@@ -204,6 +305,18 @@ data class AgentTaskRunStats(
     val firstEpochMillis: Long? = null,
     val lastEpochMillis: Long? = null,
     val toolCounts: Map<String, Long> = emptyMap(),
+    /**
+     * The run's newest file-mutation count (gauge), or `null` when the engine never
+     * reported one.
+     *
+     * The pair "tool calls vs files changed" is the question `/stats` has to answer
+     * **while the run is in flight**: 175 tool calls and 0 mutations is a run that
+     * will not converge, and it used to be visible only by comparing workspace
+     * mtimes by hand.
+     */
+    val mutations: Long? = null,
+    /** Newest count of consecutive coding rounds without a mutation (gauge). */
+    val readOnlyRounds: Int? = null,
 ) {
     /**
      * True when any token counter is non-zero.
@@ -254,6 +367,8 @@ private class RunStatsAccumulator {
     var events = 0L
     var firstEpochMillis: Long? = null
     var lastEpochMillis: Long? = null
+    var mutations: Long? = null
+    var readOnlyRounds: Int? = null
     val toolCounts = HashMap<String, Long>()
 
     fun record(
@@ -265,11 +380,18 @@ private class RunStatsAccumulator {
         totalTokens: Int?,
         cachedInputTokens: Int?,
         cacheWriteInputTokens: Int?,
+        mutations: Long?,
+        readOnlyRounds: Int?,
         epochMillis: Long,
     ) {
         events++
         if (firstEpochMillis == null) firstEpochMillis = epochMillis
         lastEpochMillis = epochMillis
+        // Progress gauges: a `round.start` reports the run's CURRENT cumulative
+        // mutation count and read-only streak, so the newest reported value wins.
+        // Summing them would report 1+2+3 files for a run that changed three.
+        mutations?.let { this.mutations = it }
+        readOnlyRounds?.let { this.readOnlyRounds = it }
         when (type) {
             AgentTaskEvent.TYPE_ROUND -> rounds++
             AgentTaskEvent.TYPE_TOOL_CALL -> {
@@ -324,6 +446,8 @@ private class RunStatsAccumulator {
             .sortedWith(compareByDescending<Map.Entry<String, Long>> { it.value }.thenBy { it.key })
             .take(AgentTaskRunStats.MAX_TOOL_BREAKDOWN)
             .associateTo(LinkedHashMap()) { it.key to it.value },
+        mutations = mutations,
+        readOnlyRounds = readOnlyRounds,
     )
 }
 
@@ -374,6 +498,11 @@ class AgentTaskEventLog(val capacity: Int = DEFAULT_CAPACITY) {
         cumulativeTokens: Long? = null,
         errorCode: String? = null,
         resumable: Boolean? = null,
+        callId: String? = null,
+        detail: Map<String, Any?>? = null,
+        mutations: Long? = null,
+        readOnlyRounds: Int? = null,
+        schemaVersion: Int? = AgentTaskEvent.SCHEMA_VERSION,
         epochMillis: Long = System.currentTimeMillis(),
     ): AgentTaskEvent {
         // The log is the last point before serialization, so the "no unpaired
@@ -400,10 +529,18 @@ class AgentTaskEventLog(val capacity: Int = DEFAULT_CAPACITY) {
             cumulativeTokens = cumulativeTokens,
             errorCode = errorCode,
             resumable = resumable,
+            callId = callId?.let(AgentTaskEventSanitizer::replaceUnpairedSurrogates),
+            // The decision payload is attacker-adjacent in the same way arguments
+            // are (tool text flows into it), so it is redacted and bounded here —
+            // the one place every producer goes through.
+            detail = AgentTaskEventSanitizer.detail(detail),
+            schemaVersion = schemaVersion,
+            mutations = mutations,
+            readOnlyRounds = readOnlyRounds,
         )
         accumulator.record(
             type, tool, ok, inputTokens, outputTokens, totalTokens,
-            cachedInputTokens, cacheWriteInputTokens, epochMillis,
+            cachedInputTokens, cacheWriteInputTokens, mutations, readOnlyRounds, epochMillis,
         )
         events.addLast(event)
         while (events.size > capacity) {
@@ -436,6 +573,16 @@ class AgentTaskEventLog(val capacity: Int = DEFAULT_CAPACITY) {
     @Synchronized
     fun lastSeq(): Long = nextSeq - 1
 
+    /**
+     * Sequence number of the OLDEST retained event, or 0 when the log is empty.
+     *
+     * A follower compares its cursor with this to learn that it fell behind the
+     * retained window: without it, "you missed 300 steps" and "nothing new happened"
+     * arrive as the same empty page.
+     */
+    @Synchronized
+    fun firstSeq(): Long = events.firstOrNull()?.seq ?: 0L
+
     /** Number of retained events. */
     @Synchronized
     fun size(): Int = events.size
@@ -443,6 +590,45 @@ class AgentTaskEventLog(val capacity: Int = DEFAULT_CAPACITY) {
     /** How many events fell out of the buffer. */
     @Synchronized
     fun droppedCount(): Long = dropped
+
+    /**
+     * The newest retained event of [type], or `null` when none is retained.
+     *
+     * Used at the terminal transition to assemble a failed task's structured evidence
+     * ([ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskStatus.failureDetail])
+     * from the decision events that were recorded moments earlier — the log is the
+     * channel both the agent and the runner write to, so no cross-layer plumbing is
+     * needed. Scans from the tail and stops at the first match (n ≤ capacity).
+     */
+    @Synchronized
+    fun lastOfType(type: String): AgentTaskEvent? = events.lastOrNull { it.type == type }
+
+    /**
+     * One page of this log plus the cursor-honesty facts.
+     *
+     * `resynced` is true when [afterSeq] fell behind the retained window: the page is
+     * the retained tail, not a continuation of what the caller has already seen. An
+     * empty page still returns the caller's own cursor as
+     * [AgentTaskEventPage.nextSeq] so a poll is idempotent.
+     *
+     * @param afterSeq cursor: return events with a strictly greater sequence
+     * @param limit page size
+     */
+    @Synchronized
+    fun page(afterSeq: Long, limit: Int = DEFAULT_PAGE_LIMIT): AgentTaskEventPage {
+        val retained = eventsAfter(afterSeq, limit)
+        val first = events.firstOrNull()?.seq ?: 0L
+        return AgentTaskEventPage(
+            events = retained,
+            nextSeq = retained.lastOrNull()?.seq ?: afterSeq,
+            firstRetainedSeq = first,
+            lastSeq = nextSeq - 1,
+            dropped = dropped,
+            // A cursor of 0 means "from the beginning": the caller never claimed to
+            // have seen anything, so nothing can be missing relative to it.
+            resynced = afterSeq > 0 && first > 0 && afterSeq < first - 1,
+        )
+    }
 
     /**
      * The run's aggregate counters as of now.
@@ -461,6 +647,34 @@ class AgentTaskEventLog(val capacity: Int = DEFAULT_CAPACITY) {
         const val DEFAULT_PAGE_LIMIT = 200
     }
 }
+
+/**
+ * One page of an agent task's step log, with the facts a follower needs to know
+ * whether it is still following a continuous stream.
+ *
+ * The cursor contract used to be unable to express "you fell behind": when `after`
+ * pointed before the retained window the endpoint returned an empty page with the
+ * cursor unchanged — indistinguishable from "no new steps". A supervisor that slept
+ * past the 1000-event ring silently lost steps and could conclude the agent stalled.
+ *
+ * @property events the retained steps after the requested cursor, oldest first
+ * @property nextSeq cursor to pass as `after` next time; the requested cursor on an
+ *   empty page, so polling is idempotent
+ * @property firstRetainedSeq sequence number of the oldest retained step, `0` when
+ *   the log is empty
+ * @property lastSeq sequence number of the newest step ever appended
+ * @property dropped steps evicted from the bounded buffer over the log's lifetime
+ * @property resynced true when the cursor had fallen behind the retained window: the
+ *   page is the retained tail, not a continuation (the caller must re-read, not append)
+ * */
+data class AgentTaskEventPage(
+    val events: List<AgentTaskEvent> = emptyList(),
+    val nextSeq: Long = 0L,
+    val firstRetainedSeq: Long = 0L,
+    val lastSeq: Long = 0L,
+    val dropped: Long = 0L,
+    val resynced: Boolean = false,
+)
 
 /**
  * Truncation and secret redaction for [AgentTaskEvent] payloads.
@@ -500,6 +714,21 @@ object AgentTaskEventSanitizer {
 
     /** Preview length of `arguments` / `text` in one event. */
     const val MAX_PREVIEW_CHARS = 240
+
+    /** Serialized size ceiling of one event's `detail` payload. */
+    const val MAX_DETAIL_BYTES = 4096
+
+    /** Maximum keys of one `detail` map (the outermost or a nested one). */
+    const val MAX_DETAIL_KEYS = 12
+
+    /** Maximum items of one array inside `detail`. */
+    const val MAX_DETAIL_ITEMS = 20
+
+    /** Maximum nesting level of collections inside `detail`. */
+    const val MAX_DETAIL_DEPTH = 2
+
+    /** Marker key set when a `detail` payload had to be trimmed. */
+    const val DETAIL_TRUNCATED = "truncated"
 
     /** Placeholder for a redacted value. */
     const val REDACTED = "***"
@@ -628,6 +857,139 @@ object AgentTaskEventSanitizer {
         }
         return builder.toString()
     }
+
+    /**
+     * Redact, preview and bound a decision event's structured payload.
+     *
+     * The payload is machine-read, so it stays a JSON object — but it is produced from
+     * the same attacker-adjacent data as tool arguments (a shell command, a tool
+     * result), so the same rules apply:
+     *
+     * 1. a value whose **key** names a credential becomes [REDACTED];
+     * 2. every string is passed through [preview] (one line, ≤ [MAX_PREVIEW_CHARS]);
+     * 3. collections are bounded — ≤ [MAX_DETAIL_KEYS] keys, ≤ [MAX_DETAIL_ITEMS]
+     *    items, ≤ [MAX_DETAIL_DEPTH] levels — and the serialized result must fit
+     *    [MAX_DETAIL_BYTES];
+     * 4. whenever anything was cut, [DETAIL_TRUNCATED] is set to `true`, so a reader
+     *    can tell "the payload ended" from "the payload was trimmed".
+     *
+     * @return a sanitized copy, or `null` when [detail] is null/empty
+     * */
+    fun detail(detail: Map<*, *>?): Map<String, Any?>? {
+        if (detail.isNullOrEmpty()) return null
+        var truncated = false
+        val sanitized = sanitizeMap(detail, 0) { truncated = true } ?: return null
+        if (sanitized.isEmpty()) return null
+        val bounded = boundBySerializedSize(sanitized) { truncated = true }
+        return if (truncated) LinkedHashMap(bounded).apply { put(DETAIL_TRUNCATED, true) } else bounded
+    }
+
+    /** One level of [detail], with nested values sanitized recursively. */
+    private fun sanitizeMap(
+        map: Map<*, *>,
+        depth: Int,
+        markTruncated: () -> Unit,
+    ): Map<String, Any?>? {
+        val result = LinkedHashMap<String, Any?>(minOf(map.size, MAX_DETAIL_KEYS))
+        for ((rawKey, rawValue) in map) {
+            val key = rawKey?.toString()?.takeIf { it.isNotBlank() } ?: continue
+            if (result.size >= MAX_DETAIL_KEYS) {
+                markTruncated()
+                break
+            }
+            if (isSensitiveKey(key)) {
+                result[key] = REDACTED
+                continue
+            }
+            result[key] = sanitizeValue(rawValue, depth + 1, markTruncated)
+        }
+        return result
+    }
+
+    private fun sanitizeValue(value: Any?, depth: Int, markTruncated: () -> Unit): Any? = when (value) {
+        null -> null
+        is Boolean -> value
+        // Numbers are bounded by their own representation; no preview needed.
+        is Int, is Long, is Short, is Byte, is Double, is Float -> value
+        is CharSequence -> redactRaw(value.toString()).let { preview(it) }
+        is Map<*, *> -> if (depth > MAX_DETAIL_DEPTH) {
+            markTruncated()
+            null
+        } else {
+            sanitizeMap(value, depth, markTruncated)
+        }
+
+        is Iterable<*> -> if (depth > MAX_DETAIL_DEPTH) {
+            markTruncated()
+            null
+        } else {
+            val items = ArrayList<Any?>(minOf(MAX_DETAIL_ITEMS, 4))
+            for (item in value) {
+                if (items.size >= MAX_DETAIL_ITEMS) {
+                    markTruncated()
+                    break
+                }
+                items += sanitizeValue(item, depth + 1, markTruncated)
+            }
+            items
+        }
+
+        is Array<*> -> sanitizeValue(value.asList(), depth, markTruncated)
+        else -> redactRaw(value.toString()).let { preview(it) }
+    }
+
+    /**
+     * Shrink a structurally-valid payload until it serializes within [MAX_DETAIL_BYTES].
+     *
+     * The structural limits bound the common case; this one bounds the worst case (12
+     * keys × 20 items × 240 chars each ≈ 58 KB), which a single decision event must never
+     * push into a 1000-event ring.
+     *
+     * Degradation order is "keep the meaning, drop the volume": the long arrays are
+     * halved first (a verdict's check list is still readable with fewer entries), and only
+     * trailing top-level keys are dropped when even that is not enough.
+     */
+    private fun boundBySerializedSize(
+        map: Map<String, Any?>,
+        markTruncated: () -> Unit,
+    ): Map<String, Any?> {
+        if (serializedSize(map) <= MAX_DETAIL_BYTES) return map
+        markTruncated()
+
+        var current: Map<String, Any?> = map
+        var itemCap = MAX_DETAIL_ITEMS / 2
+        while (itemCap >= 1 && serializedSize(current) > MAX_DETAIL_BYTES) {
+            current = trimArrays(current, itemCap)
+            itemCap /= 2
+        }
+
+        val trimmed = LinkedHashMap(current)
+        while (trimmed.size > 1 && serializedSize(trimmed) > MAX_DETAIL_BYTES) {
+            trimmed.remove(trimmed.keys.last())
+        }
+        return trimmed
+    }
+
+    /** Every list in [map] (nested maps included) cut to [cap] items. */
+    private fun trimArrays(map: Map<String, Any?>, cap: Int): Map<String, Any?> {
+        val result = LinkedHashMap<String, Any?>(map.size)
+        map.forEach { (key, value) ->
+            result[key] = when (value) {
+                is List<*> -> value.take(cap)
+                is Map<*, *> -> {
+                    @Suppress("UNCHECKED_CAST")
+                    trimArrays(value as Map<String, Any?>, cap)
+                }
+
+                else -> value
+            }
+        }
+        return result
+    }
+
+    private fun serializedSize(map: Map<String, Any?>): Int = runCatching {
+        pulsarObjectMapper().writeValueAsBytes(map).size
+    }.getOrDefault(0)
 
     /**
      * Redact and truncate a tool's JSON arguments for the event stream.

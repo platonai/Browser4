@@ -136,8 +136,16 @@ class AgentToolCallLoop(
     private val allToolSpecifications: List<LangChain4jToolSpec> = emptyList(),
     private val disclosureListingLimit: Int = 200,
     private val onToolExecuted: () -> Unit = {},
-    /** Called for every tool request before execution (name, arguments JSON). */
-    private val onToolRequest: (String, String) -> Unit = { _, _ -> },
+    /**
+     * Called for every tool request before execution (name, arguments JSON, request id).
+     *
+     * The third parameter is [ToolExecutionRequest.id] — the stable id the provider
+     * assigns to one tool call and repeats in the result message. Reporters store it
+     * on the `tool.call` event so a consumer can pair call and result exactly; pairing
+     * by tool name is a heuristic that breaks for parallel calls of the same tool
+     * (issue #652, P1-2).
+     */
+    private val onToolRequest: (String, String, String?) -> Unit = { _, _, _ -> },
     /**
      * Called after every executed tool with its request, result message and
      * execution duration — feeds complete run tracing (name, arguments, full
@@ -428,7 +436,7 @@ class AgentToolCallLoop(
 
             // Execute each tool request and append results
             for (request in toolRequests) {
-                observed { onToolRequest(request.name(), request.arguments() ?: "{}") }
+                observed { onToolRequest(request.name(), request.arguments() ?: "{}", request.id()) }
                 val executedAt = System.nanoTime()
                 // Progressive disclosure: system.listTools / system.exposeTools
                 // are intercepted here — exposeTools mutates exposedToolSpecs,

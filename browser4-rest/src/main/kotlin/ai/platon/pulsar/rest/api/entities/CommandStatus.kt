@@ -150,6 +150,27 @@ data class CommandStatus(
      * from the memory event log.
      */
     var timings: Map<String, Any?>? = null,
+
+    /**
+     * Structured failure evidence (issue #652): the finish gate's violations and
+     * unlisted files, the failing verification checks, the repair rounds spent and the
+     * isolation decision — assembled from the run's decision events.
+     *
+     * This is what makes a failed task answer "which rule, which files, which check"
+     * from `/result` alone instead of pointing at a backend log only the machine can
+     * read. `null` for a successful task.
+     */
+    var failureDetail: Map<String, Any?>? = null,
+
+    /**
+     * Live progress gauge: the run's cumulative file-mutation count as of its newest
+     * round (`null` = never reported). Paired with [readOnlyRounds], a 2-second status
+     * poll can spot "hundreds of tool calls, zero files changed".
+     */
+    var mutations: Long? = null,
+
+    /** Live progress gauge: consecutive coding rounds without a file mutation. */
+    var readOnlyRounds: Int? = null,
 ) {
     val status: String get() = ResourceStatus.getStatusText(statusCode)
     var lastModifiedTime: Instant? = null
@@ -363,6 +384,13 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     // permissions, because every other rail (preset, paths, sandbox) is off for it.
     status.unrestricted = this.unrestricted
     status.timings = this.timings
+    // Structured failure evidence (P0-C) and the live progress gauges (P0-B). Both
+    // travel on the envelope as well as the result: `agent status` is polled every
+    // couple of seconds while a run is in flight, and "which rule rejected it / how
+    // many files changed" must be readable from that poll.
+    status.failureDetail = this.failureDetail
+    status.mutations = this.mutations
+    status.readOnlyRounds = this.readOnlyRounds
     // The page this task ended on. AgentTaskStatus now carries it (observed from
     // the live page, see DocumentHttpStatus); before that the conversion dropped
     // it and every agent/loop record shipped the model's 201/"created" default.
@@ -430,6 +458,9 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     result.resumable = this.resumable
     result.effectiveTokenBudget = this.effectiveTokenBudget
     result.timings = this.timings
+    // A client that only reads `result` (the CLI's `agent result --json`) must get the
+    // same structured failure evidence: that is where "which rule / which check" lives.
+    result.failureDetail = this.failureDetail
     // An aborted run's summary must carry what it DID produce, not only the
     // exception text: "wrote top20.csv, resume with …" is what tells the operator
     // whether the work is lost. The files were already there; the summary just did

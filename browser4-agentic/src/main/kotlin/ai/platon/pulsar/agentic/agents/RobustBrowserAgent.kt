@@ -1263,7 +1263,20 @@ open class RobustBrowserAgent(
             val announcedBudgetNudges = mutableSetOf<Int>()
             while (!isClosed && turn < maxTurns) {
                 val toolsBefore = toolExecutions.get()
-                emitRunEvent(AgentRunEvent(AgentRunEvent.ROUND_START, turn = turn + 1))
+                // Progress gauges (issue #652): the two numbers this very loop uses to
+                // decide the run is not converging (see [codingProgressNudge]) ride the
+                // round event, so a supervisor can compute "N tool calls / 0 file
+                // mutations" itself instead of comparing workspace mtimes by hand.
+                // They are gauges, not deltas: `mutationsSeen` is the newest cumulative
+                // count and `readOnlyCodingRounds` the current streak.
+                emitRunEvent(
+                    AgentRunEvent(
+                        AgentRunEvent.ROUND_START,
+                        turn = turn + 1,
+                        mutations = if (codingMode) mutationsSeen.toLong() else null,
+                        readOnlyRounds = if (codingMode) readOnlyCodingRounds else null,
+                    )
+                )
                 // User steering typed while this task runs (interactive session).
                 // Appended to the durable message list so it survives the next
                 // round's rebuild; the tool loop drains again before every
@@ -1285,6 +1298,21 @@ open class RobustBrowserAgent(
                     if (nudge != null) {
                         logger.info("✋ coding.nudge after {} read-only round(s)", readOnlyCodingRounds)
                         cliLoopTracer.logEvent("coding.nudge", mapOf("readOnlyRounds" to readOnlyCodingRounds))
+                        // The engine just decided the run is surveying instead of
+                        // editing. Exporting the decision (not only the instruction it
+                        // injected) is what lets a supervisor see the course correction
+                        // and the model's reaction in the same stream.
+                        emitRunEvent(
+                            AgentRunEvent(
+                                AgentRunEvent.NUDGE,
+                                turn = turn + 1,
+                                detail = mapOf(
+                                    "kind" to AgentRunEvent.NUDGE_CODING,
+                                    "readOnlyRounds" to readOnlyCodingRounds,
+                                    "mutations" to mutationsSeen,
+                                ),
+                            )
+                        )
                         roundMessages = roundMessages + UserMessage.from(nudge)
                         readOnlyCodingRounds = 0
                     }
@@ -1702,6 +1730,9 @@ open class RobustBrowserAgent(
                         durationMs = durationMs,
                         text = resultText,
                         turn = turn,
+                        // The same id the `tool.call` step carried, so a follower pairs
+                        // them exactly instead of guessing by tool name (issue #652).
+                        callId = req.id(),
                     )
                 )
                 cliLoopTracer.logTool(req, result, durationMs)
@@ -1763,9 +1794,15 @@ open class RobustBrowserAgent(
                     )
                 }
             },
-            onToolRequest = { name, argsJson ->
+            onToolRequest = { name, argsJson, callId ->
                 emitRunEvent(
-                    AgentRunEvent(AgentRunEvent.TOOL_CALL, tool = name, arguments = argsJson, turn = turn)
+                    AgentRunEvent(
+                        AgentRunEvent.TOOL_CALL,
+                        tool = name,
+                        arguments = argsJson,
+                        turn = turn,
+                        callId = callId,
+                    )
                 )
                 if (name == taskCompleteName) {
                     runCatching {
@@ -1844,6 +1881,22 @@ open class RobustBrowserAgent(
                                 "percent" to percent,
                                 "consumed" to tokenBudget.consumedTotal,
                                 "limit" to tokenBudget.effectiveMaxTotalTokens,
+                            )
+                        )
+                        // The wrap-up instruction is a decision event too: a supervisor
+                        // that sees "94% of the budget, engine asked the model to wrap up"
+                        // can intervene before the abort, instead of learning the budget
+                        // was short from `task.failed` (issue #652).
+                        emitRunEvent(
+                            AgentRunEvent(
+                                AgentRunEvent.NUDGE,
+                                turn = turn,
+                                detail = mapOf(
+                                    "kind" to AgentRunEvent.NUDGE_BUDGET,
+                                    "percent" to percent,
+                                    "consumed" to tokenBudget.consumedTotal,
+                                    "limit" to tokenBudget.effectiveMaxTotalTokens,
+                                ),
                             )
                         )
                         innerMessages.add(
@@ -2688,6 +2741,23 @@ open class RobustBrowserAgent(
     ): FinishReconciliation {
         val sid = context.sessionId.take(8)
         val verdict = evaluateFinishReport(action, context)
+        val strict = config.finishGateCheck.equals("strict", ignoreCase = true)
+        // Every evaluation is exported, pass included (issue #652): "the gate ran and
+        // said fine" is evidence a supervisor needs, and inferring it from the absence
+        // of a failure makes an unrun gate look like a pass.
+        emitRunEvent(
+            AgentRunEvent(
+                AgentRunEvent.GATE_EVALUATED,
+                detail = mapOf(
+                    "passed" to verdict.passed,
+                    "strict" to strict,
+                    "violations" to verdict.violations,
+                    "unlistedFiles" to verdict.unlistedFiles,
+                    "warnings" to verdict.warnings,
+                    "requiredGates" to config.finishRequiredGates,
+                ),
+            )
+        )
         verdict.warnings.forEach { warning ->
             logger.warn("⚠ finish.report sid={} {}", sid, warning)
         }
@@ -2698,7 +2768,7 @@ open class RobustBrowserAgent(
         verdict.violations.forEach { violation ->
             logger.warn("⚠ finish.report sid={} {}", sid, violation)
         }
-        if (!config.finishGateCheck.equals("strict", ignoreCase = true)) {
+        if (!strict) {
             logger.warn(
                 "⚠ finish.report sid={} finishGateCheck=warn — accepting the completion despite {} violation(s)",
                 sid, verdict.violations.size,
@@ -2727,6 +2797,16 @@ open class RobustBrowserAgent(
                     "🔁 cli-agent.finish.repair.round sid={} round={}/{} missing={}",
                     sid, decision.round, finishReportRepair.maxRounds, verdict.unlistedFiles.size,
                 )
+                emitRunEvent(
+                    AgentRunEvent(
+                        AgentRunEvent.FINISH_REPAIR,
+                        detail = mapOf(
+                            "round" to decision.round,
+                            "maxRounds" to finishReportRepair.maxRounds,
+                            "missing" to verdict.unlistedFiles,
+                        ),
+                    )
+                )
                 FinishReconciliation(repairMessage = decision.message)
             }
 
@@ -2743,6 +2823,16 @@ open class RobustBrowserAgent(
                     "⚠ finish.report sid={} amended filesChanged: the run wrote {} file(s) the " +
                         "report omitted ({} listed now) — the mutation trace is authoritative",
                     sid, verdict.unlistedFiles.size, amended.size,
+                )
+                emitRunEvent(
+                    AgentRunEvent(
+                        AgentRunEvent.FINISH_AMEND,
+                        detail = mapOf(
+                            "added" to verdict.unlistedFiles,
+                            "source" to "mutation-trace",
+                            "filesChanged" to amended,
+                        ),
+                    )
                 )
                 FinishReconciliation(completion = action.copy(filesChanged = amended))
             }
@@ -2889,7 +2979,38 @@ open class RobustBrowserAgent(
                 (record.name.contains("verify", ignoreCase = true) &&
                     record.resultText.trimStart().startsWith("{"))
         } ?: return
-        VerificationReport.parseFromText(candidate.resultText)?.let { lastVerificationVerdict = it }
+        VerificationReport.parseFromText(candidate.resultText)?.let { verdict ->
+            lastVerificationVerdict = verdict
+            // Export the verdict the moment it is parsed (issue #652): the completion
+            // decision and the repair budget are driven by THIS object, and until now it
+            // existed only in memory plus a truncated tool-result preview. A supervisor
+            // can now read "which check is red, with which exit code" while the run is
+            // still going.
+            emitRunEvent(
+                AgentRunEvent(
+                    AgentRunEvent.VERIFY_VERDICT,
+                    detail = mapOf(
+                        "passed" to verdict.passed,
+                        "module" to verdict.module,
+                        "failureReason" to verdict.failureReason(),
+                        "checkedAt" to verdict.verifiedAt?.toString(),
+                        // Bounded: AgentTaskEventSanitizer.detail keeps ≤ 12 top-level keys,
+                        // ≤ 20 items per array and previews every string to 240 chars, so a
+                        // 6-check report fits comfortably.
+                        "checks" to verdict.checks.map { check ->
+                            mapOf(
+                                "name" to check.name,
+                                "target" to check.target,
+                                "ran" to check.ran,
+                                "ok" to check.ok,
+                                "required" to check.required,
+                                "exitCode" to check.exitCode,
+                            )
+                        },
+                    ),
+                )
+            )
+        }
     }
 
     /**
@@ -2914,13 +3035,41 @@ open class RobustBrowserAgent(
                     "🔁 cli-agent.repair.round sid={} round={}/{} reason={}",
                     context.sid, decision.round, repairLoop.maxRounds, reason,
                 )
+                // The repair round is a decision the supervisor has to see: it says the
+                // run is being held back because a check is red, and which one (#652).
+                emitRunEvent(
+                    AgentRunEvent(
+                        AgentRunEvent.REPAIR_ROUND,
+                        detail = mapOf(
+                            "round" to decision.round,
+                            "maxRounds" to repairLoop.maxRounds,
+                            "reason" to reason,
+                        ),
+                    )
+                )
                 decision.message
             }
 
-            RepairLoop.Action.EXHAUSTED -> throw IllegalStateException(
-                "Finish report rejected: verification still fails after " +
-                    "${repairLoop.roundsUsed} repair round(s) — ${verdict.failureReason()}"
-            )
+            RepairLoop.Action.EXHAUSTED -> {
+                // Emitted BEFORE the throw: the terminal `task.failed` step carries the
+                // failure prose, but the verdict is what names the red check. Without this
+                // event the terminal state could not answer "which rule, which check".
+                emitRunEvent(
+                    AgentRunEvent(
+                        AgentRunEvent.REPAIR_EXHAUSTED,
+                        detail = mapOf(
+                            "roundsUsed" to repairLoop.roundsUsed,
+                            "maxRounds" to repairLoop.maxRounds,
+                            "passed" to verdict.passed,
+                            "failureReason" to verdict.failureReason(),
+                        ),
+                    )
+                )
+                throw IllegalStateException(
+                    "Finish report rejected: verification still fails after " +
+                        "${repairLoop.roundsUsed} repair round(s) — ${verdict.failureReason()}"
+                )
+            }
 
             RepairLoop.Action.PASSED, RepairLoop.Action.DISABLED -> null
         }

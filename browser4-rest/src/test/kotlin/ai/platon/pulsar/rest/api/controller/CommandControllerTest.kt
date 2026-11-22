@@ -2,14 +2,18 @@ package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEvent
+import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEventPage
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskRunStats
+import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskStatus
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.api.entities.CommandInputRequest
+import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.entities.CommandSubmitResponse
+import ai.platon.pulsar.rest.api.entities.toCommandStatus
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
@@ -27,6 +31,7 @@ import org.springframework.http.MediaType
 import java.time.Instant
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -124,6 +129,8 @@ class CommandControllerTest {
                     // declared parameter needs its own matcher, even when the
                     // caller never passes it.
                     anyOrNull(),
+                    // rewindTaskId (13th parameter, defaulted) — same rule.
+                    anyOrNull(),
                 )
             ).thenReturn("agent-task-9")
 
@@ -154,6 +161,10 @@ class CommandControllerTest {
                     // addDirs (11th parameter, defaulted) — see the async test above.
                     anyOrNull(),
                     // unrestricted (12th parameter, defaulted) — see the async test above.
+                    anyOrNull(),
+                    // rewindTaskId (13th parameter, defaulted) — added with the pi
+                    // context alignment; a defaulted argument still occupies a matcher
+                    // slot, so omitting it fails the whole stub.
                     anyOrNull(),
                 )
             ).thenReturn(status)
@@ -254,10 +265,16 @@ class CommandControllerTest {
             processState = "in_progress",
         )
         whenever(executor.getStatus(DEFAULT_SESSION_ID, "agent-1")).thenReturn(running)
-        whenever(executor.events("agent-1", 2L, 200)).thenReturn(
-            listOf(
-                AgentTaskEvent(seq = 3, type = AgentTaskEvent.TYPE_TOOL_CALL, tool = "coding.read"),
-                AgentTaskEvent(seq = 4, type = AgentTaskEvent.TYPE_MODEL_TEXT, text = "done soon"),
+        whenever(executor.eventsPage("agent-1", 2L, 200)).thenReturn(
+            AgentTaskEventPage(
+                events = listOf(
+                    AgentTaskEvent(seq = 3, type = AgentTaskEvent.TYPE_TOOL_CALL, tool = "coding.read"),
+                    AgentTaskEvent(seq = 4, type = AgentTaskEvent.TYPE_MODEL_TEXT, text = "done soon"),
+                ),
+                nextSeq = 4,
+                firstRetainedSeq = 1,
+                lastSeq = 4,
+                dropped = 0,
             )
         )
 
@@ -270,13 +287,16 @@ class CommandControllerTest {
         assertEquals(false, body.done)
         assertEquals(4L, body.nextSeq, "the cursor is the last delivered sequence")
         assertEquals(listOf(3L, 4L), body.events.map { it.seq })
+        assertEquals(1L, body.firstRetainedSeq, "the client can see where the window begins")
+        assertEquals(0L, body.dropped)
+        assertEquals(false, body.resynced, "a cursor inside the window is a real continuation")
     }
 
     @Test
     @DisplayName("an unknown id is 404; a finished id with no new events keeps the cursor")
     fun eventsEndpointHandlesUnknownAndEmptyPages() {
         whenever(executor.getStatus(DEFAULT_SESSION_ID, "nope")).thenReturn(null)
-        whenever(executor.events("nope", 0L, 200)).thenReturn(emptyList())
+        whenever(executor.eventsPage("nope", 0L, 200)).thenReturn(null)
 
         assertEquals(
             HttpStatus.NOT_FOUND,
@@ -290,7 +310,9 @@ class CommandControllerTest {
             processState = "completed",
         )
         whenever(executor.getStatus(DEFAULT_SESSION_ID, "agent-2")).thenReturn(finished)
-        whenever(executor.events("agent-2", 7L, 200)).thenReturn(emptyList())
+        whenever(executor.eventsPage("agent-2", 7L, 200)).thenReturn(
+            AgentTaskEventPage(events = emptyList(), nextSeq = 7, firstRetainedSeq = 1, lastSeq = 7)
+        )
 
         val body = assertNotNull(controller.getEvents("agent-2", after = 7, limit = 200).body)
         assertTrue(body.done, "a finished task must stop the follower")
@@ -307,10 +329,15 @@ class CommandControllerTest {
         // row. Reporting `done=false` then would make an uncapped follower poll
         // forever.
         whenever(executor.getStatus(DEFAULT_SESSION_ID, "agent-3")).thenReturn(null)
-        whenever(executor.events("agent-3", 0L, 200)).thenReturn(
-            listOf(
-                AgentTaskEvent(seq = 1, type = AgentTaskEvent.TYPE_TOOL_CALL, tool = "b4.run"),
-                AgentTaskEvent(seq = 2, type = AgentTaskEvent.TYPE_DONE, text = "finished"),
+        whenever(executor.eventsPage("agent-3", 0L, 200)).thenReturn(
+            AgentTaskEventPage(
+                events = listOf(
+                    AgentTaskEvent(seq = 1, type = AgentTaskEvent.TYPE_TOOL_CALL, tool = "b4.run"),
+                    AgentTaskEvent(seq = 2, type = AgentTaskEvent.TYPE_DONE, text = "finished"),
+                ),
+                nextSeq = 2,
+                firstRetainedSeq = 1,
+                lastSeq = 2,
             )
         )
 
@@ -319,6 +346,36 @@ class CommandControllerTest {
         assertTrue(body.done, "a terminal event must stop the follower")
         assertEquals("done", body.status)
         assertEquals(2L, body.nextSeq)
+    }
+
+    @Test
+    @DisplayName("a cursor behind the retained window is reported as resynced, never as an empty gap")
+    fun eventsEndpointReportsAResyncedCursor() {
+        // A supervisor that slept past the 1000-step ring must be told its cursor fell
+        // behind the window; returning an empty page with the cursor unchanged is
+        // indistinguishable from "no new steps" (issue #652, P0-D).
+        val running = CommandStatus(
+            id = "agent-4",
+            statusCode = ResourceStatus.SC_PROCESSING,
+            processState = "in_progress",
+        )
+        whenever(executor.getStatus(DEFAULT_SESSION_ID, "agent-4")).thenReturn(running)
+        whenever(executor.eventsPage("agent-4", 3L, 200)).thenReturn(
+            AgentTaskEventPage(
+                events = listOf(AgentTaskEvent(seq = 500, type = AgentTaskEvent.TYPE_TOOL_CALL, tool = "b4.run")),
+                nextSeq = 500,
+                firstRetainedSeq = 500,
+                lastSeq = 900,
+                dropped = 499,
+                resynced = true,
+            )
+        )
+
+        val body = assertNotNull(controller.getEvents("agent-4", after = 3, limit = 200).body)
+
+        assertTrue(body.resynced, "the follower must know it lost steps")
+        assertEquals(500L, body.firstRetainedSeq)
+        assertEquals(499L, body.dropped)
     }
 
     @Test
@@ -483,6 +540,87 @@ class CommandControllerTest {
         )
         assertEquals(132, stats["events"])
         assertEquals(mapOf("b4.run" to 12), stats["toolCounts"])
+    }
+
+    @Test
+    @DisplayName("stats carry the progress gauges, and an unreported gauge stays null not 0")
+    fun statsCarryTheProgressGauges() {
+        whenever(executor.getStatus(DEFAULT_SESSION_ID, "agent-5")).thenReturn(
+            CommandStatus(id = "agent-5", statusCode = ResourceStatus.SC_PROCESSING, processState = "in_progress")
+        )
+        whenever(executor.stats("agent-5")).thenReturn(
+            AgentTaskRunStats(toolCalls = 175, events = 400, mutations = 0, readOnlyRounds = 6)
+        )
+        // A browsing task never tracks file mutations: 0 would be a lie, null is honest.
+        whenever(executor.getStatus(DEFAULT_SESSION_ID, "agent-6")).thenReturn(
+            CommandStatus(id = "agent-6", statusCode = ResourceStatus.SC_PROCESSING, processState = "in_progress")
+        )
+        whenever(executor.stats("agent-6")).thenReturn(AgentTaskRunStats(toolCalls = 12, events = 30))
+
+        val coding = assertNotNull(controller.getStats("agent-5").body)
+        assertEquals(175, coding.stats.toolCalls)
+        assertEquals(0L, coding.stats.mutations, "175 tool calls and 0 file mutations is the signal")
+        assertEquals(6, coding.stats.readOnlyRounds)
+
+        val browsing = assertNotNull(controller.getStats("agent-6").body)
+        assertNull(browsing.stats.mutations, "an untracked gauge must not read as 0")
+        assertNull(browsing.stats.readOnlyRounds)
+    }
+
+    @Test
+    @DisplayName("a failed task's result carries the structured failure detail")
+    fun resultCarriesTheStructuredFailureDetail() {
+        // `/result` must answer "which rule, which files, which check" without the backend
+        // log a remote supervisor cannot read (issue #652, acceptance criterion 1).
+        val failed = CommandStatus(
+            id = "agent-7",
+            statusCode = ResourceStatus.SC_EXPECTATION_FAILED,
+            processState = "completed",
+        )
+        failed.errorCode = "TOOL_ERROR"
+        failed.resumable = true
+        failed.failureDetail = mapOf(
+            "errorCode" to "TOOL_ERROR",
+            "finishGate" to mapOf(
+                "passed" to false,
+                "violations" to listOf("filesChanged lists a file git does not show"),
+                "unlistedFiles" to listOf("ev.js"),
+            ),
+        )
+        whenever(executor.getResult(DEFAULT_SESSION_ID, "agent-7")).thenReturn(
+            ai.platon.pulsar.rest.api.entities.CommandResult(
+                summary = "rejected",
+                failureDetail = failed.failureDetail,
+            )
+        )
+
+        val result = assertNotNull(controller.getResult("agent-7").body)
+
+        val detail = assertNotNull(result.failureDetail)
+        @Suppress("UNCHECKED_CAST")
+        val gate = detail["finishGate"] as Map<String, Any?>
+        assertEquals(false, gate["passed"])
+        assertEquals(listOf("ev.js"), gate["unlistedFiles"])
+    }
+
+    @Test
+    @DisplayName("the status conversion passes the failure detail and the gauges through")
+    fun toCommandStatusCarriesFailureDetailAndGauges() {
+        val agent = AgentTaskStatus(
+            id = "agent-8",
+            statusCode = ResourceStatus.SC_EXPECTATION_FAILED,
+            processState = "done",
+        )
+        agent.failureDetail = mapOf("errorCode" to "TOOL_ERROR", "reason" to "rejected")
+        agent.mutations = 4
+        agent.readOnlyRounds = 0
+
+        val status = agent.toCommandStatus()
+
+        assertEquals(agent.failureDetail, status.failureDetail)
+        assertEquals(4L, status.mutations, "the live gauges must reach the status poll")
+        assertEquals(0, status.readOnlyRounds)
+        assertEquals(agent.failureDetail, status.commandResult?.failureDetail)
     }
 
     private companion object {

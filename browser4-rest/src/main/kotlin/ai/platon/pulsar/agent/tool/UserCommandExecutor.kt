@@ -4,6 +4,7 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEvent
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEventLog
+import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEventPage
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskRunStats
 import ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
@@ -403,11 +404,25 @@ class UserCommandExecutor(
         id: String,
         afterSeq: Long = 0L,
         limit: Int = AgentTaskEventLog.DEFAULT_PAGE_LIMIT,
-    ): List<AgentTaskEvent> = agentRunners.values
-        .firstNotNullOfOrNull { runner ->
-            runner.events(id, afterSeq, limit).takeIf { it.isNotEmpty() }
-        }
-        .orEmpty()
+    ): List<AgentTaskEvent> = eventsPage(id, afterSeq, limit)?.events.orEmpty()
+
+    /**
+     * The live step log page of agent task [id], or `null` when no runner holds a log
+     * for it.
+     *
+     * The page adds the cursor-honesty facts (`resynced` / `dropped` /
+     * `firstRetainedSeq`) a follower needs; `null` is what lets the REST layer answer
+     * `404` and a follower distinguish "no task" from "nothing new yet" (issue #652).
+     *
+     * @param afterSeq cursor: return events with a strictly greater sequence
+     * @param limit maximum events in this page
+     */
+    fun eventsPage(
+        id: String,
+        afterSeq: Long = 0L,
+        limit: Int = AgentTaskEventLog.DEFAULT_PAGE_LIMIT,
+    ): AgentTaskEventPage? = agentRunners.values
+        .firstNotNullOfOrNull { runner -> runner.eventsPage(id, afterSeq, limit) }
 
     /**
      * The run statistics of agent task [id], or `null` when no runner holds a log

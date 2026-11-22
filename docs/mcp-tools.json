@@ -164,8 +164,96 @@
       "expectsError" : false,
       "executable" : true
     } ],
-    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"statusCode\": {\"type\": \"integer\"},\n    \"message\": {\"type\": \"string\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"statusCode\": {\"type\": \"integer\"},\n    \"message\": {\"type\": \"string\"},\n    \"error\": {\"type\": \"string\"},\n    \"errorCode\": {\"type\": \"string\"},\n    \"resumable\": {\"type\": \"boolean\"},\n    \"effectiveTokenBudget\": {\"type\": \"integer\"},\n    \"mutations\": {\"type\": \"integer\"},\n    \"readOnlyRounds\": {\"type\": \"integer\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"},\n    \"eventsTool\": {\"type\": \"string\"},\n    \"statsTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "Stops the task's runner and reports the outcome as JSON\n(`cancelled=true|false`, plus a `reason` whenever nothing was cancelled).\nA page visit cannot be interrupted mid-navigation: cancelling a live one\nreports `cancelled=false` with that reason, and so does cancelling a task\nthat already finished — the response never pretends the id is unknown."
+  }, {
+    "domain" : "command",
+    "method" : "events",
+    "mcpNames" : [ "command_events" ],
+    "signature" : "command.events(id: String, after: Long? = 0, limit: Int? = 200)",
+    "description" : "Page a command task's live step log: what the task is actually doing, one step per round/tool/model reply.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "id",
+      "type" : "String",
+      "required" : true,
+      "description" : "Task id returned by `command.run`. Required."
+    }, {
+      "name" : "after",
+      "type" : "Long?",
+      "required" : false,
+      "default" : "0",
+      "description" : "Cursor: only steps with a greater `seq` are returned. Pass the `nextSeq` of the previous page; 0 starts from the retained tail."
+    }, {
+      "name" : "limit",
+      "type" : "Int?",
+      "required" : false,
+      "default" : "200",
+      "description" : "Page size, clamped to 1000. A long coding run emits thousands of steps, so page instead of asking for everything."
+    } ],
+    "examples" : [ {
+      "title" : "Read the newest steps of a running task",
+      "args" : {
+        "id" : "5c3a1f2e-9b47-4d21-8f0a-1e6b7c8d9a01"
+      },
+      "expectsError" : false,
+      "executable" : true
+    }, {
+      "title" : "Follow a task from the beginning of the retained window",
+      "args" : {
+        "id" : "5c3a1f2e-9b47-4d21-8f0a-1e6b7c8d9a01",
+        "after" : "0",
+        "limit" : "100"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\", \"nextSeq\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\"},\n    \"done\": {\"type\": \"boolean\"},\n    \"nextSeq\": {\"type\": \"integer\"},\n    \"firstRetainedSeq\": {\"type\": \"integer\"},\n    \"dropped\": {\"type\": \"integer\"},\n    \"resynced\": {\"type\": \"boolean\"},\n    \"events\": {\"type\": \"array\", \"items\": {\"type\": \"object\"}},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"},\n    \"eventsTool\": {\"type\": \"string\"},\n    \"statsTool\": {\"type\": \"string\"}\n  }\n}",
+    "help" : "command.events(id: String, after: Long = 0, limit: Int = 200)\n\nAnswers \"what is it doing\" while `command.status` answers \"is it alive\".\nEach step carries `seq`, `type` (`round.start`, `tool.call`,\n`tool.result`, `model.text`, `run.usage`, lifecycle and the decision\nevents `gate.evaluated`, `verify.verdict`, `repair.round`, `nudge`,\n`isolation.merge`, …), plus `callId` on tool steps (pair `tool.call`\nwith its `tool.result` by it, never by tool name) and a bounded\n`detail` map on decision steps.\n\nThe answer also carries the cursor facts: `nextSeq` to pass back as\n`after`, `firstRetainedSeq` (oldest step still retained), `dropped`\n(steps evicted from the bounded buffer) and `resynced=true` when your\ncursor had fallen behind the window — the page is then the retained\ntail, not a continuation, and steps are missing rather than absent.\n\nSteps are in memory only (bounded per task): a backend restart keeps\nthe status row and loses the process. `done=true` means stop polling."
+  }, {
+    "domain" : "command",
+    "method" : "input",
+    "mcpNames" : [ "command_input" ],
+    "signature" : "command.input(id: String, text: String, deliverAs: String? = steer)",
+    "description" : "Steer a running command task, or queue a follow-up that continues it.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "id",
+      "type" : "String",
+      "required" : true,
+      "description" : "Task id returned by `command.run`. Required."
+    }, {
+      "name" : "text",
+      "type" : "String",
+      "required" : true,
+      "description" : "What the agent should do from now on. Required and must not be blank."
+    }, {
+      "name" : "deliverAs",
+      "type" : "String?",
+      "required" : false,
+      "default" : "steer",
+      "description" : "`steer` (default) reaches the agent at its next model round-trip and redirects the current step; `followUp` is delivered when the agent would stop and continues the same conversation with the new instruction."
+    } ],
+    "examples" : [ {
+      "title" : "Redirect a running task",
+      "args" : {
+        "id" : "5c3a1f2e-9b47-4d21-8f0a-1e6b7c8d9a01",
+        "text" : "also record the publish date of every item"
+      },
+      "expectsError" : false,
+      "executable" : true
+    }, {
+      "title" : "Queue an instruction for the stop point",
+      "args" : {
+        "id" : "5c3a1f2e-9b47-4d21-8f0a-1e6b7c8d9a01",
+        "text" : "then summarize what you changed",
+        "deliverAs" : "followUp"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"statusCode\": {\"type\": \"integer\"},\n    \"message\": {\"type\": \"string\"},\n    \"error\": {\"type\": \"string\"},\n    \"errorCode\": {\"type\": \"string\"},\n    \"resumable\": {\"type\": \"boolean\"},\n    \"effectiveTokenBudget\": {\"type\": \"integer\"},\n    \"mutations\": {\"type\": \"integer\"},\n    \"readOnlyRounds\": {\"type\": \"integer\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"},\n    \"eventsTool\": {\"type\": \"string\"},\n    \"statsTool\": {\"type\": \"string\"}\n  }\n}",
+    "help" : "command.input(id: String, text: String, deliverAs: String = \"steer\")\n\n`accepted=true` means the line was QUEUED, not read: the agent sees a\n`steer` step at its next model round-trip (or a `follow_up` step at its\nstop point), and the returned `message` says which. `accepted=false` is a\nnormal race (the task finished while you were typing) and comes with the\nreason instead of an error."
   }, {
     "domain" : "command",
     "method" : "result",
@@ -187,7 +275,7 @@
       "expectsError" : false,
       "executable" : true
     } ],
-    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"statusCode\": {\"type\": \"integer\"},\n    \"message\": {\"type\": \"string\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"statusCode\": {\"type\": \"integer\"},\n    \"message\": {\"type\": \"string\"},\n    \"error\": {\"type\": \"string\"},\n    \"errorCode\": {\"type\": \"string\"},\n    \"resumable\": {\"type\": \"boolean\"},\n    \"effectiveTokenBudget\": {\"type\": \"integer\"},\n    \"mutations\": {\"type\": \"integer\"},\n    \"readOnlyRounds\": {\"type\": \"integer\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"},\n    \"eventsTool\": {\"type\": \"string\"},\n    \"statsTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "command.result(id: String)\n\nThe status envelope plus a `result` field holding the command's own\npayload. Poll `command.status` until it is terminal before reading, or\ncall this directly and treat a non-terminal `status` as \"not ready\"."
   }, {
     "domain" : "command",
@@ -297,8 +385,31 @@
       "cancelTool" : "command_cancel",
       "pollAfterMs" : 1000
     },
-    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\", \"statusTool\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"pollAfterMs\": {\"type\": \"integer\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\", \"statusTool\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"pollAfterMs\": {\"type\": \"integer\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"},\n    \"eventsTool\": {\"type\": \"string\"},\n    \"statsTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "command.run(command: String)\ncommand.run(command: String, async: Boolean = true, noopLimit: Int?, engine: String?, coding: Boolean?)\n\n`command` is a URL to load, a natural-language instruction, or an agent\ntask. With async=true (the default) the call returns a task id and you\npoll it with `command.status` (JSON status envelope), read the payload\nwith `command.result`, and stop it with `command.cancel`. Pass\nasync=false when you would rather block for the finished status.\nPass coding=true for a pure coding task (read/write files, run builds):\nthe agent then works from its coding tool set without a browser page.\nTasks are browser tasks unless the caller says otherwise.\naddDirs grants extra absolute folders besides the workspace (\"agent run\n--add-dir\"): the task may read, write and run commands there, the access\npreset still limits what may be written, and the grant ends with the task."
+  }, {
+    "domain" : "command",
+    "method" : "stats",
+    "mcpNames" : [ "command_stats" ],
+    "signature" : "command.stats(id: String)",
+    "description" : "Read a command task's exact run counters: rounds, LLM calls, tool calls, failures, tokens and file mutations.",
+    "returnType" : "String",
+    "arguments" : [ {
+      "name" : "id",
+      "type" : "String",
+      "required" : true,
+      "description" : "Task id returned by `command.run`. Required."
+    } ],
+    "examples" : [ {
+      "title" : "Check whether a long coding run has changed any file",
+      "args" : {
+        "id" : "5c3a1f2e-9b47-4d21-8f0a-1e6b7c8d9a01"
+      },
+      "expectsError" : false,
+      "executable" : true
+    } ],
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\", \"stats\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\"},\n    \"processState\": {\"type\": \"string\"},\n    \"isDone\": {\"type\": \"boolean\"},\n    \"done\": {\"type\": \"boolean\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"stats\": {\"type\": \"object\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"},\n    \"eventsTool\": {\"type\": \"string\"},\n    \"statsTool\": {\"type\": \"string\"}\n  }\n}",
+    "help" : "command.stats(id: String)\n\nThe counters are maintained as steps are appended, so they stay exact\nafter steps fall out of the bounded buffer (counting the steps you\nreceived would undercount). Fields: `rounds`, `modelRequests`,\n`toolCalls`, `toolFailures`, `tokens{in,out,total,cachedIn,cacheWriteIn}`,\n`cacheReported`, `events`, `droppedEvents`, `toolCounts`, and the progress\ngauges `mutations` / `readOnlyRounds`.\n\n`toolCalls` with `mutations == 0` on a coding task is the earliest\nreliable sign the run will not converge. `mutations`/`readOnlyRounds`\nare `null` (not `0`) when the engine never reported them — a browsing\ntask does not track file mutations."
   }, {
     "domain" : "command",
     "method" : "status",
@@ -320,7 +431,7 @@
       "expectsError" : false,
       "executable" : true
     } ],
-    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"statusCode\": {\"type\": \"integer\"},\n    \"message\": {\"type\": \"string\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"statusCode\": {\"type\": \"integer\"},\n    \"message\": {\"type\": \"string\"},\n    \"error\": {\"type\": \"string\"},\n    \"errorCode\": {\"type\": \"string\"},\n    \"resumable\": {\"type\": \"boolean\"},\n    \"effectiveTokenBudget\": {\"type\": \"integer\"},\n    \"mutations\": {\"type\": \"integer\"},\n    \"readOnlyRounds\": {\"type\": \"integer\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"},\n    \"eventsTool\": {\"type\": \"string\"},\n    \"statsTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "command.status(id: String)\n\nReturns the shared envelope — `taskId`, `status`\n(`queued|running|done|failed|cancelled`), `processed` when the agent\nhas recorded steps, and the tool names to poll, read and cancel with.\nAn unknown id reports `status=failed`, never a healthy-looking state."
   }, {
     "domain" : "crawl",
@@ -343,7 +454,7 @@
       "expectsError" : false,
       "executable" : true
     } ],
-    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"statusCode\": {\"type\": \"integer\"},\n    \"message\": {\"type\": \"string\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"statusCode\": {\"type\": \"integer\"},\n    \"message\": {\"type\": \"string\"},\n    \"error\": {\"type\": \"string\"},\n    \"errorCode\": {\"type\": \"string\"},\n    \"resumable\": {\"type\": \"boolean\"},\n    \"effectiveTokenBudget\": {\"type\": \"integer\"},\n    \"mutations\": {\"type\": \"integer\"},\n    \"readOnlyRounds\": {\"type\": \"integer\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"},\n    \"eventsTool\": {\"type\": \"string\"},\n    \"statsTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "Cancels the task's coroutine and finalizes its record, so a client can\nstop polling immediately. Cancelling an unknown or already finished\ntask is reported (cancelled=false) rather than treated as an error:\nthe desired end state already holds."
   }, {
     "domain" : "crawl",
@@ -366,7 +477,7 @@
       "expectsError" : false,
       "executable" : true
     } ],
-    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"statusCode\": {\"type\": \"integer\"},\n    \"message\": {\"type\": \"string\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"statusCode\": {\"type\": \"integer\"},\n    \"message\": {\"type\": \"string\"},\n    \"error\": {\"type\": \"string\"},\n    \"errorCode\": {\"type\": \"string\"},\n    \"resumable\": {\"type\": \"boolean\"},\n    \"effectiveTokenBudget\": {\"type\": \"integer\"},\n    \"mutations\": {\"type\": \"integer\"},\n    \"readOnlyRounds\": {\"type\": \"integer\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"},\n    \"eventsTool\": {\"type\": \"string\"},\n    \"statsTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "crawl.result(id: String)\n\nThe status envelope plus `pages` — one entry per crawled URL with its\ntitle, content length and any X-SQL extraction. Poll `crawl.status`\nuntil it is terminal before reading."
   }, {
     "domain" : "crawl",
@@ -390,7 +501,7 @@
       "expectsError" : false,
       "executable" : true
     } ],
-    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"statusCode\": {\"type\": \"integer\"},\n    \"message\": {\"type\": \"string\"},\n    \"error\": {\"type\": \"string\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"progress\": {\"type\": \"number\"},\n    \"processed\": {\"type\": \"integer\"},\n    \"total\": {\"type\": \"integer\"},\n    \"elapsedMs\": {\"type\": \"integer\"},\n    \"statusCode\": {\"type\": \"integer\"},\n    \"message\": {\"type\": \"string\"},\n    \"error\": {\"type\": \"string\"},\n    \"errorCode\": {\"type\": \"string\"},\n    \"resumable\": {\"type\": \"boolean\"},\n    \"effectiveTokenBudget\": {\"type\": \"integer\"},\n    \"mutations\": {\"type\": \"integer\"},\n    \"readOnlyRounds\": {\"type\": \"integer\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"},\n    \"eventsTool\": {\"type\": \"string\"},\n    \"statsTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "crawl.status(id: String)\n\nReturns the shared envelope — `taskId`, `status`\n(`queued|running|done|failed|cancelled`), `processed` (pages collected\nso far), `elapsedMs` once the task finished, and the tool names to\npoll, read and cancel with. An unknown id reports `status=failed`."
   }, {
     "domain" : "crawl",
@@ -464,7 +575,7 @@
       "cancelTool" : "crawl_cancel",
       "pollAfterMs" : 1000
     },
-    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\", \"statusTool\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"pollAfterMs\": {\"type\": \"integer\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"}\n  }\n}",
+    "outputSchema" : "{\n  \"type\": \"object\",\n  \"required\": [\"taskId\", \"status\", \"statusTool\"],\n  \"properties\": {\n    \"taskId\": {\"type\": \"string\"},\n    \"status\": {\"type\": \"string\", \"enum\": [\"queued\", \"running\", \"done\", \"failed\", \"cancelled\"]},\n    \"pollAfterMs\": {\"type\": \"integer\"},\n    \"statusTool\": {\"type\": \"string\"},\n    \"resultTool\": {\"type\": \"string\"},\n    \"cancelTool\": {\"type\": \"string\"},\n    \"eventsTool\": {\"type\": \"string\"},\n    \"statsTool\": {\"type\": \"string\"}\n  }\n}",
     "help" : "Starts a recursive crawl in the background and returns the task id\nimmediately. Poll it with `crawl.status`, read the payload with\n`crawl.result`. Use `depth=0` for a single page, and prefer the\nswarm domain for high-throughput parallel extraction.\nThe pages are fetched with the DEFAULT session's browser unless\n`fetchSession` names another session: cookies (locale, currency,\ndelivery location, login) live in that profile, so a crawl that\nreads a marketplace must name the session that was warmed for it."
   }, {
     "domain" : "experience",

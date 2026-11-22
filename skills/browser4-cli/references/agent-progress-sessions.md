@@ -58,10 +58,12 @@ Files written (1) · workspace: ~/.browser4/agent/workspace.3b27…
 ```
 
 - One line per tool **call**; a completion line only for a **slow** (>2 s) or **failed** tool, so a 100-tool run stays readable. Failures always print the first ~240 characters of the tool output.
-- The result line repeats the call's index (`↳ #2 browser_click failed after 120ms: …`), so two calls of the same tool are tellable apart.
+- The result line repeats the call's index (`↳ #2 browser_click failed after 120ms: …`), so two calls of the same tool are tellable apart. The backend also sends the exact `callId` on both steps (`--ndjson`), so a programmatic follower pairs them without the name heuristic.
+- **The engine's own verdicts are visible**: `⏱ gate rejected: 2 violation(s) — …` when a completion report fails the finish gate, `🔁 repair round 1/3 — compile browser4-browser failed (exit 1)` when a failing `coding.verify` is fed back, and `✔ finish report amended from the mutation trace: +3 file(s)` when the report's file list is completed from the trace. A passing gate stays silent — the completion line already reports success.
 - Arguments are shown as `key="value"` for the keys a reader can act on (`selector`, `ref`, `url`, `path`, `file`, `args`, `text`, `query`, `sql`, `command`) — at most three, then `+N` for the rest. A shape with none of those keys falls back to the compact JSON, so nothing is hidden.
 - Prose lines (the model's own text, steering) are marked `⋯` / `↪` and wrap to `COLUMNS` (clamped 40–400, default 100), the continuation indented under the marker instead of running back to column 0. Structured lines (calls and results) deliberately stay one line — they are what people grep and copy.
 - **Long silences are not a hang.** After 30 s without a step the live view prints `[00:39]   ⋯ still running · 5 step(s) · 30s since the last step`, then at most one more every 30 s. A single slow tool (three minutes inside one `b4.run`) used to print nothing at all in between. Terminal only — a piped log, `--quiet`, `--json` and `--ndjson` carry steps and nothing else. `-i` behaves the same.
+- **A gap in the step stream is reported, never silent.** Steps live in a bounded per-task buffer (1000); if the follower falls behind it, the backend says `resynced=true` and the live view prints `⚠ fell behind the retained step window — N step(s) dropped, resumed at seq M` (in `--ndjson` the same fact arrives as `{"type":"events.resynced","firstRetainedSeq":…,"dropped":N,"after":…}`). Before this, the page was simply empty and a lost stretch looked like a stalled agent.
 - `--follow` has **no default timeout** (unlike `--wait`); pass `--wait-timeout <secs>` to bound it. On timeout the CLI exits non-zero and the task keeps running server-side.
 - **Ctrl+C cancels the task** (the same thing `agent cancel <task-id>` does) and exits — it no longer leaves an orphan running in the background.
 
@@ -76,11 +78,27 @@ browser4-cli agent run "Collect the top 5 products" --follow --ndjson | jq -c 's
 
 ```json
 {"type":"task.submitted","taskId":"…","task":"Collect the top 5 products"}
-{"taskId":"…","seq":3,"type":"tool.call","epochMillis":1761…,"tool":"b4.run","arguments":"{\"args\":\"goto …\"}","turn":1}
-{"taskId":"…","seq":4,"type":"tool.result","epochMillis":1761…,"tool":"b4.run","ok":true,"durationMs":6200,"text":"…","turn":1}
+{"taskId":"…","seq":3,"type":"tool.call","epochMillis":1761…,"tool":"b4.run","arguments":"{\"args\":\"goto …\"}","turn":1,"callId":"call_a1"}
+{"taskId":"…","seq":4,"type":"tool.result","epochMillis":1761…,"tool":"b4.run","ok":true,"durationMs":6200,"text":"…","turn":1,"callId":"call_a1"}
 {"taskId":"…","seq":5,"type":"run.usage","epochMillis":1761…,"turn":1,"inputTokens":4821,"outputTokens":212,"totalTokens":5033,"cachedInputTokens":3900,"cacheWriteInputTokens":0}
+{"taskId":"…","seq":6,"type":"round.start","epochMillis":1761…,"turn":2,"mutations":3,"readOnlyRounds":0,"schemaVersion":1}
+{"taskId":"…","seq":7,"type":"gate.evaluated","epochMillis":1761…,"schemaVersion":1,"detail":{"passed":false,"strict":true,"violations":["filesChanged lists 1 file(s) neither git nor this run's file trace shows: ev.js"],"unlistedFiles":["ev.js"]}}
 {"taskId":"…","type":"task.result","status":"done","elapsedMs":41300,"result":{"summary":"…"}}
 ```
+
+Beyond the step types above, `--ndjson` forwards the **decision events** and their bounded `detail` payload unchanged, so a script can judge a run the way the engine does:
+
+| type | when | `detail` |
+|---|---|---|
+| `verify.verdict` | a `coding.verify` result was parsed | `passed`, `module`, `failureReason`, `checks[{name,target,ran,ok,required,exitCode}]` |
+| `gate.evaluated` | every finish-gate evaluation, pass included | `passed`, `strict`, `violations[]`, `unlistedFiles[]`, `warnings[]`, `requiredGates[]` |
+| `repair.round` | a failing verdict was fed back | `round`, `maxRounds`, `reason` |
+| `repair.exhausted` | the repair budget ran out (before `task.failed`) | `roundsUsed`, `maxRounds`, `passed`, `failureReason` |
+| `finish.repair` / `finish.amend` | the report's file list is repaired / completed from the trace | `round`, `missing[]` / `added[]`, `source`, `filesChanged` |
+| `nudge` | the engine injected a correction | `kind=coding` (`readOnlyRounds`, `mutations`) or `kind=budget` (`percent`, `consumed`, `limit`) |
+| `isolation.merge` | the worktree merge was applied or refused | `decision`, `changedFiles`, `reason` |
+
+`round.start` also carries the progress gauges `mutations` (cumulative file mutations, a **gauge**, not a delta) and `readOnlyRounds` (consecutive rounds that changed no file). "Hundreds of tool calls, `mutations: 0`" is the earliest reliable sign a run will not converge. Every step now also carries `schemaVersion`, and the `detail` payload is bounded (strings ~240 chars, ≤12 keys, ≤20 items, ≤2 levels, ≤4 KB) with `detail.truncated=true` whenever it had to be cut.
 
 `run.usage` is one line per model request, carrying the provider's token counts (`inputTokens`/`outputTokens`/`totalTokens`, omitted when the provider reports none) — the same numbers `/stats` sums — plus, when the provider discloses it, the prompt-cache breakdown: `cachedInputTokens` are the prompt tokens served from its cache (cache *read*; `null`/absent when it reported no cache details — unknown, not `0`), `cacheWriteInputTokens` the tokens written into that cache (Anthropic-style APIs; `0`/absent elsewhere).
 
@@ -205,7 +223,7 @@ Session commands:
 |---|---|
 | `/help` | List the commands |
 | `/status` | Status of the running (or last) task |
-| `/stats [task-id]` | Run statistics: LLM rounds and requests, token usage (prompt-cache reads/writes and hit ratio included when the provider reports them), tool calls |
+| `/stats [task-id]` | Run statistics: LLM rounds and requests, token usage (prompt-cache reads/writes and hit ratio included when the provider reports them), tool calls, and — for a coding task — `files  N changed` next to the tool count (`⚠ … not converging` when tools ran without a single file change) |
 | `/result [--json] [--full]` | Print the last finished task's result as sections (`--json`: the envelope as pretty JSON; `--full`: no fold, no per-section caps) |
 | `/resume [--budget <n>] [task-id]` | Continue an interrupted/stalled task with its workspace and files. After a budget abort pass a larger `--budget` (the numbered continue choice does this with a doubled cap) |
 | `/cancel` | Cancel the running task (same as Ctrl+C) |

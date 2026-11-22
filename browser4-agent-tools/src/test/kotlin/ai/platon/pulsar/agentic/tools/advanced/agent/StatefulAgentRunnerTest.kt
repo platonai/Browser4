@@ -1069,4 +1069,179 @@ class StatefulAgentRunnerTest {
             runner.close()
         }
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Issue #652: supervision surface (decision events, gauges, cursor honesty)
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("a decision step reaches the log with its detail, and unknown types are harmless")
+    fun decisionEventsReachTheLog() {
+        val runner = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))
+        try {
+            val status = runner.create()
+            runner.recordRunEvent(
+                status.id,
+                AgentRunEvent(
+                    AgentRunEvent.GATE_EVALUATED,
+                    detail = mapOf(
+                        "passed" to false,
+                        "strict" to true,
+                        "violations" to listOf("filesChanged lists a file git does not show"),
+                        "unlistedFiles" to listOf("ev.js"),
+                    ),
+                ),
+            )
+
+            val event = runner.events(status.id).last { it.type == AgentTaskEvent.TYPE_GATE_EVALUATED }
+            assertEquals(false, event.detail!!["passed"])
+            assertNotNull(event.schemaVersion, "new rows carry the model version")
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("a round gauge updates the live status the 2-second status poll reads")
+    fun roundGaugesReachTheStatus() {
+        val runner = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))
+        try {
+            val status = runner.create()
+            runner.recordRunEvent(
+                status.id,
+                AgentRunEvent(AgentRunEvent.ROUND_START, turn = 3, mutations = 7, readOnlyRounds = 2),
+            )
+
+            assertEquals(7L, status.mutations, "the live status must carry the newest gauge")
+            assertEquals(2, status.readOnlyRounds)
+
+            val stats = runner.stats(status.id)!!
+            assertEquals(7L, stats.mutations)
+            assertEquals(2, stats.readOnlyRounds)
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("a failed task's failure detail names the rule, the files and the red check")
+    fun failureDetailIsAssembledFromDecisionEvents() {
+        val runner = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))
+        try {
+            val status = runner.create()
+            runner.recordRunEvent(
+                status.id,
+                AgentRunEvent(
+                    AgentRunEvent.VERIFY_VERDICT,
+                    detail = mapOf(
+                        "passed" to false,
+                        "module" to "browser4-browser",
+                        "checks" to listOf(mapOf("name" to "compile", "ran" to true, "ok" to false, "exitCode" to 1)),
+                    ),
+                ),
+            )
+            runner.recordRunEvent(
+                status.id,
+                AgentRunEvent(
+                    AgentRunEvent.GATE_EVALUATED,
+                    detail = mapOf(
+                        "passed" to false,
+                        "strict" to true,
+                        "violations" to listOf("filesChanged lists 1 file(s) neither git nor this run's file trace shows: ev.js"),
+                        "unlistedFiles" to listOf("ev.js"),
+                    ),
+                ),
+            )
+            status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
+            status.errorCode = AgentTaskStatus.ERROR_TOOL_ERROR
+            status.resumable = true
+            status.failureReason = "Finish report rejected: filesChanged lists 1 file(s) …"
+
+            runner.attachFailureDetail(status)
+
+            val detail = assertNotNull(status.failureDetail)
+            assertEquals(AgentTaskStatus.ERROR_TOOL_ERROR, detail["errorCode"])
+            assertEquals(true, detail["resumable"])
+            @Suppress("UNCHECKED_CAST")
+            val gate = detail["finishGate"] as Map<String, Any?>
+            assertEquals(listOf("ev.js"), gate["unlistedFiles"])
+            @Suppress("UNCHECKED_CAST")
+            val verdict = detail["verdict"] as Map<String, Any?>
+            assertEquals("browser4-browser", verdict["module"])
+            assertNotNull(detail["reason"], "the prose reason stays available for a human")
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("a successful task carries no failure detail, and the detached snapshot keeps it")
+    fun failureDetailOnlyOnFailureAndSurvivesTheSnapshot() {
+        val runner = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))
+        try {
+            val status = runner.create()
+            runner.attachFailureDetail(status)
+            assertNull(status.failureDetail, "a healthy task has nothing to explain")
+
+            status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
+            status.failureReason = "Task cancelled"
+            status.cancelled = true
+            runner.attachFailureDetail(status)
+            val detail = assertNotNull(status.failureDetail)
+            assertEquals(AgentTaskStatus.ERROR_CANCELLED, detail["errorCode"])
+
+            // The persisted row is what a restart reads: `copy()` resets every
+            // body-declared field, so the snapshot must carry it explicitly.
+            val snapshot = status.detachedSnapshot()
+            assertEquals(detail, snapshot.failureDetail)
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("the events page reports a resynced cursor instead of a silent gap")
+    fun eventsPageReportsResync() {
+        val runner = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))
+        try {
+            val status = runner.create()
+            assertNull(runner.eventsPage("unknown-task"), "no log is not the same as an empty page")
+
+            val fromStart = assertNotNull(runner.eventsPage(status.id, afterSeq = 0))
+            assertEquals(1L, fromStart.firstRetainedSeq)
+            assertEquals(0L, fromStart.dropped)
+            assertFalse(fromStart.resynced)
+
+            val ahead = assertNotNull(runner.eventsPage(status.id, afterSeq = 99))
+            assertTrue(ahead.events.isEmpty())
+            assertEquals(99L, ahead.nextSeq, "an empty page must not move the cursor backwards")
+            assertFalse(ahead.resynced)
+        } finally {
+            runner.close()
+        }
+    }
+
+    /**
+     * The event-type vocabulary is declared twice: `AgentRunEvent` (what the agent emits)
+     * and `AgentTaskEvent` (what the runner stores). The runner passes the string through,
+     * so a rename on one side would silently produce untyped rows — this pins the copy.
+     */
+    @Test
+    @DisplayName("every decision event type is spelled the same on both sides of the runner")
+    fun decisionEventTypesAgreeAcrossLayers() {
+        val pairs = mapOf(
+            AgentRunEvent.VERIFY_VERDICT to AgentTaskEvent.TYPE_VERIFY_VERDICT,
+            AgentRunEvent.GATE_EVALUATED to AgentTaskEvent.TYPE_GATE_EVALUATED,
+            AgentRunEvent.REPAIR_ROUND to AgentTaskEvent.TYPE_REPAIR_ROUND,
+            AgentRunEvent.REPAIR_EXHAUSTED to AgentTaskEvent.TYPE_REPAIR_EXHAUSTED,
+            AgentRunEvent.FINISH_REPAIR to AgentTaskEvent.TYPE_FINISH_REPAIR,
+            AgentRunEvent.FINISH_AMEND to AgentTaskEvent.TYPE_FINISH_AMEND,
+            AgentRunEvent.NUDGE to AgentTaskEvent.TYPE_NUDGE,
+            AgentRunEvent.ISOLATION_MERGE to AgentTaskEvent.TYPE_ISOLATION_MERGE,
+        )
+
+        pairs.forEach { (runEventType, taskEventType) ->
+            assertEquals(taskEventType, runEventType, "the agent and the task log must agree on '$runEventType'")
+        }
+    }
 }

@@ -48,7 +48,9 @@ object TaskEnvelopes {
             "pollAfterMs": {"type": "integer"},
             "statusTool": {"type": "string"},
             "resultTool": {"type": "string"},
-            "cancelTool": {"type": "string"}
+            "cancelTool": {"type": "string"},
+            "eventsTool": {"type": "string"},
+            "statsTool": {"type": "string"}
           }
         }
     """.trimIndent()
@@ -68,9 +70,77 @@ object TaskEnvelopes {
             "statusCode": {"type": "integer"},
             "message": {"type": "string"},
             "error": {"type": "string"},
+            "errorCode": {"type": "string"},
+            "resumable": {"type": "boolean"},
+            "effectiveTokenBudget": {"type": "integer"},
+            "mutations": {"type": "integer"},
+            "readOnlyRounds": {"type": "integer"},
             "statusTool": {"type": "string"},
             "resultTool": {"type": "string"},
-            "cancelTool": {"type": "string"}
+            "cancelTool": {"type": "string"},
+            "eventsTool": {"type": "string"},
+            "statsTool": {"type": "string"}
+          }
+        }
+    """.trimIndent()
+
+    /**
+     * JSON Schema of the supervision tool that pages a task's step log
+     * (`command.events`).
+     *
+     * It is the status envelope plus the cursor-honesty fields, so a client that
+     * already understands the envelope only has to learn `events` / `nextSeq`.
+     *
+     * `status` is deliberately **not** constrained to [STATUSES]: a task whose status row
+     * expired while its event log survived (the row is write-TTL, the log read-TTL) answers
+     * `unknown`, which is the honest word — calling it `failed` would invent a failure.
+     */
+    val EVENTS_SCHEMA = """
+        {
+          "type": "object",
+          "required": ["taskId", "status", "nextSeq"],
+          "properties": {
+            "taskId": {"type": "string"},
+            "status": {"type": "string"},
+            "done": {"type": "boolean"},
+            "nextSeq": {"type": "integer"},
+            "firstRetainedSeq": {"type": "integer"},
+            "dropped": {"type": "integer"},
+            "resynced": {"type": "boolean"},
+            "events": {"type": "array", "items": {"type": "object"}},
+            "statusTool": {"type": "string"},
+            "resultTool": {"type": "string"},
+            "cancelTool": {"type": "string"},
+            "eventsTool": {"type": "string"},
+            "statsTool": {"type": "string"}
+          }
+        }
+    """.trimIndent()
+
+    /**
+     * JSON Schema of the supervision tool that reads a task's run counters
+     * (`command.stats`).
+     *
+     * `status` is unconstrained for the same reason as in [EVENTS_SCHEMA]: the counters
+     * can outlive the status row, and `unknown` is then the truthful word.
+     */
+    val STATS_SCHEMA = """
+        {
+          "type": "object",
+          "required": ["taskId", "status", "stats"],
+          "properties": {
+            "taskId": {"type": "string"},
+            "status": {"type": "string"},
+            "processState": {"type": "string"},
+            "isDone": {"type": "boolean"},
+            "done": {"type": "boolean"},
+            "elapsedMs": {"type": "integer"},
+            "stats": {"type": "object"},
+            "statusTool": {"type": "string"},
+            "resultTool": {"type": "string"},
+            "cancelTool": {"type": "string"},
+            "eventsTool": {"type": "string"},
+            "statsTool": {"type": "string"}
           }
         }
     """.trimIndent()
@@ -100,6 +170,16 @@ object TaskEnvelopes {
      * @param resumable whether the task can be continued (agent tasks only)
      * @param effectiveTokenBudget the **cache-miss** token budget the run enforced
      *   (`0` = unlimited): uncached prompt + output, prompt-cache reads excluded
+     * @param mutations live progress gauge: the run's cumulative file-mutation count
+     *   as of its newest round (`null` = never reported). With
+     *   [readOnlyRounds] this answers "tool calls vs files changed" while the run is
+     *   in flight — a run with hundreds of calls and zero mutations will not converge
+     * @param readOnlyRounds live progress gauge: consecutive rounds that ran tools
+     *   without changing a file
+     * @param eventsTool name of the tool that pages this task's step log, so an
+     *   MCP-only client can discover the supervision surface instead of having to know
+     *   the REST endpoints exist
+     * @param statsTool name of the tool that reads this task's run counters
      */
     fun of(
         taskId: String,
@@ -114,9 +194,13 @@ object TaskEnvelopes {
         errorCode: String? = null,
         resumable: Boolean? = null,
         effectiveTokenBudget: Long? = null,
+        mutations: Long? = null,
+        readOnlyRounds: Int? = null,
         statusTool: String? = null,
         resultTool: String? = null,
         cancelTool: String? = null,
+        eventsTool: String? = null,
+        statsTool: String? = null,
     ): Map<String, Any> {
         val envelope = linkedMapOf<String, Any>(
             "taskId" to taskId,
@@ -132,9 +216,13 @@ object TaskEnvelopes {
         errorCode?.takeIf { it.isNotBlank() }?.let { envelope["errorCode"] = it }
         resumable?.let { envelope["resumable"] = it }
         effectiveTokenBudget?.let { envelope["effectiveTokenBudget"] = it }
+        mutations?.let { envelope["mutations"] = it }
+        readOnlyRounds?.let { envelope["readOnlyRounds"] = it }
         statusTool?.let { envelope["statusTool"] = it }
         resultTool?.let { envelope["resultTool"] = it }
         cancelTool?.let { envelope["cancelTool"] = it }
+        eventsTool?.let { envelope["eventsTool"] = it }
+        statsTool?.let { envelope["statsTool"] = it }
         return envelope
     }
 

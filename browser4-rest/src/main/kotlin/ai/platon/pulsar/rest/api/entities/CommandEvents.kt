@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.api.entities
 
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEvent
+import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEventPage
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskRunStats
 
 /**
@@ -18,6 +19,14 @@ import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskRunStats
  *   number of the last returned event, or the requested cursor when the page is
  *   empty
  * @property events the steps after the requested cursor, oldest first
+ * @property firstRetainedSeq sequence number of the oldest retained step (`0` when
+ *   the log is empty/unknown) — compare it with your cursor to see the window move
+ * @property dropped steps evicted from the bounded buffer over the log's lifetime;
+ *   a follower that starts at `after=0` can tell it began inside the window from it
+ * @property resynced true when `after` had fallen behind the retained window: the
+ *   page is the retained tail, not a continuation of what the caller already saw.
+ *   Without this field the endpoint answered "you missed 300 steps" and "nothing new
+ *   happened" with the same empty page (issue #652, P0-D)
  * */
 data class CommandEventsResponse(
     val taskId: String,
@@ -25,7 +34,71 @@ data class CommandEventsResponse(
     val done: Boolean,
     val nextSeq: Long,
     val events: List<AgentTaskEvent> = emptyList(),
+    val firstRetainedSeq: Long = 0L,
+    val dropped: Long = 0L,
+    val resynced: Boolean = false,
 )
+
+/**
+ * Builds the `events` answer from one page of a task's log.
+ *
+ * Shared by the REST endpoint and the MCP `command_events` tool so an MCP-only client
+ * and a REST client cannot disagree about `status` / `done` / the cursor.
+ */
+object CommandEvents {
+
+    /** Event types that mean "this task will not produce anything else". */
+    val TERMINAL_EVENT_TYPES: Set<String> = setOf(
+        AgentTaskEvent.TYPE_DONE,
+        AgentTaskEvent.TYPE_FAILED,
+        AgentTaskEvent.TYPE_CANCELLED,
+    )
+
+    /** Status word for an id whose event log exists but whose status row is gone. */
+    const val STATUS_UNKNOWN = "unknown"
+
+    /**
+     * Compose the response.
+     *
+     * The terminal state is derived from the last terminal event when the status row is
+     * gone: the status cache expires 2h after its last WRITE while the event log expires
+     * after its last READ, so a followed task can keep its log and lose its row.
+     * Reporting `done=false` forever there would make an uncapped follower poll
+     * indefinitely.
+     *
+     * @param taskId the task id
+     * @param status the status row, when this backend still has one
+     * @param eventsPage the page from the runner's event log, or `null` when no log exists
+     * @param after the cursor the caller sent (an empty page must not move it)
+     */
+    fun page(
+        taskId: String,
+        status: CommandStatus?,
+        eventsPage: AgentTaskEventPage?,
+        after: Long,
+    ): CommandEventsResponse {
+        val events = eventsPage?.events.orEmpty()
+        val terminal = events.lastOrNull { it.type in TERMINAL_EVENT_TYPES }
+        val word = status?.statusWord() ?: when (terminal?.type) {
+            AgentTaskEvent.TYPE_DONE -> "done"
+            AgentTaskEvent.TYPE_FAILED -> "failed"
+            AgentTaskEvent.TYPE_CANCELLED -> "cancelled"
+            else -> STATUS_UNKNOWN
+        }
+        return CommandEventsResponse(
+            taskId = taskId,
+            status = word,
+            done = status?.isDone ?: (terminal != null),
+            // An empty page must not move the cursor backwards: report the one the
+            // caller asked with, so the next poll is idempotent.
+            nextSeq = eventsPage?.nextSeq ?: after,
+            events = events,
+            firstRetainedSeq = eventsPage?.firstRetainedSeq ?: 0L,
+            dropped = eventsPage?.dropped ?: 0L,
+            resynced = eventsPage?.resynced ?: false,
+        )
+    }
+}
 
 /**
  * The aggregate run statistics of an agent task:

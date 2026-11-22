@@ -256,6 +256,38 @@ data class AgentTaskStatus(
     var timings: Map<String, Any?>? = null
 
     /**
+     * Structured failure evidence: which finish-gate rule objected
+     * (`finishGate.violations` / `unlistedFiles`), which verification check was red
+     * (`verdict.checks`), how many repair rounds were spent (`repair`), and what the
+     * isolation gate decided (`isolation`).
+     *
+     * Assembled by [StatefulAgentRunner.attachFailureDetail] from the task's own
+     * decision events and persisted with the terminal row, so `GET /api/commands/{id}/result`
+     * answers "why did this fail, what is missing, can it resume" **without reading the
+     * backend log** — the log a remote supervisor cannot reach (issue #652, P0-C).
+     * `null` for a successful task and for rows written before the field existed.
+     */
+    var failureDetail: Map<String, Any?>? = null
+
+    /**
+     * Live progress gauge: the run's cumulative file-mutation count as of its newest
+     * round (`null` = never reported, e.g. a browsing task).
+     *
+     * The engine already maintains this number — it drives the "stop surveying, start
+     * editing" nudge — but it was invisible outside the run. With [readOnlyRounds] it
+     * makes "175 tool calls / 0 files changed" readable from a 2-second
+     * `command.status` poll, instead of comparing workspace mtimes by hand
+     * (issue #652, P0-B).
+     */
+    var mutations: Long? = null
+
+    /**
+     * Live progress gauge: consecutive coding rounds that ran tools but recorded no file
+     * mutation (`null` = not reported). This is the streak the engine nudges on.
+     */
+    var readOnlyRounds: Int? = null
+
+    /**
      * Machine-readable failure reason (`TOKEN_BUDGET`, `NOOP_LIMIT`, `CANCELLED`,
      * `TOOL_ERROR`), derived from [failureReason] by [failureCodeOf].
      *
@@ -448,5 +480,12 @@ fun AgentTaskStatus.detachedSnapshot(includeHistory: Boolean = true): AgentTaskS
     snapshot.timings = timings
     snapshot.errorCode = errorCode
     snapshot.resumable = resumable
+    // Failure evidence (P0-C) and the live progress gauges (P0-B): `copy()` resets every
+    // body-declared field, so without these three the persisted terminal row — the only
+    // thing left after a restart — would answer "failed" with no rule, no check and no
+    // "0 files changed".
+    snapshot.failureDetail = failureDetail
+    snapshot.mutations = mutations
+    snapshot.readOnlyRounds = readOnlyRounds
     return snapshot
 }

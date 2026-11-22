@@ -1,5 +1,8 @@
 package ai.platon.pulsar.agent.tool
 
+import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEvent
+import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEventPage
+import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskRunStats
 import ai.platon.pulsar.agentic.tools.specs.ToolResultValidator
 import ai.platon.pulsar.coding.AccessPreset
 import ai.platon.pulsar.common.ResourceStatus
@@ -491,10 +494,186 @@ class CommandToolExecutorTest {
     fun specsAreComplete() {
         val specs = executor.getToolSpecs()
 
-        assertTrue(specs.keys.containsAll(listOf("run", "status", "result", "cancel")))
+        assertTrue(specs.keys.containsAll(listOf("run", "status", "result", "cancel", "events", "stats", "input")))
         specs.values.forEach { spec ->
             assertFalse(spec.description.isNullOrBlank(), "${spec.expression} has no description")
             assertFalse(spec.help.isNullOrBlank(), "${spec.expression} has no help")
         }
+    }
+
+    // ---- supervision surface (issue #652, P0-3/P0-E) -------------------------
+
+    @Test
+    @DisplayName("the submit envelope names the supervision tools, not only status/result/cancel")
+    fun submitEnvelopeNamesTheSupervisionTools() {
+        val policy = executor.getToolSpecs()["run"]!!.task!!
+
+        // An MCP-only client learns what it can call from the answer it gets; without
+        // these two names it cannot even discover that the step log exists.
+        assertEquals("command_events", policy.eventsTool)
+        assertEquals("command_stats", policy.statsTool)
+        val envelope = ToolResultValidator.taskEnvelope("t-9", policy)
+        assertTrue(envelope.toString().contains("\"eventsTool\":\"command_events\""), envelope.toString())
+        assertTrue(envelope.toString().contains("\"statsTool\":\"command_stats\""), envelope.toString())
+    }
+
+    @Test
+    @DisplayName("every command status envelope points at the supervision tools and the live gauges")
+    fun statusEnvelopePointsAtTheSupervisionTools() {
+        `when`(runner.getStatus("s1", "t1")).thenReturn(
+            status(statusCode = ResourceStatus.SC_PROCESSING, processState = "in_progress").apply {
+                toolExecutions = 175
+                mutations = 0
+                readOnlyRounds = 6
+            }
+        )
+
+        val envelope = json("status", mapOf("id" to "t1", "sessionId" to "s1"))
+
+        assertEquals("command_events", envelope["eventsTool"])
+        assertEquals("command_stats", envelope["statsTool"])
+        assertEquals(0, envelope["mutations"], "0 files changed next to 175 tool calls is the signal")
+        assertEquals(6, envelope["readOnlyRounds"])
+    }
+
+    @Test
+    @DisplayName("command.events pages the step log with its cursor-honesty fields")
+    fun eventsPagesTheStepLog() {
+        `when`(runner.getStatus("s1", "t1")).thenReturn(
+            status(statusCode = ResourceStatus.SC_PROCESSING, processState = "in_progress")
+        )
+        `when`(runner.eventsPage("t1", 4L, 200)).thenReturn(
+            AgentTaskEventPage(
+                events = listOf(
+                    AgentTaskEvent(seq = 5, type = AgentTaskEvent.TYPE_GATE_EVALUATED, detail = mapOf("passed" to false)),
+                ),
+                nextSeq = 5,
+                firstRetainedSeq = 5,
+                lastSeq = 9,
+                dropped = 4,
+                resynced = true,
+            )
+        )
+
+        val envelope = json("events", mapOf("id" to "t1", "after" to 4, "sessionId" to "s1"))
+
+        assertEquals("t1", envelope["taskId"])
+        assertEquals("running", envelope["status"])
+        assertEquals(false, envelope["done"])
+        assertEquals(5, envelope["nextSeq"])
+        assertEquals(5, envelope["firstRetainedSeq"])
+        assertEquals(4, envelope["dropped"])
+        assertEquals(true, envelope["resynced"], "a follower must be told it lost steps")
+        assertEquals("command_events", envelope["eventsTool"])
+        @Suppress("UNCHECKED_CAST")
+        val events = envelope["events"] as List<Map<String, Any?>>
+        assertEquals(AgentTaskEvent.TYPE_GATE_EVALUATED, events.single()["type"])
+    }
+
+    @Test
+    @DisplayName("command.events rejects a negative cursor and a nonsense limit")
+    fun eventsValidatesItsCursor() {
+        assertThrows<IllegalArgumentException> { call("events", mapOf("id" to "t1", "after" to -1, "sessionId" to "s1")) }
+        assertThrows<IllegalArgumentException> { call("events", mapOf("id" to "t1", "limit" to "abc", "sessionId" to "s1")) }
+        Mockito.verifyNoInteractions(runner)
+    }
+
+    @Test
+    @DisplayName("command.events answers an unknown id with a not-found envelope, never an empty healthy task")
+    fun eventsReportsAnUnknownId() {
+        `when`(runner.getStatus("s1", "ghost")).thenReturn(null)
+        `when`(runner.eventsPage("ghost", 0L, 200)).thenReturn(null)
+
+        val envelope = json("events", mapOf("id" to "ghost", "sessionId" to "s1"))
+
+        assertEquals("failed", envelope["status"])
+        assertEquals(ResourceStatus.SC_NOT_FOUND, envelope["statusCode"])
+        assertEquals(true, envelope["done"])
+        // The payload is serialized with the shared mapper, which omits empty
+        // collections: an absent `events` is the same answer as an empty one.
+        val events = envelope["events"] as List<*>?
+        assertTrue(events == null || events.isEmpty(), "an unknown id has no steps: $events")
+    }
+
+    @Test
+    @DisplayName("command.stats answers the counters, including the progress gauges")
+    fun statsAnswersTheCounters() {
+        `when`(runner.getStatus("s1", "t1")).thenReturn(
+            status(statusCode = ResourceStatus.SC_PROCESSING, processState = "in_progress")
+        )
+        `when`(runner.stats("t1")).thenReturn(
+            AgentTaskRunStats(rounds = 9, toolCalls = 175, events = 400, mutations = 0, readOnlyRounds = 6)
+        )
+
+        val envelope = json("stats", mapOf("id" to "t1", "sessionId" to "s1"))
+
+        assertEquals(false, envelope["isDone"])
+        assertEquals("in_progress", envelope["processState"])
+        @Suppress("UNCHECKED_CAST")
+        val stats = envelope["stats"] as Map<String, Any?>
+        assertEquals(175, stats["toolCalls"])
+        assertEquals(0, stats["mutations"])
+        assertEquals(6, stats["readOnlyRounds"])
+        assertEquals("command_stats", envelope["statsTool"])
+        assertEquals("command_events", envelope["eventsTool"])
+    }
+
+    @Test
+    @DisplayName("command.stats says an expired log is unknown instead of reporting zeros")
+    fun statsReportsAMissingLog() {
+        `when`(runner.getStatus("s1", "t1")).thenReturn(null)
+        `when`(runner.stats("t1")).thenReturn(null)
+
+        val envelope = json("stats", mapOf("id" to "t1", "sessionId" to "s1"))
+
+        assertEquals("failed", envelope["status"])
+        assertFalse(envelope.containsKey("stats"), "no counters must not look like 0 of everything")
+        assertTrue(envelope["message"].toString().contains("no run counters"), envelope["message"].toString())
+    }
+
+    @Test
+    @DisplayName("command.input steers a live task and reports a finished one inline")
+    fun inputSteersALiveTask() {
+        `when`(runner.sendInput("t1", "focus on the failing test", "steer")).thenReturn(true)
+        `when`(runner.sendInput("t2", "too late", "steer")).thenReturn(false)
+        `when`(runner.getStatus("s1", "t1")).thenReturn(
+            status(statusCode = ResourceStatus.SC_PROCESSING, processState = "in_progress")
+        )
+        `when`(runner.sendInput("t3", "then summarize", "followUp")).thenReturn(true)
+        `when`(runner.getStatus("s1", "t3")).thenReturn(
+            status(statusCode = ResourceStatus.SC_PROCESSING, processState = "in_progress")
+        )
+
+        val accepted = json("input", mapOf("id" to "t1", "text" to "focus on the failing test", "sessionId" to "s1"))
+        assertEquals(true, accepted["accepted"])
+        assertTrue(accepted["message"].toString().contains("next model round"), accepted["message"].toString())
+
+        // "The agent finished while you typed" is a normal race, reported in the payload.
+        val rejected = json("input", mapOf("id" to "t2", "text" to "too late", "sessionId" to "s1"))
+        assertEquals(false, rejected["accepted"])
+        assertTrue(rejected["message"].toString().contains("not running"), rejected["message"].toString())
+
+        // deliverAs is normalized, so the CLI's `follow-up` spelling reaches the queue.
+        runBlocking {
+            executor.callFunctionOn(
+                "command", "input",
+                mapOf("id" to "t3", "text" to "then summarize", "deliverAs" to "follow-up", "sessionId" to "s1"),
+                runner,
+            )
+        }
+        Mockito.verify(runner).sendInput("t3", "then summarize", "followUp")
+    }
+
+    @Test
+    @DisplayName("command.input rejects a blank message and an unknown delivery mode")
+    fun inputValidatesItsArguments() {
+        assertThrows<IllegalArgumentException> {
+            call("input", mapOf("id" to "t1", "text" to "   ", "sessionId" to "s1"))
+        }
+        val ex = assertThrows<IllegalArgumentException> {
+            call("input", mapOf("id" to "t1", "text" to "hi", "deliverAs" to "interrupt", "sessionId" to "s1"))
+        }
+        assertTrue(ex.message!!.contains("deliverAs"), ex.message)
+        Mockito.verifyNoInteractions(runner)
     }
 }

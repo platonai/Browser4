@@ -4,7 +4,7 @@
 > 对象：`agent run "<task>"` 全链路（CLI → MCP `command.run` → `UserCommandExecutor` →
 > `StatefulAgentRunner` → `RobustBrowserAgent` CLI 工具循环 → `b4.run` 子进程）
 > 读者：要在这条链路上做外部监督（人或智能体）的实现者
-> 状态：**分析完成；P0 计划待实施**（本文不改变任何现有行为）
+> 状态：**P0-A…P0-F 已实施**（issue #652；实施记录见 §9）
 
 ---
 
@@ -560,3 +560,36 @@ curl -s "localhost:18182/api/commands/$TID/events?after=0&limit=5"   # 记 nextS
 | MCP 工具定义 | `browser4-rest/.../agent/tool/CommandToolExecutor.kt` |
 | 任务信封 | `browser4-agentic/.../tools/TaskEnvelopes.kt` |
 | CLI 跟随渲染 | `cli/browser4-cli/src/agent_interactive.rs` |
+
+---
+
+## 9. 实施记录（2026-11-22，issue #652）
+
+P0-A…P0-F 全部落地，全部为**新增可空字段 / 新增事件类型 / 新增工具**，旧消费方零改动。
+
+### 9.1 落地清单
+
+| 项 | 落点 | 关键点 |
+|---|---|---|
+| P0-A | `AgentTaskEvent` / `AgentRunEvent` 各加 `callId`、`detail`、`schemaVersion`（后者仅 TaskEvent）、`mutations`、`readOnlyRounds`；`AgentToolCallLoop.onToolRequest` 改为三参回调 | `AgentTaskEventSanitizer.detail()` 负责脱敏 + 预算：字符串 preview 240、数组 ≤20、字典 ≤12 键、嵌套 ≤2 层、序列化 ≤4 KB；任何裁剪都置 `detail["truncated"]=true`；超预算时先按半减数组、再丢尾部键 |
+| P0-A 埋点 | `RobustBrowserAgent`：`verify.verdict`（VERDICT_JSON 解析处）、`gate.evaluated`（每次评估，含通过）、`repair.round` / `repair.exhausted`、`finish.repair` / `finish.amend`、`nudge`（coding / budget）；`StatefulAgentRunner.markIsolationRefused` + `finishIsolation`（`isolation.merge`） | 每个埋点紧贴既有的 tracer / logger 调用，成本近零；`task.failed` 之前发射，保证终态能取到 |
+| P0-B | `round.start` 带 `mutations` / `readOnlyRounds`（gauge）；`RunStatsAccumulator` 覆盖式记录；`AgentTaskRunStats` / `AgentTaskStatus` / `CommandStatus` / 状态信封暴露 | 编码任务才有值，浏览任务保持 `null`（未知 ≠ 0） |
+| P0-C | `StatefulAgentRunner.attachFailureDetail()` 在**终态行落盘前**汇总 `verify.verdict` / `gate.evaluated` / `repair.*` / `isolation.merge`；`AgentTaskStatus.failureDetail` → `CommandStatus` → `CommandResult` | 不是"失败时解析日志"，而是失败时把证据搬到结果里；`detachedSnapshot()` 显式复制，重启后仍可读 |
+| P0-D | `AgentTaskEventPage`（`AgentTaskEventLog.page()`）+ `CommandEventsResponse.firstRetainedSeq/dropped/resynced` | `resynced = after > 0 && firstRetained > 0 && after < firstRetained - 1`；空页 `nextSeq` 仍是请求游标（幂等） |
+| P0-E | `CommandToolExecutor.events/stats/input`；`TaskPolicy.eventsTool/statsTool` → 提交信封；`TaskEnvelopes.of(eventsTool, statsTool, mutations, readOnlyRounds)` + `EVENTS_SCHEMA` / `STATS_SCHEMA` | `CommandEvents.page()` 由 REST 与 MCP 共用，两条通道不会给出不同的 `status`/`done`/游标 |
+| P0-F | CLI：`TaskEvent` 新增 `callId` / `detail` / `schemaVersion` / `mutations` / `readOnlyRounds`，`--ndjson` 原样透传；`EventsPage` 新增三个游标字段；`gate.evaluated` / `repair.round` / `finish.amend` 三条人类行；`resynced` 时一行警告（ndjson 下是一条 `{"type":"events.resynced"}` 记录） | `--ndjson` 的字段名与后端一致，不需要第二套解析 |
+
+### 9.2 事件类型总表（实际）
+
+生命周期 `task.created|started|done|failed|cancelled`；轮次 `round.start`（带 gauge）；工具
+`tool.call|tool.result`（带 `callId`）；模型 `model.text`、`run.usage`；干预
+`steer`、`steering.undelivered`、`follow_up`、`follow_up.undelivered`；裁决
+`verify.verdict`、`gate.evaluated`、`repair.round`、`repair.exhausted`、`finish.repair`、
+`finish.amend`、`isolation.merge`；引擎决策 `nudge`。
+
+`schemaVersion = 1` 由 `AgentTaskEventLog.append()` 统一盖章。
+
+### 9.3 未做（仍留在 §7 后续路线）
+
+事件持久化、事件级 SSE、trace 读取 API、`access.requested`、干预 correlationId、
+`b4.run` span、结构化目标、`agent supervise` 命令。这些都属于 P1/P2，不阻断"外部智能体监督"。

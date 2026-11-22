@@ -1,11 +1,11 @@
 package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
-import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEvent
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.urls.URLUtils
+import ai.platon.pulsar.rest.api.entities.CommandEvents
 import ai.platon.pulsar.rest.api.entities.CommandEventsResponse
 import ai.platon.pulsar.rest.api.entities.CommandInputRequest
 import ai.platon.pulsar.rest.api.entities.CommandInputResponse
@@ -271,7 +271,9 @@ class CommandController(
      * Events live in memory next to the task status and are bounded (the oldest
      * fall out first): a task restored after a backend restart has a status but
      * no events. `after` beyond the retained tail simply returns an empty page
-     * with `nextSeq` unchanged — never an error.
+     * with `nextSeq` unchanged — never an error. A cursor that fell BEHIND the
+     * retained window is reported (`resynced`/`dropped`/`firstRetainedSeq`) instead of
+     * being indistinguishable from "nothing new" (issue #652).
      *
      * @param id task id (the same id `agent run` prints)
      * @param after cursor: only events with a greater `seq` are returned
@@ -288,35 +290,14 @@ class CommandController(
     ): ResponseEntity<CommandEventsResponse> {
         val effectiveSessionId = SessionResolution.firstNamedOrDefault(sessionId)
         val status = commandExecutor.getStatus(effectiveSessionId, id)
-        val events = commandExecutor.events(id, after, limit.coerceIn(1, MAX_EVENTS_PAGE))
-        if (status == null && events.isEmpty()) {
+        // `null` (no log on this backend) is distinct from an empty page: only the
+        // former can mean "unknown id" together with a missing status row.
+        val page = commandExecutor.eventsPage(id, after, limit.coerceIn(1, MAX_EVENTS_PAGE))
+        if (status == null && page?.events.isNullOrEmpty()) {
             return ResponseEntity.notFound().build()
         }
 
-        // The status cache expires 2h after its last WRITE while the event log
-        // expires after its last read — so a followed task can keep its log and
-        // lose its status row. Deriving the terminal state from the last terminal
-        // event keeps `done` honest then; reporting `false` forever would make an
-        // uncapped follower poll indefinitely.
-        val terminal = events.lastOrNull { it.type in TERMINAL_EVENT_TYPES }
-        val word = status?.statusWord() ?: when (terminal?.type) {
-            AgentTaskEvent.TYPE_DONE -> STATUS_DONE
-            AgentTaskEvent.TYPE_FAILED -> STATUS_FAILED
-            AgentTaskEvent.TYPE_CANCELLED -> STATUS_CANCELLED
-            else -> STATUS_UNKNOWN
-        }
-
-        return ResponseEntity.ok(
-            CommandEventsResponse(
-                taskId = id,
-                status = word,
-                done = status?.isDone ?: (terminal != null),
-                // An empty page must not move the cursor backwards: report the one
-                // the caller asked with, so the next poll is idempotent.
-                nextSeq = events.lastOrNull()?.seq ?: after,
-                events = events,
-            )
-        )
+        return ResponseEntity.ok(CommandEvents.page(id, status, page, after))
     }
 
     /**
@@ -463,17 +444,7 @@ class CommandController(
         /** Upper bound of one `events` page (`?limit=`). */
         const val MAX_EVENTS_PAGE = 1000
 
-        /** Status word when the id has events but no resolvable status row. */
+        /** Status word when the id has no resolvable status row (`/stats`). */
         const val STATUS_UNKNOWN = "unknown"
-        const val STATUS_DONE = "done"
-        const val STATUS_FAILED = "failed"
-        const val STATUS_CANCELLED = "cancelled"
-
-        /** Event types that mean "this task will not produce anything else". */
-        val TERMINAL_EVENT_TYPES = setOf(
-            AgentTaskEvent.TYPE_DONE,
-            AgentTaskEvent.TYPE_FAILED,
-            AgentTaskEvent.TYPE_CANCELLED,
-        )
     }
 }

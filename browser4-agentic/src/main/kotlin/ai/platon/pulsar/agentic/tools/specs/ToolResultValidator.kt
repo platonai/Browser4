@@ -69,6 +69,12 @@ object ToolResultValidator {
             put("statusTool", JsonPrimitive(policy.statusTool))
             put("resultTool", JsonPrimitive(policy.resultTool))
             policy.cancelTool?.takeIf { it.isNotBlank() }?.let { put("cancelTool", JsonPrimitive(it)) }
+            // Supervision tools ride the submit envelope for the same reason
+            // `statusTool` does: a client that only speaks MCP learns which calls it can
+            // make from the answer it gets, and an MCP-only supervisor had no way to
+            // discover the step log or the counters (issue #652, P0-3).
+            policy.eventsTool?.takeIf { it.isNotBlank() }?.let { put("eventsTool", JsonPrimitive(it)) }
+            policy.statsTool?.takeIf { it.isNotBlank() }?.let { put("statsTool", JsonPrimitive(it)) }
         }
     )
 

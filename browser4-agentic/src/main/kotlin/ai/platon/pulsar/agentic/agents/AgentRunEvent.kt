@@ -44,6 +44,18 @@ package ai.platon.pulsar.agentic.agents
  *   request included ([USAGE] only) — cache-miss prompt tokens + output, the
  *   number the budget and the "how close to the abort are we" question use;
  *   prompt-cache reads are excluded (they cost ~10% of the base price)
+ * @property callId the [dev.langchain4j.agent.tool.ToolExecutionRequest] id of one
+ *   tool invocation, shared by its [TOOL_CALL] and [TOOL_RESULT]. The runner stores
+ *   it on the event so a consumer can pair call and result exactly instead of by
+ *   tool name (parallel calls of one tool are indistinguishable by name).
+ * @property detail bounded structured payload of a decision event ([VERIFY_VERDICT],
+ *   [GATE_EVALUATED], [REPAIR_ROUND], …). It is **raw** here, like the other fields:
+ *   the runner previews, redacts and bounds it on the way into the log.
+ * @property mutations cumulative file mutations of the run as of this step (gauge,
+ *   [ROUND_START] only): the engine's own progress signal, exported so a supervisor
+ *   can compute "N tool calls / 0 files changed" without reading the trace.
+ * @property readOnlyRounds consecutive coding rounds without a mutation (gauge,
+ *   [ROUND_START] only) — the number the "stop surveying, start editing" nudge fires on.
  * */
 data class AgentRunEvent(
     val type: String,
@@ -64,6 +76,14 @@ data class AgentRunEvent(
     val budgetTokens: Long? = null,
     /** Tokens consumed by this run so far, this request included ([USAGE] only). */
     val cumulativeTokens: Long? = null,
+    /** Id of the one tool invocation this step belongs to ([TOOL_CALL] / [TOOL_RESULT]). */
+    val callId: String? = null,
+    /** Structured payload of a decision event, bounded on the way into the task log. */
+    val detail: Map<String, Any?>? = null,
+    /** Cumulative file mutations of the run ([ROUND_START] only; gauge). */
+    val mutations: Long? = null,
+    /** Consecutive coding rounds without a mutation ([ROUND_START] only; gauge). */
+    val readOnlyRounds: Int? = null,
 ) {
     companion object {
         /** A new outer round started; a model request is about to be made. */
@@ -101,5 +121,42 @@ data class AgentRunEvent(
 
         /** [text] category of a [USAGE] event raised by a compaction model call. */
         const val USAGE_CATEGORY_COMPACTION = "compaction"
+
+        // ── Decision events (issue #652) ─────────────────────────────────────
+        //
+        // The engine's own course-correction signals. They were tracer/log-only until
+        // 2026-11-22, so an external supervisor could watch a run but not judge it.
+        // Each one carries a bounded `detail` payload; the type strings are mirrored
+        // on `AgentTaskEvent.TYPE_*`, and an existing consumer ignores unknown types.
+
+        /** One `coding.verify` result was parsed (`detail`: passed, module, checks[]). */
+        const val VERIFY_VERDICT = "verify.verdict"
+
+        /** One completion-report evaluation finished, pass or fail (`detail`: passed, strict, violations[], unlistedFiles[]). */
+        const val GATE_EVALUATED = "gate.evaluated"
+
+        /** A failing verification was fed back for another round (`detail`: round, maxRounds, reason). */
+        const val REPAIR_ROUND = "repair.round"
+
+        /** The repair budget is spent while verification still fails (`detail`: roundsUsed, verdict). */
+        const val REPAIR_EXHAUSTED = "repair.exhausted"
+
+        /** The completion report omitted written files; one repair round was asked for (`detail`: round, missing[]). */
+        const val FINISH_REPAIR = "finish.repair"
+
+        /** The report's `filesChanged` was completed from the mutation trace (`detail`: added[], source). */
+        const val FINISH_AMEND = "finish.amend"
+
+        /** The engine injected a correction (`detail`: kind=coding|budget, …). */
+        const val NUDGE = "nudge"
+
+        /** The isolation gate decided on the merge (`detail`: decision, changedFiles, reason). */
+        const val ISOLATION_MERGE = "isolation.merge"
+
+        /** `detail.kind` of a [NUDGE] raised by the coding progress rule. */
+        const val NUDGE_CODING = "coding"
+
+        /** `detail.kind` of a [NUDGE] raised by the token-budget thresholds. */
+        const val NUDGE_BUDGET = "budget"
     }
 }

@@ -190,6 +190,121 @@ class AgentTaskEventSanitizerTest {
         assertFalse(AgentTaskEventSanitizer.isSensitiveKey("selector"))
     }
 
+    // ---- decision payloads (`detail`, issue #652) ----------------------------
+
+    @Test
+    @DisplayName("a decision payload keeps primitives and nested check records")
+    fun detailKeepsStructuredPayload() {
+        val detail = AgentTaskEventSanitizer.detail(
+            mapOf(
+                "passed" to false,
+                "module" to "browser4-browser",
+                "exitCode" to 1,
+                "checks" to listOf(
+                    mapOf("name" to "compile", "ran" to true, "ok" to false, "exitCode" to 1),
+                    mapOf("name" to "test", "ran" to true, "ok" to true, "exitCode" to 0),
+                ),
+            ),
+        )!!
+
+        assertEquals(false, detail["passed"])
+        assertEquals("browser4-browser", detail["module"])
+        assertEquals(1, detail["exitCode"], "numbers stay numbers for a machine reader")
+        @Suppress("UNCHECKED_CAST")
+        val checks = detail["checks"] as List<Map<String, Any?>>
+        assertEquals(listOf("compile", "test"), checks.map { it["name"] })
+        assertEquals(false, checks[0]["ok"])
+        assertFalse(detail.containsKey(AgentTaskEventSanitizer.DETAIL_TRUNCATED), "nothing was cut")
+    }
+
+    @Test
+    @DisplayName("credential keys inside a decision payload are redacted")
+    fun detailRedactsCredentialKeys() {
+        val detail = AgentTaskEventSanitizer.detail(
+            mapOf("reason" to "auth failed", "apiKey" to "sk-live-123", "nested" to mapOf("token" to "abc")),
+        )!!
+
+        assertEquals(AgentTaskEventSanitizer.REDACTED, detail["apiKey"])
+        @Suppress("UNCHECKED_CAST")
+        val nested = detail["nested"] as Map<String, Any?>
+        assertEquals(AgentTaskEventSanitizer.REDACTED, nested["token"])
+    }
+
+    @Test
+    @DisplayName("decision payload strings are collapsed and truncated like every other preview")
+    fun detailPreviewsStrings() {
+        val long = "line one\nline two " + "z".repeat(500)
+        val detail = AgentTaskEventSanitizer.detail(mapOf("detail" to long))!!
+
+        val preview = detail["detail"] as String
+        assertTrue(preview.length <= AgentTaskEventSanitizer.MAX_PREVIEW_CHARS + 1, "${preview.length}")
+        assertTrue(preview.endsWith("…"), preview)
+        assertFalse(preview.contains("\n"), "a payload string must stay one line: $preview")
+    }
+
+    @Test
+    @DisplayName("an oversized decision payload is trimmed and says so")
+    fun detailIsBoundedAndMarkedTruncated() {
+        // 20 items x ~240-char previews is the worst structural case (~5 KB): it fits the
+        // per-collection limits and still blows the 4 KB wire budget, so the size bound
+        // has to degrade the payload — halving the array rather than discarding it.
+        val detail = AgentTaskEventSanitizer.detail(
+            mapOf("violations" to (1..AgentTaskEventSanitizer.MAX_DETAIL_ITEMS).map { "v".repeat(300) + " #$it" }),
+        )!!
+
+        assertEquals(true, detail[AgentTaskEventSanitizer.DETAIL_TRUNCATED], "a cut must be visible")
+        @Suppress("UNCHECKED_CAST")
+        val kept = detail["violations"] as List<Any?>
+        assertTrue(kept.isNotEmpty(), "degradation drops volume, not the whole payload")
+        assertTrue(kept.size < AgentTaskEventSanitizer.MAX_DETAIL_ITEMS, "the array had to shrink: ${kept.size}")
+        val size = ai.platon.pulsar.common.serialize.json.pulsarObjectMapper()
+            .writeValueAsBytes(detail).size
+        assertTrue(
+            size <= AgentTaskEventSanitizer.MAX_DETAIL_BYTES,
+            "a decision payload must stay bounded, got $size bytes",
+        )
+    }
+
+    @Test
+    @DisplayName("more keys/items than the ceiling are cut, and the cut is marked")
+    fun detailDropsTheTailOfOversizedCollections() {
+        val keys = (1..AgentTaskEventSanitizer.MAX_DETAIL_KEYS + 5).associate { "k$it" to "v" }
+        val items = (1..AgentTaskEventSanitizer.MAX_DETAIL_ITEMS + 5).map { "item$it" }
+
+        val byKeys = AgentTaskEventSanitizer.detail(keys)!!
+        assertEquals(
+            AgentTaskEventSanitizer.MAX_DETAIL_KEYS + 1,
+            byKeys.size,
+            "12 keys plus the truncation marker",
+        )
+        assertEquals(true, byKeys[AgentTaskEventSanitizer.DETAIL_TRUNCATED])
+
+        val byItems = AgentTaskEventSanitizer.detail(mapOf("items" to items))!!
+        @Suppress("UNCHECKED_CAST")
+        val kept = byItems["items"] as List<Any?>
+        assertEquals(AgentTaskEventSanitizer.MAX_DETAIL_ITEMS, kept.size)
+        assertEquals(true, byItems[AgentTaskEventSanitizer.DETAIL_TRUNCATED])
+    }
+
+    @Test
+    @DisplayName("an empty or nested-too-deep payload never crashes the log")
+    fun detailHandlesEmptyAndDeepPayloads() {
+        assertNull(AgentTaskEventSanitizer.detail(null))
+        assertNull(AgentTaskEventSanitizer.detail(emptyMap<String, Any?>()))
+
+        // Nested beyond the depth ceiling: the deepest collection is dropped and the cut
+        // is reported instead of throwing or serializing an unbounded tree.
+        val deep = mapOf(
+            "a" to mapOf(
+                "b" to mapOf(
+                    "c" to mapOf("d" to "too deep"),
+                ),
+            ),
+        )
+        val detail = AgentTaskEventSanitizer.detail(deep)!!
+        assertEquals(true, detail[AgentTaskEventSanitizer.DETAIL_TRUNCATED])
+    }
+
     /** A code unit that is half of a surrogate pair cannot be represented in JSON. */
     private fun assertNoUnpairedSurrogate(text: String) {
         var i = 0
