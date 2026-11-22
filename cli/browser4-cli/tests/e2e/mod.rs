@@ -1003,6 +1003,12 @@ struct MockBrowser4State {
     /// Scripted run counters per task id, served by `GET /api/commands/{id}/stats`
     /// (the `stats` object only; the envelope is built by the mock).
     custom_command_stats: HashMap<String, serde_json::Value>,
+    /// Scripted cursor window per task id: `firstRetainedSeq`, `dropped`, `resynced`.
+    ///
+    /// A backend whose 1000-event ring already evicted steps reports these on the
+    /// events page; without them the mock answers the older shape (fields absent),
+    /// which is itself a case worth testing (issue #652, P0-D).
+    command_events_windows: HashMap<String, (u64, u64, bool)>,
     /// When true, the stats endpoint answers 404 — a backend that predates it.
     command_stats_disabled: bool,
     /// Recorded `GET /api/commands/{id}/stats` task ids.
@@ -1215,6 +1221,29 @@ impl MockBrowser4Server {
             .expect("mock Browser4 state mutex poisoned")
             .custom_command_events
             .insert(task_id.to_string(), events);
+    }
+
+    /// Script the cursor window `GET /api/commands/{id}/events` reports for
+    /// [task_id]: the oldest retained step, how many were dropped, and whether the
+    /// caller's cursor fell behind the ring (`resynced`).
+    ///
+    /// This is what a backend with a wrapped 1000-event buffer answers; without it
+    /// the mock omits the fields, exactly like a backend written before they existed.
+    fn set_command_events_window(
+        &self,
+        task_id: &str,
+        first_retained_seq: u64,
+        dropped: u64,
+        resynced: bool,
+    ) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .command_events_windows
+            .insert(
+                task_id.to_string(),
+                (first_retained_seq, dropped, resynced),
+            );
     }
 
     /// Keep [task_id] `running` until a steering input arrives, so a REPL test
@@ -1925,6 +1954,7 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             let failed = scripted.iter().any(|event| {
                 event.get("type").and_then(|value| value.as_str()) == Some("task.failed")
             });
+            let window = guard.command_events_windows.get(task_id).copied();
             drop(guard);
 
             let status = if !done {
@@ -1934,15 +1964,22 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             } else {
                 "done"
             };
-            let response = serde_json::json!({
+            let mut response = serde_json::json!({
                 "taskId": task_id,
                 "status": status,
                 "done": done,
                 "nextSeq": next_seq,
                 "events": page,
-            })
-            .to_string();
-            write_http_response(&mut stream, "200 OK", "application/json", &response);
+            });
+            // A scripted cursor window is the "your cursor fell behind the ring"
+            // answer (issue #652, P0-D); without one the fields are omitted, which is
+            // the older-backend shape a follower must also tolerate.
+            if let Some((first_retained, dropped, resynced)) = window {
+                response["firstRetainedSeq"] = serde_json::json!(first_retained);
+                response["dropped"] = serde_json::json!(dropped);
+                response["resynced"] = serde_json::json!(resynced);
+            }
+            write_http_response(&mut stream, "200 OK", "application/json", &response.to_string());
         }
         // ---- agent task run statistics (interactive `/stats`) ----
         _ if method == "GET"

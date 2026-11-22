@@ -179,6 +179,189 @@ pub(super) fn test_agent_run_follow_ndjson_stays_json_in_fallback(ctx: &mut E2EC
     );
 }
 
+/// The scripted step log of a supervised run: a verification verdict, a finish-gate
+/// rejection with its evidence, a round carrying the progress gauges, and a tool pair
+/// that shares one call id (issue #652).
+fn scripted_decision_events() -> Vec<serde_json::Value> {
+    vec![
+        serde_json::json!({"seq": 1, "type": "task.created", "epochMillis": 1}),
+        serde_json::json!({"seq": 2, "type": "task.started", "epochMillis": 2, "text": "fix the test"}),
+        serde_json::json!({
+            "seq": 3,
+            "type": "tool.call",
+            "epochMillis": 3,
+            "tool": "coding.write",
+            "arguments": "{\"path\":\"ev.js\"}",
+            "turn": 1,
+            "callId": "call_a1"
+        }),
+        serde_json::json!({
+            "seq": 4,
+            "type": "tool.result",
+            "epochMillis": 4,
+            "tool": "coding.write",
+            "ok": true,
+            "durationMs": 40,
+            "text": "written",
+            "turn": 1,
+            "callId": "call_a1"
+        }),
+        serde_json::json!({
+            "seq": 5,
+            "type": "round.start",
+            "epochMillis": 5,
+            "turn": 2,
+            "mutations": 3,
+            "readOnlyRounds": 0,
+            "schemaVersion": 1
+        }),
+        serde_json::json!({
+            "seq": 6,
+            "type": "verify.verdict",
+            "epochMillis": 6,
+            "schemaVersion": 1,
+            "detail": {
+                "passed": false,
+                "module": "browser4-browser",
+                "checks": [{"name": "compile", "ran": true, "ok": false, "exitCode": 1}]
+            }
+        }),
+        serde_json::json!({
+            "seq": 7,
+            "type": "gate.evaluated",
+            "epochMillis": 7,
+            "schemaVersion": 1,
+            "detail": {
+                "passed": false,
+                "strict": true,
+                "violations": ["filesChanged lists 1 file(s) neither git nor this run's file trace shows: ghost.js"],
+                "unlistedFiles": ["ghost.js"]
+            }
+        }),
+        serde_json::json!({"seq": 8, "type": "task.done", "epochMillis": 8, "text": "done"}),
+    ]
+}
+
+/// `--ndjson` forwards the supervision surface unchanged: the decision payload, the
+/// tool pairing id and the progress gauges (issue #652). A machine follower that only
+/// saw tool names and counters could not judge a run; this is the contract it reads.
+pub(super) fn test_agent_run_follow_ndjson_carries_decision_events(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task = "Fix the failing test";
+    mock_server.set_command_events("agent-task-1", scripted_decision_events());
+    mock_server.set_command_result_response("agent-task-1", r#"{"summary":"test fixed"}"#);
+
+    let run_result = run_command(ctx, &["agent", "run", task, "--follow", "--ndjson"]);
+
+    let mut verdict = None;
+    let mut gate = None;
+    let mut round = None;
+    let mut call = None;
+    let mut result = None;
+    for line in run_result.stdout.lines().filter(|line| !line.trim().is_empty()) {
+        let value: serde_json::Value = serde_json::from_str(line).unwrap_or_else(|error| {
+            panic!("NDJSON mode emitted a non-JSON line ({error}): {line}")
+        });
+        match value.get("type").and_then(|v| v.as_str()) {
+            Some("verify.verdict") => verdict = Some(value),
+            Some("gate.evaluated") => gate = Some(value),
+            Some("round.start") => round = Some(value),
+            Some("tool.call") => call = Some(value),
+            Some("tool.result") => result = Some(value),
+            _ => {}
+        }
+    }
+
+    let verdict = verdict.expect("the verification verdict must reach --ndjson");
+    assert_eq!(verdict["schemaVersion"], 1, "the event model version rides along");
+    assert_eq!(verdict["detail"]["passed"], false);
+    assert_eq!(
+        verdict["detail"]["checks"][0]["name"], "compile",
+        "the failing check must be readable: {verdict}"
+    );
+
+    let gate = gate.expect("the finish-gate verdict must reach --ndjson");
+    assert_eq!(gate["detail"]["passed"], false);
+    assert_eq!(
+        gate["detail"]["unlistedFiles"][0], "ghost.js",
+        "the files the report omitted must be readable: {gate}"
+    );
+
+    let round = round.expect("the round step must reach --ndjson");
+    assert_eq!(round["mutations"], 3, "the progress gauge must be exported");
+    assert_eq!(round["readOnlyRounds"], 0);
+
+    let call = call.expect("the tool call must reach --ndjson");
+    let result = result.expect("the tool result must reach --ndjson");
+    assert_eq!(call["callId"], "call_a1", "the call id is the pairing key");
+    assert_eq!(
+        result["callId"], "call_a1",
+        "call and result share the id instead of a name heuristic"
+    );
+}
+
+/// A follower that fell behind the backend's retained step window is told so, on the
+/// human view and in `--ndjson` — it never silently loses a stretch of the run.
+pub(super) fn test_agent_run_follow_reports_a_resynced_cursor(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task = "Report the release notes";
+    // Two runs against one mock server ⇒ two task ids: script BOTH, or the second run
+    // sees no scripted steps at all (the mock numbers tasks per server).
+    for task_id in ["agent-task-1", "agent-task-2"] {
+        mock_server.set_command_events(task_id, scripted_follow_events(task));
+        // The ring already evicted 400 steps and the cursor started before the window —
+        // the backend answer a sleeping supervisor gets (issue #652, P0-D).
+        mock_server.set_command_events_window(task_id, 401, 400, true);
+        mock_server.set_command_result_response(task_id, r#"{"summary":"Release notes extracted"}"#);
+    }
+
+    let human = run_command(ctx, &["agent", "run", task, "--follow"]);
+    assert!(
+        human
+            .stdout
+            .contains("fell behind the retained step window"),
+        "the human view must report the gap:\n{}",
+        human.stdout
+    );
+    assert!(
+        human.stdout.contains("400 step(s) dropped"),
+        "the notice must name how many steps were lost:\n{}",
+        human.stdout
+    );
+
+    // The same fact in `--ndjson`, as a step-shaped record: a prose warning would make
+    // the stream unparseable, and silence would misreport a gap as "nothing happened".
+    reset_cli_artifacts(ctx);
+    let json_run = run_command(ctx, &["agent", "run", task, "--follow", "--ndjson"]);
+    let mut marker = None;
+    for line in json_run.stdout.lines().filter(|line| !line.trim().is_empty()) {
+        let value: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|error| panic!("NDJSON emitted a non-JSON line ({error}): {line}"));
+        if value.get("type").and_then(|v| v.as_str()) == Some("events.resynced") {
+            marker = Some(value);
+        }
+    }
+    let marker = marker.unwrap_or_else(|| {
+        panic!(
+            "the resync gap must be visible in --ndjson:\n{}",
+            json_run.stdout
+        )
+    });
+    assert_eq!(marker["dropped"], 400);
+    assert_eq!(marker["firstRetainedSeq"], 401);
+    assert_eq!(marker["taskId"], "agent-task-2");
+}
+
 /// `agent run --follow` falls back to status polling when the backend predates
 /// the events endpoint (404), instead of failing the command.
 pub(super) fn test_agent_run_follow_falls_back_without_events_endpoint(ctx: &mut E2ECtx) {
