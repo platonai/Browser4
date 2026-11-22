@@ -2323,6 +2323,13 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push("    /noop-limit tune the other knobs live.".to_string());
         lines.push(
+            "    The session banner prints a browser URL (…/agent.html?session=…) bound to the".to_string(),
+        );
+        lines.push(
+            "    same session, where the same tasks can be submitted, watched, steered and stopped."
+                .to_string(),
+        );
+        lines.push(
             "    A bare line while a task runs steers it at the next model round; /followup <text>".to_string(),
         );
         lines.push(

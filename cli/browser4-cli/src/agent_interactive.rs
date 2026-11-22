@@ -3170,9 +3170,18 @@ impl Repl {
         if self.quiet {
             line.push_str(" · quiet");
         }
+        // The web console is the same session over the REST API: the banner is the one
+        // place a terminal user can discover it without reading docs, and the session
+        // in the query string is what makes "open the page and keep going" work.
+        let console_url = format!(
+            "{}/agent.html?session={}",
+            self.base_url.trim_end_matches('/'),
+            urlencoding::encode(&session)
+        );
         vec![
             line,
             "  type a task · /help for commands · Ctrl+C cancels the running task".to_string(),
+            format!("  web console: {console_url}  ·  same session"),
         ]
     }
 
@@ -6281,7 +6290,7 @@ mod tests {
 
         let default_repl = Repl::new(&client, "http://localhost:1", &json!({}), None);
         let lines = default_repl.banner_lines();
-        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines.len(), 3, "{lines:?}");
         // An unnamed session names its own id: it is not the backend's DEFAULT pool
         // any more, so the banner must say what the session is bound to.
         assert!(
@@ -6295,6 +6304,14 @@ mod tests {
         }
         assert!(
             lines[1].contains("type a task") && lines[1].contains("Ctrl+C cancels"),
+            "{lines:?}"
+        );
+        // The web console shares this session: the URL carries the id, so opening it
+        // continues the same context instead of starting a parallel one.
+        let session = default_repl.session_id().expect("a session id");
+        assert!(
+            lines[2].contains("/agent.html?session=")
+                && lines[2].contains(&*urlencoding::encode(&session)),
             "{lines:?}"
         );
 

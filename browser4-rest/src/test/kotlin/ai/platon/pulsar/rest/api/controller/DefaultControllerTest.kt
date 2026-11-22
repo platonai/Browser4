@@ -24,4 +24,17 @@ class DefaultControllerTest {
         // a redirect must have no body.
         assertNull(response.body)
     }
+
+    @Test
+    @DisplayName("agentConsole returns a real HTTP 302 redirect to the agent.html page")
+    fun agentConsoleRedirectsToAgentHtmlPage() {
+        val session = Mockito.mock(PulsarSession::class.java)
+        val controller = DefaultController(session)
+
+        val response = controller.agentConsole()
+
+        assertEquals(HttpStatus.FOUND, response.statusCode)
+        assertEquals("/agent.html", response.headers.location?.path)
+        assertNull(response.body)
+    }
 }
