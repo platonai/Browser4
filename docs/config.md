@@ -834,7 +834,10 @@ docker run -d -p 18182:18182 `
   `POST /api/commands/{id}/goal`, the MCP tool `command.goal(id, text)`, or `/goal <text>`
   in an interactive session — and every change becomes a `goal.changed` step carrying the
   previous goal, the reason and the new revision, plus a user turn that tells the model.
-  A one-shot task has no operator behind it, so its goal simply stays put.
+  A one-shot task has nobody typing at it, and no tool reaches this channel from inside the
+  run either: its goal moves only when an operator explicitly replaces it over the API
+  (`POST /api/commands/{id}/goal`, `command.goal`), and an unknown or finished task is
+  refused with `accepted=false` and the reason.
 
   `browser4.agent.goal.mode=off` restores the pre-goal-mode engine (no pinning, no plan
   gate). `maxChars` bounds the goal text kept verbatim; `maxSteps` bounds the plan (a model

@@ -340,8 +340,10 @@ reach it, which is what makes "the run does not drift" a property of the engine 
 a hope about the model. The change is applied at the next round boundary, announced to the
 model as a user turn, and recorded as a `goal.changed` step; the plan survives it (the plan
 is progress, the goal is the target), so the run continues from where it was toward a
-different target. An unattended `agent run` has no operator, so its goal is immutable by
-design — steer it with `/`-free input over `command.input`, or submit a new task.
+different target. A run cannot move its own goal: no tool and no prompt reaches the channel.
+An unattended `agent run` has nobody typing at it either, so its goal moves only when an
+operator explicitly replaces it over the API (`POST /api/commands/{id}/goal`, `command.goal`);
+an unknown or finished task is refused with `accepted=false` and the reason.
 
 The same target is served without the CLI:
 

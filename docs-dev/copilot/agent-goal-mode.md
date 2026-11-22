@@ -121,7 +121,7 @@ working on, and drop any work that does not serve them before your next tool cal
 
 改动路径：runner 把新目标塞进该任务的**目标队列**（与 steering 同级但类型不同），agent 在下一次回合边界取用：`goal.amend(text, source=operator)` → `revision+1` → 导出 `goal.changed`（含 `previous`、`reason=operator`）→ 并向模型注入一条用户消息"操作者把目标改成了…"。计划保留（它是过程，不是目标），所以模型会看到"目标变了、进度还在"。
 
-非交互模式（`agent run "<task>"`、`/mcp/call-tool`）不接这条通道：`command.goal` 对没有活任务的 id 返回 409，对一个正在跑的 oneshot 任务——它就是没有操作者在场，所以 `POST /goal` 由 runner 明确拒绝（`409 no operator channel`），而不是悄悄忽略。
+**通道的不对称是"模型没路"，不是"任务没有通道"。** 非交互模式（`agent run "<task>"`、`command.run`）里没有操作者在场敲 `/goal`，但持 task id 的外部操作者仍可显式 `POST /api/commands/{id}/goal`（或 `command.goal(id, text)`）改一个正在跑的无人值守任务——#652 要求的"纯 MCP 监督者"正是靠它。真正被保证的是"运行内部无法换靶"：没有任何工具、没有任何提示词入口能让模型改目标。拒绝语义：未知 id、页面访问（无 goal）、任务已结束、空文本都返回 `accepted=false` + `message`（HTTP 200，`command.goal` 同理），因为"任务在你打字时刚好结束"是竞态而不是调用错误；只有 `id` 不存在时 REST 的读端点才是 404。
 
 ## 9. 监督面
 
@@ -158,5 +158,5 @@ working on, and drop any work that does not serve them before your next tool cal
 ## 12. 残余风险（诚实地写下来）
 
 - **语义漂移判定不了。** 引擎能保证"目标每轮可见 + 只有操作者能改 + 承诺的计划必须收尾"，但不能判定**计划本身是否服务于目标**。一个模型可以声明一个与目标无关、自己又能完成的计划，然后"诚实地完成"它。下一层是 #653 part B 的结构化 `doneWhen` 检查（把验收条目变成可执行的检查而不仅是文字），以及把目标交给另一个模型做语义对账（监督者角色，而不是执行者）。
-- **目标不可变是设计选择。** 交互模式里操作者能改；oneshot 里不能——这是"无人值守"的定义，而不是缺口。需要中途改方向的无人值守任务，应该用 `--follow` 跟着并 `command.input` 干预，或者重启任务。
+- **"不可变"只在运行内部成立。** 模型没有任何路径改目标；但无人值守任务并非"没人能改"——持 task id 的操作者可以显式 `POST /goal`（这正是需要中途改方向时的推荐做法，而不是重启任务），也用 `--follow` + `command.input` 干预。所以这里的保证要读成"运行不会自己换靶"，而不是"靶在任务生命周期内绝对不动"。
 - **计划是可选的。** 不声明计划的 run 只有钉住 + 闸门的老规则；这保证向后兼容，也意味着"没有计划"的 run 少一层约束。要不要强制（`browser4.agent.goal.requirePlan`）留给后续：默认关闭，因为浏览类任务的计划往往一开始就写不准。
