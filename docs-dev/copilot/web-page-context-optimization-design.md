@@ -4,6 +4,8 @@
 > 问题：网页任务中循环反复查看页面内容（`ariaSnapshot` / `snapshot` / `dump` / `htmlsnapshot` / `extract`），
 > 大页面每次快照数 KB-数十 KB，多轮累积 + 每轮整体重发 → prompt 膨胀、token 浪费。
 > 目标：同一页面内容**最多完整进入会话一次**；再次查看时只给"未变化"引用或**差异**；不破坏 KV-cache 前缀复用。
+>
+> 注（2026-11-22）：固定小节 `## Page State` 已改名为中立的 `## Environment`（页面 URL/标题/指纹/diff 的要求原样保留在该小节），下文按当时名称记录。
 
 ## 1. 问题量化
 

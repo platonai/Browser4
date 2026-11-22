@@ -5,6 +5,8 @@
 > `CompactionLedger.kt`、`PageViewDeduper.kt`、`SystemToolExecutor.kt`、`skills/browser4-cli/SKILL.md`、
 > `docs-dev/copilot/browser4-agent-tool-disclosure-feedback-design.md`（§8）、
 > `docs-dev/copilot/web-page-context-optimization-design.md`、`docs-dev/copilot/compaction-traceability-design.md`
+>
+> 注（2026-11-22）：压缩检查点的 `## Page State` 小节已改名为 `## Environment`，下文按当时名称记录。
 
 ---
 

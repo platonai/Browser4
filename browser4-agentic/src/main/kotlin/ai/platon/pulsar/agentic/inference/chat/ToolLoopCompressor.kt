@@ -420,7 +420,7 @@ class ToolLoopCompressor(
     /**
      * Whether the summary carries every section the compaction instruction
      * requires. The checkpoint is the model's only trace of the compacted
-     * history, so a summary that drops a section (e.g. Page State) is
+     * history, so a summary that drops a section (e.g. Environment) is
      * rejected and the attempt is retried/abandoned instead of landed.
      */
     private fun summaryStructureValid(summary: String): Boolean =
@@ -442,7 +442,7 @@ class ToolLoopCompressor(
             "## Errors and Fixes",
             "## Pending Jobs",
             "## Current Work",
-            "## Page State",
+            "## Environment",
             "## Next Step",
             "## Critical Context",
         )
@@ -463,7 +463,7 @@ class ToolLoopCompressor(
          * routed request (provider KV-cache reuse), mirroring deepseek-harness.
          */
         const val COMPACTION_INSTRUCTION =
-            "You are now acting as a compaction engine for this AI coding assistant. Condense " +
+            "You are now acting as a compaction engine for this agent. Condense " +
                 "the conversation ABOVE into a structured checkpoint that lets another model " +
                 "resume the work with no loss of essential context.\n" +
                 "\n" +
@@ -489,10 +489,11 @@ class ToolLoopCompressor(
                 "## Current Work\n" +
                 "- [precisely what was in progress at this checkpoint]\n" +
                 "\n" +
-                "## Page State\n" +
+                "## Environment\n" +
                 "- [for every distinct page viewed: FULL absolute URL (never truncated or elided), title, " +
-                "fingerprint and what changed since the previous view (diff highlights); " +
-                "write \"(none)\" if no page was viewed]\n" +
+                "fingerprint and what changed since the previous view (diff highlights); for workspace " +
+                "work: the working tree, platform and shell facts the next round must keep; " +
+                "write \"(none)\" when neither applies]\n" +
                 "\n" +
                 "## Next Step\n" +
                 "- [the single next action, directly in line with the most recent request, or \"(none)\"]\n" +
@@ -526,7 +527,7 @@ class ToolLoopCompressor(
             "earlier compaction of this SAME conversation. Treat it as established background and " +
             "MERGE it instead of restarting:\n" +
             "  - PRESERVE every still-true fact from it (goals, constraints, exact paths, decisions, " +
-            "page state, open problems);\n" +
+            "environment state, open problems);\n" +
             "  - ADD what the newer messages did, moving finished work out of `## Pending Jobs` / " +
             "`## Current Work` while keeping the same section structure;\n" +
             "  - DROP what is no longer true, and keep `## Next Step` at the newest state.\n" +
