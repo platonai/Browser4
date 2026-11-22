@@ -31,6 +31,8 @@ class FinishReportGateTest {
         actualVerdictJson: String? = null,
         gitDeletedFiles: Set<String>? = null,
         grantedRoots: List<Path> = emptyList(),
+        plan: AgentGoalStatus? = null,
+        planCheck: String = FinishEvidence.PLAN_CHECK_REJECT,
     ) = FinishEvidence(
         executedToolCalls = executedToolCalls,
         executedToolNames = executedToolNames,
@@ -44,6 +46,8 @@ class FinishReportGateTest {
         actualVerdictJson = actualVerdictJson,
         gitDeletedFiles = gitDeletedFiles,
         grantedRoots = grantedRoots,
+        plan = plan,
+        planCheck = planCheck,
     )
 
     private fun gate(name: String, ran: Boolean, ok: Boolean = ran, detail: String? = null): Map<String, Any?> =
@@ -569,5 +573,109 @@ class FinishReportGateTest {
         Files.createDirectories(repo.resolve(".git"))
 
         assertEquals(repo, resolveFinishGitWorkspace("", null, repo))
+    }
+
+    // ─── Rule 9: the plan the run committed to must be finished (goal mode) ──
+
+    /** A goal view whose plan is [steps]; dropped steps get [droppedReason]. */
+    private fun plan(
+        vararg steps: Pair<String, GoalStepStatus>,
+        droppedReason: String? = "the page is a 404",
+    ) = AgentGoalStatus(
+        text = "extract the price of the product",
+        source = GoalConfig.SOURCE_INSTRUCTION,
+        revision = 1,
+        steps = steps.map { (text, status) ->
+            GoalStep(
+                text = text,
+                status = status,
+                reason = if (status == GoalStepStatus.DROPPED) droppedReason else null,
+            )
+        },
+        pending = steps.count { it.second == GoalStepStatus.PENDING },
+        done = steps.count { it.second == GoalStepStatus.DONE },
+        dropped = steps.count { it.second == GoalStepStatus.DROPPED },
+    )
+
+    @Test
+    @DisplayName("an unfinished plan rejects the completion and names the open steps")
+    fun anUnfinishedPlanRejectsTheCompletion() {
+        val verdict = FinishReportGate.evaluate(
+            evidence(
+                plan = plan(
+                    "open the page" to GoalStepStatus.DONE,
+                    "extract the price" to GoalStepStatus.PENDING,
+                    "write out/price.json" to GoalStepStatus.PENDING,
+                ),
+            )
+        )
+
+        assertFalse(verdict.passed, "a run that leaves its own plan open is not done")
+        assertEquals(
+            listOf("extract the price", "write out/price.json"),
+            verdict.pendingPlan,
+            "the open steps are the actionable detail a repair round needs",
+        )
+        assertTrue(
+            verdict.violations.single().contains("the plan this run committed to is unfinished"),
+            verdict.violations.single(),
+        )
+        assertTrue(verdict.onlyPendingPlan, "the plan alone objected, so a repair round can fix it")
+    }
+
+    @Test
+    @DisplayName("a plan that is done, or honestly dropped with a reason, passes")
+    fun aFinishedOrHonestlyDroppedPlanPasses() {
+        val verdict = FinishReportGate.evaluate(
+            evidence(
+                plan = plan(
+                    "open the page" to GoalStepStatus.DONE,
+                    "extract the price" to GoalStepStatus.DROPPED,
+                ),
+            )
+        )
+
+        assertTrue(verdict.passed, "violations=${verdict.violations}")
+        assertTrue(verdict.pendingPlan.isEmpty())
+    }
+
+    @Test
+    @DisplayName("a step dropped without a reason is still owed")
+    fun aDroppedStepWithoutAReasonCountsAsOpen() {
+        // Dropping a step is the honest escape hatch, but only a drop that says WHY: a bare
+        // "dropped" is indistinguishable from forgetting the step entirely.
+        val verdict = FinishReportGate.evaluate(
+            evidence(plan = plan("extract the price" to GoalStepStatus.DROPPED, droppedReason = null))
+        )
+
+        assertFalse(verdict.passed)
+        assertEquals(listOf("extract the price"), verdict.pendingPlan)
+    }
+
+    @Test
+    @DisplayName("a run that declared no plan keeps the old rules")
+    fun noPlanKeepsTheOldRules() {
+        val verdict = FinishReportGate.evaluate(evidence(plan = null))
+
+        assertTrue(verdict.passed, "goal mode must not invent a plan for a run that declared none")
+        assertTrue(verdict.pendingPlan.isEmpty())
+    }
+
+    @Test
+    @DisplayName("-Dbrowser4.agent.finish.planCheck=warn logs the open plan but keeps the completion")
+    fun planCheckWarnOnlyLogs() {
+        val verdict = FinishReportGate.evaluate(
+            evidence(
+                plan = plan("extract the price" to GoalStepStatus.PENDING),
+                planCheck = FinishEvidence.PLAN_CHECK_WARN,
+            )
+        )
+
+        assertTrue(verdict.passed, "warn mode is the same rule with the violation downgraded")
+        assertTrue(verdict.pendingPlan.isEmpty(), "nothing for a repair round to fix")
+        assertTrue(
+            verdict.warnings.single().contains("unfinished"),
+            "the operator still has to see it: ${verdict.warnings}",
+        )
     }
 }

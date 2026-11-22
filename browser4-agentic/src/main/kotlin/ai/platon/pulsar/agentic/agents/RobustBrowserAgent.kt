@@ -748,6 +748,47 @@ open class RobustBrowserAgent(
     var followUpSource: (() -> List<PendingUserMessage>)? = null
 
     /**
+     * The goal of the run in progress, or null before the first run / after it ended.
+     *
+     * Engine state, never part of the message history: [AgentGoal.pinnedBlock] renders it
+     * into every request, so compaction, repair rounds and elapsed time cannot make the
+     * run forget what it was asked to do (docs-dev/copilot/agent-goal-mode.md).
+     */
+    @Volatile
+    var goalState: GoalState? = null
+        private set
+
+    /**
+     * Drain for the current run's OPERATOR goal amendments, set by the task runner.
+     *
+     * The only channel that may replace a goal while a task runs. A one-shot run has no
+     * operator behind it, so [goalAmendmentSource] stays null and the goal is immutable —
+     * which is the point of goal mode rather than a limitation of it.
+     */
+    @Volatile
+    var goalAmendmentSource: (() -> List<PendingGoalAmendment>)? = null
+
+    /**
+     * Sink for the run's live goal view, set by the task runner.
+     *
+     * The agent pushes rather than the runner polling: it is the only one that knows
+     * when the plan changed, and a supervisor then reads the goal from the task status
+     * (`/goal`, `command.status`, `agent supervise`) instead of scraping step details.
+     */
+    @Volatile
+    var goalListener: ((AgentGoalStatus) -> Unit)? = null
+
+    /**
+     * The plan revision the current run already exported as a `plan.update`.
+     *
+     * Per-run bookkeeping: `goal.plan` may be called once per step inside one round, and
+     * a supervisor wants one event per actual change, not one per round. Reset at every
+     * run start so a new task's first plan is always reported.
+     */
+    @Volatile
+    private var emittedPlanRevision: Int = 0
+
+    /**
      * Test/runtime override of the agent memory root directory (defaults to
      * `<APP_DATA>/memory`). Lets tests isolate the memory files, and lets
      * multi-tenant deployments relocate them.
@@ -1246,6 +1287,20 @@ open class RobustBrowserAgent(
             // notes ("todo: verify #price") must not ride into an unrelated task as the
             // strongest (tail) message of every round. A retry keeps them (same id).
             agentMemory.beginTaskScratchpad(taskId)
+            // Goal mode (docs-dev/copilot/agent-goal-mode.md): the task IS the goal — no
+            // flag, no opt-in, every `agent run` included. The goal is engine state from
+            // here on, so it is pinned into every request, no tool can replace it, and the
+            // finish gate checks the plan the run committed to. `-Dbrowser4.agent.goal.mode=off`
+            // restores the pre-goal-mode engine.
+            val runGoal = if (GoalConfig.enabled) {
+                GoalState(AgentGoal.fromInstruction(action.action)).also { state ->
+                    goalState = state
+                    ensureGoalToolRegistered(state)
+                    emitGoalPinned(state)
+                }
+            } else {
+                null
+            }
             // Provision the coding workspace mirror HERE, where [codingMode] is
             // definitely known. The mirror is otherwise attempted when the tool
             // manager is constructed, and that lazy init can happen BEFORE the task
@@ -1311,6 +1366,7 @@ open class RobustBrowserAgent(
             runTimings.reset()
             repairLoop.reset()
             finishReportRepair.reset()
+            emittedPlanRevision = 0
             logger.info("🚀 cli-agent.start sid={} turns={} instr='{}'",
                 context.sid, maxTurns, Strings.compactInline(action.action, 100))
 
@@ -1381,15 +1437,46 @@ open class RobustBrowserAgent(
                 // round's rebuild; the tool loop drains again before every
                 // inference for messages that arrive mid-round.
                 drainSteering { messages = messages + it }
+                // Operator goal change (`/goal`, `command.goal`): applied at the round
+                // boundary and announced to the model as a user turn. A one-shot run has
+                // no operator behind it, so this queue stays empty and the goal is
+                // immutable — which is the guarantee goal mode exists for.
+                drainGoalAmendment(runGoal, turn + 1)?.let { messages = messages + it }
                 // Per-round executed-tool records, populated by the loop's
                 // onToolResult callback and summarized into the continuation.
                 val roundToolRecords = mutableListOf<RoundToolRecord>()
+                // The goal: re-rendered from engine state into EVERY request. This is
+                // what makes a long run unable to drift — the instruction itself may have
+                // been compacted away at round 3, but the goal block is rebuilt here, at
+                // the tail (the strongest position), no matter how many rounds elapsed.
+                val goalBlock = runGoal?.let { state ->
+                    emitPlanUpdate(state)
+                    publishGoal(state, turn + 1)
+                    val reassert = shouldReassertGoal(turn)
+                    if (reassert) {
+                        logger.info("🎯 goal.reassert sid={} round={}", context.sid, turn + 1)
+                        cliLoopTracer.logEvent("goal.reassert", mapOf("round" to turn + 1))
+                        emitRunEvent(
+                            AgentRunEvent(
+                                AgentRunEvent.NUDGE,
+                                turn = turn + 1,
+                                detail = mapOf(
+                                    "kind" to AgentRunEvent.NUDGE_GOAL,
+                                    "reason" to "long run: re-anchor to the pinned goal",
+                                    "pendingPlan" to state.goal.openSteps.size,
+                                ),
+                            )
+                        )
+                    }
+                    state.goal.pinnedBlock(turn + 1, reassert = reassert)
+                }
                 // Working memory: re-inject the scratchpad as the tail message
                 // every round (replace-tail — all earlier prefixes stay intact
                 // for KV reuse, and the compressor never touches the tail).
                 val scratchpadText = agentMemory.scratchpad.render()
-                var roundMessages =
-                    if (scratchpadText != null) messages + UserMessage.from(scratchpadText) else messages
+                var roundMessages = messages
+                if (goalBlock != null) roundMessages = roundMessages + UserMessage.from(goalBlock)
+                if (scratchpadText != null) roundMessages = roundMessages + UserMessage.from(scratchpadText)
                 // Deterministic "stop surveying, start editing" nudge for coding
                 // runs that keep re-mapping the same file across rounds.
                 if (codingMode) {
@@ -1622,6 +1709,13 @@ open class RobustBrowserAgent(
             agentMemory.consolidator?.schedule(context.sid)
             throw handleResolutionFailure(e, context, startTime)
         } finally {
+            // The goal belonged to this run: a later task starts with its own. Without
+            // this, `goal.plan` on a finished run would keep mutating the previous plan
+            // and the status envelope would report a goal nobody is working on.
+            if (goalState != null) {
+                goalState = null
+                runCatching { agentToolManager.unregisterCustomTarget(GoalToolExecutor.DOMAIN) }
+            }
             // Hand the conversation this run produced back to the session (pi's
             // continuous conversation). The fresh system prompt is dropped — the next
             // task rebuilds it with its own workspace/memory sections. Non-suspending,
@@ -1632,6 +1726,144 @@ open class RobustBrowserAgent(
             }
         }
     }
+
+    // ─── Goal mode ───────────────────────────────────────────────────────────
+
+    /**
+     * Register the `goal` domain once and bind THIS run's state to it.
+     *
+     * The executor is stateless (one registration suffices process-wide); the target
+     * carries the per-agent [GoalState], exactly like `memory`'s
+     * [ai.platon.pulsar.agentic.memory.MemoryToolTarget]. The registration must happen
+     * before the first round, because the tool loop snapshots the custom registry.
+     */
+    private fun ensureGoalToolRegistered(state: GoalState) {
+        if (CustomToolRegistry.instance.get(GoalToolExecutor.DOMAIN) == null) {
+            val executor = GoalToolExecutor()
+            CustomToolRegistry.instance.register(executor, executor.getToolSpecs().values.toList())
+        }
+        agentToolManager.registerCustomTarget(GoalToolExecutor.DOMAIN, GoalToolTarget(state))
+    }
+
+    /** Push the goal to the task status, so its supervision surface stays current. */
+    private fun publishGoal(state: GoalState, round: Int? = null) {
+        val listener = goalListener ?: return
+        runCatching { listener(state.goal.statusView(round)) }
+            .onFailure { logger.debug("publishing the goal failed: {}", it.message) }
+    }
+
+    /** Export the pinned goal once per run (text redacted: the status stream is a read). */
+    private fun emitGoalPinned(state: GoalState) {
+        val view = state.goal.statusView(round = 1)
+        publishGoal(state, 1)
+        cliLoopTracer.logEvent(
+            "goal.pinned",
+            mapOf(
+                "chars" to state.goal.text.length,
+                "source" to state.goal.source,
+                "maxChars" to GoalConfig.maxChars(),
+            ),
+        )
+        emitRunEvent(
+            AgentRunEvent(
+                AgentRunEvent.GOAL_PINNED,
+                detail = mapOf(
+                    "text" to view.text,
+                    "source" to view.source,
+                    "revision" to view.revision,
+                    "maxChars" to GoalConfig.maxChars(),
+                ),
+            )
+        )
+    }
+
+    /**
+     * Export the plan the first time the run sees a revision it has not reported.
+     *
+     * Compared by `planRevision` rather than content: the model may call `goal.plan`
+     * many times per round (once per step), and one event per actual change is what a
+     * supervisor wants, not one per round.
+     */
+    private fun emitPlanUpdate(state: GoalState) {
+        val plan = state.goal
+        if (plan.planRevision == emittedPlanRevision) return
+        emittedPlanRevision = plan.planRevision
+        if (!plan.hasPlan) return
+        emitRunEvent(
+            AgentRunEvent(
+                AgentRunEvent.PLAN_UPDATE,
+                detail = mapOf(
+                    "steps" to plan.steps.size,
+                    "done" to plan.doneSteps.size,
+                    "pending" to plan.openSteps.size,
+                    "dropped" to plan.droppedSteps.size,
+                    "planRevision" to plan.planRevision,
+                    "next" to plan.openSteps.firstOrNull()?.text,
+                ),
+            )
+        )
+    }
+
+    /**
+     * Apply the operator's goal changes that arrived since the last round.
+     *
+     * @return the user message announcing the change, or null when nothing arrived
+     */
+    private fun drainGoalAmendment(state: GoalState?, round: Int): ChatMessage? {
+        val source = goalAmendmentSource ?: return null
+        val amendments = runCatching { source() }.getOrDefault(emptyList())
+        if (amendments.isEmpty() || state == null) return null
+        var last: AgentGoal? = null
+        amendments.forEach { amendment ->
+            last = state.amend(
+                amendment.text,
+                amendment.reason ?: "operator: /goal ${amendment.id}",
+            )
+        }
+        val goal = last ?: return null
+        val view = goal.statusView(round)
+        publishGoal(state, round)
+        cliLoopTracer.logEvent(
+            "goal.changed",
+            mapOf("revision" to view.revision, "source" to view.source),
+        )
+        emitRunEvent(
+            AgentRunEvent(
+                AgentRunEvent.GOAL_CHANGED,
+                detail = mapOf(
+                    "revision" to view.revision,
+                    "source" to view.source,
+                    "previous" to view.changedFrom,
+                    "reason" to view.changedReason,
+                    "text" to view.text,
+                ),
+            )
+        )
+        logger.info("🎯 cli-agent.goal.changed sid={} revision={}", session.uuid, view.revision)
+        // A real user turn: the model is told the target moved, in the same channel it
+        // hears steering in. The pinned block carries the new goal from the next round on.
+        return UserMessage.from(
+            "The operator replaced the goal of this task.\n\n" +
+                "New goal: ${goal.text}\n\n" +
+                "Your plan is unchanged (${goal.progressLabel()}): keep the work that still " +
+                "serves the new goal and drop what does not."
+        )
+    }
+
+    /**
+     * Whether this round should re-anchor the run to its goal.
+     *
+     * The block is pinned every round regardless; this adds the explicit "restate it and
+     * name your step" instruction every [GoalConfig.reassertEveryRounds] rounds, because
+     * a model that has been reading the same paragraph for 30 rounds stops acting on it.
+     */
+    private fun shouldReassertGoal(turn: Int): Boolean {
+        val every = GoalConfig.reassertEveryRounds()
+        if (every <= 0) return false
+        val round = turn + 1
+        return round > 1 && round % every == 0
+    }
+
 
     /**
      * Copy task inputs that live outside the workspace into `<workspace>/.b4inputs/`
@@ -2834,6 +3066,10 @@ open class RobustBrowserAgent(
                 // an honest report fails while hiding the file passes (issue 20261120-0156).
                 grantedRoots = agentToolManager.accessPolicy.additionalDirs
                     .map { it.toAbsolutePath().normalize() },
+                // Rule 9 (goal mode): the plan the run declared, so an unfinished one can
+                // reject a completion that quietly answered a smaller question.
+                plan = goalState?.goal?.statusView(round = context.step),
+                planCheck = config.finishPlanCheck,
             )
         )
     }
@@ -2931,6 +3167,9 @@ open class RobustBrowserAgent(
                             "round" to decision.round,
                             "maxRounds" to finishReportRepair.maxRounds,
                             "missing" to verdict.unlistedFiles,
+                            // Rule 9 rides the same event: one repair round, whichever
+                            // bookkeeping it is asking to be fixed.
+                            "pendingPlan" to verdict.pendingPlan,
                         ),
                     )
                 )

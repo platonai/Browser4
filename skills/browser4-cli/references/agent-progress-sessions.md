@@ -29,7 +29,8 @@ the `/stats` numbers, the completion line — or when a step stream misbehaves.
 | How do I consume the same stream from a script? | [`--ndjson`](#--follow-watch-the-steps) |
 | How is a finished task's payload printed? | [Result rendering](#result-rendering) |
 | What do the numbers on the final line mean? | [The completion line](#the-completion-line) |
-| How do I steer, `/status`, `/stats` or `/resume` inside a session? | [`agent run -i`: the interactive session](#agent-run--i-the-interactive-session) |
+| How do I steer, `/status`, `/stats`, `/goal` or `/resume` inside a session? | [`agent run -i`: the interactive session](#agent-run--i-the-interactive-session) |
+| What was this run asked to do, and what does it still owe? | [`/goal`: what the run is for](#goal-what-the-run-is-for) |
 | Which backend endpoints does the live view need? | [Backend requirements and compatibility](#backend-requirements-and-compatibility) |
 | The live view is stuck or a step is unreadable — what now? | [When the step stream fails](#when-the-step-stream-fails) |
 
@@ -232,6 +233,8 @@ Session commands:
 | `/help` | List the commands |
 | `/status` | Status of the running (or last) task |
 | `/stats [task-id]` | Run statistics: LLM rounds and requests, token usage (prompt-cache reads/writes and hit ratio included when the provider reports them), tool calls, and — for a coding task — `files  N changed` next to the tool count (`⚠ … not converging` when tools ran without a single file change) |
+| `/goal [--json] [--task <id>]` | The task's goal — the instruction the engine pins into every model request — with the plan the run committed to and the steps it still owes (`--json`: the same facts as one object) |
+| `/goal <text>` | Replace the running task's goal (the operator's only channel; the model cannot reach it) |
 | `/result [--json] [--full]` | Print the last finished task's result as sections (`--json`: the envelope as pretty JSON; `--full`: no fold, no per-section caps) |
 | `/resume [--budget <n>] [task-id]` | Continue an interrupted/stalled task with its workspace and files. After a budget abort pass a larger `--budget` (the numbered continue choice does this with a doubled cap) |
 | `/cancel` | Cancel the running task (same as Ctrl+C) |
@@ -266,6 +269,26 @@ agent> /stats
 The numbers come from `GET /api/commands/{id}/stats`, which counts every step as it is appended — exact even for steps the step log no longer retains. `/stats <task-id>` reports another task of this session; against a backend without that endpoint the report is labelled `counted by this session` and can only undercount. A backend that predates the prompt-cache counters simply omits the **cache** line (its `cachedInputTokens` / `cacheWriteInputTokens` / `cacheReported` fields are missing).
 
 The completion line already carries a compact version of these numbers (`· 3 round(s) · 39 tool(s) · 54.4k tokens · cache 80%`), so `/stats` is for the breakdown — rounds vs individual requests, input/output tokens, cache reads/writes, failures and the per-tool counts.
+
+#### `/goal`: what the run is for
+
+```
+agent> /goal
+task 5b0c3f2a · goal r2 · replaced by the operator · round 7
+  only the three cheapest offers
+  reason: operator: /goal
+  plan 2/4 done, 1 dropped, 1 pending
+    ✔ 1. open the offers page
+    ✔ 2. read the prices
+    ✖ 3. export csv — no csv writer
+    ▢ 4. answer with the list
+  done when:
+    - the three prices are in the answer
+  ⚠ 1 step(s) pending — the engine rejects a completion that leaves them open
+  /goal <text> replaces it (the only way to move a running task's goal)
+```
+
+The goal is **engine state, not conversation**: it is re-rendered into every model request, so a run that is compacted, repaired or hours old still knows what it was asked to do. The plan is what the run itself recorded with `goal.plan`; a `✖` step counts as closed only when it carries the reason it was dropped. `/goal` reads `GET /api/commands/{id}/goal` (the same object every status envelope carries as `goal`), `/goal <text>` posts to it and is applied at the next round boundary — the change is announced to the model as a user turn and recorded as a `goal.changed` step, while the plan survives. An unattended `agent run` has no operator, so its goal cannot be moved: steer it instead, or submit a new task. Without `--task` the command reports the task this session is following (or last saw). Design: `docs-dev/copilot/agent-goal-mode.md`; the same facts over MCP: `command.goal`.
 
 An optional task runs immediately: `agent run -i "Summarize this page"`. With piped stdin the banner and prompt are omitted, so a harness can drive the session: `printf 'task one\n/quit\n' | browser4-cli agent run -i`.
 

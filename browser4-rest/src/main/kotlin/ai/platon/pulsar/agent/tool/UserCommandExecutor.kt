@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agent.tool
 
 import ai.platon.pulsar.agentic.AgenticSession
+import ai.platon.pulsar.agentic.agents.AgentGoalStatus
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEvent
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEventLog
@@ -598,6 +599,39 @@ class UserCommandExecutor(
         }
         return inputId
     }
+
+    /**
+     * Replace the goal of the running agent task [id].
+     *
+     * The operator's channel (`POST /api/commands/{id}/goal`, `command.goal`,
+     * `/goal <text>`). The change reaches the agent at its next round boundary, is
+     * announced to the model as a user turn and recorded as a `goal.changed` step — the
+     * model itself has no way to redefine the goal
+     * (`docs-dev/copilot/agent-goal-mode.md` §8).
+     *
+     * @return the correlation id of the queued change, or `null` when nothing accepted
+     *   it (unknown task, page visit, or a task that already finished)
+     */
+    fun amendGoal(id: String, text: String, reason: String? = null): String? {
+        val amendmentId = agentRunners.values.firstNotNullOfOrNull { runner ->
+            runner.amendGoal(id, text, reason)
+        }
+        if (amendmentId != null) {
+            logger.info("Queued goal change for agent task {} (amendmentId={})", id, amendmentId)
+        } else {
+            logger.debug("Agent task {} is not accepting a goal change", id)
+        }
+        return amendmentId
+    }
+
+    /**
+     * The goal of [id] as its status carries it, or null when the task is unknown.
+     *
+     * Read from the status row (not from the live agent), so it still answers after the
+     * run ended and after a restart rebuilt the row: "what was this task for" is a fact
+     * about the task, not about the process that ran it.
+     */
+    fun goal(sessionId: String, id: String): AgentGoalStatus? = getStatus(sessionId, id)?.goal
 
     /**
      * Look up a command status by task ID.

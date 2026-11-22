@@ -1013,6 +1013,20 @@ struct MockBrowser4State {
     command_stats_disabled: bool,
     /// Recorded `GET /api/commands/{id}/stats` task ids.
     command_stats_calls: Vec<String>,
+    /// Scripted `goal` objects per task id, served by `GET /api/commands/{id}/goal`.
+    ///
+    /// The endpoint answers `{taskId, goal, isDone}`; only the `goal` object is
+    /// scripted here — the goal text, the plan the run committed to and the counts
+    /// the backend derived — because that is what `/goal` renders
+    /// (`docs-dev/copilot/agent-goal-mode.md`).
+    custom_command_goals: HashMap<String, serde_json::Value>,
+    /// Recorded `GET /api/commands/{id}/goal` task ids, in order.
+    command_goal_calls: Vec<String>,
+    /// Recorded `POST /api/commands/{id}/goal` changes as (task id, new text).
+    command_goal_changes: Vec<(String, String)>,
+    /// When true, `POST /api/commands/{id}/goal` answers `accepted=false` — the
+    /// operator typed a change for a task that is no longer running.
+    command_goal_refused: bool,
     /// Scripted trace listings per task id, served by `GET /api/commands/{id}/trace`.
     ///
     /// The backend serves what a run actually wrote (artifact names, sizes, last write); the
@@ -1333,6 +1347,47 @@ impl MockBrowser4Server {
             .expect("mock Browser4 state mutex poisoned")
             .command_stats_calls
             .clone()
+    }
+
+    /// Script the `goal` object `GET /api/commands/{id}/goal` serves for [task_id]
+    /// (the interactive session's `/goal` command and the supervise panel).
+    ///
+    /// Only the goal is scripted — `taskId` and `isDone` are built by the mock from
+    /// the same terminal event the other command endpoints derive the status from, so
+    /// a test states the goal text, plan and counts and nothing else.
+    fn set_command_goal(&self, task_id: &str, goal: serde_json::Value) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .custom_command_goals
+            .insert(task_id.to_string(), goal);
+    }
+
+    /// Task ids whose goal was read, in order.
+    fn command_goal_calls(&self) -> Vec<String> {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .command_goal_calls
+            .clone()
+    }
+
+    /// Recorded goal changes as (task id, new text).
+    fn command_goal_changes(&self) -> Vec<(String, String)> {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .command_goal_changes
+            .clone()
+    }
+
+    /// Make `POST /api/commands/{id}/goal` answer `accepted=false`, the way a real
+    /// backend answers a change for a task that already finished.
+    fn refuse_command_goal_changes(&self) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .command_goal_refused = true;
     }
 
     /// Set a custom response for the `browser_snapshot` tool.  When set, every
@@ -2143,6 +2198,50 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             .to_string();
             write_http_response(&mut stream, "200 OK", "application/json", &response);
         }
+        // ---- the goal of a task (interactive `/goal`, supervise panel) ----
+        _ if method == "GET"
+            && route.starts_with("/api/commands/")
+            && route.ends_with("/goal") =>
+        {
+            let Some(task_id) = route
+                .strip_prefix("/api/commands/")
+                .and_then(|rest| rest.strip_suffix("/goal"))
+            else {
+                write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+                return;
+            };
+
+            let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
+            guard.command_goal_calls.push(task_id.to_string());
+            let goal = guard
+                .custom_command_goals
+                .get(task_id)
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            // Same terminal-step signal the stats route uses: a task is done once a
+            // scripted `task.done`/`task.failed`/`task.cancelled` step was served.
+            let done = guard
+                .custom_command_events
+                .get(task_id)
+                .map(|events| {
+                    events.iter().any(|event| {
+                        matches!(
+                            event.get("type").and_then(|value| value.as_str()),
+                            Some("task.done") | Some("task.failed") | Some("task.cancelled")
+                        )
+                    })
+                })
+                .unwrap_or(false);
+            drop(guard);
+
+            let response = serde_json::json!({
+                "taskId": task_id,
+                "goal": goal,
+                "isDone": done,
+            })
+            .to_string();
+            write_http_response(&mut stream, "200 OK", "application/json", &response);
+        }
         _ if method == "POST"
             && route.starts_with("/api/commands/")
             && route.ends_with("/input") =>
@@ -2174,6 +2273,58 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 "taskId": task_id,
                 "accepted": true,
                 "message": "queued: the agent sees it at its next model round",
+            })
+            .to_string();
+            write_http_response(&mut stream, "200 OK", "application/json", &response);
+        }
+        // ---- replacing the goal (the operator's channel: `/goal <text>`) ----
+        _ if method == "POST"
+            && route.starts_with("/api/commands/")
+            && route.ends_with("/goal") =>
+        {
+            let Some(task_id) = route
+                .strip_prefix("/api/commands/")
+                .and_then(|rest| rest.strip_suffix("/goal"))
+            else {
+                write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+                return;
+            };
+            let text = serde_json::from_str::<serde_json::Value>(
+                String::from_utf8_lossy(&body).as_ref(),
+            )
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("text")
+                        .and_then(|text| text.as_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+
+            let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
+            guard
+                .command_goal_changes
+                .push((task_id.to_string(), text.clone()));
+            let refused = guard.command_goal_refused;
+            // The revision the change produces: the scripted goal's revision + 1. A
+            // refused change leaves the goal alone, so it reports the current one.
+            let current = guard
+                .custom_command_goals
+                .get(task_id)
+                .and_then(|goal| goal.get("revision"))
+                .and_then(|value| value.as_u64());
+            drop(guard);
+
+            let response = serde_json::json!({
+                "taskId": task_id,
+                "accepted": !refused,
+                "message": if refused {
+                    "task is not running or has no goal channel"
+                } else {
+                    "queued: the agent applies it at its next round and is told about it"
+                },
+                "amendmentId": if refused { serde_json::Value::Null } else { serde_json::json!("amendment-1") },
+                "revision": if refused { current } else { current.map(|revision| revision + 1) },
             })
             .to_string();
             write_http_response(&mut stream, "200 OK", "application/json", &response);

@@ -49,10 +49,11 @@ the line that approves them, and reports the step log's retained window (`resync
 reader fell behind). `--json` returns the same facts as one object.
 
 > The three sources it aggregates are public: `command_status` (its envelope now carries
-> `mutations`, `readOnlyRounds` and `failureDetail`), `GET /api/commands/{id}/stats` and
-> `GET /api/commands/{id}/events` (decision steps with a bounded `detail`), plus
+> `mutations`, `readOnlyRounds`, `failureDetail` and the run's `goal`), `GET /api/commands/{id}/stats`
+> and `GET /api/commands/{id}/events` (decision steps with a bounded `detail`), plus
 > `GET /api/agent/{id}/access`. An MCP-only client reaches the same facts through
-> `command.events` / `command.stats` / `command.input`; there is no CLI-only magic here.
+> `command.events` / `command.stats` / `command.input` / `command.goal`; there is no
+> CLI-only magic here.
 ### The full audit trail: `agent trace`
 
 The step log is a **summary** — bounded, previewed, safe to follow live. `agent trace <task-id>`
@@ -310,6 +311,51 @@ the same async task. The step and `--ndjson` shapes, result rendering, the compl
 the session's context, steering and slash commands (including `/stats`), backend
 requirements and step-stream failure handling are in
 [agent-progress-sessions.md](agent-progress-sessions.md).
+
+## The goal and the plan (`/goal`)
+
+Every agent task runs under a **goal**: the instruction it was submitted with. The goal is
+engine state, not part of the message history, so it is re-rendered into **every** model
+request — compaction, repair rounds and hours of elapsed time cannot make the run forget
+what it was asked to do. A task may also record what it intends to do with the `goal.plan`
+tool (a short plan of steps with `done`/`dropped` status), and a completion report that
+leaves a declared step open is rejected instead of accepted as "done".
+
+```bash
+browser4-cli agent run -i            # then, inside the session:
+#   /goal                          the goal, the plan and the steps still owed
+#   /goal --json                   the same facts as one JSON object
+#   /goal --task <id>              another task of this session
+#   /goal <text>                   replace the running task's goal
+```
+
+`/goal` prints the goal text with its revision and origin (`goal r2 · replaced by the
+operator`), the plan's progress (`2/4 done, 1 dropped, 1 pending`), every step with its
+marker (`✔` done, `✖` dropped with the reason that closes it, `▢` pending), the `done when:`
+acceptance items when the run declared them, and a warning when steps are still open. The
+supervision panel carries the same fact as one line (`goal  <text> · plan 2/5`).
+
+Replacing the goal is the **operator's channel only**: no tool and no prompt lets the model
+reach it, which is what makes "the run does not drift" a property of the engine rather than
+a hope about the model. The change is applied at the next round boundary, announced to the
+model as a user turn, and recorded as a `goal.changed` step; the plan survives it (the plan
+is progress, the goal is the target), so the run continues from where it was toward a
+different target. An unattended `agent run` has no operator, so its goal is immutable by
+design — steer it with `/`-free input over `command.input`, or submit a new task.
+
+The same target is served without the CLI:
+
+| Surface | Shape |
+|---|---|
+| REST | `GET /api/commands/{id}/goal` → `{taskId, goal, isDone}`; `POST /api/commands/{id}/goal` `{text, reason?}` → `{accepted, message, amendmentId, revision}` |
+| MCP | `command.goal(id)` reads, `command.goal(id, text)` replaces |
+| Status envelope | `goal` on every `command_status` / `agent status` / `agent supervise` |
+
+Configuration (`docs/config.md`): `browser4.agent.goal.mode` (`pinned` default, `off` restores
+the pre-goal-mode engine), `browser4.agent.goal.maxChars` (800), `browser4.agent.goal.maxSteps`
+(12), `browser4.agent.goal.reassertEveryRounds` (6) and `browser4.agent.finish.planCheck`
+(`reject`, `warn` logs only). Design and residual risks:
+`docs-dev/copilot/agent-goal-mode.md`.
 
 ## Flags
 

@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.entities
 
+import ai.platon.pulsar.agentic.agents.AgentGoalStatus
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEvent
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEventPage
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskRunStats
@@ -231,3 +232,54 @@ data class CommandInputResponse(
     val message: String? = null,
     val inputId: String? = null,
 )
+
+/**
+ * The goal of one agent task (`GET /api/commands/{id}/goal`).
+ *
+ * Answering with the goal rather than with the whole status row means a client can ask
+ * the one question goal mode exists for — "what is this run for, and is it still on it"
+ * — without pulling a status envelope whose agent history can be large.
+ *
+ * @property taskId the task the goal belongs to
+ * @property goal the goal and the plan the run committed to; `null` for a task that
+ *   never ran under goal mode (a page visit, or a row written before the field existed)
+ * @property isDone whether the task is terminal, i.e. whether the plan can still change
+ * */
+data class CommandGoalResponse(
+    val taskId: String,
+    val goal: AgentGoalStatus? = null,
+    val isDone: Boolean = false,
+)
+
+/**
+ * Body of `POST /api/commands/{id}/goal` — the operator replacing a task's goal.
+ *
+ * @property text the new goal, verbatim; blank is rejected (`400`)
+ * @property reason optional operator note recorded with the change (`goal.changed`)
+ * */
+data class CommandGoalRequest(
+    val text: String = "",
+    val reason: String? = null,
+)
+
+/**
+ * Answer of `POST /api/commands/{id}/goal`.
+ *
+ * `accepted=false` is a normal answer (the task finished while the operator was
+ * writing) and is reported inline rather than as an HTTP error, exactly like
+ * [CommandInputResponse].
+ *
+ * @property taskId the task the change was aimed at
+ * @property accepted whether a live run took the change
+ * @property message why it was or was not accepted
+ * @property amendmentId correlation id, repeated in the `goal.changed` step's detail
+ * @property revision the goal's revision after the change (1 when nothing changed)
+ * */
+data class CommandGoalChangeResponse(
+    val taskId: String,
+    val accepted: Boolean,
+    val message: String? = null,
+    val amendmentId: String? = null,
+    val revision: Int? = null,
+)
+

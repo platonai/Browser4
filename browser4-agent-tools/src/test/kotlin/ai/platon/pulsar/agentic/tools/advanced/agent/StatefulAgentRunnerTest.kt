@@ -2,8 +2,11 @@ package ai.platon.pulsar.agentic.tools.advanced.agent
 
 import ai.platon.browser4.common.B4Constants
 import ai.platon.pulsar.agentic.AgenticSession
+import ai.platon.pulsar.agentic.agents.AgentGoal
 import ai.platon.pulsar.agentic.agents.AgentRunEvent
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
+import ai.platon.pulsar.agentic.agents.GoalStep
+import ai.platon.pulsar.agentic.agents.GoalStepStatus
 import ai.platon.pulsar.agentic.agents.RobustBrowserAgent
 import ai.platon.pulsar.agentic.inference.TokenBudgetExceededException
 import ai.platon.pulsar.agentic.model.AgentHistory
@@ -978,6 +981,52 @@ class StatefulAgentRunnerTest {
             assertNull(runner.enqueueInput("unknown-task", "hello"))
             assertNull(runner.enqueueInput(status.id, "   "))
             assertTrue(runner.drainInputs(status.id).isEmpty())
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("a goal change is queued for a live task and refused for a dead one")
+    fun aGoalChangeIsQueuedOnlyForALiveTask() {
+        val runner = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))
+        try {
+            val status = runner.create()
+
+            val amendmentId = assertNotNull(
+                runner.amendGoal(status.id, "  only the three cheapest offers  ", "operator: /goal")
+            )
+            val drained = runner.drainGoalAmendments(status.id)
+            assertEquals(1, drained.size)
+            assertEquals("only the three cheapest offers", drained.single().text)
+            assertEquals("operator: /goal", drained.single().reason)
+            assertEquals(amendmentId, drained.single().id, "the id the caller was told is the one delivered")
+            assertTrue(runner.drainGoalAmendments(status.id).isEmpty(), "draining is destructive")
+
+            assertNull(runner.amendGoal("unknown-task", "x"), "an unknown id has no drainer")
+            assertNull(runner.amendGoal(status.id, "   "), "a blank goal is not a goal")
+
+            status.done()
+            assertNull(runner.amendGoal(status.id, "too late"), "a finished task has no drainer")
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("the goal rides the status snapshot so a finished task still says what it was for")
+    fun theGoalRidesTheStatusSnapshot() {
+        val runner = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))
+        try {
+            val status = runner.create()
+            val view = AgentGoal.fromInstruction("extract the price of the product")
+                .withPlan(listOf(GoalStep("open the page", GoalStepStatus.DONE), GoalStep("read the price")))
+                .statusView(round = 3)
+            status.goal = view
+
+            assertEquals(view, status.detachedSnapshot().goal, "the snapshot is what a restart rebuilds")
+            assertEquals(2, status.detachedSnapshot().goal?.steps?.size)
+            assertEquals(1, status.detachedSnapshot().goal?.pending)
         } finally {
             runner.close()
         }

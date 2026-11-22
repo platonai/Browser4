@@ -34,6 +34,7 @@ mod star_guide;
 mod state;
 mod tips;
 mod update_check;
+mod agent_goal;
 mod agent_interactive;
 mod agent_result;
 mod agent_supervise;

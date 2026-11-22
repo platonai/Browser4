@@ -147,7 +147,7 @@ data class AgentRunEvent(
         /** The report's `filesChanged` was completed from the mutation trace (`detail`: added[], source). */
         const val FINISH_AMEND = "finish.amend"
 
-        /** The engine injected a correction (`detail`: kind=coding|budget, …). */
+        /** The engine injected a correction (`detail`: kind=coding|budget|goal, …). */
         const val NUDGE = "nudge"
 
         /** The isolation gate decided on the merge (`detail`: decision, changedFiles, reason). */
@@ -158,6 +158,25 @@ data class AgentRunEvent(
 
         /** `detail.kind` of a [NUDGE] raised by the token-budget thresholds. */
         const val NUDGE_BUDGET = "budget"
+
+        // ── Goal events (docs-dev/copilot/agent-goal-mode.md) ────────────────
+        //
+        // The goal is engine state, so the only way a supervisor can see it — or see
+        // that it was redefined — is through these. The goal itself is pinned into
+        // every request (`AgentGoal.pinnedBlock`); a run cannot be talked out of it by
+        // compaction, and no tool can replace it.
+
+        /** A run started with a goal pinned (`detail`: text, source, maxChars). */
+        const val GOAL_PINNED = "goal.pinned"
+
+        /** The run's plan progressed (`detail`: steps, done, pending, dropped, planRevision). */
+        const val PLAN_UPDATE = "plan.update"
+
+        /** The operator replaced the goal mid-run (`detail`: revision, previous, reason). */
+        const val GOAL_CHANGED = "goal.changed"
+
+        /** `detail.kind` of a [NUDGE] that re-anchors a long run to its goal. */
+        const val NUDGE_GOAL = "goal"
     }
 }
 

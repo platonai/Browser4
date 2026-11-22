@@ -5,6 +5,7 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.agents.AgentRunEvent
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
+import ai.platon.pulsar.agentic.agents.PendingGoalAmendment
 import ai.platon.pulsar.agentic.agents.PendingUserMessage
 import ai.platon.pulsar.agentic.agents.RobustBrowserAgent
 import ai.platon.pulsar.agentic.agents.RunPhase
@@ -172,6 +173,19 @@ open class StatefulAgentRunner(
      * [drainUndeliveredSteering] reports it and keeps it for the next task.
      */
     private val pendingFollowUps = ConcurrentHashMap<String, ConcurrentLinkedQueue<PendingUserMessage>>()
+
+    /**
+     * Operator goal changes queued for a running task, keyed by task id.
+     *
+     * The **only** way a running task's goal can move (`command.goal`,
+     * `/goal <text>`). The model cannot reach this queue; neither can any tool. Drained
+     * at the run's round boundary by
+     * [RobustBrowserAgent.goalAmendmentSource], and removed when the task ends.
+     *
+     * A one-shot `agent run` simply never receives one, which is why its goal is stable
+     * for the whole run — not a policy gate, just the absence of an operator.
+     */
+    private val pendingGoalAmendments = ConcurrentHashMap<String, ConcurrentLinkedQueue<PendingGoalAmendment>>()
 
     /** Guards [pendingInputs] so an enqueue can never race a drain (see [enqueueInput]). */
     private val inputLock = Any()
@@ -727,6 +741,59 @@ open class StatefulAgentRunner(
      */
     fun drainFollowUps(id: String): List<PendingUserMessage> = drainQueue(pendingFollowUps, id)
 
+    /**
+     * Replace the goal of the running task [id] with [text].
+     *
+     * The operator's channel and nothing else: `POST /api/commands/{id}/goal`,
+     * `command.goal`, `/goal <text>` in an interactive session. The agent applies it at
+     * its next round boundary, announces it to the model as a user turn, and records a
+     * [AgentTaskEvents.TYPE_GOAL_CHANGED] step, so a redefined target is never silent
+     * (docs-dev/copilot/agent-goal-mode.md §8).
+     *
+     * The run's plan is kept: what moved is the target, not the work in flight.
+     *
+     * @return the correlation id of the queued change, or `null` when the task is
+     *   unknown, already finished, or the text is blank — the three cases where a 202
+     *   would be a lie
+     */
+    fun amendGoal(id: String, text: String, reason: String? = null): String? {
+        val goal = text.trim()
+        if (goal.isEmpty()) return null
+        val status = statusCache.getIfPresent(id) ?: return null
+        if (status.isDone) return null
+        val amendmentId = UUID.randomUUID().toString()
+        synchronized(inputLock) {
+            // Re-checked inside the lock for the same reason as [enqueueInput]: the task
+            // may have ended between the check above and the add, and the terminal path
+            // already drained (so an entry added here would never be delivered).
+            if (status.isDone) return null
+            pendingGoalAmendments.computeIfAbsent(id) { ConcurrentLinkedQueue() }
+                .add(PendingGoalAmendment(amendmentId, goal, reason?.trim()?.takeIf { it.isNotEmpty() }))
+        }
+        logger.info(
+            "Queued goal change for agent task {} (agentSession={}, {} chars, amendmentId={})",
+            id, session.uuid, goal.length, amendmentId
+        )
+        return amendmentId
+    }
+
+    /**
+     * Drain the goal changes queued for [id].
+     *
+     * Called by the agent at each round boundary; destructive, like
+     * [drainInputs] — the agent reports the returned change as one announcement.
+     */
+    fun drainGoalAmendments(id: String): List<PendingGoalAmendment> = synchronized(inputLock) {
+        val queue = pendingGoalAmendments[id] ?: return emptyList()
+        val drained = ArrayList<PendingGoalAmendment>(1)
+        while (true) {
+            val next = queue.poll() ?: break
+            drained += next
+        }
+        if (queue.isEmpty()) pendingGoalAmendments.remove(id, queue)
+        drained
+    }
+
     /** Poll one task's queue to empty, under [inputLock]. */
     private fun drainQueue(
         queues: ConcurrentHashMap<String, ConcurrentLinkedQueue<PendingUserMessage>>,
@@ -767,6 +834,10 @@ open class StatefulAgentRunner(
      */
     private fun drainUndeliveredSteering(status: AgentTaskStatus) {
         val (leftover, followUps) = synchronized(inputLock) {
+            // The goal queue is dropped rather than reported: an undelivered goal change
+            // cannot be "kept for the next task" (the next task has its own goal), and a
+            // caller who queued it sees the task end before the change took effect.
+            pendingGoalAmendments.remove(status.id)
             pendingInputs.remove(status.id) to pendingFollowUps.remove(status.id)
         }.let { (steeringQueue, followUpQueue) ->
             steeringQueue?.drainAll().orEmpty() to followUpQueue?.drainAll().orEmpty()
@@ -1641,6 +1712,12 @@ open class StatefulAgentRunner(
                 // Follow-ups are delivered only when the loop would stop, so the run
                 // continues the same conversation instead of starting a second task.
                 it.followUpSource = { drainFollowUps(status.id) }
+                // Goal mode: the operator's goal changes (there is no other channel), and
+                // the live goal view the agent publishes as the plan progresses — so
+                // `command.status`, `/goal` and `agent supervise` can answer "what is this
+                // run for, and is it still on it" without reading its steps.
+                it.goalAmendmentSource = { drainGoalAmendments(status.id) }
+                it.goalListener = { view -> status.goal = view }
             }
 
             // Create and wire up ServerSideAgentEventHandlers for this command

@@ -95,6 +95,20 @@ internal class FinishReportRepair(
             used = 0
             return Decision(Action.PASSED)
         }
+        // Rule 9 (goal mode): the run declared a plan and did not finish it. That is
+        // repairable by another round — the step may simply be undone, or it may be
+        // honestly `dropped` with a reason — but it is never AMENDED: unlike an omitted
+        // `filesChanged` entry there is nothing in the run's trace to complete it from.
+        if (verdict.onlyPendingPlan) {
+            if (canRepair && maxRounds > 0 && used < maxRounds) {
+                used++
+                return Decision(
+                    Action.RETRY, used,
+                    formatPlanRepair(verdict, used, maxRounds, maxFeedbackChars),
+                )
+            }
+            return Decision(Action.REJECT, used)
+        }
         if (!verdict.onlyUnlistedFiles || !amendUnlistedFiles) {
             return Decision(Action.REJECT, used)
         }
@@ -161,11 +175,48 @@ internal class FinishReportRepair(
         }
 
         /**
+         * Render the bounded repair message for an unfinished plan (rule 9).
+         *
+         * The goal is NOT negotiable and not repeated here as an option: the message
+         * offers exactly two honest exits — finish the step, or drop it with a reason.
+         * Restating the goal as "you could also change it" would invite the drift the
+         * rule exists to catch.
+         */
+        fun formatPlanRepair(
+            verdict: FinishReportGate.Verdict,
+            round: Int,
+            maxRounds: Int,
+            maxChars: Int = DEFAULT_MAX_FEEDBACK_CHARS,
+        ): String {
+            val open = verdict.pendingPlan
+            val listed = open.take(MAX_LISTED_FILES)
+            val sb = StringBuilder()
+            sb.appendLine(
+                "Finish report round $round/$maxRounds rejected — the plan this run " +
+                    "committed to is unfinished:"
+            )
+            listed.forEachIndexed { index, step -> sb.appendLine("  ${index + 1}. $step") }
+            if (open.size > listed.size) sb.appendLine("  ... (${open.size - listed.size} more open)")
+            sb.append(
+                "Fix: finish those steps, or mark each one dropped in goal.plan with the reason " +
+                    "it cannot be done (a 404 page, a missing credential, an unavailable tool). " +
+                    "Then call system.taskComplete again. The goal itself is pinned by the engine " +
+                    "and cannot be changed from a tool call: if it cannot be met, say so in " +
+                    "problems=[...] instead of finishing on a smaller task."
+            )
+
+            val text = sb.toString().trimEnd()
+            if (text.length <= maxChars) return text
+            val marker = "\n... (plan repair feedback truncated; goal.plan has the full plan)"
+            val budget = (maxChars - marker.length).coerceAtLeast(0)
+            return text.take(budget) + marker
+        }
+
+        /**
          * The report's list plus the files it omitted, de-duplicated by normalized
          * path so `./ev.js` in the report does not come back as `ev.js`.
          */
-        internal fun merge(reported: List<String>, unlisted: List<String>): List<String> {
-            val out = ArrayList<String>(reported.size + unlisted.size)
+        internal fun merge(reported: List<String>, unlisted: List<String>): List<String> {            val out = ArrayList<String>(reported.size + unlisted.size)
             val seen = HashSet<String>()
             fun add(raw: String) {
                 val trimmed = raw.trim()

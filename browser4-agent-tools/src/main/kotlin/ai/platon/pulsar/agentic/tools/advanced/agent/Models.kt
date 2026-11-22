@@ -288,6 +288,23 @@ data class AgentTaskStatus(
     var readOnlyRounds: Int? = null
 
     /**
+     * The goal this task is being run toward, plus the plan the run committed to
+     * (`docs-dev/copilot/agent-goal-mode.md`).
+     *
+     * Every task has one: the goal is the instruction it was submitted with, pinned by
+     * the engine into every request so compaction and elapsed time cannot dilute it, and
+     * replaceable only by an explicit operator call (`command.goal` / `/goal`), never by
+     * the model. A supervisor reads it here — `/goal`, `agent supervise`, a
+     * `command.status` poll — to answer "is this run still working on what it was asked
+     * to", which no amount of prose in the step log can.
+     *
+     * Published by the agent as the plan progresses (`goal.pinned` / `plan.update` /
+     * `goal.changed`) and kept after the run ends, so a finished task's goal survives in
+     * the persisted row.
+     */
+    var goal: ai.platon.pulsar.agentic.agents.AgentGoalStatus? = null
+
+    /**
      * Machine-readable failure reason (`TOKEN_BUDGET`, `NOOP_LIMIT`, `CANCELLED`,
      * `TOOL_ERROR`), derived from [failureReason] by [failureCodeOf].
      *
@@ -487,5 +504,6 @@ fun AgentTaskStatus.detachedSnapshot(includeHistory: Boolean = true): AgentTaskS
     snapshot.failureDetail = failureDetail
     snapshot.mutations = mutations
     snapshot.readOnlyRounds = readOnlyRounds
+    snapshot.goal = goal
     return snapshot
 }

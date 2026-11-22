@@ -8,6 +8,9 @@ import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.rest.api.entities.CommandEvents
 import ai.platon.pulsar.rest.api.entities.CommandEventsResponse
+import ai.platon.pulsar.rest.api.entities.CommandGoalChangeResponse
+import ai.platon.pulsar.rest.api.entities.CommandGoalRequest
+import ai.platon.pulsar.rest.api.entities.CommandGoalResponse
 import ai.platon.pulsar.rest.api.entities.CommandInputRequest
 import ai.platon.pulsar.rest.api.entities.CommandInputResponse
 import ai.platon.pulsar.rest.api.entities.CommandResult
@@ -360,6 +363,84 @@ class CommandController(
                 isDone = status?.isDone ?: false,
                 elapsedMs = elapsedMs,
                 stats = stats,
+            )
+        )
+    }
+
+    /**
+     * The goal of an agent task and the plan the run committed to.
+     *
+     * Goal mode (`docs-dev/copilot/agent-goal-mode.md`) pins the task's instruction into
+     * every model request, so a run cannot forget its goal however long it runs; this
+     * endpoint is how a supervisor reads that goal and its plan's progress without
+     * pulling a status envelope whose agent history can be large.
+     *
+     * It reads the status row rather than the live agent, so it keeps answering after the
+     * run ended and after a restart rebuilt the row: what the task was for is a fact
+     * about the task, not about the process that ran it.
+     *
+     * @param id task id
+     * @param sessionId optional session, used only to find the owning runner
+     * @return `200` + [CommandGoalResponse] (`goal` is null when the task never ran under
+     *   goal mode), `404` when the id is unknown
+     */
+    @GetMapping("/{id}/goal")
+    fun getGoal(
+        @PathVariable id: String,
+        @RequestParam(name = "sessionId", required = false) sessionId: String? = null,
+    ): ResponseEntity<CommandGoalResponse> {
+        val effectiveSessionId = SessionResolution.firstNamedOrDefault(sessionId)
+        val status = commandExecutor.getStatus(effectiveSessionId, id)
+            ?: return ResponseEntity.notFound().build()
+        return ResponseEntity.ok(
+            CommandGoalResponse(taskId = id, goal = status.goal, isDone = status.isDone)
+        )
+    }
+
+    /**
+     * Replace the goal of a running agent task — the operator's channel, and the only one.
+     *
+     * The model has no route here (no tool, no prompt) — that is what makes "the run does
+     * not drift" a property of the engine instead of a hope about the model. A change is
+     * applied at the agent's next round boundary, announced to the model as a user turn,
+     * and recorded as a `goal.changed` step carrying the caller's [CommandGoalRequest.reason]
+     * and the new revision.
+     *
+     * `accepted=false` is a normal answer (the task finished while the operator was
+     * writing) and is reported inline rather than as an HTTP error, exactly like
+     * [postInput]. A page visit — which has no goal — is refused the same way.
+     *
+     * @param id task id
+     * @param request the new goal text
+     * @return `200` + [CommandGoalChangeResponse]; `400` for a blank text
+     */
+    @PostMapping("/{id}/goal")
+    fun postGoal(
+        @PathVariable id: String,
+        @RequestBody request: CommandGoalRequest,
+        @RequestParam(name = "sessionId", required = false) sessionId: String? = null,
+    ): ResponseEntity<CommandGoalChangeResponse> {
+        val text = request.text.trim()
+        if (text.isEmpty()) {
+            return ResponseEntity.badRequest().body(
+                CommandGoalChangeResponse(id, accepted = false, message = "text must not be blank")
+            )
+        }
+
+        val amendmentId = commandExecutor.amendGoal(id, text, request.reason)
+        val accepted = amendmentId != null
+        val status = commandExecutor.getStatus(SessionResolution.firstNamedOrDefault(sessionId), id)
+        return ResponseEntity.ok(
+            CommandGoalChangeResponse(
+                taskId = id,
+                accepted = accepted,
+                message = if (accepted) {
+                    "queued: the agent applies it at its next round and is told about it"
+                } else {
+                    "task is not running or has no goal channel"
+                },
+                amendmentId = amendmentId,
+                revision = status?.goal?.revision,
             )
         )
     }

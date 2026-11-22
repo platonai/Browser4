@@ -1280,6 +1280,52 @@ pub async fn get_command_trace_file(
     .await
 }
 
+/// Fetch a task's goal and the plan the run committed to:
+/// `GET /api/commands/{id}/goal`.
+///
+/// Every agent task runs under a goal — the instruction it was submitted with, pinned by
+/// the engine into every model request — so this answers "what is this run for, and is it
+/// still on it" without pulling a status envelope whose agent history can be large.
+/// A 404 means the id is unknown (finished and aged out, or another process's task).
+pub async fn get_command_goal(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<RestResponse, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/commands/{task_id}/goal"));
+    send_rest_response(
+        client
+            .get(url)
+            .timeout(std::time::Duration::from_secs(30)),
+    )
+    .await
+}
+
+/// Replace the goal of a running task: `POST /api/commands/{id}/goal`.
+///
+/// The operator's only channel for moving a target the model cannot move — the change
+/// reaches the agent at its next round boundary and is recorded as a `goal.changed` step.
+pub async fn post_command_goal(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+    text: &str,
+    reason: Option<&str>,
+) -> Result<RestResponse, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/commands/{task_id}/goal"));
+    let mut body = serde_json::json!({ "text": text });
+    if let Some(reason) = reason.map(str::trim).filter(|reason| !reason.is_empty()) {
+        body["reason"] = serde_json::Value::String(reason.to_string());
+    }
+    send_rest_response(
+        client
+            .post(url)
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(30)),
+    )
+    .await
+}
+
 /// Queue a user message for a running agent task:
 /// `POST /api/commands/{id}/input`.
 ///

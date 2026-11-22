@@ -40,6 +40,17 @@ class FinishReportRepairTest {
             warnings = emptyList(),
         )
 
+    /** Rule 9: the run declared a plan and left steps open (goal mode). */
+    private fun unfinishedPlan(vararg steps: String): FinishReportGate.Verdict =
+        FinishReportGate.Verdict(
+            violations = listOf(
+                "the plan this run committed to is unfinished: ${steps.size} step(s) still pending — " +
+                    steps.take(5).joinToString("; ")
+            ),
+            warnings = emptyList(),
+            pendingPlan = steps.toList(),
+        )
+
     @Test
     @DisplayName("a passing report needs no repair")
     fun passingReportIsAccepted() {
@@ -164,8 +175,7 @@ class FinishReportRepairTest {
 
     @Test
     @DisplayName("the repair message stays bounded on a long omission list")
-    fun repairMessageIsBounded() {
-        val files = (1..FinishReportRepair.MAX_LISTED_FILES + 5).map { "scratch$it.js" }
+    fun repairMessageIsBounded() {        val files = (1..FinishReportRepair.MAX_LISTED_FILES + 5).map { "scratch$it.js" }
 
         val message = FinishReportRepair.formatRepair(omission(*files.toTypedArray()), round = 1, maxRounds = 3)
 
@@ -178,5 +188,37 @@ class FinishReportRepairTest {
         )
         assertTrue(truncated.length <= 200, "length=${truncated.length}")
         assertTrue(truncated.contains("truncated"), truncated)
+    }
+
+    @Test
+    @DisplayName("an unfinished plan gets one repair round, then the task fails")
+    fun anUnfinishedPlanIsRepairedThenRejected() {
+        val policy = FinishReportRepair(maxRounds = 2)
+        val verdict = unfinishedPlan("extract the price", "write out/price.json")
+
+        val first = policy.decide(verdict)
+        assertEquals(FinishReportRepair.Action.RETRY, first.action)
+        assertEquals(1, first.round)
+        assertNull(first.amendedFiles, "an unfinished plan is never amended from the trace")
+        val message = first.message.orEmpty()
+        assertTrue(message.contains("1. extract the price"), message)
+        assertTrue(message.contains("2. write out/price.json"), message)
+        assertTrue(message.contains("mark each one dropped in goal.plan"), message)
+        assertTrue(message.contains("cannot be changed from a tool call"), message)
+
+        assertEquals(FinishReportRepair.Action.RETRY, policy.decide(verdict).action)
+
+        val exhausted = policy.decide(verdict)
+        assertEquals(FinishReportRepair.Action.REJECT, exhausted.action)
+        assertNull(exhausted.amendedFiles, "there is nothing in the trace to complete a plan from")
+    }
+
+    @Test
+    @DisplayName("a plan repair is refused outright when the loop cannot take another round")
+    fun anUnfinishedPlanWithoutARoundLeftFails() {
+        val decision = FinishReportRepair(maxRounds = 3).decide(unfinishedPlan("extract the price"), canRepair = false)
+
+        assertEquals(FinishReportRepair.Action.REJECT, decision.action)
+        assertNull(decision.message)
     }
 }

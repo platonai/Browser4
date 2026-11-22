@@ -355,6 +355,74 @@ class CommandToolExecutor(
             ),
         )
 
+        /**
+         * `command.goal`: read the goal of a task, or replace it as the operator.
+         *
+         * One method for both directions because they are one question — "what is this
+         * task for" — with an optional answer: without `text` it reads, with `text` it
+         * changes. The MCP-only supervisor of issue #652's acceptance criteria needs
+         * both, and a separate read tool would be a second name for the same fact.
+         */
+        toolSpec["goal"] = ToolSpec(
+            domain = domain,
+            method = "goal",
+            arguments = listOf(
+                ToolSpec.Arg("id", "String", null, "Task id returned by `command.run`. Required."),
+                ToolSpec.Arg(
+                    "text", "String?", "null",
+                    "Omit to READ the goal and the plan's progress; supply to REPLACE the " +
+                        "goal of the running task (the operator's only channel — the model " +
+                        "itself cannot change it).",
+                ),
+                ToolSpec.Arg(
+                    "reason", "String?", "null",
+                    "Optional operator note recorded with the change (`goal.changed`).",
+                ),
+            ),
+            returnType = "String",
+            description = "Read a command task's goal and plan progress, or replace its goal " +
+                "as the operator.",
+            help = """
+                command.goal(id: String, text?: String, reason?: String)
+
+                Every agent task runs under a goal: the instruction it was submitted with,
+                pinned into every model request by the engine, so compaction and elapsed
+                time cannot make the run forget it. The answer carries `goal.text`,
+                `goal.source` (`instruction` or `operator`), `goal.revision`, the plan
+                (`goal.steps[]` with `text`/`status`/`reason`), `goal.doneWhen[]` and the
+                counts `pending`/`done`/`dropped`.
+
+                Without `text` this is a read: use it to decide whether a long run is still
+                working on what it was asked to — a plan with `pending` steps and no
+                mutations is the earliest sign it is not.
+
+                With `text` it REPLACES the goal of the live task: the change reaches the
+                agent at its next round boundary, is announced to the model as a user turn,
+                and is recorded as a `goal.changed` step carrying `revision`, `previous` and
+                your `reason`. `accepted=false` is a normal race (the task finished while you
+                were writing) and comes with the reason instead of an error.
+
+                This is the only channel that may move a goal: no tool the model can call
+                rewrites it. A run that cannot meet its goal must report that
+                (`problems` in `system.taskComplete`) or drop the plan step with a reason.
+            """.trimIndent(),
+            outputSchema = TaskEnvelopes.STATUS_SCHEMA,
+            examples = listOf(
+                ToolExample(
+                    title = "Read what a long run is for",
+                    args = mapOf("id" to "5c3a1f2e-9b47-4d21-8f0a-1e6b7c8d9a01"),
+                ),
+                ToolExample(
+                    title = "Narrow the goal of a running task",
+                    args = mapOf(
+                        "id" to "5c3a1f2e-9b47-4d21-8f0a-1e6b7c8d9a01",
+                        "text" to "only the three cheapest offers; skip the rest",
+                        "reason" to "operator narrowed the scope mid-run",
+                    ),
+                ),
+            ),
+        )
+
         toolSpec["input"] = ToolSpec(
             domain = domain,
             method = "input",
@@ -669,6 +737,55 @@ class CommandToolExecutor(
                 pulsarObjectMapper().writeValueAsString(envelopeOf(status) + payload)
             }
 
+            // command.goal(id: String, text?: String, reason?: String)
+            "goal" -> {
+                validateArgs(
+                    args, allowed = setOf("id", "text", "reason") + SESSION_ARG,
+                    required = setOf("id"), functionName
+                )
+                val sessionId = paramString(args, "sessionId", functionName, default = DEFAULT_SESSION_ID)!!
+                val id = paramString(args, "id", functionName)!!
+                val text = paramString(args, "text", functionName, required = false)?.trim()
+                val status = service.getStatus(sessionId, id) ?: CommandStatus.notFound(id)
+
+                if (text.isNullOrEmpty()) {
+                    // READ: the goal and the plan as the task carries them. `null` for a
+                    // page visit or a run from before goal mode, which the payload says
+                    // out loud instead of answering with an empty object.
+                    val payload = linkedMapOf<String, Any?>(
+                        "taskId" to id,
+                        "isDone" to status.isDone,
+                        "goal" to status.goal,
+                        "message" to if (status.goal == null) {
+                            "no goal recorded for this task (a page visit, or a run older than goal mode)"
+                        } else {
+                            status.goal?.summary()
+                        },
+                    )
+                    pulsarObjectMapper().writeValueAsString(envelopeOf(status) + payload)
+                } else {
+                    // CHANGE: the operator's channel. There is no tool the model can call
+                    // that reaches this branch — that asymmetry is what makes the goal
+                    // non-negotiable from inside the run.
+                    val reason = paramString(args, "reason", functionName, required = false)
+                    val amendmentId = service.amendGoal(id, text, reason)
+                    val accepted = amendmentId != null
+                    val after = service.getStatus(sessionId, id) ?: status
+                    val payload = linkedMapOf<String, Any?>(
+                        "accepted" to accepted,
+                        "message" to if (accepted) {
+                            "queued: the agent applies it at its next round and is told about it"
+                        } else {
+                            "task is not running or has no goal channel"
+                        },
+                        "amendmentId" to amendmentId,
+                        "revision" to after.goal?.revision,
+                        "goal" to after.goal,
+                    )
+                    pulsarObjectMapper().writeValueAsString(envelopeOf(status) + payload)
+                }
+            }
+
             else -> throw IllegalArgumentException("Unsupported command method: $functionName(${args.keys})")
         }
     }
@@ -745,6 +862,10 @@ class CommandToolExecutor(
             // Structured failure evidence (P0-C): a poll of the envelope answers "which
             // gate rule, which files, which check" without a second call.
             failureDetail = status.failureDetail,
+            // The goal and its plan (goal mode): the same poll answers "what is this run
+            // for, and is it still on it", which no amount of prose in the steps can.
+            goal = status.goal,
+            goalTool = "command_goal",
         )
     }
 
@@ -764,6 +885,8 @@ class CommandToolExecutor(
         "cancelTool" to "command_cancel",
         "eventsTool" to "command_events",
         "statsTool" to "command_stats",
+        // Goal mode: what the run is for, and the one channel that may move it.
+        "goalTool" to "command_goal",
     )
 
     /** Wall-clock run time of [status], or `null` when it never started. */

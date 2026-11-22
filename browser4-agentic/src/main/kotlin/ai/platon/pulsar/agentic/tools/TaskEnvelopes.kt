@@ -76,11 +76,13 @@ object TaskEnvelopes {
             "mutations": {"type": "integer"},
             "readOnlyRounds": {"type": "integer"},
             "failureDetail": {"type": "object"},
+            "goal": {"type": "object"},
             "statusTool": {"type": "string"},
             "resultTool": {"type": "string"},
             "cancelTool": {"type": "string"},
             "eventsTool": {"type": "string"},
-            "statsTool": {"type": "string"}
+            "statsTool": {"type": "string"},
+            "goalTool": {"type": "string"}
           }
         }
     """.trimIndent()
@@ -200,11 +202,14 @@ object TaskEnvelopes {
         mutations: Long? = null,
         readOnlyRounds: Int? = null,
         failureDetail: Map<String, Any?>? = null,
+        /** The task's goal and plan (`docs-dev/copilot/agent-goal-mode.md`), when it has one. */
+        goal: Any? = null,
         statusTool: String? = null,
         resultTool: String? = null,
         cancelTool: String? = null,
         eventsTool: String? = null,
         statsTool: String? = null,
+        goalTool: String? = null,
     ): Map<String, Any> {
         val envelope = linkedMapOf<String, Any>(
             "taskId" to taskId,
@@ -226,11 +231,15 @@ object TaskEnvelopes {
         // is what a supervisor polls, and "which rule, which check" must not require a
         // second call to `/events` (issue #652, P0-C).
         failureDetail?.takeIf { it.isNotEmpty() }?.let { envelope["failureDetail"] = it }
+        // The goal travels with the status for the same reason: "what is this run for, and
+        // is it still on it" must be answerable from the poll a supervisor already makes.
+        goal?.let { envelope["goal"] = it }
         statusTool?.let { envelope["statusTool"] = it }
         resultTool?.let { envelope["resultTool"] = it }
         cancelTool?.let { envelope["cancelTool"] = it }
         eventsTool?.let { envelope["eventsTool"] = it }
         statsTool?.let { envelope["statsTool"] = it }
+        goalTool?.let { envelope["goalTool"] = it }
         return envelope
     }
 

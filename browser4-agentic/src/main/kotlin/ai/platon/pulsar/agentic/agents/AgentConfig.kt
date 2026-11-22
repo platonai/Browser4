@@ -119,6 +119,21 @@ data class AgentConfig(
     val finishUnlistedFiles: String =
         System.getProperty("browser4.agent.finish.unlistedFiles", "amend"),
     /**
+     * What the finish gate does when the plan the run declared (`goal.plan`) still has
+     * open steps at completion (rule 9, goal mode).
+     *
+     * - `reject` (default): the pending steps go back to the model for up to
+     *   [repairMaxRounds] rounds (finish them, or drop them with a reason); when the
+     *   budget is spent the task fails with the open steps as evidence. An unfinished
+     *   plan is never amended from the trace — there is nothing to amend it with.
+     * - `warn`: log only, accept the completion. For deployments whose models write
+     *   plans optimistically and whose operators accept the gap.
+     *
+     * Configurable via `-Dbrowser4.agent.finish.planCheck=warn`.
+     */
+    val finishPlanCheck: String =
+        System.getProperty("browser4.agent.finish.planCheck", "reject"),
+    /**
      * Repair-round budget (plan P1.3): when the latest `coding.verify` verdict
      * failed, the engine feeds the structured diagnostics back and lets the
      * model repair, up to this many rounds, then fails the task with the

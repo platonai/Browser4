@@ -614,6 +614,151 @@ pub(super) fn test_agent_run_interactive_reports_run_statistics(ctx: &mut E2ECtx
     );
 }
 
+/// `/goal` answers "what is this run for, and what does it still owe?" from the goal the
+/// backend serves — the instruction, the plan the run committed to and its open steps —
+/// and `/goal <text>` is the operator's only way to move that target
+/// (`docs-dev/copilot/agent-goal-mode.md`).
+pub(super) fn test_agent_run_interactive_reports_the_goal(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+    mock_server.set_command_result_response("agent-task-1", "goal result");
+    // A goal that was replaced once, with a plan two steps in: one dropped with a reason
+    // (closed) and one still pending (the run owes an outcome).
+    mock_server.set_command_goal(
+        "agent-task-1",
+        serde_json::json!({
+            "text": "only the three cheapest offers",
+            "source": "operator",
+            "revision": 2,
+            "changedReason": "operator: /goal",
+            "steps": [
+                {"text": "open the offers page", "status": "done"},
+                {"text": "read the prices", "status": "done"},
+                {"text": "export csv", "status": "dropped", "reason": "no csv writer"},
+                {"text": "answer with the list", "status": "pending"}
+            ],
+            "doneWhen": ["the three prices are in the answer"],
+            "pending": 1,
+            "done": 2,
+            "dropped": 1,
+            "round": 7
+        }),
+    );
+
+    let run_result = run_command_with_stdin(
+        ctx,
+        &["agent", "run", "-i"],
+        "Summarize the page\n/goal\n/goal only the four cheapest offers\n/quit\n",
+    );
+
+    let stdout = &run_result.stdout;
+    assert!(
+        stdout.contains("task agent-task-1 · goal r2 · replaced by the operator · round 7"),
+        "/goal must head the report with the task, the goal revision, who moved it and the round:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("  only the three cheapest offers"),
+        "/goal must print the goal itself — the target a step log cannot show:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("  reason: operator: /goal"),
+        "a replaced goal must say why it moved:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("  plan 2/4 done, 1 dropped, 1 pending"),
+        "/goal must report the plan's progress:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("    ✔ 1. open the offers page"),
+        "a done step must be marked done:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("    ✖ 3. export csv — no csv writer"),
+        "a dropped step must carry the reason that closes it:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("    ▢ 4. answer with the list"),
+        "a pending step is what the run still owes:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("  done when:"),
+        "/goal must print the acceptance items the run declared:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("  ⚠ 1 step(s) pending"),
+        "a plan with open steps must be called out:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("/goal <text> replaces it"),
+        "/goal must say how the operator moves the target:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("task agent-task-1 · goal changed · now r3"),
+        "/goal <text> must report the accepted change and the new revision:\n{stdout}"
+    );
+
+    assert_eq!(
+        mock_server.command_goal_calls(),
+        vec!["agent-task-1".to_string()],
+        "reading the goal must query GET /api/commands/{{id}}/goal for the task"
+    );
+    assert_eq!(
+        mock_server.command_goal_changes(),
+        vec![(
+            "agent-task-1".to_string(),
+            "only the four cheapest offers".to_string()
+        )],
+        "the replacement text must reach POST /api/commands/{{id}}/goal"
+    );
+}
+
+/// A goal change for a task that is no longer running is answered inline, not as an
+/// HTTP error: the operator sees "not accepted" and the reason, and the run's goal is
+/// left alone.
+pub(super) fn test_agent_run_interactive_reports_a_refused_goal_change(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+    mock_server.set_command_result_response("agent-task-1", "goal result");
+    mock_server.set_command_goal(
+        "agent-task-1",
+        serde_json::json!({
+            "text": "extract the price",
+            "revision": 1,
+            "pending": 0,
+            "done": 0,
+            "dropped": 0,
+            "steps": []
+        }),
+    );
+    mock_server.refuse_command_goal_changes();
+
+    let run_result = run_command_with_stdin(
+        ctx,
+        &["agent", "run", "-i"],
+        "Summarize the page\n/goal only the title\n/quit\n",
+    );
+
+    let stdout = &run_result.stdout;
+    assert!(
+        stdout.contains("task agent-task-1 · goal change NOT accepted"),
+        "a refused change must say so instead of pretending it landed:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("task is not running or has no goal channel"),
+        "a refused change must carry the backend's reason:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("now r1"),
+        "the answer reports the revision the goal still has:\n{stdout}"
+    );
+}
+
 /// A finished task's payload is rendered as human sections, not dumped as the
 /// raw `command_result` JSON — `-i` used to print one multi-KB line.
 pub(super) fn test_agent_run_interactive_renders_the_result_sections(ctx: &mut E2ECtx) {
@@ -1884,6 +2029,21 @@ pub(super) fn test_agent_supervise_reports_progress_and_verdicts(ctx: &mut E2ECt
             "mutations": 0,
             "readOnlyRounds": 6,
             "statusTool": "command_status",
+            // The goal rides the status envelope, so the panel answers "what is this run
+            // for" from the same poll (goal mode, `/goal` is the expanded form).
+            "goal": {
+                "text": "make the build green on Windows",
+                "source": "instruction",
+                "revision": 1,
+                "steps": [
+                    {"text": "reproduce the failure", "status": "done"},
+                    {"text": "fix the sandbox path handling", "status": "pending"}
+                ],
+                "pending": 1,
+                "done": 1,
+                "dropped": 0,
+                "round": 6
+            },
         }),
     );
     // A live run: the same decision steps as the follow scenario, minus the terminal one,
@@ -1941,6 +2101,14 @@ pub(super) fn test_agent_supervise_reports_progress_and_verdicts(ctx: &mut E2ECt
         "a run with tools but no writes must be called out:\n{stdout}"
     );
     assert!(
+        stdout.contains("goal     make the build green on Windows · plan 1/2 done, 1 pending"),
+        "what the run is for and how far its plan got must head the panel:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("▢ fix the sandbox path handling"),
+        "the steps a run still owes are the drift signal a plan gives:\n{stdout}"
+    );
+    assert!(
         stdout.contains("gate     ✗ rejected"),
         "the finish gate's verdict must be visible:\n{stdout}"
     );
@@ -1973,4 +2141,7 @@ pub(super) fn test_agent_supervise_reports_progress_and_verdicts(ctx: &mut E2ECt
     assert_eq!(raw["verdict"]["passed"], false);
     assert_eq!(raw["repair"]["round"], 1);
     assert_eq!(raw["access"]["pending"][0]["requestId"], "req-1");
+    assert_eq!(raw["goal"]["text"], "make the build green on Windows");
+    assert_eq!(raw["goal"]["progress"], "1/2 done, 1 pending");
+    assert_eq!(raw["goal"]["pending"], 1);
 }

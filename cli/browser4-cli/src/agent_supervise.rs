@@ -106,6 +106,10 @@ pub(crate) struct Supervision {
     pub(crate) repair: Option<RepairView>,
     /// How many corrective instructions the engine injected (`nudge`).
     pub(crate) nudges: u64,
+    /// The goal this run is pinned to and the plan it committed to, when the backend serves
+    /// one (`docs-dev/copilot/agent-goal-mode.md`). `None` for a page visit or an older
+    /// backend — the panel then simply omits the line.
+    pub(crate) goal: Option<crate::agent_goal::GoalView>,
     pub(crate) pending_access: Vec<PendingAccess>,
     /// The newest decision steps, oldest first (`type`, one-line summary).
     pub(crate) recent_decisions: Vec<(String, String)>,
@@ -157,6 +161,11 @@ pub(crate) fn parse_status_envelope(body: &str) -> Result<Supervision, String> {
             .map(str::to_string),
         resumable: value.get("resumable").and_then(|v| v.as_bool()),
         failure_detail: value.get("failureDetail").filter(|v| v.is_object()).cloned(),
+        // The goal rides the same envelope (every agent task has one), so a single status
+        // poll answers "what is this run for" — `/goal` is the expanded form of this line.
+        goal: value
+            .get("goal")
+            .and_then(crate::agent_goal::parse_goal),
         ..Default::default()
     })
 }
@@ -459,6 +468,20 @@ pub(crate) fn render(supervision: &Supervision) -> Vec<String> {
 
     lines.push(window_line(&supervision.window));
 
+    // The goal: what this run is for and how far its plan got. It sits above the gate
+    // because "did it finish what it was asked to" precedes "is the report honest" — and
+    // a plan with pending steps next to a passing gate is exactly the drift a panel is
+    // supposed to surface (docs-dev/copilot/agent-goal-mode.md).
+    if let Some(goal) = &supervision.goal {
+        lines.push(format!("  goal     {}", goal.summary(140)));
+        for step in goal.steps.iter().filter(|step| step.is_open()).take(3) {
+            lines.push(format!("             ▢ {}", truncate(&step.text, 140)));
+        }
+        if goal.pending > 3 {
+            lines.push(format!("             … {} more pending", goal.pending - 3));
+        }
+    }
+
     if let Some(gate) = &supervision.gate {
         let mut line = if gate.passed {
             "  gate     ✔ passed".to_string()
@@ -719,6 +742,21 @@ pub(crate) fn to_json(supervision: &Supervision) -> Value {
             "dropped": supervision.window.dropped,
             "resynced": supervision.window.resynced,
         },
+        "goal": supervision.goal.as_ref().map(|goal| json!({
+            "text": goal.text,
+            "source": goal.source,
+            "revision": goal.revision,
+            "progress": goal.progress(),
+            "round": goal.round,
+            "pending": goal.pending,
+            "done": goal.done,
+            "dropped": goal.dropped,
+            "steps": goal.steps.iter().map(|step| json!({
+                "text": step.text,
+                "status": step.status,
+                "reason": step.reason,
+            })).collect::<Vec<_>>(),
+        })),
         "gate": supervision.gate.as_ref().map(|gate| json!({
             "passed": gate.passed,
             "violations": gate.violations,

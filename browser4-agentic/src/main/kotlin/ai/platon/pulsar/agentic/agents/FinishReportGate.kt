@@ -51,7 +51,25 @@ internal data class FinishEvidence(
      * evidence of its own and its writes stay *material* (rule 7 still requires them to be listed).
      */
     val grantedRoots: List<Path> = emptyList(),
-)
+    /**
+     * The plan the run committed to (`AgentGoal.statusView`), or null when it declared
+     * none. Rule 9's input: the goal itself is pinned into every request by the engine
+     * (so it cannot be compacted away), which leaves "did the run finish what it said
+     * it would" as the deterministic half of goal drift.
+     */
+    val plan: AgentGoalStatus? = null,
+    /**
+     * `-Dbrowser4.agent.finish.planCheck`: `reject` (default) turns an unfinished plan
+     * into a violation, `warn` only records it. `warn` exists for deployments whose
+     * models write plans optimistically and whose operators accept that.
+     */
+    val planCheck: String = PLAN_CHECK_REJECT,
+) {
+    companion object {
+        const val PLAN_CHECK_REJECT = "reject"
+        const val PLAN_CHECK_WARN = "warn"
+    }
+}
 
 /**
  * The deterministic finish-report rules.
@@ -106,6 +124,16 @@ internal object FinishReportGate {
          * failing a run that did the work (see [FinishReportRepair]).
          */
         val unlistedFiles: List<String> = emptyList(),
+        /**
+         * Rule 9's actionable detail: plan steps the run still owes an outcome for
+         * (`pending`, or `dropped` without a reason). Empty when the rule passed or no
+         * plan was declared.
+         *
+         * A caller that can still talk to the model sends this list back as a repair
+         * message; unlike an omission in `filesChanged`, an unfinished plan is never
+         * amended from the trace — there is nothing in the trace to amend it with.
+         */
+        val pendingPlan: List<String> = emptyList(),
     ) {
         val passed: Boolean get() = violations.isEmpty()
 
@@ -121,6 +149,10 @@ internal object FinishReportGate {
          */
         val onlyUnlistedFiles: Boolean
             get() = unlistedFiles.isNotEmpty() && violations.size == 1
+
+        /** True when the **only** violation is rule 9: the declared plan is unfinished. */
+        val onlyPendingPlan: Boolean
+            get() = pendingPlan.isNotEmpty() && violations.size == 1
     }
 
     fun evaluate(evidence: FinishEvidence): Verdict {
@@ -279,7 +311,31 @@ internal object FinishReportGate {
             }
         }
 
-        return Verdict(violations, warnings, unlistedFiles)
+        // 9. The plan the run committed to must be finished — or honestly dropped.
+        //
+        // Goal mode (`docs-dev/copilot/agent-goal-mode.md` §7) pins the goal into every
+        // request, so the engine no longer has to trust that the run remembers it. What
+        // it CAN still check is whether the run finished what it said it would: a step
+        // that is `pending`, or `dropped` without a reason, is work the run owes, and a
+        // completion report that ignores it is claiming success for a smaller task than
+        // the one it committed to — the observable form of goal drift.
+        var pendingPlan = emptyList<String>()
+        val plan = evidence.plan
+        if (plan != null && plan.steps.isNotEmpty()) {
+            val open = plan.openStepTexts()
+            if (open.isNotEmpty()) {
+                val message = "the plan this run committed to is unfinished: " +
+                    "${open.size} step(s) still pending — " + open.take(5).joinToString("; ")
+                if (evidence.planCheck.equals(FinishEvidence.PLAN_CHECK_WARN, ignoreCase = true)) {
+                    warnings += message
+                } else {
+                    pendingPlan = open
+                    violations += message
+                }
+            }
+        }
+
+        return Verdict(violations, warnings, unlistedFiles, pendingPlan)
     }
 
     /**

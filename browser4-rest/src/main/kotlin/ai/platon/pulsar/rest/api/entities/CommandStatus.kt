@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.api.entities
 
 import ai.platon.browser4.common.B4Constants.PAGE_STATUS_UNKNOWN
+import ai.platon.pulsar.agentic.agents.AgentGoalStatus
 import ai.platon.pulsar.agentic.tools.TaskEnvelopes
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskStatus
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
@@ -171,6 +172,20 @@ data class CommandStatus(
 
     /** Live progress gauge: consecutive coding rounds without a file mutation. */
     var readOnlyRounds: Int? = null,
+
+    /**
+     * The goal this task is running toward, plus the plan the run committed to
+     * (`docs-dev/copilot/agent-goal-mode.md`).
+     *
+     * Every agent task has one — the instruction it was submitted with, pinned by the
+     * engine into every request and replaceable only by an explicit operator call
+     * (`POST /api/commands/{id}/goal`, `command.goal`, `/goal`), never by the model.
+     * A supervisor reads the target and the plan's progress here instead of inferring
+     * them from hundreds of steps, and a run that quietly walked away from its goal
+     * becomes visible as an unfinished plan rather than as plausible prose.
+     * `null` for page visits and for rows written before the field existed.
+     */
+    var goal: AgentGoalStatus? = null,
 ) {
     val status: String get() = ResourceStatus.getStatusText(statusCode)
     var lastModifiedTime: Instant? = null
@@ -391,6 +406,11 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     status.failureDetail = this.failureDetail
     status.mutations = this.mutations
     status.readOnlyRounds = this.readOnlyRounds
+    // The goal and the plan the run committed to (goal mode): part of the envelope for
+    // the same reason as the gauges above — a supervisor polls `agent status`/`/goal`
+    // while the run is in flight, and "what is this run for, is it still on it" must be
+    // answerable from that poll.
+    status.goal = this.goal
     // The page this task ended on. AgentTaskStatus now carries it (observed from
     // the live page, see DocumentHttpStatus); before that the conversion dropped
     // it and every agent/loop record shipped the model's 201/"created" default.

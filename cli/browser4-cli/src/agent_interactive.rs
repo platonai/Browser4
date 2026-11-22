@@ -30,9 +30,11 @@ mod line_editor;
 use line_editor::Editor;
 
 use crate::http::{
-    cancel_command_task, get_agent_access_view, get_command_events, get_command_result,
-    get_command_stats, get_command_status, post_agent_access_decision, send_command_input,
+    cancel_command_task, get_agent_access_view, get_command_events, get_command_goal,
+    get_command_result, get_command_stats, get_command_status, post_agent_access_decision,
+    post_command_goal, send_command_input,
 };
+use crate::agent_goal;
 
 /// How often the follower asks for new events while a task is running.
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(400);
@@ -3993,6 +3995,10 @@ impl Repl {
             "events" => self.print_events(argument).await,
             // `/stats [task-id]`: no argument means the running (or last) task.
             "stats" => self.print_stats(argument).await,
+            // `/goal [--json] [--task <id>]` reads it; `/goal <text>` replaces it. The one
+            // channel that may move a running task's goal — no tool the model can call
+            // rewrites it, which is what makes "the run does not drift" an engine property.
+            "goal" => self.goal_command(argument).await,
             // The access-approval commands are answered by the session itself,
             // straight against the agent-access REST endpoints — the model never
             // sees them.
@@ -4198,6 +4204,9 @@ impl Repl {
         self.out("  /noop-limit <n>    consecutive no-op abort threshold (blank resets)");
         self.out("  /events [n]        raw JSON of the last n steps (default 20)");
         self.out("  /stats [task-id]   run statistics: LLM rounds/requests, tokens, tool calls");
+        self.out("  /goal [--json] [--task <id>]");
+        self.out("                     what this run is for, and the plan it committed to");
+        self.out("  /goal <text>       replace the running task's goal (the only way to move it)");
         self.out("  /access [task-id]                 show pending access requests and active operator grants");
         self.out("  /approve <request-id> [task-id]   approve a pending access request");
         self.out("  /deny <request-id> [task-id]      deny a pending access request");
@@ -4266,8 +4275,119 @@ impl Repl {
         }
     }
 
-    /// The fallback report: counters this session kept while following the task.
+    /// `/goal [--json] [--task <id>]` reads a task's goal; `/goal <text>` replaces it.
     ///
+    /// Every task runs under a goal the engine pins into every model request, so this is
+    /// the answer to "is this run still working on what it was asked to" that a step log
+    /// cannot give: the target itself, the plan the run committed to, and which steps it
+    /// still owes. Supplying text is the operator's only way to move that target — no tool
+    /// the model can call reaches the same queue, which is what "a task never drifts from
+    /// its goal" means in practice.
+    async fn goal_command(&mut self, argument: &str) {
+        let mut rest = argument.trim();
+        let mut as_json = false;
+        let mut named_task: Option<String> = None;
+        loop {
+            if let Some(tail) = rest.strip_prefix("--json") {
+                as_json = true;
+                rest = tail.trim_start();
+                continue;
+            }
+            if let Some(tail) = rest
+                .strip_prefix("--task")
+                .or_else(|| rest.strip_prefix("-t"))
+            {
+                let mut parts = tail.trim_start().splitn(2, char::is_whitespace);
+                named_task = parts.next().map(str::to_string).filter(|id| !id.is_empty());
+                rest = parts.next().unwrap_or_default().trim_start();
+                continue;
+            }
+            break;
+        }
+
+        let task_id = match named_task {
+            Some(id) => Some(id),
+            None => self
+                .current
+                .as_ref()
+                .map(|follower| follower.task_id.clone())
+                .or_else(|| self.last_task.clone()),
+        };
+        let Some(task_id) = task_id else {
+            self.out(
+                "no task in this session yet — a task's instruction IS its goal; type a task to start one",
+            );
+            return;
+        };
+
+        if rest.is_empty() {
+            self.show_goal(&task_id, as_json).await;
+        } else {
+            self.change_goal(&task_id, rest).await;
+        }
+    }
+
+    /// Print the goal, its plan and the steps the run still owes.
+    async fn show_goal(&mut self, task_id: &str, as_json: bool) {
+        match get_command_goal(&self.client, &self.base_url, task_id).await {
+            Ok(response) if response.is_success() => {
+                let body: Value = serde_json::from_str(&response.body).unwrap_or(Value::Null);
+                if as_json {
+                    crate::json_field("goal", body);
+                    return;
+                }
+                let goal = agent_goal::parse_goal(body.get("goal").unwrap_or(&Value::Null));
+                match goal {
+                    Some(goal) => {
+                        let done = body
+                            .get("isDone")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        for line in agent_goal::format_goal(task_id, &goal, done) {
+                            self.out(&line);
+                        }
+                    }
+                    None => self.out(&format!(
+                        "no goal recorded for {task_id} — a page visit, or a run older than goal \
+                         mode (every new `agent run` task is a goal task)"
+                    )),
+                }
+            }
+            Ok(response) if response.status == 404 => self.out(&format!(
+                "no task '{task_id}' on this server (finished and aged out, or another process's task)"
+            )),
+            Ok(response) => self.out(&format!(
+                "could not read the goal of {task_id}: HTTP {} {}",
+                response.status,
+                truncate(response.body.trim(), 200)
+            )),
+            Err(error) => self.out(&format!("could not read the goal of {task_id}: {error}")),
+        }
+    }
+
+    /// Replace the goal of a running task (the operator's channel).
+    async fn change_goal(&mut self, task_id: &str, text: &str) {
+        let reason = "operator: /goal";
+        match post_command_goal(&self.client, &self.base_url, task_id, text, Some(reason)).await {
+            Ok(response) if response.is_success() => {
+                match agent_goal::parse_goal_change(&response.body) {
+                    Ok(change) => {
+                        let line = agent_goal::format_goal_change(task_id, &change);
+                        self.out(&line);
+                    }
+                    Err(error) => self.out(&format!("could not read the goal response: {error}")),
+                }
+            }
+            Ok(response) => self.out(&format!(
+                "⚠ could not change the goal of {task_id}: HTTP {} {}",
+                response.status,
+                truncate(response.body.trim(), 200)
+            )),
+            Err(error) => self.out(&format!("could not change the goal of {task_id}: {error}")),
+        }
+    }
+
+    /// The fallback report: counters this session kept while following the task.    ///
     /// Honest about its limits — steps the session never saw (a task followed from
     /// its middle, a coding round that outran the poll interval, a backend that
     /// serves no step log at all) are missing, so the numbers can only undercount.

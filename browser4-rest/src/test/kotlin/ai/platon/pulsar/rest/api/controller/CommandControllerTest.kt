@@ -1,6 +1,9 @@
 package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
+import ai.platon.pulsar.agentic.agents.AgentGoal
+import ai.platon.pulsar.agentic.agents.GoalStep
+import ai.platon.pulsar.agentic.agents.GoalStepStatus
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEvent
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEventPage
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskRunStats
@@ -9,6 +12,7 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import ai.platon.pulsar.rest.api.entities.CommandGoalRequest
 import ai.platon.pulsar.rest.api.entities.CommandInputRequest
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
@@ -413,8 +417,73 @@ class CommandControllerTest {
         assertEquals(false, assertNotNull(blank.body).accepted)
     }
 
-    // ---- run statistics (the interactive `/stats` command) ------------------
+    // ---- the goal of a task (goal mode, `/goal`) ---------------------------
 
+    @Test
+    @DisplayName("the goal endpoint answers the pinned goal and its plan")
+    fun theGoalEndpointAnswersTheGoalAndPlan() {
+        val status = CommandStatus(id = "agent-1", statusCode = ResourceStatus.SC_PROCESSING, processState = "in_progress")
+        status.goal = AgentGoal.fromInstruction("extract the price of the product")
+            .withPlan(
+                listOf(
+                    GoalStep("open the product page", GoalStepStatus.DONE),
+                    GoalStep("extract the price"),
+                ),
+                listOf("the price is in the answer"),
+            )
+            .statusView(round = 3)
+        whenever(executor.getStatus(DEFAULT_SESSION_ID, "agent-1")).thenReturn(status)
+
+        val body = assertNotNull(controller.getGoal("agent-1").body)
+
+        assertEquals("agent-1", body.taskId)
+        assertEquals(false, body.isDone)
+        val goal = assertNotNull(body.goal, "every agent task runs under a goal")
+        assertEquals("extract the price of the product", goal.text)
+        assertEquals(2, goal.steps.size)
+        assertEquals(1, goal.pending, "the open step is what a supervisor has to see")
+        assertEquals(3, goal.round)
+        assertEquals(listOf("the price is in the answer"), goal.doneWhen)
+
+        // An unknown id is a 404, not an empty goal.
+        assertEquals(HttpStatus.NOT_FOUND, controller.getGoal("nope").statusCode)
+    }
+
+    @Test
+    @DisplayName("replacing a goal is accepted for a live task and reported inline otherwise")
+    fun replacingTheGoalIsAcceptedOrReportedInline() {
+        val status = CommandStatus(id = "agent-1", statusCode = ResourceStatus.SC_PROCESSING, processState = "in_progress")
+        status.goal = AgentGoal.fromInstruction("collect every offer")
+            .amended("only the three cheapest offers", "operator: /goal")
+            .statusView()
+        whenever(executor.amendGoal("agent-1", "only the three cheapest offers", "operator: /goal"))
+            .thenReturn("amend-7")
+        whenever(executor.amendGoal("agent-2", "too late", null)).thenReturn(null)
+        whenever(executor.getStatus(eq(DEFAULT_SESSION_ID), any())).thenReturn(status)
+
+        val accepted = assertNotNull(
+            controller.postGoal(
+                "agent-1",
+                CommandGoalRequest("only the three cheapest offers", "operator: /goal"),
+            ).body
+        )
+        assertTrue(accepted.accepted)
+        assertEquals("amend-7", accepted.amendmentId)
+        assertEquals(2, accepted.revision, "the operator's change is revision 2, not a new goal")
+
+        // "The task finished while the operator was writing" is a race, not an error.
+        val rejected = assertNotNull(
+            controller.postGoal("agent-2", CommandGoalRequest("too late")).body
+        )
+        assertEquals(false, rejected.accepted)
+        assertNull(rejected.amendmentId)
+
+        val blank = controller.postGoal("agent-1", CommandGoalRequest("   "))
+        assertEquals(HttpStatus.BAD_REQUEST, blank.statusCode)
+        assertEquals(false, assertNotNull(blank.body).accepted)
+    }
+
+    // ---- run statistics (the interactive `/stats` command) ------------------
     @Test
     @DisplayName("the stats endpoint answers the counters, the status word and the elapsed time")
     fun statsEndpointAnswersCountersStatusAndElapsed() {

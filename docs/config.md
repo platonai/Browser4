@@ -814,6 +814,46 @@ docker run -d -p 18182:18182 `
   `GET /api/commands/{id}/trace/{file}?offset=&limit=` pages one (every line is redacted again
   on the way out, which also covers a trace an older build wrote).
 
+* **`browser4.agent.goal.mode`** *(default: `pinned`)*,
+  **`browser4.agent.goal.maxChars`** *(default: `800`)*,
+  **`browser4.agent.goal.maxSteps`** *(default: `12`)*,
+  **`browser4.agent.goal.reassertEveryRounds`** *(default: `6`)* and
+  **`browser4.agent.finish.planCheck`** *(default: `reject`)*
+  Every agent task — `agent run "<task>"`, a task submitted over MCP, an `-i` session —
+  runs under a **goal**: the instruction it was submitted with. The goal is engine state,
+  not part of the conversation, so it is re-rendered into **every** model request (the
+  `## Goal (pinned by the engine …)` block at the tail). That is the point: a long run is
+  compacted, repaired and nudged, and the original instruction is the first thing
+  compaction removes, so a 40-round run used to be able to forget what it was asked to do.
+  The block also carries the plan the run committed to (`goal.plan`) and its progress, so
+  the target and the work stay in view together.
+
+  The goal is **immutable from inside the run**: no tool the model can call changes it. A
+  run that cannot meet it reports that (`problems` in `system.taskComplete`) or marks the
+  plan step `dropped` with a reason. Only the operator can move it —
+  `POST /api/commands/{id}/goal`, the MCP tool `command.goal(id, text)`, or `/goal <text>`
+  in an interactive session — and every change becomes a `goal.changed` step carrying the
+  previous goal, the reason and the new revision, plus a user turn that tells the model.
+  A one-shot task has no operator behind it, so its goal simply stays put.
+
+  `browser4.agent.goal.mode=off` restores the pre-goal-mode engine (no pinning, no plan
+  gate). `maxChars` bounds the goal text kept verbatim; `maxSteps` bounds the plan (a model
+  that writes 500 steps must not push real work out of the context window).
+  `reassertEveryRounds` adds an explicit "restate the goal, name your step" line every N
+  rounds — a model stops acting on a paragraph it has read 30 times — and `0` disables it.
+
+  `browser4.agent.finish.planCheck` decides what happens when the declared plan still has
+  open steps at completion: `reject` (default) sends the pending steps back for up to
+  `browser4.agent.repair.maxRounds` rounds — finish them, or drop them with a reason — and
+  otherwise fails the task with those steps as evidence; `warn` logs the gap and accepts
+  the completion. A step is **open** when it is `pending`, or `dropped` without a reason: a
+  bare "dropped" is indistinguishable from forgetting it.
+
+  What the gate cannot do is judge whether the plan *serves* the goal — that is semantic.
+  It guarantees the goal stays visible, only an operator can move it, and the work the run
+  promised is either done or honestly dropped; the rest is what `/goal`, `agent supervise`
+  and the `goal.*` steps are for.
+
 * **`browser4.agent.session.contextEnabled`** *(default: `true`)*,
   **`browser4.agent.session.contextTokens`** *(default: `24000`)*,
   **`browser4.agent.session.memoryTokens`** *(default: `2000`)* and
@@ -991,6 +1031,11 @@ All are JVM system properties (set with `BROWSER4_SERVER_OPTS` or `-D…` when y
 | `browser4.agent.access.unattended` | unset (`full` + network) | Preset derived for a task with no TTY. `deny` removes workspace power entirely; explicit `--access` wins; the derivation is audited `ACCESS_APPROVED(source=default)`. Unknown value warns once and stays `full`. |
 | `browser4.agent.allowTaskWorkspaceWrites` | `true` | A run may also write other tasks' workspaces (`<app data>/agent/<yyyy>/<MM>/<dd>/<agent-uuid>/workspace[.<task-id>]`), inside the `taskWorkspaceWriteDays` window and at most 64 roots; `workspace.archive`, `<app data>/agent/skills` and isolated worktrees stay out, the preset still bounds it. The default costs attribution — `filesChanged` then means "written by this run", not "produced by it"; `false` restores the workspace-only boundary and that guarantee. |
 | `browser4.agent.taskWorkspaceWriteDays` | `7` | Day directories the task-workspace scan looks at, clamped to `1..400` (the root cap stays `TaskWorkspaces.MAX_ROOTS` = 64). |
+| `browser4.agent.goal.mode` | `pinned` | Pin the task's goal into every model request and gate the plan at finish. `off` restores the pre-goal-mode engine (no pinning, no plan gate). |
+| `browser4.agent.goal.maxChars` | `800` | Goal text kept verbatim in the pinned block; longer instructions are truncated with a marker. |
+| `browser4.agent.goal.maxSteps` | `12` | Plan steps kept (`goal.plan`); bounds what the pinned block can spend on the plan. |
+| `browser4.agent.goal.reassertEveryRounds` | `6` | Rounds between two "restate the goal, name your step" reminders; `0` disables them. |
+| `browser4.agent.finish.planCheck` | `reject` | What to do when the declared plan still has open steps at completion: `reject` (repair rounds, then fail with the pending steps as evidence) or `warn` (log only). A step dropped without a reason counts as open. |
 | `browser4.agent.shell.workspaceBoundary` | `on` | Advisory fast-fail: refuses literal absolute paths outside the workspace. Not an enforcement layer; the sandbox is. |
 | `browser4.agent.shell.forbidBootstrap` | `on` | Refuses `b4w build\|stop\|install\|upgrade\|uninstall\|recover` and the bootstrap build/recovery scripts: a task must not rebuild the runtime executing it. Builds via `coding.mvnBuild`/`coding.verify` stay allowed. |
 | `browser4.agent.shell.pathGuard` | `on` | **Deprecated**, advisory: refuses command arguments naming credential locations. Does not relax protected subtrees; sandbox still enforces. |

@@ -248,6 +248,25 @@ data class AgentTaskEvent(
         /** A pending access request was approved or denied (`detail`: `requestId`, `decision`, `reason`). */
         const val TYPE_ACCESS_RESOLVED = "access.resolved"
 
+        // ── Goal steps (docs-dev/copilot/agent-goal-mode.md) ─────────────────
+        //
+        // The goal is engine state pinned into every request, so these steps are the
+        // only external evidence of it: what the run was asked to do, what it planned,
+        // and whether an operator moved the target. The goal boundary is what makes
+        // "the run did something else for 40 rounds" observable at all.
+
+        /** A run started with a goal pinned (`detail`: `text`, `source`, `revision`, `maxChars`). */
+        const val TYPE_GOAL_PINNED = "goal.pinned"
+
+        /** The committed plan progressed (`detail`: `steps`, `done`, `pending`, `dropped`, `planRevision`, `next`). */
+        const val TYPE_PLAN_UPDATE = "plan.update"
+
+        /** An operator replaced the goal mid-run (`detail`: `revision`, `previous`, `reason`, `text`). */
+        const val TYPE_GOAL_CHANGED = "goal.changed"
+
+        /** `detail.kind` of a [TYPE_NUDGE] that re-anchors a long run to its goal. */
+        const val NUDGE_GOAL = "goal"
+
         /**
          * Version stamped on every event this build writes (see
          * [AgentTaskEvent.schemaVersion]).
