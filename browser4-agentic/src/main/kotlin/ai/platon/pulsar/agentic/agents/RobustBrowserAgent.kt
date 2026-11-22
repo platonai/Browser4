@@ -2,6 +2,7 @@ package ai.platon.pulsar.agentic.agents
 
 import ai.platon.pulsar.agentic.*
 import ai.platon.pulsar.agentic.common.AgentPaths
+import ai.platon.pulsar.agentic.common.SecretRedactor
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.AgenticEvents
 import ai.platon.pulsar.agentic.inference.AgentTokenBudget
@@ -448,6 +449,34 @@ internal fun codingProgressNudge(readOnlyRounds: Int, limit: Int = CLI_CODING_RE
  */
 internal fun deliveredInputDetail(pending: List<PendingUserMessage>): Map<String, Any?> =
     mapOf("inputIds" to pending.map { it.id })
+
+/**
+ * One line of `cli-tool-trace.jsonl`: the full tool payload, **redacted on the way out**.
+ *
+ * The trace is the only place that keeps a tool's complete arguments and complete output, so it
+ * is also the only place a password typed into a form or a token passed to a shell command would
+ * sit in plaintext on the backend disk (issue #652, gap 5). The record keeps its shape — every
+ * existing reader of `cli-tool-trace.jsonl` keeps working — and only the credential-bearing
+ * values change.
+ *
+ * Built here rather than inline in the tracer so the rule can be asserted without a filesystem:
+ * the tracer's only remaining job is to append the map it returns.
+ */
+internal fun toolTracePayload(
+    seq: Int,
+    tool: String?,
+    argumentsJson: String?,
+    resultText: String?,
+    durationMs: Long,
+    timestamp: String,
+): Map<String, Any?> = mapOf(
+    "timestamp" to timestamp,
+    "seq" to seq,
+    "tool" to tool,
+    "arguments" to SecretRedactor.redactForTrace(tool, argumentsJson ?: "{}"),
+    "durationMs" to durationMs,
+    "resultText" to SecretRedactor.redactForTrace(tool, resultText),
+)
 
 /** Budget percentage at which the run is told to wrap up ([budgetPressureNudge]). */
 internal const val CLI_BUDGET_FINISH_PERCENT = 80
@@ -2255,17 +2284,26 @@ open class RobustBrowserAgent(
             }
         }
 
-        /** Append one executed tool (arguments + full result text + duration). */
+        /**
+         * Append one executed tool (arguments + full result text + duration).
+         *
+         * The arguments and the result are **redacted** before they are written: this file is
+         * the one place that keeps a tool's complete payload, so a password typed into a form
+         * or a token handed to a shell command would otherwise sit in plaintext on the backend
+         * disk forever (issue #652, gap 5). Redaction is the shared rule set
+         * ([ai.platon.pulsar.agentic.common.SecretRedactor]); the shape of the record is
+         * unchanged, so every existing reader keeps working.
+         */
         fun logTool(request: ToolExecutionRequest, result: ToolExecutionResultMessage, durationMs: Long) {
             if (!enabled) return
             try {
-                val payload = mapOf(
-                    "timestamp" to AppPaths.fromNow(),
-                    "seq" to toolSeq.incrementAndGet(),
-                    "tool" to request.name(),
-                    "arguments" to (request.arguments() ?: "{}"),
-                    "durationMs" to durationMs,
-                    "resultText" to result.text(),
+                val payload = toolTracePayload(
+                    seq = toolSeq.incrementAndGet(),
+                    tool = request.name(),
+                    argumentsJson = request.arguments(),
+                    resultText = result.text(),
+                    durationMs = durationMs,
+                    timestamp = AppPaths.fromNow(),
                 )
                 jsonlWriter.writeTo(payload, runDir.resolve("cli-tool-trace.jsonl"))
             } catch (e: Exception) {
@@ -2306,11 +2344,13 @@ open class RobustBrowserAgent(
                     "tool" to tool,
                     "callId" to raw.id(),
                     "viewType" to viewType,
-                    "url" to extractPageUrl(request.arguments(), rawText),
+                    // A page URL can carry its credential in the query string
+                    // (`?access_token=…`); the timeline only needs to identify the request.
+                    "url" to SecretRedactor.redactUrl(extractPageUrl(request.arguments(), rawText)),
                     "title" to extractPageTitle(rawText),
                     "fingerprint" to PageViewDeduper.fingerprintOf(rawText),
                     "textChars" to rawText.length,
-                    "arguments" to (request.arguments() ?: "{}"),
+                    "arguments" to SecretRedactor.redactForTrace(tool, request.arguments() ?: "{}"),
                 )
                 jsonlWriter.writeTo(payload, runDir.resolve("page-timeline.jsonl"))
             } catch (e: Exception) {

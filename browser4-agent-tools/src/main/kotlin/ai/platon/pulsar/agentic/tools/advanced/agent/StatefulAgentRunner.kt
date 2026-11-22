@@ -9,6 +9,7 @@ import ai.platon.pulsar.agentic.agents.PendingUserMessage
 import ai.platon.pulsar.agentic.agents.RobustBrowserAgent
 import ai.platon.pulsar.agentic.agents.RunPhase
 import ai.platon.pulsar.agentic.agents.RunPhaseClock
+import ai.platon.pulsar.agentic.common.AgentPaths
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.detail.DefaultServerSideAgentEventHandlers
 import ai.platon.pulsar.agentic.model.AgentHistory
@@ -39,6 +40,7 @@ import kotlinx.coroutines.sync.withLock
 import java.io.Closeable
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -309,6 +311,23 @@ open class StatefulAgentRunner(
     }
 
     /**
+     * Age out the run traces (`<data>/logs/agent/<time>/<uuid>/`) of the tasks this backend
+     * no longer keeps.
+     *
+     * `browser4.agent.trace.retentionDays` (default [DEFAULT_TRACE_RETENTION_DAYS], `0` = keep
+     * everything) is read from the session config on every run, so an operator can change it
+     * without a restart. The pruning itself tolerates a missing or unreadable trace root.
+     */
+    private fun pruneTraceRuns() {
+        val days = runCatching {
+            session.sessionConfig.getInt("browser4.agent.trace.retentionDays", DEFAULT_TRACE_RETENTION_DAYS)
+        }.getOrDefault(DEFAULT_TRACE_RETENTION_DAYS)
+        if (days <= 0) return
+        runCatching { AgentPaths.pruneTraceRuns(Instant.now().minus(Duration.ofDays(days.toLong()))) }
+            .onFailure { logger.debug("pruning agent trace dirs failed: {}", it.message) }
+    }
+
+    /**
      * Compact the JSONL persistence file.
      *
      * Two triggers: terminal entries past the TTL, and a file larger than
@@ -325,6 +344,11 @@ open class StatefulAgentRunner(
     internal fun compactPersistence() {
         val ttlCutoff = ttlCutoff()
         val terminalState = TERMINAL_PROCESS_STATE
+        // Trace retention runs on the same clock as the status rows: every task's run dir
+        // (full prompt, complete tool payloads, page timeline) is far more disk than a row,
+        // and nothing used to remove it (issue #652, gap 5). This is independent of the
+        // status compaction below, so it runs before the early return.
+        pruneTraceRuns()
 
         val stale = statusCache.asMap().entries.filter {
             it.value.processState == terminalState && it.value.lastActivity().isBefore(ttlCutoff)
@@ -2126,6 +2150,16 @@ open class StatefulAgentRunner(
 
         /** Max cached task statuses per runner (see the status cache's KDoc). */
         const val STATUS_CACHE_SIZE = 1_000L
+
+        /**
+         * How long one agent run's trace directory is kept by default.
+         *
+         * A run's trace is the full audit trail (exact prompts, complete tool payloads), which
+         * is exactly why it cannot live forever: `browser4.agent.trace.retentionDays=0` keeps
+         * everything, and an operator who needs a long-lived audit should move it out of the
+         * data dir rather than turn this off.
+         */
+        const val DEFAULT_TRACE_RETENTION_DAYS = 7
 
         /** Min spacing between in-progress status snapshots (see [persistProgress]). */
         const val PROGRESS_PERSIST_INTERVAL_MS = 10_000L

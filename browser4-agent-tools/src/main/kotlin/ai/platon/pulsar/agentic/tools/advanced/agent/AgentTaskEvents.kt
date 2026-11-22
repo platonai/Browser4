@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.advanced.agent
 
+import ai.platon.pulsar.agentic.common.SecretRedactor
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.JsonNode
@@ -805,7 +806,7 @@ object AgentTaskEventSanitizer {
     const val DETAIL_TRUNCATED = "truncated"
 
     /** Placeholder for a redacted value. */
-    const val REDACTED = "***"
+    const val REDACTED = SecretRedactor.REDACTED
 
     /** Tools whose values are what the user typed into the page. */
     private val TEXT_INPUT_TOOLS = setOf("fill", "type", "insertText", "insert_text", "press")
@@ -814,37 +815,11 @@ object AgentTaskEventSanitizer {
     private val TEXT_INPUT_KEYS = setOf("text", "value")
 
     /**
-     * Argument keys that name a credential, compared lower-cased with `_`/`-`
-     * stripped, so `apiKey`, `api_key` and `api-key` all match.
+     * Argument keys that name a credential — **the rule set lives in
+     * [SecretRedactor]**, because the run trace needs the same list (a password in a
+     * tool's arguments must not reach the disk verbatim either).
      * */
-    private val SENSITIVE_KEYS = setOf(
-        "password", "passwd", "pwd", "secret", "token",
-        "apikey", "accesstoken", "refreshtoken", "authorization",
-        "cookie", "setcookie", "creditcard", "cardnumber", "cvv", "securitycode",
-    )
-
-    /**
-     * Selector hints for a credential field. A text-input tool targeting one of
-     * these has its typed text redacted instead of previewed.
-     * */
-    private val SENSITIVE_SELECTOR_HINTS = listOf(
-        "password", "passwd", "pwd", "secret", "token", "api-key", "api_key",
-        "apikey", "cvv", "credit-card", "cardnumber",
-    )
-
-    /** Fallback redaction for argument blobs that are not valid JSON. */
-    private val INLINE_SECRET = Regex(
-        """(?i)("(?:[^"]*?(?:password|passwd|pwd|secret|token|api_?key|authorization|cookie)[^"]*?)"\s*:\s*)"(?:[^"\\]|\\.)*""""
-    )
-
-    /**
-     * Fallback redaction for CLI-style flags — a `coding.shell` command such as
-     * `cli --password hunter2 --token abc` is as sensitive as a JSON body, and
-     * it never matches [INLINE_SECRET].
-     * */
-    private val INLINE_FLAG_SECRET = Regex(
-        """(?i)(--?(?:password|passwd|pwd|secret|token|api[-_]?key|authorization|cookie)[=\s]+)("[^"]*"|'[^']*'|\S+)"""
-    )
+    private val SENSITIVE_KEYS get() = SecretRedactor.SENSITIVE_KEYS
 
     private val WHITESPACE = Regex("""\s+""")
 
@@ -1130,22 +1105,17 @@ object AgentTaskEventSanitizer {
         return preview(redacted)
     }
 
-    /** True when [key] names a credential (case/`_`/`-` insensitive). */
-    fun isSensitiveKey(key: String): Boolean =
-        // A nested key may arrive dotted (`credentials.token`): the last segment
-        // is the part that names the value.
-        normalizeKey(key.substringAfterLast('.')) in SENSITIVE_KEYS
+    /**
+     * True when [key] names a credential (case/`_`/`-` insensitive).
+     *
+     * The rule set lives in [SecretRedactor] because the run trace needs the same list: a
+     * password must not be stored verbatim on disk either (issue #652, gap 5).
+     */
+    fun isSensitiveKey(key: String): Boolean = SecretRedactor.isSensitiveKey(key)
 
     /** True when the argument value of a text-input tool must be hidden. */
-    fun isSensitiveTextInput(tool: String?, key: String, selector: String?): Boolean {
-        if (tool !in TEXT_INPUT_TOOLS) return false
-        if (normalizeKey(key) !in TEXT_INPUT_KEYS) return false
-        val hint = selector?.lowercase() ?: return false
-        return SENSITIVE_SELECTOR_HINTS.any { hint.contains(it) }
-    }
-
-    private fun normalizeKey(key: String): String =
-        key.lowercase().replace("_", "").replace("-", "")
+    fun isSensitiveTextInput(tool: String?, key: String, selector: String?): Boolean =
+        SecretRedactor.isSensitiveTextInput(tool, key, selector)
 
     private fun redactJson(tool: String?, raw: String): String? = runCatching {
         val mapper = pulsarObjectMapper()
@@ -1181,12 +1151,6 @@ object AgentTaskEventSanitizer {
         }
     }
 
-    private fun redactRaw(raw: String): String {
-        val jsonish = INLINE_SECRET.replace(raw) { match ->
-            "${match.groupValues[1]}\"$REDACTED\""
-        }
-        return INLINE_FLAG_SECRET.replace(jsonish) { match ->
-            "${match.groupValues[1]}$REDACTED"
-        }
-    }
+    /** Non-JSON fallback: the shared text rules (see [SecretRedactor.redactText]). */
+    private fun redactRaw(raw: String): String = SecretRedactor.redactText(raw)
 }

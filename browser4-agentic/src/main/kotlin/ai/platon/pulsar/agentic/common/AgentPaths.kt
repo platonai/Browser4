@@ -87,6 +87,72 @@ object AgentPaths {
     }
 
     /**
+     * Delete trace run dirs whose last activity is older than [olderThan].
+     *
+     * Every run writes its full prompt, complete tool payloads and page timeline under
+     * `<data>/logs/agent/<time>/<uuid>/`, and nothing ever removed them: a month of self-
+     * development runs left tens of thousands of files behind (issue #652, gap 5). Retention
+     * is the other half of "keep the full audit trail" — an audit trail nobody can afford to
+     * keep is not an audit trail.
+     *
+     * A run dir is removed whole, and a date dir that becomes empty is removed with it, so the
+     * trace root keeps the `<time>/<uuid>` shape a reader expects.
+     *
+     * @param olderThan cutoff: dirs last modified before it are deleted
+     * @return how many run dirs were removed
+     */
+    fun pruneTraceRuns(olderThan: Instant): Int = pruneTraceRuns(AGENT_TRACE_DIR, olderThan)
+
+    /**
+     * The same retention over an explicit [traceRoot].
+     *
+     * Split out so a caller (and a test) can point it at a directory it owns: the default is the
+     * process-wide data dir, and a retention run deleting a developer's real traces because a
+     * test asked it to would be a bug, not a feature.
+     *
+     * @param traceRoot the trace root (`<data>/logs/agent` in production)
+     * @param olderThan cutoff: dirs last modified before it are deleted
+     * @return how many run dirs were removed
+     */
+    fun pruneTraceRuns(traceRoot: Path, olderThan: Instant): Int {
+        if (!Files.isDirectory(traceRoot)) return 0
+        val cutoff = olderThan.toEpochMilli()
+        var removed = 0
+        runCatching {
+            Files.list(traceRoot).use { dates ->
+                dates.filter { Files.isDirectory(it) }.forEach { dateDir ->
+                    runCatching {
+                        Files.list(dateDir).use { runs ->
+                            runs.filter { Files.isDirectory(it) }.forEach { runDir ->
+                                val modified = runCatching {
+                                    Files.getLastModifiedTime(runDir).toMillis()
+                                }.getOrDefault(Long.MAX_VALUE)
+                                if (modified < cutoff && deleteRecursively(runDir)) removed++
+                            }
+                        }
+                        // The date dir is empty once every run of that day has aged out.
+                        Files.deleteIfExists(dateDir)
+                    }.onFailure {
+                        logger.debug("could not prune trace dir {}: {}", dateDir, it.message)
+                    }
+                }
+            }
+        }.onFailure { logger.debug("could not list the trace root {}: {}", traceRoot, it.message) }
+        if (removed > 0) {
+            logger.info("removed {} expired agent trace run dir(s) under {}", removed, traceRoot)
+        }
+        return removed
+    }
+
+    /** Delete [dir] and everything under it; true when it is gone afterwards. */
+    private fun deleteRecursively(dir: Path): Boolean = runCatching {
+        Files.walk(dir).use { stream ->
+            stream.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+        }
+        !Files.exists(dir)
+    }.getOrDefault(false)
+
+    /**
      * Pure link creation, separated for testing: creates
      * `projectRoot/logs/agent -> traceDir` when the target entry is absent.
      *

@@ -786,6 +786,16 @@ docker run -d -p 18182:18182 `
   bootstrap build/recovery scripts — rebuilding the runtime that executes the task is
   operator work. `coding.mvnBuild` / `coding.verify` are unaffected.
 
+* **`browser4.agent.trace.retentionDays`** *(default: `7`)*
+  Every agent run writes its trace under `<data>/logs/agent/<time>/<uuid>/` — the exact
+  prompt the model saw, complete tool arguments and outputs, the page timeline. It is the
+  full audit trail of a run, which is why it cannot live forever: the periodic compaction
+  deletes run dirs whose last activity is older than this, and empties the date dirs they
+  lived in. `0` keeps everything (the backend logs a reminder that disk use is then
+  unbounded). Credential-bearing tool arguments, results and URL query parameters are
+  redacted **when the trace is written**, so a password typed into a form never reaches
+  the file in the first place.
+
 * **`browser4.agent.session.contextEnabled`** *(default: `true`)*,
   **`browser4.agent.session.contextTokens`** *(default: `24000`)*,
   **`browser4.agent.session.memoryTokens`** *(default: `2000`)* and

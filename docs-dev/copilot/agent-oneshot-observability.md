@@ -600,7 +600,8 @@ P0-A…P0-F 全部落地，全部为**新增可空字段 / 新增事件类型 / 
 | P2 `agent supervise <id>` | `cli/browser4-cli/src/agent_supervise.rs`（纯读聚合：`command_status` + `/stats` + `/events` + `/api/agent/{id}/access`）+ `agent supervise` 命令；状态信封新增 `failureDetail`（`TaskEnvelopes` / `STATUS_SCHEMA`） | 把 P0/P1 导出的判据做成开箱即用的一屏：工具数与文件改动并列、gate/verify 裁决与红掉的 check、repair 轮次、待审批项、步骤窗口（`resynced`）。`--json` 同源；四个来源各自可失败（某一源 404/超时只让该段显示"unknown"） |
 | P1 事件级 SSE | `GET /api/commands/{id}/events/stream`（`CommandController.streamSteps`；`ServerSentEvents.kt` 新增 `toServerSentEventsOf`，一个流可同时产出数据帧与注释保活帧） | 每帧带 `id: <seq>`，`Last-Event-ID` 或 `?after=` 决定起点，终态步骤之后立刻 complete，静默 15s 发注释保活，`?maxSeconds=` 可限时；慢读者只推迟下一次读取，不会丢步。CLI 跟随器仍用轮询（本轮未改），该端点面向看板/其它 agent |
 
+| P1 trace 写侧脱敏 + 保留 | `SecretRedactor`（agentic `common`：敏感键/正则/URL 参数的**唯一**规则源，事件流 `AgentTaskEventSanitizer` 改为委托）；`CliLoopTracer.logTool` / `logPageView` 写盘前脱敏（`toolTracePayload` 抽成可测函数）；`AgentPaths.pruneTraceRuns()` + `browser4.agent.trace.retentionDays`（默认 7 天，`0`=永久）挂到 runner 的周期压缩 | issue §5 的两半：`cli-tool-trace.jsonl` 曾是唯一把 `coding.shell` 的命令、表单里的密码**明文**写到磁盘的地方；现在参数/结果/URL 查询参数在写入前即脱敏，记录形状不变（旧读者不受影响），整轮 trace 目录按 7 天老化删除（原先从不清理）。读取侧 API 未做（见 §9.4） |
 ### 9.4 未做（仍留在 §7 后续路线）
 
-trace 读取 API + 写侧脱敏、`b4.run` 子进程 span、结构化目标/计划检查点。
+trace 读取 API（远程按 taskId 读取完整过程）、`b4.run` 子进程 span、结构化目标/计划检查点。
 这些属于 P1/P2，不阻断"外部智能体监督"。
