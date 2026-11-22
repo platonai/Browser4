@@ -6,7 +6,9 @@ import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEvent
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEventLog
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEventPage
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskRunStats
+import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTraceIndex
 import ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner
+import ai.platon.pulsar.agentic.common.SecretRedactor
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitStatus
 import ai.platon.pulsar.agentic.tools.advanced.crawl.StatefulPageVisitor
@@ -22,6 +24,9 @@ import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
+import ai.platon.pulsar.rest.api.entities.CommandTraceFile
+import ai.platon.pulsar.rest.api.entities.CommandTraceFileResponse
+import ai.platon.pulsar.rest.api.entities.CommandTraceResponse
 import ai.platon.pulsar.rest.api.entities.refreshed
 import ai.platon.pulsar.rest.api.entities.toCommandStatus
 import ai.platon.pulsar.rest.config.CommandNormalizer
@@ -33,6 +38,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import java.io.Closeable
+import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
@@ -56,6 +62,22 @@ class UserCommandExecutor(
 ) : Closeable {
     companion object {
         const val FLOW_POLLING_INTERVAL = 1000L
+
+        /**
+         * The only file names the trace API serves.
+         *
+         * A run dir also holds the raw prompt dumps (the `cli-prompt` subdirectory) and the trace
+         * link; the API deliberately exposes the line-oriented audit streams only — a prompt dump
+         * carries the whole conversation, whose credentials are redacted at the tool layer but not
+         * per message yet, so serving it would move an unredacted copy over HTTP.
+         */
+        private val TRACE_STREAM_NAME = Regex("^[A-Za-z0-9._-]+\\.jsonl$")
+
+        /** Default page size of one trace stream. */
+        const val TRACE_PAGE_DEFAULT = 500
+
+        /** Upper bound of one trace page (a 500-line page of 240-char previews is ~120 KB). */
+        const val TRACE_PAGE_MAX = 2_000
 
         /**
          * How many commands may run at the same time.
@@ -447,6 +469,89 @@ class UserCommandExecutor(
      */
     fun stats(id: String): AgentTaskRunStats? = agentRunners.values
         .firstNotNullOfOrNull { runner -> runner.stats(id) }
+
+    /**
+     * The full run trace of agent task [id], or `null` when nothing is indexed for it.
+     *
+     * The trace directory is keyed by the agent's own uuid and start time; the runner records
+     * `taskId -> dir` when the task starts ([ai.platon.pulsar.agentic.tools.advanced.agent.AgentTraceIndex]),
+     * so this lookup needs no live runner — a finished task's trace stays readable until the
+     * retention policy ages it out. Only the `*.jsonl` audit streams are listed: the raw prompt
+     * dumps stay local (their per-message credentials are not redacted yet).
+     *
+     * @param id task id
+     */
+    fun trace(id: String): CommandTraceResponse? {
+        val dir = AgentTraceIndex.shared().runDirOf(id) ?: return null
+        val files = runCatching {
+            Files.list(dir).use { stream ->
+                stream.filter { Files.isRegularFile(it) && TRACE_STREAM_NAME.matches(it.fileName.toString()) }
+                    .map { path ->
+                        CommandTraceFile(
+                            name = path.fileName.toString(),
+                            bytes = runCatching { Files.size(path) }.getOrDefault(0L),
+                            modifiedAt = runCatching {
+                                Files.getLastModifiedTime(path).toInstant().toString()
+                            }.getOrNull(),
+                        )
+                    }
+                    .toList()
+            }
+        }.getOrElse {
+            logger.debug("listing the trace dir of {} failed: {}", id, it.message)
+            emptyList()
+        }.sortedByDescending { it.modifiedAt ?: "" }
+        return CommandTraceResponse(taskId = id, runDir = dir.toString(), files = files)
+    }
+
+    /**
+     * One page of one trace stream: `GET /api/commands/{id}/trace/{file}`.
+     *
+     * Every line is redacted again on the way out — a trace written by an older build in the same
+     * data dir predates the write-side redaction, and serving it verbatim over HTTP would move an
+     * unredacted copy off the machine.
+     *
+     * @param id task id
+     * @param file stream name; anything but a `*.jsonl` name inside the run dir is rejected
+     * @param offset first line to return (0-based)
+     * @param limit page size (clamped to [TRACE_PAGE_MAX])
+     * @return the page, or `null` when the task/file is unknown or the name is not a stream
+     */
+    fun traceFile(id: String, file: String, offset: Int = 0, limit: Int = TRACE_PAGE_DEFAULT): CommandTraceFileResponse? {
+        if (!TRACE_STREAM_NAME.matches(file)) return null
+        val dir = AgentTraceIndex.shared().runDirOf(id) ?: return null
+        val path = runCatching { dir.resolve(file).normalize() }.getOrNull() ?: return null
+        // The name is already pattern-checked; this keeps the rule true even if the pattern ever
+        // loosens (a symlinked run dir must not escape it).
+        if (!path.startsWith(dir.normalize())) return null
+        if (!Files.isRegularFile(path)) return null
+        val from = offset.coerceAtLeast(0)
+        val size = limit.coerceIn(1, TRACE_PAGE_MAX)
+        val total = runCatching {
+            Files.lines(path).use { it.count() }
+        }.getOrElse {
+            logger.debug("reading the trace {} of {} failed: {}", file, id, it.message)
+            return null
+        }.toInt()
+        val lines = runCatching {
+            Files.lines(path).use { stream ->
+                stream.skip(from.toLong()).limit(size.toLong())
+                    .map { line -> SecretRedactor.redactText(line) }
+                    .toList()
+            }
+        }.getOrElse {
+            logger.debug("reading the trace page {} of {} failed: {}", file, id, it.message)
+            return null
+        }
+        return CommandTraceFileResponse(
+            taskId = id,
+            file = file,
+            offset = from,
+            limit = size,
+            totalLines = total,
+            lines = lines,
+        )
+    }
 
     /**
      * Queue a user message for the running agent task [id].

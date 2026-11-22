@@ -601,7 +601,8 @@ P0-A…P0-F 全部落地，全部为**新增可空字段 / 新增事件类型 / 
 | P1 事件级 SSE | `GET /api/commands/{id}/events/stream`（`CommandController.streamSteps`；`ServerSentEvents.kt` 新增 `toServerSentEventsOf`，一个流可同时产出数据帧与注释保活帧） | 每帧带 `id: <seq>`，`Last-Event-ID` 或 `?after=` 决定起点，终态步骤之后立刻 complete，静默 15s 发注释保活，`?maxSeconds=` 可限时；慢读者只推迟下一次读取，不会丢步。CLI 跟随器仍用轮询（本轮未改），该端点面向看板/其它 agent |
 
 | P1 trace 写侧脱敏 + 保留 | `SecretRedactor`（agentic `common`：敏感键/正则/URL 参数的**唯一**规则源，事件流 `AgentTaskEventSanitizer` 改为委托）；`CliLoopTracer.logTool` / `logPageView` 写盘前脱敏（`toolTracePayload` 抽成可测函数）；`AgentPaths.pruneTraceRuns()` + `browser4.agent.trace.retentionDays`（默认 7 天，`0`=永久）挂到 runner 的周期压缩 | issue §5 的两半：`cli-tool-trace.jsonl` 曾是唯一把 `coding.shell` 的命令、表单里的密码**明文**写到磁盘的地方；现在参数/结果/URL 查询参数在写入前即脱敏，记录形状不变（旧读者不受影响），整轮 trace 目录按 7 天老化删除（原先从不清理）。读取侧 API 未做（见 §9.4） |
+| P1 trace 读取 API | `AgentTraceIndex`（`<data>/agent/trace-index.jsonl`，一行 `taskId → runDir`，按字节+行数双重上限压缩，目录被保留策略删掉时解析为 null）；`StatefulAgentRunner` 任务开始时记录；`GET /api/commands/{id}/trace`（列 `*.jsonl` 审计流）与 `/{id}/trace/{file}?offset=&limit=`（按行分页，读侧再脱敏一次） | 补上 issue §5 的最后一段：trace 目录按 agent uuid 命名，持有 taskId 的审阅者原先根本找不到它。现在可按 taskId 列出并分页读取完整过程（工具调用/用量/时间线/压缩账本），读取前对整行再脱敏一次（覆盖老版本写的明文 trace）；`cli-prompt/` 原始 prompt 转储**不**通过 API 暴露（其逐条消息的凭据尚未脱敏），仍是本地审计面 |
 ### 9.4 未做（仍留在 §7 后续路线）
 
-trace 读取 API（远程按 taskId 读取完整过程）、`b4.run` 子进程 span、结构化目标/计划检查点。
+prompt 转储的逐条消息脱敏（其 API 暴露是这条的前置）、`b4.run` 子进程 span、结构化目标/计划检查点。
 这些属于 P1/P2，不阻断"外部智能体监督"。

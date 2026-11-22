@@ -14,6 +14,8 @@ import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatsResponse
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.entities.CommandSubmitResponse
+import ai.platon.pulsar.rest.api.entities.CommandTraceFileResponse
+import ai.platon.pulsar.rest.api.entities.CommandTraceResponse
 import ai.platon.pulsar.rest.api.entities.statusWord
 import ai.platon.pulsar.rest.api.support.SessionResolution
 import ai.platon.pulsar.rest.api.support.toServerSentEvents
@@ -545,6 +547,56 @@ class CommandController(
         val event: AgentTaskEvent? = null,
         val comment: String? = null,
     )
+
+    /**
+     * The full run trace of a task: `GET /api/commands/{id}/trace`.
+     *
+     * The step log ([getEvents]) is what the run did, in order, capped and previewed for a live
+     * view. The trace is the audit trail behind it: the exact prompt the model saw, one line per
+     * executed tool with its complete arguments and complete output, the provider's usage per
+     * request, the page timeline. It lives on disk under `logs/agent/<time>/<uuid>/`, a path
+     * keyed by the agent's own uuid — which is why this endpoint exists at all: a reviewer
+     * holding the task id had no way to resolve it (issue #652, gap 5).
+     *
+     * Only the `*.jsonl` audit streams are listed. The raw prompt dumps stay local: they carry
+     * the whole conversation, whose credentials are redacted at the tool layer but not per message
+     * yet, so serving them would move an unredacted copy over HTTP.
+     *
+     * @param id task id (the same id `agent run` prints)
+     * @return `200` + [CommandTraceResponse], `404` when the task has no indexed trace (never ran
+     *   here, tracing was off, or the retention policy already removed it)
+     * */
+    @GetMapping("/{id}/trace")
+    fun getTrace(@PathVariable id: String): ResponseEntity<CommandTraceResponse> {
+        val trace = commandExecutor.trace(id) ?: return ResponseEntity.notFound().build()
+        return ResponseEntity.ok(trace)
+    }
+
+    /**
+     * One page of one trace stream: `GET /api/commands/{id}/trace/{file}?offset=&limit=`.
+     *
+     * Paged by line because a long run's tool stream is megabytes of JSONL. Every line is
+     * redacted on the way out: the current build redacts when it writes, and this also covers a
+     * trace written by an older build in the same data dir.
+     *
+     * @param id task id
+     * @param file stream name (`cli-tool-trace.jsonl`, `cli-usage.jsonl`, …); any other name is
+     *   rejected — the trace directory is not a file browser
+     * @param offset first line to return (0-based)
+     * @param limit page size (clamped to 2000)
+     * @return `200` + [CommandTraceFileResponse], `404` when the task or the stream is unknown
+     * */
+    @GetMapping("/{id}/trace/{file}")
+    fun getTraceFile(
+        @PathVariable id: String,
+        @PathVariable file: String,
+        @RequestParam(name = "offset", defaultValue = "0") offset: Int,
+        @RequestParam(name = "limit", defaultValue = "500") limit: Int,
+    ): ResponseEntity<CommandTraceFileResponse> {
+        val page = commandExecutor.traceFile(id, file, offset, limit)
+            ?: return ResponseEntity.notFound().build()
+        return ResponseEntity.ok(page)
+    }
 
     @GetMapping(value = ["/{id}/stream"], produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     fun streamEvents(

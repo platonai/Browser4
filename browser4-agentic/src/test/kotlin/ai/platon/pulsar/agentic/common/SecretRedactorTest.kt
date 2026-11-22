@@ -2,6 +2,7 @@ package ai.platon.pulsar.agentic.common
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
@@ -45,7 +46,29 @@ class SecretRedactorTest {
     }
 
     @Test
-    @DisplayName("CLI-style flags are redacted too")
+    @DisplayName("a credential inside an embedded (escaped) JSON string is redacted too")
+    fun redactsEscapedJsonStrings() {
+        // This is the shape a trace line has on disk: the tool's own JSON lives inside the line's
+        // JSON, so every quote of it is escaped. Without this rule the read-side redaction would
+        // match nothing in the one case it exists for.
+        val line = """{"seq":1,"arguments":"{\"password\":\"hunter2\",\"user\":\"ada\"}"}"""
+
+        val redacted = SecretRedactor.redactText(line)
+
+        assertFalse(redacted.contains("hunter2"), redacted)
+        assertTrue(redacted.contains("""\"password\":\"***\""""), redacted)
+        assertTrue(redacted.contains("ada"), "a non-secret value stays readable: $redacted")
+        // The line must stay one valid JSON object after the substitution.
+        assertNotNull(serdeJsonParse(redacted), "redaction must not break the record: $redacted")
+    }
+
+    /** Minimal JSON validity check: the payload must still parse. */
+    private fun serdeJsonParse(text: String): Any? = runCatching {
+        com.fasterxml.jackson.databind.ObjectMapper().readTree(text)
+    }.getOrNull()
+
+    @Test
+    @DisplayName("a CLI-style flag is redacted too")
     fun redactsCliFlags() {
         val raw = """cli login --user ada --password "hunter2" --token abc123"""
 

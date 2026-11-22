@@ -790,6 +790,17 @@ open class RobustBrowserAgent(
         CliLoopTracer(uuid, startTime, config.logInferenceToFile, cliViewToolNames(session.sessionConfig))
     }
 
+    /**
+     * Where this agent's full run trace is (or will be) written, or `null` when tracing is off.
+     *
+     * Exposed because the trace directory is keyed by the agent's own uuid and start time, which
+     * a caller (the task runner) cannot compute: it records `taskId -> this directory` so a
+     * reviewer holding the task id can read the process behind it. Reading it creates the
+     * directory, which the first trace write would do anyway.
+     */
+    val traceRunDir: Path?
+        get() = if (config.logInferenceToFile) cliLoopTracer.runDirectory else null
+
     private val noopLimit: Int get() = (noopLimitOverride ?: config.consecutiveNoOpLimit).coerceAtLeast(1)
 
     /**
@@ -2175,6 +2186,9 @@ open class RobustBrowserAgent(
         private val runDir: Path by lazy {
             AgentPaths.resolveTraceRunDir(agentStartTime, agentUuid)
         }
+
+        /** Where this run's trace lives (`<data>/logs/agent/<time>/<uuid>`). */
+        val runDirectory: Path get() = runDir
 
         private val jsonlWriter by lazy { MultiSinkMessageWriter(runDir) }
         private val promptDir: Path by lazy {

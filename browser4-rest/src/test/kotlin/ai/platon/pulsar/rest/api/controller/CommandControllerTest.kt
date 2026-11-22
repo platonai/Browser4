@@ -13,6 +13,9 @@ import ai.platon.pulsar.rest.api.entities.CommandInputRequest
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.entities.CommandSubmitResponse
+import ai.platon.pulsar.rest.api.entities.CommandTraceFile
+import ai.platon.pulsar.rest.api.entities.CommandTraceFileResponse
+import ai.platon.pulsar.rest.api.entities.CommandTraceResponse
 import ai.platon.pulsar.rest.api.entities.toCommandStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -670,6 +673,46 @@ class CommandControllerTest {
         assertEquals(HttpStatus.NOT_FOUND, response.statusCode)
     }
 
+    @Test
+    @DisplayName("the trace endpoints expose the audit streams, and 404 when nothing is indexed")
+    fun traceEndpointsExposeTheAuditStreams() {
+        whenever(executor.trace("agent-1")).thenReturn(
+            CommandTraceResponse(
+                taskId = "agent-1",
+                runDir = "/tmp/logs/agent/2026-11-22/aaaa",
+                files = listOf(
+                    CommandTraceFile("cli-tool-trace.jsonl", bytes = 2_048, modifiedAt = "2026-11-22T00:00:00Z"),
+                ),
+            )
+        )
+        whenever(executor.trace("ghost")).thenReturn(null)
+        whenever(executor.traceFile("agent-1", "cli-tool-trace.jsonl", 0, 500)).thenReturn(
+            CommandTraceFileResponse(
+                taskId = "agent-1",
+                file = "cli-tool-trace.jsonl",
+                offset = 0,
+                limit = 500,
+                totalLines = 1,
+                lines = listOf("""{"seq":1,"tool":"coding.read"}"""),
+            )
+        )
+        whenever(executor.traceFile("agent-1", "cli-prompt/1.request.json", 0, 500)).thenReturn(null)
+
+        val trace = assertNotNull(controller.getTrace("agent-1").body)
+        assertEquals("agent-1", trace.taskId)
+        assertEquals("cli-tool-trace.jsonl", trace.files.single().name)
+
+        val page = assertNotNull(controller.getTraceFile("agent-1", "cli-tool-trace.jsonl", 0, 500).body)
+        assertEquals(1, page.totalLines)
+        assertEquals("""{"seq":1,"tool":"coding.read"}""", page.lines.single())
+
+        assertEquals(HttpStatus.NOT_FOUND, controller.getTrace("ghost").statusCode)
+        assertEquals(
+            HttpStatus.NOT_FOUND,
+            controller.getTraceFile("agent-1", "cli-prompt/1.request.json", 0, 500).statusCode,
+            "a prompt dump is not part of the served surface",
+        )
+    }
     @Test
     @DisplayName("the status conversion passes the failure detail and the gauges through")
     fun toCommandStatusCarriesFailureDetailAndGauges() {

@@ -1606,6 +1606,11 @@ open class StatefulAgentRunner(
                     taskPolicy.copy(mode = ai.platon.pulsar.coding.AgentMode.BROWSE)
                 }
                 it.agentToolManager.applyAccessPolicy(policyWithMode, status.id)
+                // Point the trace at the task: the run dir is keyed by the agent's uuid and
+                // start time, so without this row a reviewer holding the task id cannot find
+                // the process behind it (issue #652, gap 5).
+                runCatching { it.traceRunDir?.let { dir -> AgentTraceIndex.shared().record(status.id, dir) } }
+                    .onFailure { error -> logger.debug("indexing the trace of {} failed: {}", status.id, error.message) }
                 // The approval queue is per task (applyAccessPolicy builds a fresh one), so the
                 // observer is installed here and cleared in the finally: a `coding.requestAccess`
                 // that waits for an operator becomes a step of THIS task's stream instead of a

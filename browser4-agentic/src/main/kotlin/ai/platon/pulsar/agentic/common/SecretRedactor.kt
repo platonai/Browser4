@@ -68,6 +68,23 @@ object SecretRedactor {
     )
 
     /**
+     * The same pair shape **inside an embedded JSON string**, where the quotes are escaped.
+     *
+     * A trace line is written as one JSON object: the tool's own arguments/result live inside it
+     * as a string, so `{"password":"hunter2"}` reaches a reader as
+     * `"arguments":"{\"password\":\"hunter2\"}"`. Without this rule the read-side redaction would
+     * match nothing at all — the exact case it exists for (a trace written by an older build, or a
+     * raw prompt dump).
+     *
+     * The value has to stop at the *delimiter* `\"` (the next `,`/`}` in the embedded object) and
+     * not run over `,\"user\":\"ada\"` — hence the lookahead, which the plain-quote rule gets for
+     * free from `[^,}\]]`.
+     */
+    private val ESCAPED_SECRET = Regex(
+        """(?i)(\\"(?:[^"\\]|\\.)*?(?:password|passwd|pwd|secret|token|api_?key|authorization|cookie)(?:[^"\\]|\\.)*?\\"\s*:\s*)(\\"(?:\\.|[^"\\])*?\\"(?=\s*[,}]))"""
+    )
+
+    /**
      * A CLI-style flag: a `coding.shell` command such as `cli --password hunter2 --token abc` is
      * as sensitive as a JSON body, and it never matches [INLINE_SECRET].
      */
@@ -102,14 +119,17 @@ object SecretRedactor {
     }
 
     /**
-     * Redact credential-bearing free text: JSON-shaped pairs and CLI-style flags.
+     * Redact credential-bearing free text: JSON-shaped pairs, embedded (escaped) pairs, and
+     * CLI-style flags.
      *
-     * Used for anything that is not parsed (a shell command, a message, a log line) and as the
-     * fallback when a payload is not valid JSON.
+     * Used for anything that is not parsed (a shell command, a message, a log line, a trace line
+     * read back from disk) and as the fallback when a payload is not valid JSON.
      */
     fun redactText(raw: String): String {
         if (raw.isEmpty()) return raw
-        val jsonish = INLINE_SECRET.replace(raw) { match -> "${match.groupValues[1]}\"$REDACTED\"" }
+        // Escaped pairs first: a plain-quote rule would cut through the middle of `\"password\"`.
+        val escaped = ESCAPED_SECRET.replace(raw) { match -> "${match.groupValues[1]}\\\"$REDACTED\\\"" }
+        val jsonish = INLINE_SECRET.replace(escaped) { match -> "${match.groupValues[1]}\"$REDACTED\"" }
         return INLINE_FLAG_SECRET.replace(jsonish) { match -> "${match.groupValues[1]}$REDACTED" }
     }
 
