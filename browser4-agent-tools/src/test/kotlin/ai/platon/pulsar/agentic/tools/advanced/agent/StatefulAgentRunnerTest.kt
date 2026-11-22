@@ -1133,6 +1133,71 @@ class StatefulAgentRunnerTest {
     }
 
     @Test
+    @DisplayName("a task's steps survive a runner restart, not only its status row")
+    fun stepsSurviveARunnerRestart() {
+        // The status row was always durable; the PROCESS was not — a restart restored "failed"
+        // with no way to see how the run got there (issue #652 §4).
+        val first = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))
+        val taskId: String
+        try {
+            taskId = first.create().id
+            first.recordRunEvent(
+                taskId,
+                AgentRunEvent(AgentRunEvent.ROUND_START, turn = 1, mutations = 2, readOnlyRounds = 0),
+            )
+            first.recordRunEvent(
+                taskId,
+                AgentRunEvent(
+                    AgentRunEvent.GATE_EVALUATED,
+                    detail = mapOf("passed" to false, "violations" to listOf("a file git does not show")),
+                ),
+            )
+        } finally {
+            // Closing flushes the write-behind queue: the shard is what a restart finds.
+            first.close()
+        }
+
+        // A fresh runner IS the restart: nothing is in memory, only the shard on disk.
+        val second = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))
+        try {
+            val restored = second.events(taskId)
+            assertTrue(restored.isNotEmpty(), "the restart must not lose the process")
+            assertEquals(
+                listOf(AgentTaskEvent.TYPE_CREATED, AgentRunEvent.ROUND_START, AgentTaskEvent.TYPE_GATE_EVALUATED),
+                restored.map { it.type },
+            )
+            assertEquals(1L, restored.first().seq, "restored steps keep their sequence numbers")
+            assertEquals(false, restored[2].detail!!["passed"], "the decision payload survives")
+
+            // The counters are recomputed from the restored steps, so `/stats` answers too.
+            val stats = assertNotNull(second.stats(taskId))
+            assertEquals(1, stats.rounds)
+            assertEquals(2L, stats.mutations)
+
+            // A new step continues the persisted sequence instead of restarting it.
+            second.recordRunEvent(taskId, AgentRunEvent(AgentRunEvent.MODEL_TEXT, text = "after the restart"))
+            val appended = second.events(taskId).last()
+            assertEquals(AgentRunEvent.MODEL_TEXT, appended.type)
+            assertEquals(restored.size + 1L, appended.seq)
+        } finally {
+            second.close()
+        }
+    }
+
+    @Test
+    @DisplayName("an unknown task is not resurrected by reading its (absent) shard")
+    fun readingAnUnknownTaskDoesNotCreateALog() {
+        val runner = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))
+        try {
+            assertNull(runner.eventsPage("ghost"))
+            assertNull(runner.stats("ghost"))
+            assertTrue(runner.events("ghost").isEmpty())
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
     @DisplayName("a terminal task leaves no steering queue behind")
     fun terminalTaskDoesNotLeakSteeringQueue() = runBlocking {
         val agent = mockAgent(AgentHistory(), "run-1")

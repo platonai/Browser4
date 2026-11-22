@@ -22,7 +22,10 @@ import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskRunStats
  * @property firstRetainedSeq sequence number of the oldest retained step (`0` when
  *   the log is empty/unknown) — compare it with your cursor to see the window move
  * @property dropped steps evicted from the bounded buffer over the log's lifetime;
- *   a follower that starts at `after=0` can tell it began inside the window from it
+ *   a follower that starts at `after=0` can tell it began inside the window from it.
+ *   A log **restored** after a backend restart starts this counter at 0: the steps
+ *   evicted before the restart are gone from both the buffer and its on-disk shard, so
+ *   `firstRetainedSeq` is what tells a follower where the remaining window begins.
  * @property resynced true when `after` had fallen behind the retained window: the
  *   page is the retained tail, not a continuation of what the caller already saw.
  *   Without this field the endpoint answered "you missed 300 steps" and "nothing new

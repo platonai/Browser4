@@ -133,6 +133,16 @@ open class StatefulAgentRunner(
         .build()
 
     /**
+     * Write-behind persistence of the step logs: what makes a task's PROCESS survive a backend
+     * restart instead of dying with the in-memory ring.
+     *
+     * It cannot change what a run does — appends are queued and written by one daemon thread,
+     * the queue drops lines rather than blocking a run, and every failure is logged at debug —
+     * so a slow or full disk costs history, never work (issue #652 §4).
+     */
+    private val eventStore: AgentTaskEventStore = AgentTaskEventStore(agentEventDir())
+
+    /**
      * Steering messages the interactive session typed while its task runs,
      * keyed by task id. Drained at every model round-trip by
      * [RobustBrowserAgent.steeringSource] and removed when the task ends.
@@ -349,6 +359,10 @@ open class StatefulAgentRunner(
             "Compacting agent task persistence ({} stale, {} rows kept, {} bytes, TTL {} min)",
             stale.size, kept.size, persistence.sizeInBytes(), taskTtlMinutes
         )
+        // The persisted step logs share the task TTL: a task whose row was just dropped has no
+        // reader left for its steps, and leaving them would grow the data dir without bound.
+        runCatching { eventStore.prune(ttlCutoff) }
+            .onFailure { logger.debug("pruning the persisted step logs failed: {}", it.message) }
     }
 
     fun create(): AgentTaskStatus {
@@ -366,10 +380,40 @@ open class StatefulAgentRunner(
 
     /**
      * The task's live step log; created on first use and kept bounded by
-     * [eventLogs] (capacity + idle TTL), never persisted.
+     * [eventLogs] (capacity + idle TTL).
+     *
+     * A log rebuilt after a restart adopts the steps persisted for the task, so a follower
+     * that reconnects still sees where the run had got to instead of an empty process next
+     * to a terminal status row. Each log is wired to [eventStore] so the tail keeps being
+     * persisted (issue #652 §4).
      */
     private fun eventLog(taskId: String): AgentTaskEventLog =
-        eventLogs.get(taskId) { AgentTaskEventLog() }
+        eventLogs.get(taskId) { builtEventLog(taskId) }
+
+    /**
+     * Build a log for [taskId], restoring whatever the store holds for it.
+     *
+     * Called from the Caffeine loader, so one task's log is built exactly once per process.
+     */
+    private fun builtEventLog(taskId: String): AgentTaskEventLog = AgentTaskEventLog().apply {
+        // The restored events may be older than anything this process wrote; `restore`
+        // keeps their seq, so a client's cursor stays meaningful across the restart.
+        runCatching { restore(eventStore.load(taskId)) }
+            .onFailure { logger.warn("restoring the step log of {} failed: {}", taskId, it.message) }
+        onAdopt = { event -> eventStore.append(taskId, event) }
+    }
+
+    /**
+     * The log of [id] if this runner has one in memory **or** on disk, else `null`.
+     *
+     * The distinction matters: `null` is what the REST layer turns into `404`, so an unknown
+     * task must not create an empty log — only a task with a persisted shard is restored.
+     */
+    private fun persistedEventLog(id: String): AgentTaskEventLog? {
+        eventLogs.getIfPresent(id)?.let { return it }
+        if (!eventStore.hasShard(id)) return null
+        return eventLogs.get(id) { builtEventLog(id) }
+    }
 
     /** Append one of the runner's own lifecycle steps for [status]. */
     private fun recordLifecycle(status: AgentTaskStatus, type: String, text: String? = null) {
@@ -564,7 +608,7 @@ open class StatefulAgentRunner(
      *
      * @param id task id
      * */
-    fun stats(id: String): AgentTaskRunStats? = eventLogs.getIfPresent(id)?.stats()
+    fun stats(id: String): AgentTaskRunStats? = persistedEventLog(id)?.stats()
 
     /**
      * The steps of [id] after [afterSeq], oldest first.
@@ -580,7 +624,7 @@ open class StatefulAgentRunner(
         id: String,
         afterSeq: Long = 0L,
         limit: Int = AgentTaskEventLog.DEFAULT_PAGE_LIMIT,
-    ): List<AgentTaskEvent> = eventLogs.getIfPresent(id)?.eventsAfter(afterSeq, limit) ?: emptyList()
+    ): List<AgentTaskEvent> = persistedEventLog(id)?.eventsAfter(afterSeq, limit) ?: emptyList()
 
     /**
      * One page of the live step log of [id], with the cursor-honesty facts a follower
@@ -599,7 +643,7 @@ open class StatefulAgentRunner(
         id: String,
         afterSeq: Long = 0L,
         limit: Int = AgentTaskEventLog.DEFAULT_PAGE_LIMIT,
-    ): AgentTaskEventPage? = eventLogs.getIfPresent(id)?.page(afterSeq, limit)
+    ): AgentTaskEventPage? = persistedEventLog(id)?.page(afterSeq, limit)
 
     /**
      * Queue a steering [text] for the running task [id].
@@ -2031,6 +2075,10 @@ open class StatefulAgentRunner(
 
         statusCache.invalidateAll()
         eventLogs.invalidateAll()
+        // Write the queued step lines before dropping the logs: a shutdown must not lose the
+        // process of tasks that just finished.
+        runCatching { eventStore.close() }
+            .onFailure { logger.debug("closing the agent event store failed: {}", it.message) }
         liveInstances.remove(this)
         logger.info("StatefulAgentRunner closed (agentSession={})", session.uuid)
     }
@@ -2113,6 +2161,14 @@ open class StatefulAgentRunner(
             System.getProperty("browser4.data.dir", System.getProperty("user.home")),
             ".browser4", "data", "agent", "agent-tasks.jsonl"
         )
+
+        /**
+         * Where one task's persisted step log lives: `<data>/agent/events/<taskId>.jsonl`.
+         *
+         * Next to the task registry on purpose — both are aged out by the same TTL, and both
+         * are per-task rows a reviewer may be handed.
+         */
+        fun agentEventDir(): Path = agentPersistencePath().parent.resolve("events")
 
         /**
          * Look up a task status straight from the disk persistence, without

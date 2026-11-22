@@ -15,11 +15,15 @@ import com.fasterxml.jackson.databind.node.ObjectNode
  * these, served by `GET /api/commands/{id}/events`.
  *
  * Events are kept in a bounded in-memory log ([AgentTaskEventLog]) next to the
- * task status; they are deliberately **not** persisted — the JSONL row set is a
- * task registry, not a run log, and a 1000-event buffer per task would dwarf it.
+ * task status, and the same steps are written to a per-task JSONL shard by
+ * [AgentTaskEventStore] — write-behind, on a daemon thread, so a run pays nothing for
+ * it, and a backend restart can restore the PROCESS instead of only the status row.
+ * The JSONL row set stays a task registry; the shards live next to it under
+ * `<data>/agent/events/` and age out with the same TTL.
  *
  * `arguments` and `text` are already truncated and secret-redacted by
- * [AgentTaskEventSanitizer] when the event enters the log.
+ * [AgentTaskEventSanitizer] when the event enters the log — which is also the point
+ * where it is persisted, so the on-disk copy is as safe as the served one.
  *
  * @property seq monotonic per-task sequence number, the cursor for `?after=`
  * @property type one of the `AgentTaskEvent.TYPE_*` constants
@@ -475,6 +479,12 @@ private class RunStatsAccumulator {
  * The run's aggregate counters ([stats]) are maintained as events are appended,
  * so they stay exact even after their steps have been evicted.
  *
+ * The log itself is memory-only, but it is not the last copy: [onAdopt] lets the task
+ * runner mirror every step to [AgentTaskEventStore], and [restore] adopts what a previous
+ * process wrote — with the original sequence numbers, so a client's cursor survives the
+ * restart. A restored log's [droppedCount] starts at 0: the events evicted before the
+ * restart are already gone from the shard (it is rotated to the same window).
+ *
  * @param capacity maximum number of retained events (default [DEFAULT_CAPACITY])
  * */
 class AgentTaskEventLog(val capacity: Int = DEFAULT_CAPACITY) {
@@ -487,6 +497,16 @@ class AgentTaskEventLog(val capacity: Int = DEFAULT_CAPACITY) {
     private var nextSeq: Long = 1L
     private var dropped: Long = 0L
     private val accumulator = RunStatsAccumulator()
+
+    /**
+     * Called with every event this log adopts, after it is stored.
+     *
+     * The runner installs a persister here ([AgentTaskEventStore]) so a restart can restore the
+     * process, not only the status row. Kept as a listener rather than a constructor argument:
+     * the log is usable (and cheap) without any sink, and tests exercise it that way.
+     */
+    @Volatile
+    var onAdopt: ((AgentTaskEvent) -> Unit)? = null
 
     /**
      * Append one event, assigning it the next sequence number.
@@ -560,7 +580,48 @@ class AgentTaskEventLog(val capacity: Int = DEFAULT_CAPACITY) {
             events.removeFirst()
             dropped++
         }
+        // Best effort: a persister failure must never fail the run it observes.
+        onAdopt?.let { sink -> runCatching { sink(event) } }
         return event
+    }
+
+    /**
+     * Adopt events read back from disk, preserving their sequence numbers.
+     *
+     * Used when this task's log is (re)built for a task that ran before a backend restart: the
+     * restored steps keep their `seq`, so a client's cursor still means what it meant, and the
+     * aggregate counters ([stats]) are recomputed from them.
+     *
+     * Restored events are **not** re-serialized through [append]: they were sanitized when they
+     * were first written, and re-previewing a preview would truncate the payload twice.
+     *
+     * @param restored the persisted events, oldest first (already ordered by `seq`)
+     * @return how many events were adopted
+     */
+    @Synchronized
+    fun restore(restored: List<AgentTaskEvent>): Int {
+        if (restored.isEmpty()) return 0
+        var adopted = 0
+        for (event in restored.sortedBy { it.seq }) {
+            // A shard can overlap what this log already holds (a reader restored it while the
+            // task was still appending): only strictly newer steps are adopted.
+            if (event.seq < nextSeq) continue
+            nextSeq = event.seq + 1
+            accumulator.record(
+                event.type, event.tool, event.ok, event.inputTokens, event.outputTokens,
+                event.totalTokens, event.cachedInputTokens, event.cacheWriteInputTokens,
+                event.mutations, event.readOnlyRounds, event.epochMillis,
+            )
+            events.addLast(event)
+            while (events.size > capacity) {
+                events.removeFirst()
+                // An eviction here is the same loss a live log has: the log is bounded, and a
+                // reader that fell behind is told about it through `dropped`.
+                dropped++
+            }
+            adopted++
+        }
+        return adopted
     }
 
     /**
