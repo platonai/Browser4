@@ -238,6 +238,8 @@ class AgentTaskStatusTest {
         status.refresh(ResourceStatus.SC_PROCESSING)
         status.submittedTask = "refactor Browser4WebDriver"
         status.workspace = "/workspace"
+        status.sessionId = "interactive-abc"
+        status.workspaceExplicit = true
         status.toolExecutions = 42
         status.agentHistory = AgentHistory(
             mutableListOf(AgentState(step = 1, instruction = "refactor", sessionId = "run-1"))
@@ -246,13 +248,15 @@ class AgentTaskStatusTest {
         val snapshot = status.detachedSnapshot()
 
         // data class copy() only carries constructor properties: createdTime,
-        // startedTime, lastModifiedTime, submittedTask, workspace and
-        // toolExecutions must be copied explicitly.
+        // startedTime, lastModifiedTime, submittedTask, workspace, the session
+        // attribution and toolExecutions must be copied explicitly.
         assertEquals(status.createdTime, snapshot.createdTime)
         assertEquals(status.startedTime, snapshot.startedTime)
         assertEquals(status.lastModifiedTime, snapshot.lastModifiedTime)
         assertEquals("refactor Browser4WebDriver", snapshot.submittedTask)
         assertEquals("/workspace", snapshot.workspace)
+        assertEquals("interactive-abc", snapshot.sessionId, "the sidebar groups by this field")
+        assertTrue(snapshot.workspaceExplicit, "a caller-named workspace must stay durable after a restart")
         assertEquals(42, snapshot.toolExecutions)
         assertEquals(1, snapshot.agentHistory?.states?.size)
         assertNotSame(status.agentHistory, snapshot.agentHistory, "the history must be detached")

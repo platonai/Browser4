@@ -8,6 +8,7 @@ import ai.platon.pulsar.agentic.tools.TaskEnvelopes
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.coding.AccessPreset
 import ai.platon.pulsar.coding.AdditionalDirs
+import ai.platon.pulsar.coding.TaskWorkspaceOverride
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.api.entities.CommandEvents
 import ai.platon.pulsar.rest.api.entities.CommandStatus
@@ -150,6 +151,19 @@ class CommandToolExecutor(
                         "is reset when it ends), while the access preset still decides whether anything " +
                         "may be written there.",
                 ),
+                ToolSpec.Arg(
+                    "workspace", "String?", "null",
+                    "The directory THIS task runs in (`agent run --workspace <dir>`): an absolute path " +
+                        "to an existing directory on the backend machine. The task works in it **in " +
+                        "place** — no per-task copy, no git worktree, no merge — and the directory is " +
+                        "never created, archived or swept by Browser4. Without `coding` it replaces the " +
+                        "per-task `<agent data>/workspace.<taskId>` directory; with `coding` the task " +
+                        "still runs in place (a non-git corpus is a legitimate coding target), while " +
+                        "the backend's own coding checkout is refused: an in-place run there would " +
+                        "bypass the isolated worktree and its verify-gated merge. Cannot be combined " +
+                        "with `resumeTaskId` or `sharedWorkspace`; omit (or leave empty) to keep the " +
+                        "per-task workspace.",
+                ),
             ),
             returnType = "String",
             description = "Execute a plain command (URL, instruction, or agent task). " +
@@ -175,6 +189,10 @@ class CommandToolExecutor(
                 addDirs grants extra absolute folders besides the workspace ("agent run
                 --add-dir"): the task may read, write and run commands there, the access
                 preset still limits what may be written, and the grant ends with the task.
+                workspace names the directory the task runs in ("agent run --workspace
+                <dir>"): an existing absolute directory, used in place (no per-task copy,
+                no worktree, no merge, never archived), incompatible with resumeTaskId and
+                sharedWorkspace. With coding=true the backend's own checkout is refused.
             """.trimIndent(),
             examples = listOf(
                 ToolExample(
@@ -500,7 +518,7 @@ class CommandToolExecutor(
                     allowed = setOf(
                         "command", "async", "noopLimit", "engine", "coding", "freshWorkspace", "sharedWorkspace",
                         "access", "unattended", "resumeTaskId", "rewindTaskId", "tokenBudget", "addDirs",
-                        "unrestricted",
+                        "unrestricted", "workspace",
                     ) + SESSION_ARG,
                     // `agent run --resume <id>` may omit the task text: the instruction
                     // comes from the interrupted task's checkpoint. Validated below.
@@ -567,15 +585,26 @@ class CommandToolExecutor(
                 val addDirs = AdditionalDirs.resolveAll(
                     paramStringList(args, "addDirs", functionName, required = false)
                 )
+                // `agent run --workspace <dir>`: the directory the task runs in, used in place.
+                // Resolved and validated at the single decision point (existence, type, credential
+                // stores, the coding checkout for a coding task) so a bad value fails the call with
+                // an actionable message instead of starting a task in a directory nobody named.
+                // The conflict check runs here too: a task that is submitted and then fails is a
+                // worse answer than "these two flags cannot be combined".
+                val workspace = paramString(args, "workspace", functionName, required = false, default = null)
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.let { TaskWorkspaceOverride.resolve(it, coding = coding == true) }
+                TaskWorkspaceOverride.requireCompatibleWorkspaceFlags(workspace, resumeTaskId, sharedWorkspace)
                 if (isAsync) {
                     service.submitPlainCommand(
                         sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
-                        resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId,
+                        resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace,
                     )
                 } else {
                     val status = service.executePlainCommand(
                         sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
-                        resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId,
+                        resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace,
                     )
                     pulsarObjectMapper().writeValueAsString(status)
                 }

@@ -13,6 +13,7 @@ import ai.platon.pulsar.coding.CodingAgentFileSystem
 import ai.platon.pulsar.coding.CodingAgentShell
 import ai.platon.pulsar.coding.CodingComponents
 import ai.platon.pulsar.coding.CodingWorkspace
+import ai.platon.pulsar.coding.WorkspaceIsolation
 import ai.platon.pulsar.coding.sandbox.ExecutionSandboxes
 import ai.platon.pulsar.agentic.cli.CliStateEnv
 import ai.platon.pulsar.agentic.model.*
@@ -46,6 +47,20 @@ class AgentToolManager constructor(
      *  the root from the shell at dispatch time, so it cannot go stale. */
     @Volatile
     var workspaceRoot: Path = initialWorkspaceRoot
+        private set
+
+    /**
+     * Whether [workspaceRoot] was named by the caller (`agent run --workspace <dir>`) instead of
+     * being chosen by the task runner.
+     *
+     * An explicit workspace is used **in place** and belongs to the caller, so it is never
+     * provisioned as a coding mirror: linking the backend checkout's reactor modules into a
+     * caller-named directory would put the repo's module entries into a data corpus the user
+     * simply pointed the task at. Reset by every [rebindWorkspace] call, so a previous task's
+     * choice cannot leak into the next one.
+     */
+    @Volatile
+    var workspaceExplicit: Boolean = false
         private set
 
     /**
@@ -246,6 +261,13 @@ class AgentToolManager constructor(
      */
     internal fun provisionCodingWorkspaceMirror() {
         if (!agent.codingMode) return
+        // `agent run --workspace <dir>`: the caller named the tree and it is used as-is. Mirroring
+        // would write the checkout's module entries into it (and a manifest pointing at a repo the
+        // user never mentioned), so the override is the whole workspace provisioning.
+        if (workspaceExplicit) {
+            logger.debug("workspace {} was named by the caller; skipping the coding mirror", workspaceRoot)
+            return
+        }
         val root = workspaceRoot.toAbsolutePath().normalize()
         if (root == ai.platon.pulsar.coding.CodingWorkspace.workspaceRoot.toAbsolutePath().normalize()) return
         // A git work tree is already repository-shaped (every module is right
@@ -308,7 +330,15 @@ class AgentToolManager constructor(
         // worktree has no manifest of its own until this write point, and the
         // task-end Δgit computation must look at the MAIN repository, not the
         // isolated tree.
-        val repo = existing?.sourceRepo?.let { java.nio.file.Path.of(it) } ?: sourceRepo
+        //
+        // `--workspace <dir>` has neither an isolation record nor a manifest on first use, but a
+        // git directory still needs its baseline: without it `filesChanged` would report only the
+        // mutation log, and a change the model made through a shell command would be invisible.
+        // Resolved from the workspace itself — never from the backend checkout.
+        val explicitRepo = if (existing?.sourceRepo == null && sourceRepo == null && workspaceExplicit) {
+            runCatching { WorkspaceIsolation.resolveRepoRoot(root) }.getOrNull()
+        } else null
+        val repo = existing?.sourceRepo?.let { java.nio.file.Path.of(it) } ?: sourceRepo ?: explicitRepo
         // Write point 2: rotate leftover currentTask (crash recovery) then set active.
         runCatching {
             val base = existing ?: ai.platon.pulsar.coding.WorkspaceManifest(
@@ -339,7 +369,16 @@ class AgentToolManager constructor(
                 gitBaseline = lifecycle.captureGitBaseline(repo)
             }
         }.onFailure { logger.warn("beginTask manifest write failed: {}", it.message) }
-        return runCatching { lifecycle.beginTask(root, taskId, instruction, coding, codingFs) }
+        return runCatching {
+            lifecycle.beginTask(
+                root, taskId, instruction, coding, codingFs,
+                // `--workspace <dir>` belongs to the caller: its deliverables are never archived
+                // next to it (the archive lives in `workspaceRoot.parent/workspace.archive`, a
+                // sibling directory the user did not ask for) and no "inherited state" block is
+                // invented for a tree the engine did not hand to the previous task.
+                archiveDeliverables = !workspaceExplicit,
+            )
+        }
             .onFailure { logger.warn("beginTask archive/reset failed: {}", it.message) }
             .getOrNull()?.inheritedSummary
     }
@@ -490,12 +529,19 @@ class AgentToolManager constructor(
 
     /**
      * Point the coding tools at a fresh, isolated workspace root. Used by the
-     * task runner when the caller passes `agent run --fresh-workspace`. The
-     * previous [codingShell]/[codingFs]/[codingTarget] are replaced; callers
+     * task runner when the caller passes `agent run --fresh-workspace` (now the
+     * default) or `--workspace <dir>`. The previous
+     * [codingShell]/[codingFs]/[codingTarget] are replaced; callers
      * that read these properties each dispatch see the new instances.
+     *
+     * @param root the workspace this task runs in
+     * @param explicit true when [root] was named by the caller (`--workspace`) rather than
+     *   chosen by the runner — see [workspaceExplicit]. Every rebind resets the flag, so a
+     *   stale override cannot follow a task into the next one.
      */
-    fun rebindWorkspace(root: Path) {
+    fun rebindWorkspace(root: Path, explicit: Boolean = false) {
         workspaceRoot = root
+        workspaceExplicit = explicit
         codingShell = buildCodingShell(root)
         codingFs = buildCodingFs(root)
         codingTarget = buildCodingTarget(root)

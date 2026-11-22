@@ -32,6 +32,12 @@ class WorkspaceTaskLifecycle(
      * The archive/inheritance guard intentionally skips the same-taskId case
      * (resume / re-run of a cancelled task) — a resume must not archive the
      * half-finished work it is about to continue.
+     *
+     * @param archiveDeliverables false for a caller-named workspace (`agent run --workspace`):
+     *   the tree belongs to the caller, so no archive is written next to it (the archive path is
+     *   `workspaceRoot.parent/workspace.archive`, a sibling the user never asked for) and no
+     *   "inherited workspace state" block is invented. Change tracking is still reset, so the
+     *   task's `filesChanged` starts at zero.
      */
     fun beginTask(
         workspaceRoot: Path,
@@ -39,9 +45,10 @@ class WorkspaceTaskLifecycle(
         instruction: String,
         coding: Boolean,
         fs: CodingAgentFileSystem,
+        archiveDeliverables: Boolean = true,
     ): BeginTaskOutcome {
         val manifest = runCatching { store.read(workspaceRoot) }.getOrNull()
-        val archiveDir = if (coding) archiveDir(workspaceRoot) else null
+        val archiveDir = if (coding && archiveDeliverables) archiveDir(workspaceRoot) else null
 
         // Reset change tracking first so any mid-archive failure still leaves a
         // clean counter for the new task (§6.2.1 "先归档、后重置" is about file
@@ -50,7 +57,7 @@ class WorkspaceTaskLifecycle(
         fs.beginTask(archiveDir)
 
         val inherited = runCatching {
-            if (!coding) null
+            if (!coding || !archiveDeliverables) null
             else {
                 val prev = manifest?.lastTask ?: return@runCatching null
                 if (prev.taskId == taskId) return@runCatching null // resume guard

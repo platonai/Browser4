@@ -4254,6 +4254,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "coding", description: "Mark the task as a coding task (plain file/build work; no browser page, no page navigation, no screenshots). Everything else — including any URL or page interaction — stays a browser task, which is the default: task type is never auto-detected", is_bool: true, short: None },
                 OptionDef { name: "fresh-workspace", description: "Deprecated compatibility switch: every task now runs in its own workspace directory, so this is a no-op. Use --shared-workspace for the opposite", is_bool: true, short: None },
                 OptionDef { name: "shared-workspace", description: "Run this task in the shared workspace (the old default) instead of its own per-task workspace, so it sees and mutates previous tasks' files. --resume still uses the interrupted task's workspace", is_bool: true, short: None },
+                OptionDef { name: "workspace <dir>", description: "Run this task in the given directory, in place: an existing folder on the backend machine becomes the task's workspace, so the agent reads and writes there directly instead of in a per-task copy. Nothing is isolated, merged, archived or swept, --coding included (the backend's own coding checkout is refused: drop --workspace or have the operator set -Dbrowser4.agent.workspace.isolation=off). A relative path resolves against the current shell directory and ~ expands to the home directory. Cannot be combined with --resume or --shared-workspace", is_bool: false, short: None },
                 OptionDef { name: "access", description: "Access preset for this task's coding tools: full (default), write (no shell), read-build (read + project build, no shell, no file mutation), read. Omit to use the server-wide browser4.agent.access default. Reset when the task ends", is_bool: false, short: None },
                 OptionDef { name: "add-dir <dir>", description: "Grant this task's agent an extra folder besides its workspace: readable, writable and usable as a shell working directory. Repeatable (one flag per folder); relative paths resolve against the current shell directory and ~ expands to the home directory. The folder must already exist on the backend machine, and the OS credential stores (~/.ssh, ~/.aws, ~/.gnupg, ~/.config/gcloud) stay refused. The grant lasts for this task only and is reset when it ends", is_bool: false, short: None },
                 OptionDef { name: "unrestricted", description: "Run this task with the current OS user's own permissions: full preset, external access, network, destructive commands, no protected rails, no OS sandbox, and the shell's command allow-list is off too (inline scripts and PowerShell cmdlets run as written; shapes the checker cannot decompose are handed to the platform shell in every mode). The OS credential stores (~/.ssh, ~/.aws, ~/.gnupg, ~/.config/gcloud) stay refused, as do the commands that would kill or rebuild this backend. Opt-in per task, audited, inherited by --resume; with -i it applies to every task of the session", is_bool: true, short: None },
@@ -4292,6 +4293,19 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if get_bool(args, "shared-workspace").unwrap_or(false) {
                     p["sharedWorkspace"] = json!(true);
+                }
+                // `--workspace <dir>`: the caller names the task's workspace, which is then used in
+                // place. Resolved to an absolute path here for the same reason as `--add-dir` (the
+                // backend runs in the runtime bundle, so a relative path would name a different
+                // directory there); the backend owns the "exists, is a directory, not a credential
+                // store, not the coding checkout" decision, because only it knows the machine.
+                if let Some(dir) = get_opt_str(args, "workspace") {
+                    // A blank value is not a directory: checking before `resolve_add_dir` matters,
+                    // because an empty path collapses to the current directory and would silently
+                    // run the task in the shell's cwd.
+                    if !dir.trim().is_empty() {
+                        p["workspace"] = json!(resolve_add_dir(&dir));
+                    }
                 }
                 if let Some(access) = get_opt_str(args, "access") {
                     p["access"] = json!(access);
@@ -7628,6 +7642,67 @@ mod tests {
             "a relative folder must be resolved against the shell directory, got {relative}"
         );
         assert!(relative.ends_with("shared-libs"), "got {relative}");
+    }
+
+    /// `--workspace <dir>` names the task's directory and is forwarded as one absolute
+    /// path: the backend runs in the runtime bundle, so a relative value would name a
+    /// different directory there. No flag at all leaves the key out, which keeps the
+    /// per-task workspace (an empty string would be a directory nobody named).
+    #[test]
+    fn test_agent_run_forwards_workspace_as_an_absolute_path() {
+        let map = commands_map();
+        let cmd = map.get("agent-run").unwrap();
+        let absolute = if cfg!(windows) { "C:\\corpus" } else { "/corpus" };
+
+        let mut args = HashMap::new();
+        args.insert("task".to_string(), json!("summarize the corpus"));
+        args.insert("workspace".to_string(), json!(absolute));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["workspace"], json!(absolute), "got {params}");
+
+        let mut relative = HashMap::new();
+        relative.insert("task".to_string(), json!("summarize the corpus"));
+        relative.insert("workspace".to_string(), json!("corpus"));
+        let params = (cmd.tool_params_fn)(&relative);
+        let resolved = params["workspace"].as_str().expect("workspace must be forwarded");
+        assert!(
+            std::path::Path::new(resolved).is_absolute(),
+            "a relative workspace must be resolved against the shell directory, got {resolved}"
+        );
+        assert!(resolved.ends_with("corpus"), "got {resolved}");
+
+        let mut absent = HashMap::new();
+        absent.insert("task".to_string(), json!("summarize the corpus"));
+        let params = (cmd.tool_params_fn)(&absent);
+        assert!(params.get("workspace").is_none(), "got {params}");
+
+        let mut blank = HashMap::new();
+        blank.insert("task".to_string(), json!("summarize the corpus"));
+        blank.insert("workspace".to_string(), json!("   "));
+        let params = (cmd.tool_params_fn)(&blank);
+        assert!(params.get("workspace").is_none(), "a blank directory is not a directory, got {params}");
+    }
+
+    /// `--workspace` and the two flags that also name the workspace travel in the
+    /// payload untouched: the refusal is reported by `handle_agent_run` (CLI side) and
+    /// again by the backend, so a task is never accepted and then silently run
+    /// somewhere the caller did not name.
+    #[test]
+    fn test_agent_run_forwards_workspace_with_the_flags_it_conflicts_with() {
+        let map = commands_map();
+        let cmd = map.get("agent-run").unwrap();
+        let absolute = if cfg!(windows) { "C:\\corpus" } else { "/corpus" };
+
+        let mut args = HashMap::new();
+        args.insert("task".to_string(), json!("summarize"));
+        args.insert("workspace".to_string(), json!(absolute));
+        args.insert("resume".to_string(), json!("task-1"));
+        args.insert("shared-workspace".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert_eq!(params["workspace"], json!(absolute), "got {params}");
+        assert_eq!(params["sharedWorkspace"], json!(true), "got {params}");
+        assert_eq!(params["resumeTaskId"], json!("task-1"), "got {params}");
     }
 
     /// `--unrestricted` is a per-task opt-in: forwarded as `true` when given, and

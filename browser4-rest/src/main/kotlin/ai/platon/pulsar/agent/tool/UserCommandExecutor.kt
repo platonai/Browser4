@@ -7,6 +7,7 @@ import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEvent
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEventLog
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEventPage
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskRunStats
+import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskStatus
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTraceIndex
 import ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner
 import ai.platon.pulsar.agentic.common.SecretRedactor
@@ -230,6 +231,7 @@ class UserCommandExecutor(
         addDirs: List<Path> = emptyList(),
         unrestricted: Boolean? = null,
         rewindTaskId: String? = null,
+        workspace: Path? = null,
     ): CommandStatus {
         // A resume may omit the task text entirely: the instruction comes from the
         // interrupted task's checkpoint on the backend.
@@ -243,7 +245,7 @@ class UserCommandExecutor(
                 freshWorkspace = freshWorkspace, sharedWorkspace = sharedWorkspace,
                 access = access, unattended = unattended,
                 resumeTaskId = resumeTaskId, tokenBudget = tokenBudget, addDirs = addDirs,
-                unrestricted = unrestricted, rewindTaskId = rewindTaskId,
+                unrestricted = unrestricted, rewindTaskId = rewindTaskId, workspace = workspace,
             )
             .toCommandStatus()
     }
@@ -273,6 +275,7 @@ class UserCommandExecutor(
         addDirs: List<Path> = emptyList(),
         unrestricted: Boolean? = null,
         rewindTaskId: String? = null,
+        workspace: Path? = null,
     ): String {
         val command = plainCommand.trim()
 
@@ -287,7 +290,7 @@ class UserCommandExecutor(
 
         return submitAgentTask(
             sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId,
-            tokenBudget, addDirs, unrestricted, rewindTaskId,
+            tokenBudget, addDirs, unrestricted, rewindTaskId, workspace,
         )
     }
 
@@ -322,20 +325,22 @@ class UserCommandExecutor(
         addDirs: List<Path> = emptyList(),
         unrestricted: Boolean? = null,
         rewindTaskId: String? = null,
+        workspace: Path? = null,
     ): String {
         val runner = ensureAgentRunner(sessionId)
         val status = runner.create()
         taskOwner[status.id] = "agent"
         logger.info(
-            "Submitting agent task {} (session={}, noopLimit={}, coding={}, freshWorkspace={}, access={}, unattended={}, resume={}, tokenBudget={}, addDirs={})",
+            "Submitting agent task {} (session={}, noopLimit={}, coding={}, freshWorkspace={}, access={}, unattended={}, resume={}, tokenBudget={}, addDirs={}, workspace={})",
             status.id, sessionId, noopLimit, coding ?: false, freshWorkspace ?: false,
             access?.id ?: "default", unattended, resumeTaskId ?: "none",
             tokenBudget ?: "default",
             addDirs.map { it.toString() }.ifEmpty { listOf("none") }.joinToString(","),
+            workspace?.toString() ?: "default",
         )
         runner.submit(
             plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId,
-            tokenBudget, addDirs, unrestricted, rewindTaskId,
+            tokenBudget, addDirs, unrestricted, rewindTaskId, workspace,
         )
         return status.id
     }
@@ -690,6 +695,49 @@ class UserCommandExecutor(
     /** The task's status from whichever runner owns it, whatever session was named. */
     private fun probeAllRunners(id: String): CommandStatus? =
         agentRunners.values.firstNotNullOfOrNull { it.getStatus(id)?.toCommandStatus() }
+
+    /**
+     * Every agent task this backend can still describe, newest row per task id.
+     *
+     * Two sources, because each answers a question the other cannot:
+     *
+     * - the live runners' caches are authoritative for a task that is **running** (or that
+     *   this process just finished), including its current progress;
+     * - the shared JSONL registry is the only thing left after a restart, and it also holds
+     *   the tasks of a session whose runner was rebuilt or closed.
+     *
+     * A row read from disk never overwrites a newer in-memory one, and an older duplicate
+     * (the registry appends one row per status change) is dropped, so a caller sees one row
+     * per task.
+     *
+     * Used by the web console's session sidebar and by `agent list`-style surfaces: both
+     * need to group tasks by session, which is why [ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskStatus.sessionId]
+     * is persisted with every row.
+     */
+    fun agentTaskStatuses(): List<AgentTaskStatus> {
+        val newest = LinkedHashMap<String, AgentTaskStatus>()
+        agentRunners.values.forEach { runner ->
+            runCatching { runner.statuses() }.getOrDefault(emptyList()).forEach { newest[it.id] = it }
+        }
+        runCatching { StatefulAgentRunner.sharedAgentPersistence().readAll() }
+            .getOrDefault(emptyList())
+            .forEach { row ->
+                val current = newest[row.id]
+                if (current == null || row.lastActivity().isAfter(current.lastActivity())) {
+                    newest[row.id] = row
+                }
+            }
+        return newest.values.toList()
+    }
+
+    /**
+     * The sessions that have a live runner in this process.
+     *
+     * A session listed by the sidebar but missing from this set is remembered history
+     * only: switching to it still works (the next task rebuilds the runner), but nothing
+     * of it is currently running.
+     */
+    fun liveAgentSessionIds(): Set<String> = agentRunners.keys.toSet()
 
     private fun fallbackPageStatus(sessionId: String, id: String): CommandStatus? {
         if (!pageVisitors.containsKey(sessionId)) return null

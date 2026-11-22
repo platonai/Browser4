@@ -538,7 +538,7 @@ call this directly and treat a non-terminal `status` as "not ready".
 ### `command_run`
 
 ```
-command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, sharedWorkspace: Boolean? = null, engine: String? = null, access: String? = null, unattended: Boolean? = true, unrestricted: Boolean? = null, resumeTaskId: String? = null, tokenBudget: Long? = null, addDirs: List<String>? = null)
+command.run(command: String, async: Boolean = true, noopLimit: Int? = null, coding: Boolean? = null, freshWorkspace: Boolean? = null, sharedWorkspace: Boolean? = null, engine: String? = null, access: String? = null, unattended: Boolean? = true, unrestricted: Boolean? = null, resumeTaskId: String? = null, tokenBudget: Long? = null, addDirs: List<String>? = null, workspace: String? = null)
 ```
 
 Execute a plain command (URL, instruction, or agent task). When async=true (default), returns a task ID immediately. When async=false, blocks until done and returns the CommandStatus as JSON. noopLimit optionally overrides the consecutive no-op abort threshold for agent tasks. engine is a deprecated compatibility argument: the CLI tool loop is the only engine, and the removed 'observe-act' engine is rejected. coding=true explicitly marks an agent task as a coding task (file/build work, no page); omitted or false means a browser task — the default, and never auto-detected.
@@ -558,6 +558,7 @@ Execute a plain command (URL, instruction, or agent task). When async=true (defa
 | `resumeTaskId` | String? | no | null | Resume an interrupted task by id: the new run starts from that task's checkpoint — its instruction, workspace and the files already written — and inherits its coding/access flags. `command` may then be empty. The id must be known to this backend (the interrupted row is restored after a restart, within its TTL). |
 | `tokenBudget` | Long? | no | null | **Cache-miss** token budget for THIS task (`agent run --token-budget`), overriding `agent.token.budget.total` for this run only — a per-run override, never a process-wide config write. The charge is uncached prompt + output; prompt-cache reads do not count, and a provider that reports no cache details charges its whole prompt. 0 means unlimited. Omit to use the configured default. |
 | `addDirs` | List<String>? | no | null | Extra folders this task's agent may reach besides its workspace (`agent run --add-dir`, repeatable). Each entry must be an absolute path to an existing directory on the backend machine; relative paths, missing folders and OS credential stores are rejected at submission. An added folder is readable, writable and usable as a shell working directory for this task only (the grant is reset when it ends), while the access preset still decides whether anything may be written there. |
+| `workspace` | String? | no | null | The directory THIS task runs in (`agent run --workspace <dir>`): an absolute path to an existing directory on the backend machine. The task works in it **in place** — no per-task copy, no git worktree, no merge — and the directory is never created, archived or swept by Browser4. Without `coding` it replaces the per-task `<agent data>/workspace.<taskId>` directory; with `coding` the task still runs in place (a non-git corpus is a legitimate coding target), while the backend's own coding checkout is refused: an in-place run there would bypass the isolated worktree and its verify-gated merge. Cannot be combined with `resumeTaskId` or `sharedWorkspace`; omit (or leave empty) to keep the per-task workspace. |
 
 Returns: `String`
 
@@ -608,6 +609,10 @@ Tasks are browser tasks unless the caller says otherwise.
 addDirs grants extra absolute folders besides the workspace ("agent run
 --add-dir"): the task may read, write and run commands there, the access
 preset still limits what may be written, and the grant ends with the task.
+workspace names the directory the task runs in ("agent run --workspace
+<dir>"): an existing absolute directory, used in place (no per-task copy,
+no worktree, no merge, never archived), incompatible with resumeTaskId and
+sharedWorkspace. With coding=true the backend's own checkout is refused.
 
 </details>
 

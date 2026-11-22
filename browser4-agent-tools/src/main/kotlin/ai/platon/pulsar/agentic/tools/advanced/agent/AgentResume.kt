@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agentic.tools.advanced.agent
 
 import ai.platon.pulsar.coding.CodingWorkspace
+import ai.platon.pulsar.coding.TaskWorkspaceOverride
 import ai.platon.pulsar.coding.WorkspaceIsolation
 import java.nio.file.Files
 import java.nio.file.Path
@@ -109,6 +110,10 @@ internal const val MAX_ABORT_DELIVERABLES = 50
  * @param resumeWorkspace the interrupted task's workspace when resuming — the files it
  *   already wrote are what the new run continues from
  * @param sharedWorkspace `--shared-workspace`: use the shared `<baseDir>/workspace`
+ * @param explicitWorkspace `agent run --workspace <dir>`: the caller named the directory, so it
+ *   wins over every other rule. The directory is used **in place** (nothing is copied into it and
+ *   nothing is merged out of it), which is why [requireCompatibleWorkspaceFlags] refuses it
+ *   together with the two flags that also name a workspace.
  * @return the workspace to use, or `null` for the shared `<baseDir>/workspace`. The runner
  *   rebinds to this workspace before applying the task's access policy, so the policy file is
  *   read from it rather than from the workspace that was active before the task started.
@@ -118,11 +123,31 @@ internal fun taskWorkspaceFor(
     taskId: String,
     resumeWorkspace: Path?,
     sharedWorkspace: Boolean?,
+    explicitWorkspace: Path? = null,
 ): Path? = when {
+    explicitWorkspace != null -> explicitWorkspace
     resumeWorkspace != null -> resumeWorkspace
     sharedWorkspace == true -> null
     else -> baseDir.resolve("workspace.$taskId")
 }
+
+/**
+ * Refuse `--workspace` combined with a flag that already names the task's workspace.
+ *
+ * The rule lives with the other `--workspace` validation
+ * ([TaskWorkspaceOverride.requireCompatibleWorkspaceFlags]) so the submission path and the task
+ * runner cannot drift apart; this alias keeps the check next to [taskWorkspaceFor], which uses it.
+ *
+ * @param explicitWorkspace the resolved `--workspace` directory, or null when the flag was absent
+ * @param resumeTaskId the raw `--resume` value, or null
+ * @param sharedWorkspace the raw `--shared-workspace` value, or null
+ * @throws IllegalArgumentException naming the conflicting pair and the fix
+ */
+internal fun requireCompatibleWorkspaceFlags(
+    explicitWorkspace: Path?,
+    resumeTaskId: String?,
+    sharedWorkspace: Boolean?,
+) = TaskWorkspaceOverride.requireCompatibleWorkspaceFlags(explicitWorkspace, resumeTaskId, sharedWorkspace)
 
 /**
  * The managed worktree a resumed coding task must continue in, or `null` when the

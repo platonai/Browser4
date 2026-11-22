@@ -774,6 +774,12 @@ docker run -d -p 18182:18182 `
   pre-2026-11 in-place/mirror behaviour). The older `coding.devTask` path uses the same
   switch and merges only on success.
 
+  Not the same as the CLI's `agent run --workspace <dir>`: that one names **one task's**
+  directory and runs it in place (no worktree, no merge, nothing archived), while this
+  property names the checkout every coding task mirrors/worktrees from. A `--coding` task
+  may not point `--workspace` at this checkout — it would bypass the worktree and its
+  verify-gated merge.
+
 * **`browser4.agent.isolation.requireVerify`** *(default: `true`)*
   A coding run that changed code is merged back only when `coding.verify` produced a
   **passing** verdict covering the changed modules. Documentation-only changes need no

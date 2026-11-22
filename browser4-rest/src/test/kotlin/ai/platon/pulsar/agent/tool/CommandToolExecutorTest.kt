@@ -490,6 +490,80 @@ class CommandToolExecutorTest {
     }
 
     @Test
+    @DisplayName("run forwards --workspace so the task runs in place in the directory the caller named")
+    fun runForwardsExplicitWorkspace() {
+        val dir = Files.createTempDirectory("b4-workspace-")
+        try {
+            val resolved = dir.toAbsolutePath().normalize()
+            runBlocking {
+                `when`(
+                    runner.submitPlainCommand(
+                        "s1", "summarize the corpus", null, null, null, null, null, true, null, null,
+                        emptyList(), null, null, resolved,
+                    )
+                ).thenReturn("t-workspace")
+
+                val taskId = call(
+                    "run",
+                    mapOf(
+                        "command" to "summarize the corpus",
+                        "sessionId" to "s1",
+                        "workspace" to dir.toString(),
+                    )
+                )
+
+                assertEquals("t-workspace", taskId)
+                Mockito.verify(runner).submitPlainCommand(
+                    "s1", "summarize the corpus", null, null, null, null, null, true, null, null,
+                    emptyList(), null, null, resolved,
+                )
+            }
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    @DisplayName("run rejects --workspace combined with --resume instead of ignoring one of them")
+    fun runRejectsWorkspaceWithResume() {
+        val dir = Files.createTempDirectory("b4-workspace-")
+        try {
+            val ex = assertThrows<IllegalArgumentException> {
+                call(
+                    "run",
+                    mapOf(
+                        "command" to "",
+                        "sessionId" to "s1",
+                        "workspace" to dir.toString(),
+                        "resumeTaskId" to "t-previous",
+                    )
+                )
+            }
+
+            assertTrue(ex.message!!.contains("--workspace cannot be combined with --resume"), ex.message)
+            Mockito.verifyNoInteractions(runner)
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    @DisplayName("run rejects a --workspace folder that does not exist instead of creating it")
+    fun runRejectsMissingWorkspace() {
+        val missing = Files.createTempDirectory("b4-workspace-").resolve("does-not-exist")
+        try {
+            val ex = assertThrows<IllegalArgumentException> {
+                call("run", mapOf("command" to "task", "sessionId" to "s1", "workspace" to missing.toString()))
+            }
+
+            assertTrue(ex.message!!.contains("not an existing directory"), ex.message)
+            Mockito.verifyNoInteractions(runner)
+        } finally {
+            missing.parent.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     @DisplayName("every advertised command tool has documentation and a result contract")
     fun specsAreComplete() {
         val specs = executor.getToolSpecs()
