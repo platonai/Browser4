@@ -696,7 +696,7 @@ class CommandControllerTest {
                 lines = listOf("""{"seq":1,"tool":"coding.read"}"""),
             )
         )
-        whenever(executor.traceFile("agent-1", "cli-prompt/1.request.json", 0, 500)).thenReturn(null)
+        whenever(executor.traceFile("agent-1", "../../etc/passwd", 0, 500)).thenReturn(null)
 
         val trace = assertNotNull(controller.getTrace("agent-1").body)
         assertEquals("agent-1", trace.taskId)
@@ -709,8 +709,8 @@ class CommandControllerTest {
         assertEquals(HttpStatus.NOT_FOUND, controller.getTrace("ghost").statusCode)
         assertEquals(
             HttpStatus.NOT_FOUND,
-            controller.getTraceFile("agent-1", "cli-prompt/1.request.json", 0, 500).statusCode,
-            "a prompt dump is not part of the served surface",
+            controller.getTraceFile("agent-1", "../../etc/passwd", 0, 500).statusCode,
+            "the trace id is not a file browser",
         )
     }
     @Test

@@ -478,6 +478,44 @@ internal fun toolTracePayload(
     "resultText" to SecretRedactor.redactForTrace(tool, resultText),
 )
 
+/**
+ * One dumped conversation message, **redacted on the way out**.
+ *
+ * `cli-prompt/<ts>.<seq>.request.json` is the exact prompt the model saw — the most valuable
+ * forensic artifact of a run, and the one that carries everything: the system prompt, the user's
+ * task and steering lines, the model's tool requests, and every tool result in full. That is also
+ * why it cannot be written verbatim: a password typed into a login form appears in two places (the
+ * `fill` request and its result), and a token passed to `coding.shell` appears in the request.
+ *
+ * The shape of the dump is unchanged — `type`/`text`/`toolExecutionRequests` — so every existing
+ * reader keeps working; only credential-bearing values change. A tool request is redacted with its
+ * own tool name ([SecretRedactor.redactForTrace]), because a `fill`'s typed value is only
+ * recognisable as a credential through its selector.
+ */
+internal fun promptMessagePayload(message: ChatMessage): Map<String, Any?> = when (message) {
+    is SystemMessage -> mapOf("type" to "system", "text" to SecretRedactor.redactText(message.text()))
+    is UserMessage -> mapOf(
+        "type" to "user",
+        "text" to SecretRedactor.redactText(message.singleText() ?: message.toString()),
+    )
+    is AiMessage -> mapOf(
+        "type" to "ai",
+        "text" to SecretRedactor.redactText(message.text() ?: ""),
+        "toolExecutionRequests" to message.toolExecutionRequests().orEmpty().map { request ->
+            mapOf(
+                "name" to request.name(),
+                "arguments" to SecretRedactor.redactForTrace(request.name(), request.arguments() ?: "{}"),
+            )
+        },
+    )
+    is ToolExecutionResultMessage -> mapOf(
+        "type" to "tool_result",
+        "toolName" to message.toolName(),
+        "text" to SecretRedactor.redactForTrace(message.toolName(), message.text()),
+    )
+    else -> mapOf("type" to "unknown", "text" to SecretRedactor.redactText(message.toString()))
+}
+
 /** Budget percentage at which the run is told to wrap up ([budgetPressureNudge]). */
 internal const val CLI_BUDGET_FINISH_PERCENT = 80
 
@@ -2218,7 +2256,7 @@ open class RobustBrowserAgent(
                             }.getOrElse { "{}" },
                         )
                     },
-                    "messages" to messages.map { serializeMessage(it) },
+                    "messages" to messages.map { promptMessagePayload(it) },
                     "messageCount" to messages.size,
                 )
                 // Fallback estimate persisted with the dump so token totals
@@ -2470,26 +2508,7 @@ open class RobustBrowserAgent(
             }
         }
 
-        private fun serializeMessage(message: ChatMessage): Map<String, Any?> = when (message) {
-            is SystemMessage -> mapOf("type" to "system", "text" to message.text())
-            is UserMessage -> mapOf("type" to "user", "text" to (message.singleText() ?: message.toString()))
-            is AiMessage -> mapOf(
-                "type" to "ai",
-                "text" to (message.text() ?: ""),
-                "toolExecutionRequests" to message.toolExecutionRequests().orEmpty().map { request ->
-                    mapOf(
-                        "name" to request.name(),
-                        "arguments" to (request.arguments() ?: "{}"),
-                    )
-                },
-            )
-            is ToolExecutionResultMessage -> mapOf(
-                "type" to "tool_result",
-                "toolName" to message.toolName(),
-                "text" to message.text(),
-            )
-            else -> mapOf("type" to "unknown", "text" to message.toString())
-        }
+        private fun serializeMessage(message: ChatMessage): Map<String, Any?> = promptMessagePayload(message)
     }
 
     /** Auto context compression for the CLI tool loop (long multi-step tasks). */

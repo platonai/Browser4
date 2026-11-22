@@ -155,14 +155,15 @@ data class CommandInputRequest(
  * response is the mapping, and [CommandTraceFile] entries are what
  * `GET /api/commands/{id}/trace/{file}` serves (issue #652, gap 5).
  *
- * Only the `*.jsonl` audit streams are listed — the raw prompt dumps are kept local. They carry
- * the whole conversation, whose credentials are redacted at the tool layer but not per message
- * yet, so serving them would move an unredacted copy over HTTP.
+ * Only trace artifacts are served: the `*.jsonl` audit streams and the per-round prompt dumps
+ * (`cli-prompt/<ts>.<seq>.request.json`). Both are redacted when they are written — the prompt
+ * dump per message, because it carries the conversation, the tool requests and every tool result
+ * — and again when they are read (a trace written by an older build predates that rule).
  *
  * @property taskId the task the trace belongs to
  * @property runDir absolute path of the run's trace directory (informational: a local operator
  *   can open the files directly, and the path is what the retention policy ages out)
- * @property files the audit streams, newest-modified first
+ * @property files the trace artifacts, newest-modified first
  * */
 data class CommandTraceResponse(
     val taskId: String,
@@ -173,7 +174,8 @@ data class CommandTraceResponse(
 /**
  * One audit stream inside a run's trace directory.
  *
- * @property name file name (`cli-tool-trace.jsonl`, `cli-usage.jsonl`, `page-timeline.jsonl`, …)
+ * @property name artifact name (`cli-tool-trace.jsonl`, `cli-usage.jsonl`, `page-timeline.jsonl`,
+ *   `cli-prompt/<ts>.<seq>.request.json`, …)
  * @property bytes file size
  * @property modifiedAt last write, ISO-8601 (a reader can tell a finished run from a live one)
  * */

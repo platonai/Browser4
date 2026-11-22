@@ -558,9 +558,10 @@ class CommandController(
      * keyed by the agent's own uuid — which is why this endpoint exists at all: a reviewer
      * holding the task id had no way to resolve it (issue #652, gap 5).
      *
-     * Only the `*.jsonl` audit streams are listed. The raw prompt dumps stay local: they carry
-     * the whole conversation, whose credentials are redacted at the tool layer but not per message
-     * yet, so serving them would move an unredacted copy over HTTP.
+     * Served: the `*.jsonl` audit streams and the per-round prompt dumps
+     * (`cli-prompt/<ts>.<seq>.request.json`). Both are redacted when they are written — the prompt
+     * dump per message, because it carries the conversation, the tool requests and every tool
+     * result — and every line is redacted again on the way out.
      *
      * @param id task id (the same id `agent run` prints)
      * @return `200` + [CommandTraceResponse], `404` when the task has no indexed trace (never ran

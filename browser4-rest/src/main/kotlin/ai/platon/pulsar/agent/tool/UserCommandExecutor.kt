@@ -64,14 +64,21 @@ class UserCommandExecutor(
         const val FLOW_POLLING_INTERVAL = 1000L
 
         /**
-         * The only file names the trace API serves.
+         * The line-oriented audit streams (top level of a run dir).
          *
-         * A run dir also holds the raw prompt dumps (the `cli-prompt` subdirectory) and the trace
-         * link; the API deliberately exposes the line-oriented audit streams only — a prompt dump
-         * carries the whole conversation, whose credentials are redacted at the tool layer but not
-         * per message yet, so serving it would move an unredacted copy over HTTP.
+         * These are written with their credentials already redacted, so they are served by name.
          */
         private val TRACE_STREAM_NAME = Regex("^[A-Za-z0-9._-]+\\.jsonl$")
+
+        /**
+         * The per-round prompt dumps: `cli-prompt/<ts>.<seq>.request.json`.
+         *
+         * Served now that each message is redacted when the dump is written
+         * ([ai.platon.pulsar.agentic.agents.promptMessagePayload]). The pattern still pins them to
+         * that one directory, so the trace API cannot be pointed at the dev symlink or a rotated
+         * log sitting next to it.
+         */
+        private val TRACE_PROMPT_NAME = Regex("^cli-prompt/[0-9A-Za-z._-]+\\.request\\.json$")
 
         /** Default page size of one trace stream. */
         const val TRACE_PAGE_DEFAULT = 500
@@ -476,19 +483,19 @@ class UserCommandExecutor(
      * The trace directory is keyed by the agent's own uuid and start time; the runner records
      * `taskId -> dir` when the task starts ([ai.platon.pulsar.agentic.tools.advanced.agent.AgentTraceIndex]),
      * so this lookup needs no live runner — a finished task's trace stays readable until the
-     * retention policy ages it out. Only the `*.jsonl` audit streams are listed: the raw prompt
-     * dumps stay local (their per-message credentials are not redacted yet).
+     * retention policy ages it out. Both the line-oriented audit streams and the per-round prompt
+     * dumps are listed: both are redacted when they are written.
      *
      * @param id task id
      */
     fun trace(id: String): CommandTraceResponse? {
         val dir = AgentTraceIndex.shared().runDirOf(id) ?: return null
         val files = runCatching {
-            Files.list(dir).use { stream ->
-                stream.filter { Files.isRegularFile(it) && TRACE_STREAM_NAME.matches(it.fileName.toString()) }
+            Files.walk(dir, 2).use { stream ->
+                stream.filter { Files.isRegularFile(it) && isServableTraceFile(dir, it) }
                     .map { path ->
                         CommandTraceFile(
-                            name = path.fileName.toString(),
+                            name = dir.relativize(path).toString().replace('\\', '/'),
                             bytes = runCatching { Files.size(path) }.getOrDefault(0L),
                             modifiedAt = runCatching {
                                 Files.getLastModifiedTime(path).toInstant().toString()
@@ -512,19 +519,16 @@ class UserCommandExecutor(
      * unredacted copy off the machine.
      *
      * @param id task id
-     * @param file stream name; anything but a `*.jsonl` name inside the run dir is rejected
+     * @param file stream name; anything but a trace file inside the run dir is rejected
      * @param offset first line to return (0-based)
      * @param limit page size (clamped to [TRACE_PAGE_MAX])
-     * @return the page, or `null` when the task/file is unknown or the name is not a stream
+     * @return the page, or `null` when the task/file is unknown or the name is not a trace file
      */
     fun traceFile(id: String, file: String, offset: Int = 0, limit: Int = TRACE_PAGE_DEFAULT): CommandTraceFileResponse? {
-        if (!TRACE_STREAM_NAME.matches(file)) return null
         val dir = AgentTraceIndex.shared().runDirOf(id) ?: return null
         val path = runCatching { dir.resolve(file).normalize() }.getOrNull() ?: return null
-        // The name is already pattern-checked; this keeps the rule true even if the pattern ever
-        // loosens (a symlinked run dir must not escape it).
-        if (!path.startsWith(dir.normalize())) return null
-        if (!Files.isRegularFile(path)) return null
+        if (!isServableTraceFile(dir, path)) return null
+        val name = dir.relativize(path).toString().replace('\\', '/')
         val from = offset.coerceAtLeast(0)
         val size = limit.coerceIn(1, TRACE_PAGE_MAX)
         val total = runCatching {
@@ -540,17 +544,33 @@ class UserCommandExecutor(
                     .toList()
             }
         }.getOrElse {
-            logger.debug("reading the trace page {} of {} failed: {}", file, id, it.message)
+            logger.debug("reading the trace page {} of {} failed: {}", name, id, it.message)
             return null
         }
         return CommandTraceFileResponse(
             taskId = id,
-            file = file,
+            file = name,
             offset = from,
             limit = size,
             totalLines = total,
             lines = lines,
         )
+    }
+
+    /**
+     * True when [path] is a trace artifact the API serves.
+     *
+     * Two shapes: the line-oriented audit streams at the top level (`*.jsonl`) and the per-round
+     * prompt dumps under `cli-prompt/` (`<ts>.<seq>.request.json`). Anything else — the dev
+     * symlink, a rotated log, a directory, anything that resolves outside [runDir] — is not part
+     * of the surface, so a trace id can never be used as a file browser.
+     */
+    private fun isServableTraceFile(runDir: Path, path: Path): Boolean {
+        if (!Files.isRegularFile(path)) return false
+        val normalized = path.normalize()
+        if (!normalized.startsWith(runDir.normalize())) return false
+        val name = runDir.normalize().relativize(normalized).toString().replace('\\', '/')
+        return TRACE_STREAM_NAME.matches(name) || TRACE_PROMPT_NAME.matches(name)
     }
 
     /**

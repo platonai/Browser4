@@ -136,19 +136,45 @@ class UserCommandExecutorTest {
     }
 
     @Test
-    @DisplayName("the trace endpoint lists the audit streams and hides the raw prompt dumps")
-    fun theTraceListShowsTheAuditStreamsOnly(@TempDir root: Path) {
+    @DisplayName("the trace endpoint lists the audit streams and the prompt dumps")
+    fun theTraceListShowsEveryTraceArtifact(@TempDir root: Path) {
         val executor = tracedExecutor(root, "task-1", listOf("""{"seq":1}"""))
         try {
             val trace = assertNotNull(executor.trace("task-1"))
 
             assertEquals("task-1", trace.taskId)
             assertEquals(
-                setOf("cli-tool-trace.jsonl", "cli-usage.jsonl"),
+                setOf("cli-tool-trace.jsonl", "cli-usage.jsonl", "cli-prompt/1.request.json"),
                 trace.files.map { it.name }.toSet(),
-                "a prompt dump carries the whole conversation and is not served",
+                "the prompt dump is served too — it is redacted when it is written",
             )
             assertNull(executor.trace("ghost"), "an unindexed task is not found")
+        } finally {
+            executor.close()
+            System.clearProperty("browser4.data.dir")
+        }
+    }
+
+    @Test
+    @DisplayName("a prompt dump is served, and its lines are redacted again on read")
+    fun promptDumpsAreServedRedacted(@TempDir root: Path) {
+        val executor = tracedExecutor(root, "task-1", listOf("""{"seq":1}"""))
+        try {
+            // The fixture on disk predates write-side redaction, so the read must redact.
+            Files.writeString(
+                root.resolve("logs/agent/2026-11-22/aaaa/cli-prompt/1.request.json"),
+                "{\n" +
+                    """  "messages" : [ { """ + "\n" +
+                    """    "type" : "tool_result",""" + "\n" +
+                    """    "text" : "{\"password\":\"hunter2\"}"""" + "\n" +
+                    "  } ]\n}\n",
+            )
+
+            val page = assertNotNull(executor.traceFile("task-1", "cli-prompt/1.request.json"))
+
+            assertEquals("cli-prompt/1.request.json", page.file)
+            assertFalse(page.lines.joinToString("").contains("hunter2"), page.lines.joinToString("\n"))
+            assertTrue(page.lines.joinToString("").contains("***"), page.lines.joinToString("\n"))
         } finally {
             executor.close()
             System.clearProperty("browser4.data.dir")
@@ -182,13 +208,14 @@ class UserCommandExecutorTest {
     }
 
     @Test
-    @DisplayName("only *.jsonl streams inside the run dir can be read")
-    fun onlyStreamNamesAreReadable(@TempDir root: Path) {
+    @DisplayName("only trace artifacts inside the run dir can be read")
+    fun onlyTraceArtifactsAreReadable(@TempDir root: Path) {
         val executor = tracedExecutor(root, "task-1", listOf("""{"seq":1}"""))
         try {
-            assertNull(executor.traceFile("task-1", "cli-prompt/1.request.json"), "a prompt dump is not served")
             assertNull(executor.traceFile("task-1", "../../agent-tasks.jsonl"), "no path traversal")
+            assertNull(executor.traceFile("task-1", "../../../logs/agent/x.jsonl"), "nor a deeper escape")
             assertNull(executor.traceFile("task-1", "absent.jsonl"), "an unknown stream is 404")
+            assertNull(executor.traceFile("task-1", "1.request.json"), "a prompt dump only under cli-prompt/")
             assertNull(executor.traceFile("ghost", "cli-usage.jsonl"), "an unknown task is 404")
         } finally {
             executor.close()

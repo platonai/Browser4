@@ -794,11 +794,11 @@ docker run -d -p 18182:18182 `
   lived in. `0` keeps everything (the backend logs a reminder that disk use is then
   unbounded). Credential-bearing tool arguments, results and URL query parameters are
   redacted **when the trace is written**, so a password typed into a form never reaches
-  the file in the first place. A task's trace is reachable by the id a caller knows:
-  `GET /api/commands/{id}/trace` lists the streams and
+  the file in the first place. The per-round prompt dumps (`cli-prompt/…request.json`, the exact
+  messages the model saw) are redacted **per message** for the same reason. A task's trace is
+  reachable by the id a caller knows: `GET /api/commands/{id}/trace` lists the artifacts and
   `GET /api/commands/{id}/trace/{file}?offset=&limit=` pages one (every line is redacted again
-  on the way out). The raw prompt dumps are not served — their per-message credentials are not
-  redacted yet.
+  on the way out, which also covers a trace an older build wrote).
 
 * **`browser4.agent.session.contextEnabled`** *(default: `true`)*,
   **`browser4.agent.session.contextTokens`** *(default: `24000`)*,
