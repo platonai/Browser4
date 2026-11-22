@@ -598,8 +598,9 @@ P0-A…P0-F 全部落地，全部为**新增可空字段 / 新增事件类型 / 
 | P1-6 权限审批进流 | `AccessApprovals.observer` + `AccessApprovalEvent`（browser4-coding）；`StatefulAgentRunner.recordAccessEvent` 写入 `access.requested` / `access.resolved`，观察者在 applyAccessPolicy 后安装、任务结束时清除 | 无人值守时"卡在等审批"与"工具很慢"外观相同；现在是一条明确的步骤，且 `/approve` / `/deny` 的结果也回到流里。观察者异常被吞掉，绝不影响审批裁决 |
 | P1 事件持久化 | `AgentTaskEventStore`（每任务 `<data>/agent/events/<taskId>.jsonl`，写后台线程 + 有界队列 + 4 MB 轮转 + TTL 清理）；`AgentTaskEventLog.onAdopt/restore()`；`StatefulAgentRunner` 在日志创建时回填、`events/stats/eventsPage` 走 `persistedEventLog()` | 解决 issue §4 的另一半（"重启后有状态无过程"）：恢复的步骤保留原 `seq`（游标仍有效），计数器按恢复的事件重算；写盘是 write-behind，队列满就丢（只影响磁盘历史，不影响运行），读取容忍崩溃留下的半行。恢复后的 `dropped` 从 0 起（重启前淘汰的步骤在分片里也已不存在） |
 | P2 `agent supervise <id>` | `cli/browser4-cli/src/agent_supervise.rs`（纯读聚合：`command_status` + `/stats` + `/events` + `/api/agent/{id}/access`）+ `agent supervise` 命令；状态信封新增 `failureDetail`（`TaskEnvelopes` / `STATUS_SCHEMA`） | 把 P0/P1 导出的判据做成开箱即用的一屏：工具数与文件改动并列、gate/verify 裁决与红掉的 check、repair 轮次、待审批项、步骤窗口（`resynced`）。`--json` 同源；四个来源各自可失败（某一源 404/超时只让该段显示"unknown"） |
+| P1 事件级 SSE | `GET /api/commands/{id}/events/stream`（`CommandController.streamSteps`；`ServerSentEvents.kt` 新增 `toServerSentEventsOf`，一个流可同时产出数据帧与注释保活帧） | 每帧带 `id: <seq>`，`Last-Event-ID` 或 `?after=` 决定起点，终态步骤之后立刻 complete，静默 15s 发注释保活，`?maxSeconds=` 可限时；慢读者只推迟下一次读取，不会丢步。CLI 跟随器仍用轮询（本轮未改），该端点面向看板/其它 agent |
 
 ### 9.4 未做（仍留在 §7 后续路线）
 
-事件级 SSE（`Last-Event-ID`）、trace 读取 API + 写侧脱敏、`b4.run` span、结构化目标。
+trace 读取 API + 写侧脱敏、`b4.run` 子进程 span、结构化目标/计划检查点。
 这些属于 P1/P2，不阻断"外部智能体监督"。

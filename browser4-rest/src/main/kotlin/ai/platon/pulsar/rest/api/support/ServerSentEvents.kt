@@ -39,7 +39,26 @@ fun <T : Any> Flow<T>.toServerSentEvents(
     scope: CoroutineScope,
     logger: Logger,
     map: (T) -> ServerSentEvent<T> = { ServerSentEvent.builder(it).build() },
-): Flux<ServerSentEvent<T>> {
+): Flux<ServerSentEvent<T>> = toServerSentEventsOf(scope, logger, map)
+
+/**
+ * The same bridge when one stream carries two kinds of frame.
+ *
+ * A step stream needs it: real steps are `data` frames of an event payload, while keep-alives
+ * are SSE **comments**, which have no payload at all. Writing that as a flow of one wrapper type
+ * ([T]) mapped onto a different wire type ([P]) keeps the "which frames are data" decision at
+ * the call site, exactly like the event shape above.
+ *
+ * @param scope collects the flow (see [toServerSentEvents])
+ * @param logger where a failed flow is reported before the failure reaches the sink
+ * @param map one flow value onto the frame to send
+ * @return the stream, one frame per value, completed when the flow completes
+ * */
+fun <T : Any, P : Any> Flow<T>.toServerSentEventsOf(
+    scope: CoroutineScope,
+    logger: Logger,
+    map: (T) -> ServerSentEvent<P>,
+): Flux<ServerSentEvent<P>> {
     val values: Flux<T> = Flux.create { sink ->
         val job = onEach { sink.next(it) }
             // The stream ends for exactly one reason here, and the cause says which: `null`

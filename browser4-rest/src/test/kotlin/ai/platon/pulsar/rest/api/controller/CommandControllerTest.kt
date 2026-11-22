@@ -14,6 +14,8 @@ import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.entities.CommandSubmitResponse
 import ai.platon.pulsar.rest.api.entities.toCommandStatus
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
@@ -28,6 +30,7 @@ import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
+import java.time.Duration
 import java.time.Instant
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -605,6 +608,66 @@ class CommandControllerTest {
         val gate = detail["finishGate"] as Map<String, Any?>
         assertEquals(false, gate["passed"])
         assertEquals(listOf("ev.js"), gate["unlistedFiles"])
+    }
+
+    @Test
+    @DisplayName("the step stream pushes frames with ids, honouring Last-Event-ID, and stops at the terminal step")
+    fun stepStreamPushesFramesAndStopsAtTheTerminalStep() {
+        // A subscriber that reconnects has one cursor: the explicit `?after=` wins, then the
+        // SSE `Last-Event-ID` header, then 0. Every frame carries `id: <seq>` so a browser's
+        // EventSource resumes exactly where it stopped.
+        whenever(executor.launchScope()).thenReturn(CoroutineScope(Dispatchers.Unconfined))
+        whenever(executor.getStatus(DEFAULT_SESSION_ID, "agent-1")).thenReturn(
+            CommandStatus(id = "agent-1", statusCode = ResourceStatus.SC_PROCESSING, processState = "in_progress")
+        )
+        whenever(executor.eventsPage("agent-1", 2L, 200)).thenReturn(
+            AgentTaskEventPage(
+                events = listOf(
+                    AgentTaskEvent(seq = 3, type = AgentTaskEvent.TYPE_TOOL_CALL, tool = "b4.run"),
+                    AgentTaskEvent(seq = 4, type = AgentTaskEvent.TYPE_DONE, text = "finished"),
+                ),
+                nextSeq = 4,
+                firstRetainedSeq = 1,
+            )
+        )
+
+        val response = controller.streamSteps(
+            id = "agent-1",
+            after = null,
+            lastEventId = "2",
+            limit = 200,
+            maxSeconds = 0,
+            sessionId = null,
+        )
+
+        assertEquals(HttpStatus.OK, response.statusCode)
+        val frames = assertNotNull(response.body).collectList().block(Duration.ofSeconds(5))
+        assertNotNull(frames)
+        assertEquals(2, frames.size, "one frame per step, then the stream completes: $frames")
+        assertEquals(listOf("3", "4"), frames.map { it.id() }, "the id is the cursor the client sends back")
+        assertEquals(
+            listOf(AgentTaskEvent.TYPE_TOOL_CALL, AgentTaskEvent.TYPE_DONE),
+            frames.map { it.event() },
+        )
+        assertEquals(4L, frames.last().data()!!.seq)
+    }
+
+    @Test
+    @DisplayName("the step stream answers 404 for an id no runner knows")
+    fun stepStreamIs404ForAnUnknownId() {
+        whenever(executor.getStatus(DEFAULT_SESSION_ID, "ghost")).thenReturn(null)
+        whenever(executor.hasEvents("ghost")).thenReturn(false)
+
+        val response = controller.streamSteps(
+            id = "ghost",
+            after = 0,
+            lastEventId = null,
+            limit = 200,
+            maxSeconds = 1,
+            sessionId = null,
+        )
+
+        assertEquals(HttpStatus.NOT_FOUND, response.statusCode)
     }
 
     @Test

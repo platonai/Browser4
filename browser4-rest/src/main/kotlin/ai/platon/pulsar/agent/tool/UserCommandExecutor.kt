@@ -425,6 +425,16 @@ class UserCommandExecutor(
         .firstNotNullOfOrNull { runner -> runner.eventsPage(id, afterSeq, limit) }
 
     /**
+     * True when this backend holds a step log for [id] — in memory or restored from disk.
+     *
+     * Distinct from "has new events": the SSE endpoint uses it to answer `404` for an id no
+     * runner knows, while a task with an empty log is still a real stream to attach to.
+     *
+     * @param id task id
+     */
+    fun hasEvents(id: String): Boolean = agentRunners.values.any { runner -> runner.eventsPage(id, 0L, 1) != null }
+
+    /**
      * The run statistics of agent task [id], or `null` when no runner holds a log
      * for it.
      *

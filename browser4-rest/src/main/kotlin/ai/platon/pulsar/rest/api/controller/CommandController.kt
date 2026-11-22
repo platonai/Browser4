@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
+import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEvent
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.getLogger
@@ -16,7 +17,10 @@ import ai.platon.pulsar.rest.api.entities.CommandSubmitResponse
 import ai.platon.pulsar.rest.api.entities.statusWord
 import ai.platon.pulsar.rest.api.support.SessionResolution
 import ai.platon.pulsar.rest.api.support.toServerSentEvents
+import ai.platon.pulsar.rest.api.support.toServerSentEventsOf
 import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flow
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.http.codec.ServerSentEvent
@@ -431,6 +435,117 @@ class CommandController(
         return ResponseEntity.ok(body)
     }
 
+    /**
+     * The same step stream as [getEvents], pushed instead of polled:
+     * `GET /api/commands/{id}/events/stream`.
+     *
+     * The cursor endpoint requires a client to poll every few hundred milliseconds, which
+     * costs one request per observer per tick and makes "was this step already shown"
+     * the client's problem. This endpoint is a Server-Sent Events stream of the same
+     * [AgentTaskEvent]s, and it speaks the two conventions a follower already has:
+     *
+     * - **`Last-Event-ID`**: every frame carries `id: <seq>`, so a browser's `EventSource`
+     *   reconnect — or any client that stores the last id — resumes exactly where it
+     *   stopped (an explicit `?after=` wins when both are present);
+     * - **`done`**: the stream completes right after the task's terminal step, so a
+     *   supervisor does not have to guess when to stop reading.
+     *
+     * `?maxSeconds=` bounds the stream for a caller that cannot afford an unbounded
+     * connection (a dashboard refresh, a test); `0` (the default) reads until the task ends.
+     * A silent run still sends a comment keep-alive, so a proxy does not cut the connection
+     * during a three-minute tool call.
+     *
+     * Backpressure is the reader's: frames are produced on demand (one poll per subscribed
+     * connection), and a slow reader simply delays the next poll — it cannot lose a step,
+     * because the cursor only advances with a frame that was actually emitted.
+     *
+     * @param id task id (the same id `agent run` prints)
+     * @param after explicit cursor; `null` falls back to `Last-Event-ID`, then to 0
+     * @param lastEventId the SSE reconnect header
+     * @param limit page size per internal poll (clamped to [MAX_EVENTS_PAGE])
+     * @param maxSeconds how long the stream may stay open (`0` = until the task ends)
+     * @param sessionId optional session, used only to find the owning runner
+     * @return `200` + the event stream, `404` when the id is unknown
+     * */
+    @GetMapping("/{id}/events/stream", produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
+    fun streamSteps(
+        @PathVariable id: String,
+        @RequestParam(name = "after", required = false) after: Long?,
+        @RequestHeader(name = LAST_EVENT_ID_HEADER, required = false) lastEventId: String?,
+        @RequestParam(name = "limit", required = false, defaultValue = "200") limit: Int,
+        @RequestParam(name = "maxSeconds", required = false, defaultValue = "0") maxSeconds: Long,
+        @RequestParam(name = "sessionId", required = false) sessionId: String?,
+    ): ResponseEntity<Flux<ServerSentEvent<AgentTaskEvent>>> {
+        val effectiveSessionId = SessionResolution.firstNamedOrDefault(sessionId)
+        val cursor = after
+            ?: lastEventId?.trim()?.toLongOrNull()
+            ?: 0L
+        if (commandExecutor.getStatus(effectiveSessionId, id) == null && !commandExecutor.hasEvents(id)) {
+            return ResponseEntity.notFound().build()
+        }
+        val pageSize = limit.coerceIn(1, MAX_EVENTS_PAGE)
+        val deadline = if (maxSeconds > 0) System.currentTimeMillis() + maxSeconds * 1000 else Long.MAX_VALUE
+
+        val frames = flow {
+            var next = cursor
+            var lastFrameAt = System.currentTimeMillis()
+            while (true) {
+                val status = commandExecutor.getStatus(effectiveSessionId, id)
+                val page = commandExecutor.eventsPage(id, next, pageSize)
+                val events = page?.events.orEmpty()
+                for (event in events) {
+                    emit(StepFrame(event = event))
+                    next = event.seq
+                    lastFrameAt = System.currentTimeMillis()
+                }
+                val response = CommandEvents.page(id, status, page, next)
+                // A terminal step is the last thing this task will ever write: complete right
+                // after emitting it instead of waiting for the next poll to notice `done`.
+                if (events.any { it.type in CommandEvents.TERMINAL_EVENT_TYPES }) return@flow
+                if (response.done && events.isEmpty()) return@flow
+                if (System.currentTimeMillis() >= deadline) return@flow
+                if (events.isEmpty() && System.currentTimeMillis() - lastFrameAt >= KEEPALIVE_INTERVAL_MS) {
+                    // A comment frame, not an event: it keeps the connection warm without
+                    // asking the client to parse (or ignore) a synthetic step.
+                    emit(StepFrame(comment = "keepalive"))
+                    lastFrameAt = System.currentTimeMillis()
+                }
+                delay(STEP_STREAM_POLL_MS)
+            }
+        }
+
+        return ResponseEntity.ok(
+            frames.toServerSentEventsOf(commandExecutor.launchScope(), logger) { frame ->
+                val event = frame.event
+                if (event != null) {
+                    ServerSentEvent.builder(event)
+                        .id(event.seq.toString())
+                        .event(event.type)
+                        .build()
+                } else {
+                    ServerSentEvent.builder<AgentTaskEvent>()
+                        .comment(frame.comment ?: "keepalive")
+                        .build()
+                }
+            }
+        )
+    }
+
+    /**
+     * The stream of [CommandController.streamSteps] carries one of two things.
+     *
+     * A data frame ([event]) is a real step; a comment frame ([comment]) is the keep-alive.
+     * The pair exists because Server-Sent Events express keep-alives as comments, and the
+     * shared flow-to-SSE helper needs a non-null payload to carry one.
+     *
+     * @property event the step to send, or `null` for a comment frame
+     * @property comment the comment text of a keep-alive frame
+     */
+    data class StepFrame(
+        val event: AgentTaskEvent? = null,
+        val comment: String? = null,
+    )
+
     @GetMapping(value = ["/{id}/stream"], produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     fun streamEvents(
         @PathVariable id: String,
@@ -450,5 +565,14 @@ class CommandController(
 
         /** Status word when the id has no resolvable status row (`/stats`). */
         const val STATUS_UNKNOWN = "unknown"
+
+        /** The SSE reconnect header a browser's `EventSource` sends (also a request header here). */
+        const val LAST_EVENT_ID_HEADER = "Last-Event-ID"
+
+        /** How often the step stream looks for new steps. */
+        const val STEP_STREAM_POLL_MS = 250L
+
+        /** Silence after which the step stream sends a comment keep-alive. */
+        const val KEEPALIVE_INTERVAL_MS = 15_000L
     }
 }
