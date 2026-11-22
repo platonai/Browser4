@@ -759,28 +759,26 @@ docker run -d -p 18182:18182 `
   its result, and how each task ended (`done` / `failed` / `cancelled`, its files, and the
   workspace they live in). That is what makes `agent run -i` — and any client that submits
   several tasks under one `sessionId` — continue the session instead of restarting from
-  zero: the next run sees the same context the previous run saw, not a summary of it.
+  zero: the next run sees the same context the previous run saw, not a summary of it. The
+  block states only what the transcript **is** — it does not tell the model which
+  instruction is the current goal, which one was abandoned, or how to treat the history:
+  that judgement is the model's, and a deployment that wants to steer it supplies its own
+  text with `browser4.agent.systemPrompt.*` (below).
 
   **The transcript is compressed by the model when it grows.** The block rides in every
   prompt of the next run, so once the rendered transcript crosses `contextTokens`
   (estimated at 4 characters per token) the runner asks the model — with a dedicated
-  *compression instruction* — to fold the older turns into a memory block of about
-  `memoryTokens`. The instruction states what must survive the fold, so compression cannot
-  quietly lose the thread:
+  *compression instruction* — to fold the older turns into a record of about `memoryTokens`.
+  The instruction asks for a **factual record** (instructions as worded, decisions, paths,
+  URLs, selectors, ids, formats, error strings, numbers, how each task ended) and for no
+  goals, priorities, recommendations or conclusions the transcript does not contain. It
+  does not impose an order of importance; what the record means for the next task is the
+  model's to decide.
 
-  - the **session goal** (the first task's instruction) and **every correction** — a task
-    instruction that reads like a redirection ("actually…", "instead…", "改用…") or a line
-    typed into a running task is quoted verbatim;
-  - the decisions taken and the facts later work depends on (URLs, selectors, ids,
-    formats, accounts — never secrets);
-  - the **files** created or changed, and the workspace directory they live in;
-  - tool outcomes that constrain later work, and the **open problems** / unfinished steps.
-
-  What it drops: page snapshots, repeated tool chatter, and reasoning that led nowhere. The
-  **newest task's turns are never folded** — they are what the next instruction most likely
-  refers to — and a second compression receives the first memory as input, so nothing is
-  lost across folds. If the compression call fails, the transcript is sent uncompressed and
-  the failure is logged: losing the session's memory is worse than a long prompt.
+  The **newest task's turns are never folded**, and a second compression receives the first
+  memory as input, so nothing is lost across folds. If the compression call fails, the
+  transcript is sent uncompressed and the failure is logged: losing the session's memory is
+  worse than a long prompt.
 
   Set `contextTokens` to `0` (or `contextEnabled=false`) to disable the injection; a
   one-shot `agent run` is unaffected either way, because the first task of a session has
@@ -817,6 +815,30 @@ docker run -d -p 18182:18182 `
 
   ```bash
   BROWSER4_SERVER_OPTS="-Dbrowser4.agent.session.contextTokens=48000 -Dbrowser4.agent.session.memoryTokens=3000" browser4-cli open
+  ```
+
+* **`browser4.agent.systemPrompt.override`** / **`browser4.agent.systemPrompt.overrideFile`**,
+  **`browser4.agent.systemPrompt.extra`** / **`browser4.agent.systemPrompt.file`** *(default: unset)*
+  Operator-supplied system-prompt text. The built-in prompt states the engine's own contract
+  (role, tools, permissions, completion) and carries no statement about what a session's
+  history means; this is where a deployment adds its own framing or guidance instead of
+  patching the backend.
+
+  - `override` / `overrideFile` replace the **role preamble** (the "who you are / how to
+    work" text). The resident CLI reference, the context-hygiene section, the permissions
+    block and the `system.taskComplete` contract are still appended: a replacement cannot
+    strip the rules a run needs to finish or its boundary description.
+  - `extra` / `file` are appended after the built-in prompt — last, so they have the final
+    word. The two can be combined with an override.
+  - `.file` variants read a UTF-8 text file; a missing/unreadable file is logged and
+    ignored, and the built-in text is used. Any value is truncated to 64 000 characters.
+  - Keys are read from the session config, so they can be set globally
+    (`application-private.properties`, `BROWSER4_SERVER_OPTS`) or per session.
+
+  ```properties
+  browser4.agent.systemPrompt.file=/etc/browser4/prompt-extra.md
+  # or replace the role framing entirely:
+  browser4.agent.systemPrompt.overrideFile=/etc/browser4/role.md
   ```
 
 * **`browser4.agent.context.windowTokens`** *(default: `0` = unknown)* and

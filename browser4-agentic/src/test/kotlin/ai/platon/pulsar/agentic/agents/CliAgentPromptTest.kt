@@ -6,11 +6,16 @@ import ai.platon.pulsar.coding.Capability
 import ai.platon.pulsar.coding.CapabilityId
 import ai.platon.pulsar.coding.CapabilitySource
 import ai.platon.pulsar.coding.Effect
+import ai.platon.pulsar.common.config.VolatileConfig
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 /**
  * The CLI tool-loop system prompt must fit the task it opens. A refactor of a
@@ -320,5 +325,54 @@ class CliAgentPromptTest {
         // No grant, no line.
         val plain = CliAgentPrompt.hygiene(true, workspace, AgentAccessPolicy())
         assertFalse(plain.contains("Extra folders granted"), plain)
+    }
+
+    // ─── externally configured prompt text ───────────────────────────────────
+
+    @Test
+    @DisplayName("an operator-supplied role replaces the built-in role")
+    fun externalRoleReplacesTheBuiltInRole() {
+        val conf = VolatileConfig(true).apply {
+            set(CliAgentPrompt.OVERRIDE_KEY, "You are a custom agent. Answer from the page.")
+        }
+
+        assertEquals("You are a custom agent. Answer from the page.", CliAgentPrompt.externalRole(conf))
+    }
+
+    @Test
+    @DisplayName("an operator-supplied append goes to the end of the prompt")
+    fun externalAppendIsReturned() {
+        val conf = VolatileConfig(true).apply {
+            set(CliAgentPrompt.EXTRA_KEY, "Prefer CSV over JSON.")
+        }
+
+        assertEquals("Prefer CSV over JSON.", CliAgentPrompt.externalAppend(conf))
+        assertNull(CliAgentPrompt.externalRole(conf), "an append must not replace the role")
+    }
+
+    @Test
+    @DisplayName("the file variants are read from disk")
+    fun externalFilesAreRead(@TempDir dir: Path) {
+        val role = dir.resolve("role.md").also { Files.writeString(it, "  custom role  ") }
+        val extra = dir.resolve("extra.md").also { Files.writeString(it, "extra guidance") }
+        val conf = VolatileConfig(true).apply {
+            set(CliAgentPrompt.OVERRIDE_FILE_KEY, role.toString())
+            set(CliAgentPrompt.EXTRA_FILE_KEY, extra.toString())
+        }
+
+        assertEquals("custom role", CliAgentPrompt.externalRole(conf))
+        assertEquals("extra guidance", CliAgentPrompt.externalAppend(conf))
+    }
+
+    @Test
+    @DisplayName("a missing file is ignored instead of failing the run")
+    fun aMissingPromptFileIsIgnored(@TempDir dir: Path) {
+        val conf = VolatileConfig(true).apply {
+            set(CliAgentPrompt.OVERRIDE_FILE_KEY, dir.resolve("nope.md").toString())
+            set(CliAgentPrompt.EXTRA_FILE_KEY, dir.resolve("nope-extra.md").toString())
+        }
+
+        assertNull(CliAgentPrompt.externalRole(conf))
+        assertEquals("", CliAgentPrompt.externalAppend(conf))
     }
 }

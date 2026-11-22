@@ -1147,6 +1147,10 @@ open class RobustBrowserAgent(
             // memory tools undisclosed to the model.
             val taskId = context.sid
             agentMemory.currentTaskId = taskId
+            // A new task starts with an empty working-memory board: the previous task's
+            // notes ("todo: verify #price") must not ride into an unrelated task as the
+            // strongest (tail) message of every round. A retry keeps them (same id).
+            agentMemory.beginTaskScratchpad(taskId)
             // Provision the coding workspace mirror HERE, where [codingMode] is
             // definitely known. The mirror is otherwise attempted when the tool
             // manager is constructed, and that lazy init can happen BEFORE the task
@@ -2523,7 +2527,18 @@ open class RobustBrowserAgent(
 
     /** System prompt for the CLI tool-loop engine: role + resident quick reference + hygiene rules. */
     private fun cliAgentSystemPrompt(): String = buildString {
-        append(CliAgentPrompt.role(codingMode, config.repairMaxRounds, agentWorkspaceDir, isolated = workspaceIsolation != null))
+        val conf = session.sessionConfig
+        // An operator may replace the role framing and/or append guidance without
+        // patching the backend (`browser4.agent.systemPrompt.*`). The reference, the
+        // hygiene section, the permissions block and the completion contract below are
+        // engine-owned and are never replaced: a custom prompt cannot make a run
+        // unable to finish or unaware of its boundaries.
+        val externalRole = CliAgentPrompt.externalRole(conf)
+        if (externalRole != null) {
+            append(externalRole)
+        } else {
+            append(CliAgentPrompt.role(codingMode, config.repairMaxRounds, agentWorkspaceDir, isolated = workspaceIsolation != null))
+        }
         // The resident browsing quick reference is what a browsing run needs every
         // round; a coding run gets its role facts from CliAgentPrompt instead, so it
         // does not start by reading browser CLI docs (observed waste).
@@ -2561,6 +2576,12 @@ open class RobustBrowserAgent(
         // model about its boundaries in the first round, and a `--access full` task running on a
         // backend configured for `read` must not be told it is restricted.
         append(CliAgentPrompt.hygiene(codingMode, agentWorkspaceDir, agentToolManager.accessPolicy))
+        // Operator-supplied guidance goes last, after every engine-owned section.
+        val externalAppend = CliAgentPrompt.externalAppend(conf)
+        if (externalAppend.isNotEmpty()) {
+            append("\n\n")
+            append(externalAppend)
+        }
     }
 
     private suspend fun initializeResolution(initContext: ExecutionContext, attempt: Int) {

@@ -3,6 +3,9 @@ package ai.platon.pulsar.agentic.agents
 import ai.platon.pulsar.coding.AccessPreset
 import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.coding.CodingComponents
+import ai.platon.pulsar.common.config.ImmutableConfig
+import ai.platon.pulsar.common.getLogger
+import java.nio.file.Files
 import java.nio.file.Path
 
 /**
@@ -417,6 +420,67 @@ internal object CliAgentPrompt {
             "readable, writable and usable as a shell working directory in addition to the " +
             "workspace ($write under this preset). They are not copies: the task's own workspace " +
             "stays the place for deliverables and for `coding.write`."
+    }
+
+    // ─── externally configured prompt text ───────────────────────────────────
+
+    /**
+     * The built-in prompt states the engine's own contract (role, tools, permissions,
+     * completion). It carries no statement about what a session's history means — that
+     * judgement belongs to the model. An operator who wants different framing or extra
+     * guidance supplies it externally instead of patching the backend:
+     *
+     * - [OVERRIDE_KEY] / [OVERRIDE_FILE_KEY] replace the role preamble ([role]). The
+     *   resident CLI reference, the context-hygiene section, the permissions block and
+     *   the `system.taskComplete` contract are still appended, so a replacement cannot
+     *   strip the rules a run needs to finish.
+     * - [EXTRA_KEY] / [EXTRA_FILE_KEY] are appended after the built-in prompt, last, so
+     *   they have the final word.
+     *
+     * Keys are read from the session config, so they can be set globally or per
+     * `agent run -i -s <name>` session. A missing/unreadable file, a blank value or an
+     * oversized value never fails a run: it is ignored with a warning, or truncated to
+     * [MAX_EXTERNAL_PROMPT_CHARS].
+     */
+    const val OVERRIDE_KEY = "browser4.agent.systemPrompt.override"
+
+    /** File variant of [OVERRIDE_KEY]: a UTF-8 text file that replaces the role preamble. */
+    const val OVERRIDE_FILE_KEY = "browser4.agent.systemPrompt.overrideFile"
+
+    /** Text appended to the end of the built-in system prompt. */
+    const val EXTRA_KEY = "browser4.agent.systemPrompt.extra"
+
+    /** File variant of [EXTRA_KEY]. */
+    const val EXTRA_FILE_KEY = "browser4.agent.systemPrompt.file"
+
+    /** Upper bound on any externally supplied prompt text, in characters. */
+    const val MAX_EXTERNAL_PROMPT_CHARS = 64_000
+
+    private val logger = getLogger(CliAgentPrompt::class)
+
+    /** The operator-supplied role text, or `null` to keep the built-in role. */
+    fun externalRole(conf: ImmutableConfig): String? =
+        readExternal(conf, OVERRIDE_KEY, OVERRIDE_FILE_KEY)
+
+    /** Operator-supplied text to append to the built-in prompt; "" when none. */
+    fun externalAppend(conf: ImmutableConfig): String =
+        readExternal(conf, EXTRA_KEY, EXTRA_FILE_KEY).orEmpty()
+
+    private fun readExternal(conf: ImmutableConfig, textKey: String, fileKey: String): String? {
+        conf.get(textKey)?.trim()?.takeIf { it.isNotEmpty() }
+            ?.let { return it.take(MAX_EXTERNAL_PROMPT_CHARS) }
+        val file = conf.get(fileKey)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val path = runCatching { Path.of(file).toAbsolutePath().normalize() }.getOrNull()
+        if (path == null || !Files.isRegularFile(path)) {
+            logger.warn("{} points at a missing file: {} — the built-in prompt is used", fileKey, file)
+            return null
+        }
+        return runCatching { Files.readString(path) }
+            .onFailure { logger.warn("Failed to read {} '{}': {}", fileKey, path, it.message) }
+            .getOrNull()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.take(MAX_EXTERNAL_PROMPT_CHARS)
     }
 }
 
