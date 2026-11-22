@@ -101,8 +101,8 @@ class SessionConversationTest {
         // The outcome carries what the next task reuses.
         assertTrue(block.contains("→ done in 2m 13s"), block)
         assertTrue(block.contains("files: src/export.kt"), block)
-        // The block tells the model which instruction is the real task.
-        assertTrue(block.contains("The instruction at the top of this"), block)
+        // The block states what the transcript is; it gives no instruction about it.
+        assertTrue(block.contains("actual conversation"), block)
     }
 
     @Test
@@ -258,18 +258,43 @@ class SessionConversationTest {
     }
 
     @Test
-    @DisplayName("the compression instruction says what must survive the fold")
-    fun theCompressionInstructionIsExplicit() {
+    @DisplayName("the compression instruction asks for facts and states no goal or priority")
+    fun theCompressionInstructionAsksForFactsOnly() {
         val instruction = SessionConversation(memoryChars = 800 * SessionConversation.CHARS_PER_TOKEN)
             .compressionSystemInstruction()
 
-        assertTrue(instruction.contains("smallest memory block"), instruction)
-        assertTrue(instruction.contains("session goal"), instruction)
-        assertTrue(instruction.contains("correction"), instruction)
-        assertTrue(instruction.contains("workspace"), instruction)
-        assertTrue(instruction.contains("open problems"), instruction)
+        assertTrue(instruction.contains("factual record"), instruction)
+        assertTrue(instruction.contains("State only what the transcript"), instruction)
+        assertTrue(instruction.contains("Do not add goals"), instruction)
         assertTrue(instruction.contains("about 800 tokens"), instruction)
-        assertTrue(instruction.contains("Output only the memory block"), instruction)
+        // A session may mix browsing and coding tasks, so the instruction names no mode.
+        assertFalse(instruction.contains("browser-automation"), instruction)
+        // The harness does not decide which instruction is "the" goal.
+        assertFalse(instruction.contains("ACTIVE NOW"), instruction)
+        assertFalse(instruction.contains("SUPERSEDED"), instruction)
+        assertFalse(instruction.contains("first task's instruction"), instruction)
+        assertFalse(instruction.contains("must survive"), instruction)
+        assertFalse(instruction.contains("Preserve, in this order"), instruction)
+    }
+
+    @Test
+    @DisplayName("the block states what the transcript is and gives no guidance")
+    fun theBlockStatesFactsWithoutGuidance() {
+        val conversation = SessionConversation()
+        conversation.beginTask("extract the price of the product")
+        conversation.endTask(status("extract the price of the product"))
+
+        val block = conversation.renderForPrompt()
+
+        assertTrue(block.contains("## Session context"), block)
+        assertTrue(block.contains("actual conversation"), block)
+        assertTrue(block.contains("extract the price of the product"), block)
+        // The block used to tell the model how to treat history; the model judges now.
+        assertFalse(block.contains("Treat it as your memory"), block)
+        assertFalse(block.contains("do not repeat work"), block)
+        assertFalse(block.contains("it wins"), block)
+        assertFalse(block.contains("reference only"), block)
+        assertFalse(block.contains("continue from where an interrupted run stopped"), block)
     }
 
     @Test
@@ -509,7 +534,13 @@ class SessionConversationTest {
         // The checkpoint of a task is the conversation as it was BEFORE that task ran.
         assertEquals(first, conversation.rewindStartOf("task-2"))
         assertNull(conversation.rewindStartOf("unknown"))
-        assertTrue(conversation.branchSummaryInstruction().contains("## What not to repeat"))
+        // The branch summary states what the branch did; it no longer recommends
+        // what the next task must not repeat.
+        val branchInstruction = conversation.branchSummaryInstruction()
+        assertTrue(branchInstruction.contains("## What this branch tried"), branchInstruction)
+        assertFalse(branchInstruction.contains("## What not to repeat"), branchInstruction)
+        assertFalse(branchInstruction.contains("must not repeat"), branchInstruction)
+        assertFalse(branchInstruction.contains("browser-automation"), branchInstruction)
 
         // A rewind replaces the conversation even when the checkpoint is empty: the
         // compacted transcript must not re-inject what the user just rewound away from.

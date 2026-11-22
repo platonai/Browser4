@@ -6,6 +6,8 @@
 > 问题：现有压缩实现了"语义自足"的回溯（引用带 digest + Page State 时间线），但缺少 deepseek-harness 的
 > **结构性回溯**（压缩账本 + 稳定引用解析）与**事务可靠性**（稳定性校验、shrink 校验、溢出恢复、审计记账）。
 > 目标：在不推翻现有设计（KV-cache 前缀不变性、引用/diff、保留最新视图）的前提下，补齐上述能力。
+>
+> 注（2026-11-22）：`REQUIRED_SUMMARY_SECTIONS` 与 `COMPACTION_INSTRUCTION` 中的 `## Page State` 已改名为 `## Environment`（同时覆盖页面与工作区/平台事实），下文按当时名称记录。
 
 ## 1. 现状缺口（对照 deepseek-harness 逐条审计）
 

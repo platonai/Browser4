@@ -233,6 +233,15 @@ class CodingAgentShell(
      * folder, otherwise the string layer would allow a command the OS then denies.
      */
     private val additionalDirs: Set<Path> = emptySet(),
+    /**
+     * Other tasks' workspaces in scope ([TaskWorkspaces], [AgentAccessPolicy.allowTaskWorkspaceWrites]).
+     *
+     * Used by the fallback boundary (direct construction) and handed to the execution sandbox
+     * **coalesced to their day directories** ([TaskWorkspaces.sandboxRoots]): one low-integrity
+     * label or container ACE per day instead of one per task. The precise list lives in the
+     * injected [boundaryAuthorizer], so the string layer stays exact.
+     */
+    private val taskWorkspaceRoots: Set<Path> = emptySet(),
 ) {
     /**
      * Id of the OS boundary this shell launches commands under (`off` when there is none).
@@ -1612,7 +1621,12 @@ class CodingAgentShell(
     private val workingDirRoots: List<Path> by lazy {
         (
             listOf(canonicalBaseDir) + MirrorRoots.derive(baseDir) +
-                listOfNotNull(MirrorRoots.sourceRoot(baseDir)) + resolvedAdditionalDirs
+                listOfNotNull(MirrorRoots.sourceRoot(baseDir)) + resolvedAdditionalDirs +
+                // Another task's workspace is a place a command legitimately runs *in*: moving a
+                // deliverable there or finishing a previous run's work starts with `cd`. Leaving it
+                // out would let the boundary accept a write the working-directory check then
+                // refuses, which reads like the feature is broken.
+                taskWorkspaceRoots.map { it.toAbsolutePath().normalize() }
             ).distinct()
     }
 
@@ -1821,7 +1835,8 @@ class CodingAgentShell(
         val roots = (
             listOf(canonicalBaseDir) + CodingComponents.toolchainRoots() + MirrorRoots.derive(baseDir) +
                 listOfNotNull(MirrorRoots.sourceRoot(baseDir)) +
-                additionalDirs.map { it.toAbsolutePath().normalize() }
+                additionalDirs.map { it.toAbsolutePath().normalize() } +
+                taskWorkspaceRoots.map { it.toAbsolutePath().normalize() }
             ).toSet()
         Authorizer(
             listOf(
@@ -2769,7 +2784,10 @@ class CodingAgentShell(
             ProcessSpec(commandLine, workDir.toPath(), environment),
             workspace,
             networkAllowed(),
-            additionalDirs.map { it.toAbsolutePath().normalize() },
+            additionalDirs.map { it.toAbsolutePath().normalize() } +
+                // Coalesced to the day directories: one label/ACE per day, not one per task, and
+                // the grant covers a task that starts after this one (string layer stays exact).
+                TaskWorkspaces.sandboxRoots(taskWorkspaceRoots),
         )
 
         val process = ProcessLauncher.start(spec, redirectErrorStream = false)

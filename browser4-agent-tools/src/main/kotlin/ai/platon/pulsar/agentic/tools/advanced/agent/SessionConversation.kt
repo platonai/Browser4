@@ -83,12 +83,11 @@ internal data class SessionSnapshot(
  * matter how long the session runs. [needsCompression] fires when the rendered
  * transcript crosses `browser4.agent.session.contextTokens`, and the runner then asks
  * the model to compact it using [compressionSystemInstruction] — a dedicated
- * instruction that states what must survive the fold (the session goal and every
- * correction, decisions and facts later work depends on, the files and their workspace,
- * open problems) and what may be dropped (page snapshots, repeated chatter, dead-end
- * reasoning). The result is stored as [compressed] and the folded turns are dropped;
- * [adoptCompressed] keeps the newest task's turns raw, because that is the task the next
- * instruction most likely refers to.
+ * instruction that asks for a factual record of the transcript — what was asked, what
+ * the tools returned, how each task ended. It states nothing about which goal is
+ * current or what to prioritize: the meaning of the history is the model's to judge.
+ * The result is stored as [compressed] and the folded turns are dropped;
+ * [adoptCompressed] keeps the newest task's turns raw.
  *
  * If the model call fails the runner sends the transcript uncompressed (bounded by the
  * caller's model window, not by this class): losing the context is worse than sending a
@@ -214,18 +213,17 @@ internal class SessionConversation(
      * what not to repeat.
      */
     fun branchSummaryInstruction(): String = """
-        You summarize ONE abandoned branch of a long browser-automation session.
+        You summarize ONE abandoned branch of a long agent session.
         The user rewound the session to an earlier point, and the transcript below is what
-        the branch tried AFTER that point: attempts, tool calls and their results. The next
-        task continues from the rewound point and must not repeat this branch blindly.
+        that branch did after that point: attempts, tool calls and their results.
 
-        Keep it short and factual. Preserve exact paths, commands, URLs, selectors, error
-        strings and ids. Output only these sections, "(none)" for an empty one:
+        State only what the transcript states. Preserve exact paths, commands, URLs,
+        selectors, error strings and ids. Output only these sections, "(none)" for an
+        empty one:
 
         ## What this branch tried
-        ## What it learned (facts later work can reuse)
-        ## Why it may have been abandoned (only what the conversation states)
-        ## What not to repeat
+        ## What it learned
+        ## Why it was abandoned (only what the conversation states)
     """.trimIndent()
 
     /**
@@ -480,28 +478,27 @@ internal class SessionConversation(
         append(renderFoldable())
     }.trimEnd()
 
-    /** The compression instruction (the "compression prompt"). */
+    /**
+     * The compression instruction (the "compression prompt").
+     *
+     * It asks for a factual record of the transcript and states nothing about which
+     * goal is current, what to keep first, or what must not be lost: the transcript is
+     * the evidence and the meaning of it belongs to the model that reads the record.
+     * A deployment that wants a policy here supplies one externally
+     * (`browser4.agent.systemPrompt.*`, see `CliAgentPrompt`).
+     */
     fun compressionSystemInstruction(): String = """
-        You compact the working memory of one long browser-automation session for the
-        agent that continues it. The input is the actual transcript of the session's
-        earlier tasks: what the user asked, the model's own messages, the tool calls with
-        their results, and every steering line the user typed.
+        You compact the transcript of an agent session.
 
-        Rewrite it into the smallest memory block that still lets the NEXT task continue
-        correctly. Preserve, in this order, quoting user intent verbatim where it matters:
+        The input is the session's actual conversation: what the user asked, the agent's
+        messages, the tool calls with their results, and the steering lines typed into it.
 
-        1. the session goal — the first task's instruction — and every later correction or
-           steering line that revised it;
-        2. decisions already taken and the facts later work depends on (URLs, selectors,
-           ids, formats, accounts — never secrets);
-        3. files created or changed, and the workspace directory they live in;
-        4. tool outcomes that constrain later work, and open problems or unfinished steps.
+        Write a compact factual record of that conversation. State only what the transcript
+        states: the instructions as they were worded, the decisions, paths, URLs, selectors,
+        ids, formats, error strings and numbers, and how each task ended. Do not add goals,
+        priorities, recommendations or conclusions that the transcript does not contain.
 
-        Drop page snapshots, repeated tool chatter, and reasoning that led nowhere. Write
-        terse factual notes addressed to the next task, at most about ${(memoryChars / CHARS_PER_TOKEN).coerceAtLeast(200)} tokens in total.
-
-        Output only the memory block: no preamble, no thanks, no headings other than plain
-        lines.
+        Output only the record, at most about ${(memoryChars / CHARS_PER_TOKEN).coerceAtLeast(200)} tokens.
     """.trimIndent()
 
     /**
@@ -531,12 +528,8 @@ internal class SessionConversation(
             appendLine()
             appendLine(
                 "This session already ran $taskCount task(s). The transcript below is the actual " +
-                    "conversation of those runs — what was asked, your own messages, the tool calls " +
-                    "and their results, and the corrections typed into them. Treat it as your memory " +
-                    "of the session: do not repeat work that is already done, build on the files it " +
-                    "changed, and continue from where an interrupted run stopped. The instruction at " +
-                    "the top of this message is the task to perform NOW — if it contradicts anything " +
-                    "below, it wins."
+                    "conversation of those tasks: what was asked, the agent's messages, the tool calls " +
+                    "with their results, the steering lines typed into them, and how each task ended."
             )
             compressed?.takeIf { it.isNotBlank() }?.let {
                 appendLine()

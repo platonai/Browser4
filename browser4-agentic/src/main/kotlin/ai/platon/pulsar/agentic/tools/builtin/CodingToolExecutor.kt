@@ -35,6 +35,7 @@ import ai.platon.pulsar.coding.RepoLock
 import ai.platon.pulsar.coding.Request
 import ai.platon.pulsar.coding.SkeletonExtractor
 import ai.platon.pulsar.coding.TokenEstimator
+import ai.platon.pulsar.coding.TaskWorkspaces
 import ai.platon.pulsar.coding.ToolAccessDeniedException
 import ai.platon.pulsar.coding.CodingTokenStats
 import ai.platon.pulsar.coding.ValidationResult
@@ -2293,6 +2294,25 @@ class CodingToolExecutor : AbstractToolExecutor() {
                     "Added folders (read+write scope for this task, --add-dir): " +
                         AdditionalDirs.describe(policy.additionalDirs)
                 )
+            }
+            // Other tasks' workspaces are neither the workspace nor a request: the policy decides
+            // whether they are writable at all (`-Dbrowser4.agent.allowTaskWorkspaceWrites`), so the
+            // report says which case this task is in instead of listing paths that would be refused.
+            if (policy.allowTaskWorkspaceWrites) {
+                val siblings = CodingComponents.taskWorkspaceRoots(fs.workspaceRoot, policy)
+                appendLine(
+                    "Other task workspaces (read+write): " +
+                        if (siblings.isEmpty()) {
+                            "none in the last ${TaskWorkspaces.writeDays()} day(s) " +
+                                "(-Dbrowser4.agent.taskWorkspaceWriteDays=  " +
+                                "-Dbrowser4.agent.allowTaskWorkspaceWrites=false)"
+                        } else {
+                            TaskWorkspaces.describe(siblings) +
+                                " (+ -Dbrowser4.agent.allowTaskWorkspaceWrites=false to refuse)"
+                        }
+                )
+            } else {
+                appendLine("Other task workspaces (read+write): none (allowTaskWorkspaceWrites=false)")
             }
             appendLine("Files:")
             appendLine("  read workspace           : $yes")

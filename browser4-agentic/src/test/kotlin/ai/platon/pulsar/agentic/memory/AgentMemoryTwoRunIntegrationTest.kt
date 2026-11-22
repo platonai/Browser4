@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -122,6 +123,23 @@ class AgentMemoryTwoRunIntegrationTest {
             "extract the product title", "https://example.com/dp/88888", memory.scope,
         )
         assertTrue(hits.hits.isNotEmpty(), "later queries must surface the failure knowledge")
+    }
+
+    @Test
+    @DisplayName("the scratchpad is scoped to one task: a retry keeps it, a new task starts empty")
+    fun testScratchpadIsScopedToOneTask() {
+        memory.beginTaskScratchpad("taskA")
+        memory.note("selector", ".price", "taskA")
+        assertTrue(memory.scratchpad.render()!!.contains("selector: .price"))
+
+        // A retry of the SAME task keeps its working memory.
+        memory.beginTaskScratchpad("taskA")
+        assertTrue(memory.scratchpad.render()!!.contains("selector: .price"))
+
+        // The user moved on to another job: the next task must not inherit the board,
+        // which is re-injected as the LAST message of every round (the strongest slot).
+        memory.beginTaskScratchpad("taskB")
+        assertNull(memory.scratchpad.render())
     }
 
     @Test

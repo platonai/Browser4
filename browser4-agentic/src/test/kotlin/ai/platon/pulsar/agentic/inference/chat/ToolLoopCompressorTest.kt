@@ -54,7 +54,7 @@ class ToolLoopCompressorTest {
         - (none)
         ## Current Work
         - (none)
-        ## Page State
+        ## Environment
         - (none)
         ## Next Step
         - write tests
@@ -357,7 +357,7 @@ class ToolLoopCompressorTest {
         // Old unprotected results get shrunk to fit the budget; the protected
         // skillDoc result stays full even though it alone exceeds the cap.
         messages += roundMessage(1, tool = "coding.read", body = "x".repeat(3_000))
-        val skillBody = "## Page State\n" + "y".repeat(50_000)
+        val skillBody = "## Environment\n" + "y".repeat(50_000)
         messages += roundMessage(2, tool = "system_skillDoc", body = skillBody)
 
         val c = ToolLoopCompressor(
@@ -419,10 +419,14 @@ class ToolLoopCompressorTest {
     }
 
     @Test
-    @DisplayName("compaction instruction asks for a Page State timeline")
-    fun compactionInstructionIncludesPageState() {
-        assertTrue(ToolLoopCompressor.COMPACTION_INSTRUCTION.contains("## Page State"))
-        assertTrue(ToolLoopCompressor.COMPACTION_INSTRUCTION.contains("\"(none)\" if no page was viewed"))
+    @DisplayName("compaction instruction asks for an Environment section (page timeline included)")
+    fun compactionInstructionIncludesEnvironment() {
+        val instruction = ToolLoopCompressor.COMPACTION_INSTRUCTION
+        assertTrue(instruction.contains("## Environment"), instruction)
+        // The browsing requirement survives inside the neutral section.
+        assertTrue(instruction.contains("FULL absolute URL"), instruction)
+        assertTrue(instruction.contains("\"(none)\" when neither applies"), instruction)
+        assertFalse(instruction.contains("## Page State"), "the section must not stay page-only: $instruction")
     }
 
     @Test
@@ -743,6 +747,6 @@ class ToolLoopCompressorTest {
         assertEquals(ToolLoopCompressor.COMPACTION_UPDATE_INSTRUCTION, instruction)
         assertTrue(instruction.contains("PRESERVE every still-true fact"), instruction)
         assertTrue(instruction.contains("ADD what the newer messages did"), instruction)
-        assertTrue(instruction.contains("## Page State"), "the required structure still applies")
+        assertTrue(instruction.contains("## Environment"), "the required structure still applies")
     }
 }

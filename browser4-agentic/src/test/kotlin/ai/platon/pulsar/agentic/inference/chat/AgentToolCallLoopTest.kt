@@ -979,7 +979,7 @@ class AgentToolCallLoopTest {
         - (none)
         ## Current Work
         - (none)
-        ## Page State
+        ## Environment
         - (none)
         ## Next Step
         - write tests

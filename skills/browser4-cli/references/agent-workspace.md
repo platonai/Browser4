@@ -39,7 +39,7 @@ browser4-cli agent run "Use the fields in docs/field-spec.csv and build the shee
 ### The per-task workspace
 
 Every task runs in its **own** directory. The path is
-`<agent data>/<yyyy>/<MM>/<dd>/<agent-uuid>/workspace.<task-id>` — on a dev-mode
+`<agent data>/agent/<yyyy>/<MM>/<dd>/<agent-uuid>/workspace.<task-id>` — on a dev-mode
 backend `<agent data>` is `~/.browser4/workspaces/<workspace-id>/app-data`.
 
 | Command | Root |
@@ -190,9 +190,52 @@ the operator's explicit opt-in, not something a task can grant itself, and it is
 (`browser4.agent.sandbox`). The `code` / `tool call` / `plugin` rule is driven by the
 preset instead: only `access=full` allows them.
 
+### Other tasks' workspaces
+
+Writing into **another task's workspace** is allowed by default, because handing a deliverable to the
+next task (or finishing a previous one's work) is the normal collaboration shape:
+
+```bash
+browser4-cli agent run "Finish the CSV in workspace.task-8f3a: add the currency column, keep its schema"
+browser4-cli agent run "Move today's report.json from workspace.task-8f3a into this task's deliverables"
+```
+
+What is in scope is derived from the layout, never from the name alone:
+
+- `<agent data>/agent/<yyyy>/<MM>/<dd>/<agent-uuid>/workspace` — the legacy shared workspace;
+- `<agent data>/agent/<yyyy>/<MM>/<dd>/<agent-uuid>/workspace.<task-id>` — a per-task workspace;
+- the newest `browser4.agent.taskWorkspaceWriteDays` day directories (default `7`), at most 64 roots
+  (`TaskWorkspaces.MAX_ROOTS`), so a run start never walks months of history.
+
+What stays out of scope, deliberately:
+
+- **`workspace.archive`** — the deliverables of aborted tasks live next to the workspace and are not
+  a workspace a run may rewrite;
+- **`<agent data>/agent/skills`** — deploying an executable skill is a privilege escalation, refused
+  exactly as it is for `b4.run`;
+- **isolated coding worktrees** (`<repo>/.browser4/worktrees/<task-id>`) — an unmerged worktree is
+  the only copy of a change that has not passed `coding.verify`. Hand one over explicitly with
+  `--add-dir <worktree>`.
+
+The access preset still decides whether anything may be written, so `--access read` keeps other
+tasks' workspaces read-only, and the credential rails (`~/.ssh`, `~/.aws`, …) are untouched. The OS
+sandbox is given the **day directory** of each granted workspace, so a confined child needs one
+label/ACE per day rather than one per task; the string layer keeps the exact list.
+
+Costs to know about: a run can now overwrite or delete another task's deliverables, so `filesChanged`
+no longer proves the files it names were *produced* by that run — it proves they were **written by**
+it. The set is resolved when the policy is applied, so a task that starts *later* is not in it
+(`--add-dir` covers that case). `coding.permissions` prints the roots this task actually got.
+
+Restore the workspace-only write boundary with:
+
+```bash
+BROWSER4_SERVER_OPTS="-Dbrowser4.agent.allowTaskWorkspaceWrites=false" browser4-cli open
+```
+
 ### Extra folders granted with `--add-dir`
 
-A task's boundary is its own workspace (plus its mirrored module roots, the checkout those mirrors come from — writable, so a self-development task edits the code it runs from — and the readable roots). To let a run work on a folder that lives somewhere else, grant it explicitly:
+A task's boundary is its own workspace plus the other task workspaces above (and its mirrored module roots, the checkout those mirrors come from — writable, so a self-development task edits the code it runs from — and the readable roots). To let a run work on a folder that lives somewhere else, grant it explicitly:
 
 ```bash
 browser4-cli agent run "Port the helpers in ../shared-libs into this repo" --coding --add-dir ../shared-libs
@@ -294,6 +337,8 @@ Credential locations stay refused. `--access` never widens paths.
 | `--fresh-workspace` | `agent run` | accepted for compatibility; per-task isolation is the default now |
 | `--access <preset>` | `agent run` | which *tools* run (`full`/`write`/`read-build`/`read`); never widens paths |
 | `--add-dir <dir>` | `agent run` | grant an **existing** folder outside the workspace: readable, writable and usable as a shell working directory for this task (repeatable; scope only — the preset still bounds what may be done there, and `--resume` inherits it) |
+| `browser4.agent.allowTaskWorkspaceWrites` | backend | whether a run may write other tasks' workspaces (default `true`; `false` restores the workspace-only boundary) |
+| `browser4.agent.taskWorkspaceWriteDays` | backend | how many of the newest day directories the scan looks at (default `7`, clamped to `1..400`) |
 | `browser4.agent.copyTaskInputs` | backend | copy instruction-referenced external files into `.b4inputs/` (default `true`) |
 | `browser4.agent.allowExternalAccess` | backend | deprecated; advisory string-layer widening for absolute paths outside the workspace (default `false`) |
 | `browser4.agent.workspace` | backend | the checkout a `--coding` task mirrors (default: auto-detected) |
@@ -308,7 +353,8 @@ Credential locations stay refused. `--access` never widens paths.
 | The agent reports a blocked input in `problems` | the file could not be resolved at all | check the path exists in the checkout, then re-run |
 | `coding.read` refuses a file | binary (`.xlsx`, `.pdf`, `.zip`, image) | extract it with a script, or convert it to CSV first |
 | Artifacts are "missing" from the repository | they live in the task workspace | use `agent result` to find the workspace and copy from there |
-| The agent cannot see a file an earlier task wrote | each task has its own workspace | pass `--shared-workspace`, or name the file so it is copied into `.b4inputs/` |
+| A write into another task's workspace is refused | it is outside the window (older than `taskWorkspaceWriteDays`, past the 64-root cap), it is `workspace.archive`/`agent/skills`, or the run is a coding worktree | `--add-dir <path>` grants that one folder; `coding.permissions` shows what the task got |
+| The agent cannot see a file an earlier task wrote | reads of other workspaces are allowed, but only where the task looks | name the absolute path (`coding.permissions` lists the writable ones), or pass `--shared-workspace` |
 | A failed run lists no files | the run wrote nothing **of its own** | files from earlier tasks are deliberately excluded; resume (`--resume`) continues the same workspace |
 
 ## Related

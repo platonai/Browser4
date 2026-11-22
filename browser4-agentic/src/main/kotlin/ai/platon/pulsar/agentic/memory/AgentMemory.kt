@@ -109,6 +109,31 @@ open class AgentMemory(
     @Volatile
     var currentTaskId: String? = null
 
+    /**
+     * The task whose working-memory board [scratchpad] currently holds.
+     *
+     * A note ("the price selector is .price", "todo: verify #qty") is working memory of
+     * the task that wrote it, but this agent — and therefore its scratchpad — is shared
+     * by every task of a session. Without a per-task reset the notes of task N were
+     * re-injected as the tail message of every round of task N+1 (the strongest position
+     * in the prompt), even when the user had moved on to an unrelated job.
+     */
+    @Volatile
+    private var scratchpadTaskId: String? = null
+
+    /**
+     * Start the working memory of [taskId]: a NEW task begins with an empty board.
+     *
+     * A retry of the same task (same id) keeps its notes — it is the same job.
+     */
+    @Synchronized
+    fun beginTaskScratchpad(taskId: String?) {
+        if (taskId != null && taskId != scratchpadTaskId) {
+            scratchpad.clear()
+            scratchpadTaskId = taskId
+        }
+    }
+
     /** Write a scratchpad note and record the NoteWritten event. */
     fun note(key: String, value: String, taskId: String? = null): String {
         val result = scratchpad.note(key, value)
