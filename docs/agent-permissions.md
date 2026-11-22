@@ -139,9 +139,21 @@ fs / shell 实例，也无法重开工具门已经关掉的东西。
 | `cap-shell-boundary` | lexical（按字面）+ 工具链根 + launcher 豁免 | shell |
 
 两个 grant 都覆盖 workspace、镜像模块根（`MirrorRoots`）、源检出（`ScopeKind.SOURCE`）、
-`--add-dir` 目录，以及**只读**的可读根（`ReadablePaths`）；工具链根（JDK、`.m2`、`.gradle`、`.cache`、
+`--add-dir` 目录、其他任务的工作区（`ScopeKind.TASK_WORKSPACE`，见下），以及**只读**的可读根
+（`ReadablePaths`）；工具链根（JDK、`.m2`、`.gradle`、`.cache`、
 `tmp`、OS 目录）只给 shell。作用域由 `scopeManifest` 单一派生，manifest 与 grant 不会漂移。
-Authorizer 按 `(root, 可读根, add-dir)` 缓存，LRU 上限 64（每个任务一个新工作区，不设上限会随进程增长）。
+Authorizer 按 `(root, 可读根, add-dir, 其他任务工作区)` 缓存，LRU 上限 64（每个任务一个新工作区，不设上限会随进程增长）。
+
+**其他任务的工作区**由 `TaskWorkspaces` 从布局推导，只认
+`<app data>/agent/<yyyy>/<MM>/<dd>/<agent-uuid>/workspace[.<task-id>]` 这一种形状，不看名字：
+`workspace.archive`（中断任务的归档交付物）、`<agent data>/agent/skills`（可执行 skill 的部署点）、
+隔离 worktree（`<repo>/.browser4/worktrees/<task-id>`，未合并改动的唯一副本）**不在**其中；
+后者要用 `--add-dir` 显式交接。开关是 `browser4.agent.allowTaskWorkspaceWrites`（默认 `true`），
+窗口 `browser4.agent.taskWorkspaceWriteDays`（默认 7 天，钳制 1..400）、上限 64 个根。
+两个后果要在心里备着：① `filesChanged` 从此只证明「本次 run 写过」，不再证明「由本次 run 产出」；
+② 集合在策略生效时解析，**之后**启动的任务不在其中（用 `--add-dir` 补）。
+沙箱只拿到每个工作区的**日目录**（`TaskWorkspaces.sandboxRoots`）：一天一个 label/ACE，而不是一个任务一个，
+字符串层仍是精确列表。
 
 ### ⑤ 执行沙箱与进程层
 
@@ -190,7 +202,7 @@ SID；low-il / windows-acl 仍共享身份，撤销只把窗口限制在任务�
 
 | 护栏 | 内容 | 实现 |
 |---|---|---|
-| 工作区边界 | `allowExternalAccess=false`（默认）时，写与 shell 越界即拒 | `Authorizer` + fs/shell |
+| 工作区边界 | `allowExternalAccess=false`（默认）时，写与 shell 越界即拒；其他任务的工作区是**默认在界内**的例外，但只有布局合法的 `workspace[.<task-id>]` 才算 | `Authorizer` + fs/shell + `TaskWorkspaces` |
 | 受保护文件 | `VERSION`、`AGENTS.md`、`CLAUDE.md`、根 `pom.xml`、`browser4-dependencies/pom.xml`、`ci.yml`、`b4w.*`、`bin/build*`、`bin/recover*`、`mvnw*` | `DEFAULT_PROTECTED_FILES` |
 | 受保护目录 | `.browser4`（快照 / 检查点 / worktree）、`.github/workflows`、`.mvn` | `DEFAULT_PROTECTED_DIRS` |
 | 敏感路径 | `~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.config/gcloud`、`~/.browser4` | `DEFAULT_SENSITIVE_PATHS` |
@@ -269,6 +281,7 @@ REST 控制器**故意不开 CORS**：批准等于授予写文件/执行命令�
 | 无人值守默认 | `-Dbrowser4.agent.access.unattended` | `full` + 允许网络；`deny` 用 `denyTools=coding.*,skill.*` 表达 |
 | 任务预设 | `agent run --access <preset>` | 继承服务端 |
 | 额外目录 | `agent run --add-dir`、REPL `/add-dir`、`/dirs [clear]` | 无 |
+| 其他任务工作区 | `-Dbrowser4.agent.allowTaskWorkspaceWrites`、窗口 `-Dbrowser4.agent.taskWorkspaceWriteDays` | **开**（写其他任务的 `workspace[.<task-id>]`；`workspace.archive`、`agent/skills`、隔离 worktree 不在内） |
 | 全权 | `agent run --unrestricted` | 关 |
 | 可读根 | `-Dbrowser4.agent.readPaths` | Browser4 数据根、`~/.browser4`、CLI 工作区、源检出 |
 | OS 沙箱 | `-Dbrowser4.agent.sandbox` | Windows：默认 `windows-acl`（新装与老装一次性升级）；`windows-low-il` 是**免账户免管理员**的 coding 推荐后端（写与凭据读强制、网络不强制）；其它平台 `off`（待 P2）；库/测试 `off` |
@@ -663,6 +676,7 @@ icacls '<dir>' /remove "*S-1-15-2-<hash>"   # 只删这一条，不要 /reset �
 | `browser4-coding/.../PermissionAudit.kt` | 拒绝码表、计数、单次日志 |
 | `browser4-coding/.../CodingComponents.kt` | 边界 Authorizer、scope manifest、fs / shell / sandbox 装配 |
 | `browser4-coding/.../ReadablePaths.kt`、`SensitivePaths.kt` | 可读根、凭证路径的判定顺序 |
+| `browser4-coding/.../TaskWorkspaces.kt` | 其他任务工作区的形状判定、窗口/上限、沙箱日目录合并 |
 | `browser4-coding/.../CodingAgentShell.kt`、`CodingAgentFileSystem.kt` | 命令分层、路径守卫、受保护/敏感清单 |
 | `browser4-coding/.../sandbox/ExecutionSandbox.kt`、`SandboxDefaults.kt` | 沙箱后端、环境白名单、默认策略 |
 | `browser4-coding/.../sandbox/WindowsLowIntegritySandbox.kt`、`OwnerSecurityRights.kt` | Low-IL 后端：令牌、打标（`labelWritable`）、OWNER RIGHTS 授权、三段探针 |

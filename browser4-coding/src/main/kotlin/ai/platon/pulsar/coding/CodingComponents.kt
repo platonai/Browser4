@@ -86,6 +86,8 @@ object CodingComponents {
         val readableRoots: List<Path>,
         /** Folders `agent run --add-dir` granted to the task, normalized and sorted. */
         val additionalDirs: List<Path>,
+        /** Other tasks' workspaces in scope ([TaskWorkspaces]), normalized and sorted. */
+        val taskWorkspaces: List<Path> = emptyList(),
     )
 
     private val boundaryAuthorizers = object : LinkedHashMap<BoundaryKey, Authorizer>(16, 0.75f, true) {
@@ -173,11 +175,15 @@ object CodingComponents {
      * @param readableRoots the readable roots in effect; defaults to [ReadablePaths.roots]
      * @param additionalDirs folders granted to the task besides the workspace
      *   (`agent run --add-dir`); they are read+write in both boundary grants
+     * @param taskWorkspaces other tasks' workspaces in scope
+     *   ([AgentAccessPolicy.allowTaskWorkspaceWrites]); read+write in both grants when the policy
+     *   allows it, and never an ancestor of a workspace (`workspace.archive`, `agent/skills`)
      */
     internal fun scopeManifest(
         root: Path,
         readableRoots: List<Path> = ReadablePaths.roots(),
         additionalDirs: Collection<Path> = emptyList(),
+        taskWorkspaces: Collection<Path> = emptyList(),
     ): List<ScopeEntry> {
         val realRoot = runCatching { root.toRealPath() }.getOrDefault(root.toAbsolutePath().normalize())
         val boundaryGrants = setOf(CAP_FS_BOUNDARY, CAP_SHELL_BOUNDARY)
@@ -230,8 +236,35 @@ object CodingComponents {
                     grants = boundaryGrants,
                 )
             }
-        return listOf(workspace) + mirrors + listOfNotNull(source) + toolchain + readable + added
+        return listOf(workspace) + mirrors + listOfNotNull(source) + toolchain + readable + added +
+            taskWorkspaceEntries(taskWorkspaces, known, boundaryGrants)
     }
+
+    /**
+     * Other tasks' workspaces as scope entries ([ScopeKind.TASK_WORKSPACE]).
+     *
+     * Split out so the derivation is testable on its own and so [scopeManifest] stays a list of
+     * entries rather than a list of special cases. A candidate is dropped when it is already an
+     * exact boundary root ([known]) — the workspace/mirror entry covers it then.
+     */
+    internal fun taskWorkspaceEntries(
+        taskWorkspaces: Collection<Path>,
+        known: Set<Path>,
+        grants: Set<CapabilityId>,
+    ): List<ScopeEntry> = taskWorkspaces
+        .map { runCatching { it.toRealPath() }.getOrDefault(it.toAbsolutePath().normalize()) }
+        .distinct()
+        .filterNot { it in known }
+        .sortedBy { it.toString() }
+        .map {
+            ScopeEntry(
+                id = "task-workspace:$it",
+                path = it,
+                kind = ScopeKind.TASK_WORKSPACE,
+                effects = BOUNDARY_EFFECTS,
+                grants = grants,
+            )
+        }
 
     /**
      * The single boundary [Authorizer] shared by the file system and the shell for a workspace.
@@ -254,11 +287,19 @@ object CodingComponents {
      * @param root the workspace root
      * @param additionalDirs folders `agent run --add-dir` granted to this task; they join the
      *   read **and** write scope of both grants, so the file tools and the shell agree on them
+     * @param taskWorkspaces other tasks' workspaces in scope
+     *   ([taskWorkspaceRoots]); they join both grants the same way, so a run can write a
+     *   deliverable into another task's workspace
      */
-    fun boundaryAuthorizer(root: Path, additionalDirs: Collection<Path> = emptyList()): Authorizer {
+    fun boundaryAuthorizer(
+        root: Path,
+        additionalDirs: Collection<Path> = emptyList(),
+        taskWorkspaces: Collection<Path> = emptyList(),
+    ): Authorizer {
         val realRoot = runCatching { root.toRealPath() }.getOrDefault(root.toAbsolutePath().normalize())
         val extras = additionalDirs.map { it.toAbsolutePath().normalize() }.distinct().sortedBy { it.toString() }
-        val key = BoundaryKey(realRoot, ReadablePaths.roots(), extras)
+        val task = taskWorkspaces.map { it.toAbsolutePath().normalize() }.distinct().sortedBy { it.toString() }
+        val key = BoundaryKey(realRoot, ReadablePaths.roots(), extras, task)
         synchronized(boundaryAuthorizerLock) {
             boundaryAuthorizers[key]?.let { return it }
             val built = buildBoundaryAuthorizer(key)
@@ -268,7 +309,7 @@ object CodingComponents {
     }
 
     private fun buildBoundaryAuthorizer(key: BoundaryKey): Authorizer {
-        val manifest = scopeManifest(key.root, key.readableRoots, key.additionalDirs)
+        val manifest = scopeManifest(key.root, key.readableRoots, key.additionalDirs, key.taskWorkspaces)
         // The manifest is the single source of truth: an entry's `effects` say whether its path is
         // read-only (the readable roots) or read+write (workspace, mirrors, shell toolchain roots).
         fun rootsOf(grant: CapabilityId, effect: Effect): Set<Path> =
@@ -320,7 +361,8 @@ object CodingComponents {
         policy: AgentAccessPolicy = AgentAccessPolicy.serverDefault,
         sessionEnv: Map<String, String> = emptyMap(),
     ): CodingAgentShell {
-        val boundary = policy.boundaryOrUnrestricted(root)
+        val taskWorkspaces = taskWorkspaceRoots(root, policy)
+        val boundary = policy.boundaryOrUnrestricted(root, taskWorkspaces)
         return CodingAgentShell(
             baseDir = root,
             sandbox = sandbox(policy),
@@ -338,6 +380,7 @@ object CodingComponents {
             initialSessionEnv = sessionEnv,
             readableRoots = ReadablePaths.roots().toSet(),
             additionalDirs = policy.additionalDirs,
+            taskWorkspaceRoots = taskWorkspaces.toSet(),
         )
     }
 
@@ -369,7 +412,8 @@ object CodingComponents {
         // approves one program; reusing it would make a permitted build fail on `mvn` because a
         // grant for `git` does not cover it.
         if (policy.preset == AccessPreset.FULL) return modelShell ?: shell(root, policy)
-        val boundary = policy.boundaryOrUnrestricted(root)
+        val taskWorkspaces = taskWorkspaceRoots(root, policy)
+        val boundary = policy.boundaryOrUnrestricted(root, taskWorkspaces)
         return CodingAgentShell(
             baseDir = root,
             sandbox = sandbox(policy),
@@ -384,6 +428,7 @@ object CodingComponents {
             boundaryAuthorizer = boundary,
             readableRoots = ReadablePaths.roots().toSet(),
             additionalDirs = policy.additionalDirs,
+            taskWorkspaceRoots = taskWorkspaces.toSet(),
         )
     }
 
@@ -407,7 +452,8 @@ object CodingComponents {
         policy: AgentAccessPolicy = AgentAccessPolicy.serverDefault,
         persistSnapshots: Boolean = false,
     ): CodingAgentFileSystem {
-        val boundary = policy.boundaryOrUnrestricted(root)
+        val taskWorkspaces = taskWorkspaceRoots(root, policy)
+        val boundary = policy.boundaryOrUnrestricted(root, taskWorkspaces)
         return CodingAgentFileSystem(
             workspaceRoot = root,
             allowExternalAccess = policy.allowExternalAccess,
@@ -422,11 +468,12 @@ object CodingComponents {
             boundaryAuthorizer = boundary,
             readableRoots = ReadablePaths.roots().toSet(),
             additionalDirs = policy.additionalDirs,
+            taskWorkspaceRoots = taskWorkspaces.toSet(),
             // Plan P3-6: the write side of the same boundary the shell gets. Provider, not instance:
             // the backend follows the task's mode, and an installation without a usable backend
             // silently keeping the in-process path is exactly the drift this seam must not have —
             // so the provider answers `null` only for a backend that *cannot* execute file ops.
-            mutationOpsProvider = { fileOps(policy, root) },
+            mutationOpsProvider = { fileOps(policy, root, taskWorkspaces) },
             // The refusals must name the layer this task actually runs under, not the bare
             // `browser4.agent.sandbox` property (which reads `off` while the coding chain runs
             // windows-low-il — run 4125acaa, 2026-11-19). Lazy: resolving instantiates/probes the
@@ -446,11 +493,25 @@ object CodingComponents {
      *
      * A backend that *can* but fails to start is not `null`: [SandboxFileOps] throws and the tool call
      * is refused. Falling back to an unconfined write there would silently undo the whole point.
+     *
+     * @param policy the task's policy
+     * @param root the task's workspace
+     * @param taskWorkspaces other tasks' workspaces in scope; the caller passes the list it already
+     *   resolved, because this runs on **every** mutation and the derivation is a directory scan
      */
-    fun fileOps(policy: AgentAccessPolicy, root: Path): SandboxFileOps? {
+    fun fileOps(
+        policy: AgentAccessPolicy,
+        root: Path,
+        taskWorkspaces: Collection<Path> = taskWorkspaceRoots(root, policy),
+    ): SandboxFileOps? {
         if (policy.unrestricted) return null
         val sandbox = sandbox(policy)
-        return SandboxedFileOps.forSandbox(sandbox, root, policy.additionalDirs.toList())
+        // The sandboxed writer needs every root the string layer allows, otherwise a write into
+        // another task's workspace is accepted by the boundary and refused by the OS. Other tasks'
+        // workspaces go in as their day directories ([TaskWorkspaces.sandboxRoots]): one label/ACE
+        // per day instead of one per task, and it covers a task that starts after this one.
+        val extraRoots = policy.additionalDirs.toList() + TaskWorkspaces.sandboxRoots(taskWorkspaces)
+        return SandboxedFileOps.forSandbox(sandbox, root, extraRoots.distinct())
     }
 
     /**
@@ -476,14 +537,34 @@ object CodingComponents {
     ): ExecutionSandbox? = if (policy.unrestricted || !sandbox.executesProductCommands) null else sandbox
 
     /**
+     * Other tasks' workspaces this policy puts in scope, newest first.
+     *
+     * Empty when the policy says no ([AgentAccessPolicy.allowTaskWorkspaceWrites]) — the single
+     * gate for all three consumers: the boundary grants, the sandbox grants and the
+     * `coding.permissions` report. The set is resolved from the *current* workspace: a sibling is
+     * only in scope if it is a task workspace by layout ([TaskWorkspaces]), so `workspace.archive`,
+     * `agent/skills` and an isolated worktree never are.
+     *
+     * @param root this task's workspace
+     * @param policy the policy in force
+     */
+    fun taskWorkspaceRoots(root: Path, policy: AgentAccessPolicy): List<Path> =
+        if (policy.unrestricted || !policy.allowTaskWorkspaceWrites) {
+            emptyList()
+        } else {
+            TaskWorkspaces.writableRoots(currentWorkspace = root)
+        }
+
+    /**
      * The boundary this policy's file system and shell must enforce.
      *
      * Under [AgentAccessPolicy.unrestricted] the in-process boundary is a pass-through so the
      * task runs with the OS user's own permissions; every other policy keeps the workspace
-     * boundary plus its `--add-dir` grants.
+     * boundary plus its `--add-dir` grants and the other tasks' workspaces it may write
+     * ([taskWorkspaceRoots]).
      */
-    private fun AgentAccessPolicy.boundaryOrUnrestricted(root: Path): Authorizer =
-        if (unrestricted) Authorizer.unrestricted() else boundaryAuthorizer(root, additionalDirs)
+    private fun AgentAccessPolicy.boundaryOrUnrestricted(root: Path, taskWorkspaces: List<Path>): Authorizer =
+        if (unrestricted) Authorizer.unrestricted() else boundaryAuthorizer(root, additionalDirs, taskWorkspaces)
 
     /**
      * The OS sandbox seam a task under [policy] must use, or `null` to keep the process-wide

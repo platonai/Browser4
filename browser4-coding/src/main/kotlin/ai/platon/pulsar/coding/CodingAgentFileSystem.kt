@@ -126,6 +126,15 @@ class CodingAgentFileSystem(
      */
     private val additionalDirs: Set<Path> = emptySet(),
     /**
+     * Other tasks' workspaces in scope ([TaskWorkspaces], [AgentAccessPolicy.allowTaskWorkspaceWrites]).
+     *
+     * Read **and** write scope, exactly like [additionalDirs]; only the fallback boundary of a
+     * directly constructed file system needs them, because [CodingComponents.fs] injects a
+     * boundary that already carries them. The OS write path is told the same roots by
+     * [CodingComponents.fileOps].
+     */
+    private val taskWorkspaceRoots: Set<Path> = emptySet(),
+    /**
      * Plan P3-6 — the **write-side OS boundary** for this file system. When the provider returns a
      * [SandboxFileOps], every mutating operation ([writeFile]/[appendFile]/[replaceInFile]/[delete]/
      * [mkdir]/[copy]/[move]/[revert]/…) hands the actual filesystem change to a helper that runs
@@ -2341,13 +2350,15 @@ class CodingAgentFileSystem(
      * grant over the workspace real root, every mirrored module root [MirrorRoots] finds, the
      * checkout those mirrors come from ([MirrorRoots.sourceRoot] — writable, so a self-development
      * task can edit the repository it runs from), plus the readable roots for reads only
-     * ([ReadablePaths]) and the folders `agent run --add-dir` granted for reads and writes. Built
-     * lazily so the mirror scan runs once per instance and only when a path is actually resolved.
+     * ([ReadablePaths]) and the folders `agent run --add-dir` granted for reads and writes, and the
+     * other tasks' workspaces this policy puts in scope ([taskWorkspaceRoots]). Built lazily so the
+     * mirror scan runs once per instance and only when a path is actually resolved.
      */
     private val fallbackBoundaryAuthorizer: Authorizer by lazy {
         val roots = (
             setOf(canonicalRoot) + MirrorRoots.derive(workspaceRoot) +
-                listOfNotNull(MirrorRoots.sourceRoot(workspaceRoot)) + resolvedAdditionalDirs
+                listOfNotNull(MirrorRoots.sourceRoot(workspaceRoot)) + resolvedAdditionalDirs +
+                taskWorkspaceRoots.map { it.toAbsolutePath().normalize() }
             ).toSet()
         Authorizer(
             listOf(

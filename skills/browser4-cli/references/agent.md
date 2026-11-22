@@ -128,14 +128,22 @@ The block never spends a slot on `/stats`, `/result` or `/new`: those are in `/h
 
 A task's coding tools run under one access **preset** (`full` / `write` / `read-build` / `read`), and a refused step can be approved out of band through `coding.requestAccess` plus the operator endpoints. The preset table, the `PERMISSION_DENIED | code=...` catalogue, the approval/rail rules, the unattended default and the task-scoped reset are in [agent-access.md](agent-access.md).
 
-**Reads are wider than writes.** Browser4's own data root (`~/.browser4`: logs, task data, per-task workspaces, its `tmp/`), `~/.browser4` itself even when a managed `--workspace` moved the data root, the CLI workspace owning `<app data>`, the source checkout, and any folder added with `-Dbrowser4.agent.readPaths=…` are readable from every task — read-only, whatever the preset. The one write scope outside the workspace is the checkout a task's workspace **mirrors** (a self-development task edits the code it runs from; the protected rails still apply). `coding.permissions` lists them; see [agent-access.md](agent-access.md#readable-roots--browser4s-own-folders).
+**Reads are wider than writes.** Browser4's own data root (`~/.browser4`: logs, task data, per-task workspaces, its `tmp/`), `~/.browser4` itself even when a managed `--workspace` moved the data root, the CLI workspace owning `<app data>`, the source checkout, and any folder added with `-Dbrowser4.agent.readPaths=…` are readable from every task — read-only, whatever the preset. The write scope outside the workspace is the checkout a task's workspace **mirrors** (a self-development task edits the code it runs from; the protected rails still apply), plus the other task workspaces a run may write (below). `coding.permissions` lists them; see [agent-access.md](agent-access.md#readable-roots--browser4s-own-folders).
 
 **Two layers, one boundary.** The preset and the string checks (`pathGuard`, `workspaceBoundary`, `allowExternalAccess`) decide what the model may *spell* — they are fast-fail and advisory, not enforcement. The boundary is the **execution sandbox**: `coding.shell` and `coding.runCode` run inside it whenever `browser4.agent.sandbox` selects a backend other than `off`, and on the two backends that can execute them the **file mutations** (`coding.write`/`append`/`replace`/`editLines`/`delete`/`mkdir`/`copy`/`move`/`revert`) do too — each change is performed by a child inside the boundary, so an outside write is refused by the OS, not only by the path check. `b4.run` is a *product* channel: it stays inside the boundary on `windows-low-il`/`windows-acl`, and on the browse AppContainer — which cannot read the profile or reach the host's `127.0.0.1` — it keeps its launch in the backend and `coding.permissions` lists it as not covered. Reads stay in the backend on purpose (in coding mode "read like the user" *is* the goal). A fresh Windows installation defaults to `windows-acl`; existing installations and Linux/macOS stay `off` until switched. When the
 sandbox is active, an OS denial reaches the model as `PERMISSION_DENIED | code=SANDBOX_DENIED | tool=… | needed=…` (raw evidence stays in the log), and an unavailable sandbox — missing account or credential, failed ACLs, failed write probe, unknown id — **fails the task**; there is no unsandboxed fallback. Switch values, defaults, the ACL matrix, the account property and the `off` rollback are in [config.md](../../../docs/config.md).
 
 ### Extra folders (`--add-dir`)
 
-A task's boundary is its own workspace (plus its mirrored module roots and the readable roots). A folder that lives somewhere else is granted per task — repeatable, must already exist, task-scoped, `--access` still bounds it and the OS sandbox agrees; `-i` adds `/add-dir`. See [agent-workspace.md](agent-workspace.md#extra-folders-granted-with---add-dir).
+A task's boundary is its own workspace, its mirrored module roots, the other task workspaces it may write (see below) and the readable roots. A folder that lives somewhere else is granted per task — repeatable, must already exist, task-scoped, `--access` still bounds it and the OS sandbox agrees; `-i` adds `/add-dir`. See [agent-workspace.md](agent-workspace.md#extra-folders-granted-with---add-dir).
+
+**Other tasks' workspaces are writable by default.** A run may write
+`<agent data>/agent/<date>/<uuid>/workspace[.<task-id>]` of other tasks (newest 7 days, at most 64
+roots) so a deliverable can be handed on or a previous run finished; `workspace.archive`,
+`agent/skills` and isolated worktrees stay out, the preset still bounds it, and
+`-Dbrowser4.agent.allowTaskWorkspaceWrites=false` restores the workspace-only boundary. The cost:
+`filesChanged` then means "written by this run", not "produced by it". See
+[agent-workspace.md](agent-workspace.md#other-tasks-workspaces).
 
 ## Patterns
 
