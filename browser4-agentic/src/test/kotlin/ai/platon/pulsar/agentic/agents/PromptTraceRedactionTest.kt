@@ -8,10 +8,13 @@ import dev.langchain4j.data.message.ToolExecutionResultMessage
 import dev.langchain4j.data.message.UserMessage
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTimeout
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.function.ThrowingSupplier
+import java.time.Duration
 
 /**
  * `cli-prompt/<ts>.<seq>.request.json` is the exact prompt the model saw — the richest forensic
@@ -115,5 +118,24 @@ class PromptTraceRedactionTest {
 
         assertEquals("""list the files in src/main""", payload["text"])
         assertEquals(SecretRedactor.redactText("list the files in src/main"), payload["text"])
+    }
+
+    @Test
+    @DisplayName("a large system prompt is dumped without overflowing the stack")
+    fun largeSystemPromptsAreDumped() {
+        // Regression: the prompt-dump redactor used a recursive regex; a quoted string of a few
+        // kilobytes in the system prompt threw StackOverflowError before the first model request,
+        // which failed every traced run on the default JVM stack.
+        val longValue = "a".repeat(100_000)
+        val text = "skills \"$longValue\" credentials: {\"secret\":\"s3cr3t\"}"
+
+        val payload = assertTimeout(Duration.ofSeconds(5), ThrowingSupplier {
+            promptMessagePayload(SystemMessage.from(text))
+        })
+
+        val dumped = payload["text"] as String
+        assertFalse(dumped.contains("s3cr3t"), "the secret is still redacted")
+        assertTrue(dumped.contains("skills"), "the rest of the prompt survives")
+        assertTrue(dumped.contains("a".repeat(1000)), "the large quoted value survives")
     }
 }

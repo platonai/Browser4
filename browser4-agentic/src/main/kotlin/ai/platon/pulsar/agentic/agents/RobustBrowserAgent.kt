@@ -2511,7 +2511,14 @@ open class RobustBrowserAgent(
                 // message stays in the conversation). Repair it instead.
                 Files.writeString(path, SafeText.sanitize(json))
             } catch (e: Exception) {
+                // Tracing is best effort: a dump that cannot be written or redacted must cost
+                // the trace, never the run.
                 logger.warn("Failed to write CLI prompt log: {}", e.message)
+            } catch (e: StackOverflowError) {
+                // `Error`, not `Exception`: a redaction rule that overflows the thread stack
+                // used to escape this handler and fail the whole task. Skip this dump instead,
+                // which is the one safe answer — the unredacted prompt must never be written.
+                logger.warn("Skipping CLI prompt log: tracing overflowed the thread stack")
             }
         }
 
