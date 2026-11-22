@@ -12,7 +12,8 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
  * Integration test for SkillBootstrap auto-loading in Spring context.
  *
  * This test verifies that skills are automatically loaded from classpath resources
- * (src/main/resources/skills/\*) when the AgenticContext is created.
+ * (src/main/resources/skills/\*) when the AgenticContext is created. `browser4-cli` is the only
+ * bundled skill since the demo skills were removed.
  */
 class SkillBootstrapIntegrationTest {
 
@@ -33,38 +34,36 @@ class SkillBootstrapIntegrationTest {
     fun skillsAreAutoLoadedInSpringContext() {
         val registry = SkillRegistry.instance
 
-        // At least the built-in resource skills should be present.
-        assertTrue(registry.size() >= 4, "At least 4 resource skills should be auto-loaded")
+        // The bundled skill must be present.
+        assertTrue(registry.contains("browser4-cli"), "Skill 'browser4-cli' should be auto-loaded")
 
-        // Verify specific resource skills (defined by resources/skills/*/SKILL.md)
-        assertTrue(registry.contains("web-scraping"), "Skill 'web-scraping' should be auto-loaded")
-        assertTrue(registry.contains("form-filling"), "Skill 'form-filling' should be auto-loaded")
-        assertTrue(registry.contains("data-validation"), "Skill 'data-validation' should be auto-loaded")
-        assertTrue(registry.contains("weather"), "Skill 'weather' should be auto-loaded")
+        // The removed demo skills must not come back.
+        listOf("web-scraping", "form-filling", "data-validation", "mcp-builder", "pdf", "weather")
+            .forEach { removed ->
+                assertFalse(registry.contains(removed), "Removed demo skill '$removed' must not be registered")
+            }
     }
 
     @Test
     fun skillsAreAccessibleAfterContextCreation() {
         val registry = SkillRegistry.instance
 
-        val weatherSkill = registry.get("weather")
-        assertNotNull(weatherSkill)
+        val cliSkill = registry.get("browser4-cli")
+        assertNotNull(cliSkill)
 
-        assertEquals("Weather", weatherSkill!!.metadata.name)
-        assertEquals("1.0.0", weatherSkill.metadata.version)
+        assertEquals("browser4-cli", cliSkill!!.metadata.name)
+        assertEquals("1.0.0", cliSkill.metadata.version)
+        assertTrue(cliSkill.metadata.description.isNotBlank())
     }
 
     @Test
-    fun skillDependenciesAreSatisfied() {
+    fun bundledSkillDependenciesAreSatisfied() {
         val registry = SkillRegistry.instance
 
-        val formFillingSkill = registry.get("form-filling")
-        assertNotNull(formFillingSkill)
+        val cliSkill = registry.get("browser4-cli")
+        assertNotNull(cliSkill)
 
-        val dependencies = formFillingSkill!!.metadata.dependencies
-        assertTrue(dependencies.contains("web-scraping"))
-
-        dependencies.forEach { depId ->
+        cliSkill!!.metadata.dependencies.forEach { depId ->
             assertTrue(registry.contains(depId), "Dependency $depId should be loaded")
         }
     }

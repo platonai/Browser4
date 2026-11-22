@@ -193,7 +193,7 @@ Show metadata for a specific skill.
 | `id` | Yes | Skill identifier |
 
 ```
-browser4-cli skill info web-scraping
+browser4-cli skill info browser4-cli
 ```
 
 #### `skill install`
@@ -223,7 +223,7 @@ Remove a skill from the server by ID.
 | `id` | Yes | Skill identifier |
 
 ```
-browser4-cli skill uninstall web-scraping
+browser4-cli skill uninstall my-custom-skill
 ```
 
 #### `skill reload`
