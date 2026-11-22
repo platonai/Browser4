@@ -62,31 +62,24 @@ object SecretRedactor {
         "signature", "authorization", "auth", "session", "sessionid", "cookie", "code",
     )
 
-    /** A `"key": "value"` pair in JSON-shaped text. */
-    private val INLINE_SECRET = Regex(
-        """(?i)("(?:[^"\\]|\\.)*?(?:password|passwd|pwd|secret|token|api_?key|authorization|cookie)(?:[^"\\]|\\.)*?"\s*:\s*)(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^,}\]]+)"""
+    /**
+     * Substrings that make a JSON-shaped key a credential.
+     *
+     * The list mirrors the old `(?i)password|passwd|pwd|secret|token|api_?key|authorization|cookie`
+     * alternation exactly (`api_?key` is `apikey` or `api_key`, not `api-key`), so the scan below
+     * redacts the same keys the regex did.
+     */
+    private val INLINE_SENSITIVE_MARKERS = listOf(
+        "password", "passwd", "pwd", "secret", "token",
+        "apikey", "api_key", "authorization", "cookie",
     )
 
-    /**
-     * The same pair shape **inside an embedded JSON string**, where the quotes are escaped.
-     *
-     * A trace line is written as one JSON object: the tool's own arguments/result live inside it
-     * as a string, so `{"password":"hunter2"}` reaches a reader as
-     * `"arguments":"{\"password\":\"hunter2\"}"`. Without this rule the read-side redaction would
-     * match nothing at all — the exact case it exists for (a trace written by an older build, or a
-     * raw prompt dump).
-     *
-     * The value has to stop at the *delimiter* `\"` (the next `,`/`}` in the embedded object) and
-     * not run over `,\"user\":\"ada\"` — hence the lookahead, which the plain-quote rule gets for
-     * free from `[^,}\]]`.
-     */
-    private val ESCAPED_SECRET = Regex(
-        """(?i)(\\"(?:[^"\\]|\\.)*?(?:password|passwd|pwd|secret|token|api_?key|authorization|cookie)(?:[^"\\]|\\.)*?\\"\s*:\s*)(\\"(?:\\.|[^"\\])*?\\"(?=\s*[,}]))"""
-    )
+    /** The `selector` / `ref` / `element` key of a text-input tool's arguments. */
+    private val SELECTOR_FIELD_NAMES = setOf("selector", "ref", "element")
 
     /**
      * A CLI-style flag: a `coding.shell` command such as `cli --password hunter2 --token abc` is
-     * as sensitive as a JSON body, and it never matches [INLINE_SECRET].
+     * as sensitive as a JSON body, and it never matches the JSON-shaped scanner.
      */
     private val INLINE_FLAG_SECRET = Regex(
         """(?i)(--?(?:password|passwd|pwd|secret|token|api[-_]?key|authorization|cookie)[=\s]+)("[^"]*"|'[^']*'|\S+)"""
@@ -94,9 +87,6 @@ object SecretRedactor {
 
     /** A query parameter inside a URL. */
     private val URL_PARAM = Regex("""([?&])([^=&#\s]+)=([^&#\s]*)""")
-
-    /** The `selector` / `ref` / `element` of a text-input tool's arguments. */
-    private val SELECTOR_FIELD = Regex(""""(?:selector|ref|element)"\s*:\s*"((?:[^"\\]|\\.)*)"""")
 
     /** True when [key] names a credential (case/`_`/`-` insensitive). */
     fun isSensitiveKey(key: String): Boolean =
@@ -124,12 +114,17 @@ object SecretRedactor {
      *
      * Used for anything that is not parsed (a shell command, a message, a log line, a trace line
      * read back from disk) and as the fallback when a payload is not valid JSON.
+     *
+     * Both pair shapes are handled by a **linear scan**, never a regex: see `redactPlainPairs`
+     * for the stack overflow the previous regex caused on a long quoted string.
      */
     fun redactText(raw: String): String {
         if (raw.isEmpty()) return raw
         // Escaped pairs first: a plain-quote rule would cut through the middle of `\"password\"`.
-        val escaped = ESCAPED_SECRET.replace(raw) { match -> "${match.groupValues[1]}\\\"$REDACTED\\\"" }
-        val jsonish = INLINE_SECRET.replace(escaped) { match -> "${match.groupValues[1]}\"$REDACTED\"" }
+        val escaped = redactEscapedPairs(raw)
+        val jsonish = redactPlainPairs(escaped) { key ->
+            INLINE_SENSITIVE_MARKERS.any { key.contains(it, ignoreCase = true) }
+        }
         return INLINE_FLAG_SECRET.replace(jsonish) { match -> "${match.groupValues[1]}$REDACTED" }
     }
 
@@ -146,15 +141,230 @@ object SecretRedactor {
         if (raw.isNullOrEmpty()) return raw
         val redacted = redactText(raw)
         if (tool !in TEXT_INPUT_TOOLS) return redacted
-        val selector = SELECTOR_FIELD.find(redacted)?.groupValues?.getOrNull(1)
+        val selector = findPlainStringField(redacted, SELECTOR_FIELD_NAMES)
         if (!selectorNamesCredential(selector)) return redacted
         // `"text": "…"` / `"value": "…"` — the value a credential field received.
-        return TEXT_INPUT_KEYS.fold(redacted) { text, key ->
-            Regex("""("$key"\s*:\s*)"(?:[^"\\]|\\.)*"""").replace(text) { match ->
-                "${match.groupValues[1]}\"$REDACTED\""
+        return redactPlainPairs(redacted) { key -> key in TEXT_INPUT_KEYS }
+    }
+
+    /**
+     * Replace the value of every JSON-shaped `"key": value` pair whose key `acceptsKey` accepts.
+     *
+     * ## Why this is a scan and not a regex
+     *
+     * The previous rule was
+     * `("(?:[^"\\]|\\.)*?(?:password|…)(?:[^"\\]|\\.)*?"\s*:\s*)(...)`. Java implements
+     * `(?:…)*` recursively, one level per repetition, so **every** quoted string in the text cost
+     * stack depth proportional to its length while the engine tried to read it as a key. A single
+     * 2 KB quoted value was enough to throw `StackOverflowError` on the default 1 MB thread
+     * stack. The prompt dump redacts the system prompt — tens of kilobytes, always containing
+     * quoted strings — before every model request, so the first request of a run died. This scan
+     * is linear and uses no recursion.
+     *
+     * Only the shapes the old rule accepted are rewritten: a double-quoted key, optional
+     * whitespace, `:`, optional whitespace, then a double-quoted, single-quoted or bare value. A
+     * value that never closes is left untouched.
+     */
+    private fun redactPlainPairs(text: String, acceptsKey: (String) -> Boolean): String {
+        val length = text.length
+        var index = 0
+        var copied = 0
+        var out: StringBuilder? = null
+        while (index < length) {
+            if (text[index] != '"' || isEscaped(text, index)) {
+                index++
+                continue
+            }
+            val keyEnd = findQuotedEnd(text, index, '"')
+            if (keyEnd < 0) {
+                index++
+                continue
+            }
+            val colon = skipRegexSpaces(text, keyEnd + 1)
+            if (colon >= length || text[colon] != ':') {
+                index = keyEnd + 1
+                continue
+            }
+            if (!acceptsKey(text.substring(index + 1, keyEnd))) {
+                index = keyEnd + 1
+                continue
+            }
+            val valueStart = skipRegexSpaces(text, colon + 1)
+            val valueEnd = findValueEnd(text, valueStart)
+            if (valueEnd <= valueStart) {
+                index = keyEnd + 1
+                continue
+            }
+            val builder = out ?: StringBuilder(length).also { out = it }
+            builder.append(text, copied, valueStart)
+            builder.append('"').append(REDACTED).append('"')
+            copied = valueEnd
+            index = valueEnd
+        }
+        val builder = out ?: return text
+        builder.append(text, copied, length)
+        return builder.toString()
+    }
+
+    /**
+     * The escaped form of [redactPlainPairs]: `\"key\":\"value\"` inside an embedded JSON string.
+     *
+     * A trace line is one JSON object whose `arguments`/`resultText` are strings, so a tool's own
+     * `{"password":"hunter2"}` arrives as `\"password\":\"hunter2\"`. A scan for the same reason
+     * as the plain rule.
+     */
+    private fun redactEscapedPairs(text: String): String {
+        val length = text.length
+        var index = 0
+        var copied = 0
+        var out: StringBuilder? = null
+        while (index < length) {
+            if (!isEscapedQuoteDelimiter(text, index)) {
+                index++
+                continue
+            }
+            val keyEnd = findEscapedKeyEnd(text, index + 2)
+            if (keyEnd < 0) break
+            val key = text.substring(index + 2, keyEnd)
+            if (INLINE_SENSITIVE_MARKERS.none { key.contains(it, ignoreCase = true) }) {
+                index = keyEnd + 2
+                continue
+            }
+            val colon = skipRegexSpaces(text, keyEnd + 2)
+            if (colon >= length || text[colon] != ':') {
+                index = keyEnd + 2
+                continue
+            }
+            val valueStart = skipRegexSpaces(text, colon + 1)
+            if (!isEscapedQuoteDelimiter(text, valueStart)) {
+                index = keyEnd + 2
+                continue
+            }
+            val valueEnd = findEscapedValueEnd(text, valueStart + 2)
+            if (valueEnd < 0) break
+            val builder = out ?: StringBuilder(length).also { out = it }
+            builder.append(text, copied, valueStart)
+            builder.append('\\').append('"').append(REDACTED).append('\\').append('"')
+            copied = valueEnd + 2
+            index = copied
+        }
+        val builder = out ?: return text
+        builder.append(text, copied, length)
+        return builder.toString()
+    }
+
+    /** The first `\"…\"` whose next non-space character is `:` — an escaped key close. */
+    private fun findEscapedKeyEnd(text: String, from: Int): Int {
+        var i = from
+        while (i + 1 < text.length) {
+            if (isEscapedQuoteDelimiter(text, i)) {
+                val next = skipRegexSpaces(text, i + 2)
+                if (next < text.length && text[next] == ':') return i
+            }
+            i++
+        }
+        return -1
+    }
+
+    /** The first `\"…\"` followed by `,`, `}` or the end of the text — an escaped value close. */
+    private fun findEscapedValueEnd(text: String, from: Int): Int {
+        var i = from
+        while (i + 1 < text.length) {
+            if (isEscapedQuoteDelimiter(text, i)) {
+                val next = skipRegexSpaces(text, i + 2)
+                if (next >= text.length || text[next] == ',' || text[next] == '}') return i
+            }
+            i++
+        }
+        return -1
+    }
+
+    /** The raw (still escaped) value of the first `selector` / `ref` / `element` field. */
+    private fun findPlainStringField(text: String, names: Set<String>): String? {
+        var index = 0
+        while (index < text.length) {
+            if (text[index] != '"' || isEscaped(text, index)) {
+                index++
+                continue
+            }
+            val keyEnd = findQuotedEnd(text, index, '"')
+            if (keyEnd < 0) return null
+            val colon = skipRegexSpaces(text, keyEnd + 1)
+            if (colon >= text.length || text[colon] != ':') {
+                index = keyEnd + 1
+                continue
+            }
+            if (text.substring(index + 1, keyEnd) !in names) {
+                index = keyEnd + 1
+                continue
+            }
+            val valueStart = skipRegexSpaces(text, colon + 1)
+            if (valueStart >= text.length || text[valueStart] != '"') return null
+            val valueEnd = findQuotedEnd(text, valueStart, '"')
+            return if (valueEnd < 0) null else text.substring(valueStart + 1, valueEnd)
+        }
+        return null
+    }
+
+    /** The index of the closing [quote] for a string starting at [start], or `-1`. */
+    private fun findQuotedEnd(text: String, start: Int, quote: Char): Int {
+        var i = start + 1
+        while (i < text.length) {
+            when {
+                text[i] == '\\' -> i += 2
+                text[i] == quote -> return i
+                else -> i++
             }
         }
+        return -1
     }
+
+    /** The end (exclusive) of the value starting at [start], or `-1` when it cannot be read. */
+    private fun findValueEnd(text: String, start: Int): Int {
+        if (start >= text.length) return -1
+        val first = text[start]
+        if (first == '"' || first == '\'') {
+            val end = findQuotedEnd(text, start, first)
+            return if (end < 0) -1 else end + 1
+        }
+        var i = start
+        while (i < text.length && text[i] != ',' && text[i] != '}' && text[i] != ']') i++
+        return if (i > start) i else -1
+    }
+
+    /** True when the quote at [index] is escaped by an odd number of backslashes. */
+    private fun isEscaped(text: String, index: Int): Boolean {
+        var backslashes = 0
+        var i = index - 1
+        while (i >= 0 && text[i] == '\\') {
+            backslashes++
+            i--
+        }
+        return backslashes % 2 == 1
+    }
+
+    /** True at the `\` of an unescaped `\"` delimiter inside an embedded JSON string. */
+    private fun isEscapedQuoteDelimiter(text: String, index: Int): Boolean {
+        if (index < 0 || index + 1 >= text.length) return false
+        if (text[index] != '\\' || text[index + 1] != '"') return false
+        var backslashes = 0
+        var i = index - 1
+        while (i >= 0 && text[i] == '\\') {
+            backslashes++
+            i--
+        }
+        return backslashes % 2 == 0
+    }
+
+    private fun skipRegexSpaces(text: String, start: Int): Int {
+        var i = start
+        while (i < text.length && isRegexSpace(text[i])) i++
+        return i
+    }
+
+    /** The `\s` class (ASCII) the replaced regexes used, not Unicode whitespace. */
+    private fun isRegexSpace(c: Char): Boolean =
+        c == ' ' || c == '\t' || c == '\n' || c == '\u000B' || c == '\u000C' || c == '\r'
 
     /**
      * Redact the credential-bearing query parameters of [url], keeping the URL itself usable as

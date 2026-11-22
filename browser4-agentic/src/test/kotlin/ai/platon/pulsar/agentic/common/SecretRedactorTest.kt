@@ -3,10 +3,13 @@ package ai.platon.pulsar.agentic.common
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertTimeout
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.function.ThrowingSupplier
+import java.time.Duration
 
 /**
  * One rule set guards two sinks: the event stream (rendered into terminals and CI logs) and the
@@ -135,5 +138,88 @@ class SecretRedactorTest {
         assertEquals(null, SecretRedactor.redactForTrace("fill", null))
         assertEquals("", SecretRedactor.redactForTrace("fill", ""))
         assertEquals("https://example.com/?q=1", SecretRedactor.redactUrl("https://example.com/?q=1"))
+    }
+
+    @Test
+    @DisplayName("a long quoted value must not overflow the stack")
+    fun longQuotedValuesDoNotOverflowTheStack() {
+        // Regression: the previous regex was `(?:[^"\\]|\\.)*?` over every quoted string, which
+        // the Java engine recurses through per character. ~2 KB of quoted text was enough to
+        // throw StackOverflowError on the default 1 MB thread stack; the system prompt of every
+        // run is much larger than that, so the first prompt-dump redaction killed the task.
+        val longValue = "a".repeat(100_000)
+        val raw = "prefix \"$longValue\" {\"password\":\"hunter2\",\"user\":\"ada\"}"
+
+        val redacted = assertTimeout(Duration.ofSeconds(5), ThrowingSupplier { SecretRedactor.redactText(raw) })
+
+        assertFalse(redacted.contains("hunter2"), "the secret is gone")
+        assertTrue(redacted.contains("\"password\":\"***\""), "the pair keeps its shape")
+        assertTrue(redacted.contains("a".repeat(1000)), "the long, unrelated value survives")
+    }
+
+    @Test
+    @DisplayName("a long quoted value that contains marker words is still linear")
+    fun adversarialLongValuesStayLinear() {
+        // A greedy, non-recursive regex would avoid the overflow but backtrack catastrophically
+        // on this input (measured 13 s for ~96 KB). A scan must stay linear.
+        val noisy = "\"" + "token data ".repeat(20_000) + "\""
+        val raw = "prefix $noisy {\"password\":\"hunter2\",\"user\":\"ada\"}"
+
+        val redacted = assertTimeout(Duration.ofSeconds(5), ThrowingSupplier { SecretRedactor.redactText(raw) })
+
+        assertFalse(redacted.contains("hunter2"), "the secret after the noise is still redacted")
+        assertTrue(redacted.contains("\"password\":\"***\""), "the pair keeps its shape")
+    }
+
+    @Test
+    @DisplayName("a long escaped value must not overflow either")
+    fun longEscapedValuesDoNotOverflowTheStack() {
+        val longValue = "a".repeat(100_000)
+        val line = """{"seq":1,"arguments":"{\"note\":\"$longValue\",\"password\":\"hunter2\"}"}"""
+
+        val redacted = assertTimeout(Duration.ofSeconds(5), ThrowingSupplier { SecretRedactor.redactText(line) })
+
+        assertFalse(redacted.contains("hunter2"), "the escaped secret is gone")
+        assertTrue(redacted.contains("""\"password\":\"***\""""), "the escaped pair keeps its shape")
+        assertTrue(redacted.contains("a".repeat(1000)), "the long, unrelated value survives")
+    }
+
+    @Test
+    @DisplayName("a long typed value for a credential field is redacted without a regex")
+    fun longTypedValuesAreRedacted() {
+        val longValue = "a".repeat(100_000)
+        val raw = """{"selector":"input[type=password]","text":"$longValue"}"""
+
+        val redacted = assertTimeout(Duration.ofSeconds(5), ThrowingSupplier {
+            SecretRedactor.redactForTrace("fill", raw)!!
+        })
+
+        assertFalse(redacted.contains(longValue), "the typed value is gone")
+        assertTrue(redacted.contains("\"text\":\"***\""), redacted.take(200))
+    }
+
+    @Test
+    @DisplayName("value shapes keep the behaviour the regex had")
+    fun valueShapesKeepTheirBehaviour() {
+        // Whitespace around the colon, a single-quoted value, a bare value, and a nested object.
+        val raw = """{"password" : 'hunter2', "token": abc123, "user": {"id": 7}, "note": "kept"}"""
+
+        val redacted = SecretRedactor.redactText(raw)
+
+        assertFalse(redacted.contains("hunter2"), redacted)
+        assertFalse(redacted.contains("abc123"), redacted)
+        assertTrue(redacted.contains("\"password\" : \"***\""), redacted)
+        assertTrue(redacted.contains("\"token\": \"***\""), redacted)
+        assertTrue(redacted.contains("{\"id\": 7}"), "a non-secret nested object survives: $redacted")
+        assertTrue(redacted.contains("\"note\": \"kept\""), redacted)
+        // Idempotent: a second pass sees the same placeholders and changes nothing.
+        assertEquals(redacted, SecretRedactor.redactText(redacted))
+    }
+
+    @Test
+    @DisplayName("an unterminated string is left alone instead of throwing")
+    fun unterminatedStringsAreLeftAlone() {
+        assertEquals("""{"password": "hunter2""", SecretRedactor.redactText("""{"password": "hunter2"""))
+        assertEquals("""a "quote""", SecretRedactor.redactText("""a "quote"""))
     }
 }
