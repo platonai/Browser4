@@ -927,6 +927,38 @@ class StatefulAgentRunnerTest {
     }
 
     @Test
+    @DisplayName("the next task receives the earlier conversation as facts, not as guidance")
+    fun theTranscriptReachesThePromptAsFacts() = runBlocking {
+        val instructions = mutableListOf<String>()
+        val agent = mockAgent(AgentHistory(), "run-1").also {
+            coEvery { it.run(capture(instructions)) } returns AgentHistory()
+        }
+        val session = mockSession(agent)
+        every { session.sessionConfig } returns VolatileConfig(true)
+        val runner = StatefulAgentRunner(session)
+        try {
+            runner.execute("extract the price of the product")
+            // A real user may abandon the first job completely.
+            runner.execute("now write a poem about spring")
+        } finally {
+            runner.close()
+        }
+
+        val pivot = instructions.last()
+        assertTrue(pivot.startsWith("now write a poem about spring"), pivot)
+        assertTrue(pivot.contains("## Session context"), pivot)
+        assertTrue(
+            pivot.contains("extract the price of the product"),
+            "the earlier task must still be remembered: $pivot",
+        )
+        // No built-in steering about how the history is to be treated.
+        assertFalse(pivot.contains("may be unrelated"), pivot)
+        assertFalse(pivot.contains("reference only"), pivot)
+        assertFalse(pivot.contains("it wins"), pivot)
+        assertFalse(pivot.contains("Treat it as your memory"), pivot)
+    }
+
+    @Test
     @DisplayName("steering is rejected for a finished, unknown or blank message")
     fun steeringRejectsDeadTasks() {
         val runner = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))

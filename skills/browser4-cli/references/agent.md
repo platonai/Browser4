@@ -71,7 +71,7 @@ browser4-cli agent result <task-id>
 
 `--json` prints the same data as one machine envelope instead.
 
-The workspace lives on the backend machine (copy the artifacts when it is remote). Each task gets its **own** directory (`<agent data dir>/workspace.<task-id>`), so another run's file never shows in this run's `filesChanged`; `--resume <task-id>` keeps the interrupted task's workspace, `--shared-workspace` restores the old shared `<agent data dir>/workspace`, and `--fresh-workspace` is the default behaviour already. Input copying, the read rules and the deliverable format are in
+The workspace lives on the backend machine (copy the artifacts when it is remote). Each task gets its **own** directory (`<agent data dir>/workspace.<task-id>`), so an earlier run's files are never misreported as this run's deliverables; `--resume <task-id>` keeps the interrupted task's workspace, `--shared-workspace` restores the old shared `<agent data dir>/workspace`, and `--fresh-workspace` is the default behaviour already. Input copying, the read rules and the deliverable format are in
 [agent-workspace.md](agent-workspace.md).
 
 **Coding tasks are different in one visible way.** `--coding` runs in an isolated **git
@@ -138,11 +138,13 @@ sandbox is active, an OS denial reaches the model as `PERMISSION_DENIED | code=S
 A task's boundary is its own workspace, its mirrored module roots, the other task workspaces it may write (see below) and the readable roots. A folder that lives somewhere else is granted per task — repeatable, must already exist, task-scoped, `--access` still bounds it and the OS sandbox agrees; `-i` adds `/add-dir`. See [agent-workspace.md](agent-workspace.md#extra-folders-granted-with---add-dir).
 
 **Other tasks' workspaces are writable by default.** A run may write
-`<agent data>/agent/<date>/<uuid>/workspace[.<task-id>]` of other tasks (newest 7 days, at most 64
-roots) so a deliverable can be handed on or a previous run finished; `workspace.archive`,
-`agent/skills` and isolated worktrees stay out, the preset still bounds it, and
-`-Dbrowser4.agent.allowTaskWorkspaceWrites=false` restores the workspace-only boundary. The cost:
-`filesChanged` then means "written by this run", not "produced by it". See
+`<agent data>/agent/<yyyy>/<MM>/<dd>/<uuid>/workspace[.<task-id>]` of other tasks (newest 7 days, at
+most 64 roots) so a deliverable can be handed on or a previous run finished; `workspace.archive`,
+`agent/skills` and isolated worktrees stay out, and the preset still bounds it. The cost of the
+default: a run can overwrite or delete another task's deliverable, so `filesChanged` proves the files
+it names were **written by** this run, not **produced** by it.
+`-Dbrowser4.agent.allowTaskWorkspaceWrites=false` restores the workspace-only boundary together with
+the attribution guarantee. See
 [agent-workspace.md](agent-workspace.md#other-tasks-workspaces).
 
 ## Patterns

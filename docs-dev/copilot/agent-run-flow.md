@@ -291,9 +291,9 @@ N-1 个任务做过什么。按「每个任务一条摘要 bullet」的做法能
 |---|---|---|
 | 转录 | `StatefulAgentRunner` 的 `runEventListener` → `SessionConversation.noteEvent` | `model.text` / `tool.call` / `tool.result` / `steer` 逐条记录（单条 600/300/300/300 字上限）；`round.start` 与 `run.usage` 是统计不是上下文，丢弃。 |
 | 任务边界 | `executeSerialized` 开头 `beginTask(instruction)`、终态 `endTask(status)`  | 任务行 `#N <用户指令>`；终态行 `→ done in 2m 13s · files: a, b · workspace: <绝对路径>`（工作区目录已不存在则不写，避免死路径）。指令用用户原文，绝不包含块本身。 |
-| 注入 | 同上，`instruction` 之后 | 渲染成 `## Session context` 块（块头声明"下面是本会话已发生任务的真实转录，当前指令最优先"），随 `agent.run(instruction)` 进入模型；首任务为空 ⇒ 单次 `agent run` 行为不变。 |
+| 注入 | 同上，`instruction` 之后 | 渲染成 `## Session context` 块：块头只陈述"下面是本会话已发生任务的真实对话（问了什么、模型说了什么、调了哪些工具及结果、插话、每个任务的终态）"，**不判断**哪条指令是当前目标、哪条被放弃、也不给"该不该续接"的指引——判断交给模型。随 `agent.run(instruction)` 进入模型；首任务为空 ⇒ 单次 `agent run` 行为不变。 |
 | 压缩触发 | `sessionBlockFor()`（下一个任务开始前） | `needsCompression()` = 渲染转录超过 `browser4.agent.session.contextTokens`（默认 24000 token ≈ 96KB）。压缩放在**任务开始**而不是终态 finally：那里是正常 suspend 上下文（取消中的任务不需要跑压缩），且新任务的第一次模型请求就能看到压缩结果。 |
-| 压缩指令 | `SessionConversation.compressionSystemInstruction()` | 明确要求保留：①会话目标（第一条指令）与所有修正/插话（逐字引用）；②已作决策与后续依赖的事实（URL/选择器/id/格式/账号，绝不含密钥）；③新建/修改的文件及所在工作区；④约束后续工作的工具结果与未解决问题。明确丢弃：页面快照、重复工具噪声、无果推理。输出仅记忆块，约 `browser4.agent.session.memoryTokens`（默认 2000 token）。 |
+| 压缩指令 | `SessionConversation.compressionSystemInstruction()` | 只要求**事实记录**：指令原话、决策、路径/URL/选择器/id/格式/错误串/数字、每个任务如何结束；明确"不要加入转录中没有的目标、优先级、建议或结论"，不规定保留顺序、不判断哪个目标是"活动"的。输出仅记录，约 `browser4.agent.session.memoryTokens`（默认 2000 token）。 |
 | 压缩执行 | `RobustBrowserAgent.compressSessionMemory()` | `cta.chatModel.callUmSm(transcript, instruction)`；失败返回 null ⇒ runner 记 warn 并**发送未压缩转录**（丢上下文的代价高于长 prompt）；取消照常向上传播。 |
 | 落盘 | `SessionConversationStore`（`agent-session-context.jsonl`） | 任务开始/结束与迟到插话各追加一行快照（`sessionId`/`updatedAt`/`taskCount`/`currentTaskStart`/`compressed`/`turns`），读取取该 session 最后一行；超过 TTL（`contextTtlMinutes`，默认 720min）忽略；文件 >4MB 时 restore 折叠成每 session 一行。**DEFAULT session 不落盘**（`open` 返回 null），避免无关的一次性任务跨重启互相继承。 |
 | 折叠边界 | `adoptCompressed()` | 只折 `currentTaskStart` 之前的 turn，**最新任务永远保留原文**；新的压缩输入包含上一次的 `compressed`，因此多轮折叠不丢信息。 |
@@ -308,6 +308,18 @@ N-1 个任务做过什么。按「每个任务一条摘要 bullet」的做法能
 **session**：`-i` 的 `/new` 递增 generation 得到新 sessionId ⇒ 新 runner ⇒ 新上下文，语义正好对齐。
 不带 `-s` 的 `-i` 用**本进程自己的** `interactive-<hash>`（CLI 侧 `interactive_session_base()`，由
 pid+启动时间派生），不再落到后端 DEFAULT 池——否则两个无关的 `-i` 会互相继承上下文并互相排队。
+
+**提示词中立化 + 外部配置（2026-11-22 二改）**：内置提示只陈述事实/契约，不替模型判断历史含义。
+块头只说明"下面是本会话已发生任务的真实对话"，压缩指令只要求事实记录（不规定保留顺序、不判断哪个目标是
+"活动"的、不写 SUPERSEDED）。用户可能完全换题，如何理解由模型自行判断。需要引导的部署用外部配置：
+`browser4.agent.systemPrompt.extra` / `.file` 追加在内置提示之后（最后，最具权重），
+`.override` / `.overrideFile` 替换角色前言（`CliAgentPrompt.role`）；工具、权限、`system.taskComplete`
+契约段落由引擎强制保留，覆盖模式也去不掉。配套地，工作记忆写板 (`TaskScratchpad`) 按任务作用域：
+`AgentMemory.beginTaskScratchpad(taskId)` 在新任务开始时清空（同一任务的 retry 保留），否则上一任务的
+`todo:`/`assumption:` 会作为**每轮最后一条** user 消息进入新任务。回归覆盖：`SessionConversationTest`
+（压缩指令/块头只陈述事实）、`StatefulAgentRunnerTest.theTranscriptReachesThePromptAsFacts`
+（块进入 `agent.run` 的 prompt 且不含指引）、`CliAgentPromptTest`（外部 override/append/文件/缺失文件）、
+`AgentMemoryTwoRunIntegrationTest.testScratchpadIsScopedToOneTask`。
 
 ### 9.1.1 连续会话载体（2026-11-21，对照 pi）
 

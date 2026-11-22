@@ -37,7 +37,7 @@ class ScratchpadCompressionInteractionTest {
         - (none)
         ## Current Work
         - (none)
-        ## Page State
+        ## Environment
         - (none)
         ## Next Step
         - continue
