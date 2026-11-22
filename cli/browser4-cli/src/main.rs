@@ -35030,7 +35030,8 @@ async fn run(
         }
         "agent-supervise" => {
             handle_agent_supervise(&client, &base_url, &tool_params).await?;
-        }        "agent-trace" => {
+        }
+        "agent-trace" => {
             handle_agent_trace(&client, &base_url, &tool_params).await?;
         }
 
