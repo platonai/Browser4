@@ -39,7 +39,7 @@ browser4-cli agent run "Use the fields in docs/field-spec.csv and build the shee
 ### The per-task workspace
 
 Every task runs in its **own** directory. The path is
-`<agent data>/<yyyy>/<MM>/<dd>/<agent-uuid>/workspace.<task-id>` — on a dev-mode
+`<agent data>/agent/<yyyy>/<MM>/<dd>/<agent-uuid>/workspace.<task-id>` — on a dev-mode
 backend `<agent data>` is `~/.browser4/workspaces/<workspace-id>/app-data`.
 
 | Command | Root |

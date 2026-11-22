@@ -653,15 +653,17 @@ docker run -d -p 18182:18182 `
     Advisory only: it relaxes a string-layer check, so it does not widen what the OS sandbox
     (`browser4.agent.sandbox`) lets a process reach.
   - `browser4.agent.allowTaskWorkspaceWrites` *(default: `true`)* — whether a run may write
-    **other tasks' workspaces** (`<app data>/agent/<date>/<agent-uuid>/workspace[.<task-id>]`), so a
-    deliverable can be handed to a next task or a previous run finished. Only directories that are
-    a task workspace by layout are added: `workspace.archive`, `<app data>/agent/skills` and
-    isolated coding worktrees stay out, the access preset still decides whether anything may be
-    written, and the credential rails are untouched. `false` restores the workspace-only write
-    boundary (the pre-4.16.11 behaviour). Cost: `filesChanged` then means "written by this run",
-    not "produced by it".
+    **other tasks' workspaces**
+    (`<app data>/agent/<yyyy>/<MM>/<dd>/<agent-uuid>/workspace[.<task-id>]`), so a deliverable can be
+    handed to a next task or a previous run finished. Only directories that are a task workspace by
+    layout are added: `workspace.archive`, `<app data>/agent/skills` and isolated coding worktrees
+    stay out, the access preset still decides whether anything may be written, and the credential
+    rails are untouched. The cost of the default is that a run can overwrite or delete another
+    task's deliverables, so `filesChanged` proves the files it names were **written by** this run,
+    not **produced** by it. `false` restores the workspace-only write boundary (the previous
+    behaviour) and with it the attribution guarantee.
   - `browser4.agent.taskWorkspaceWriteDays` *(default: `7`, clamped to `1..400`)* — how many of the
-    newest day directories the task-workspace scan looks at; at most
+    newest day directories the task-workspace scan looks at (the window above); at most
     `TaskWorkspaces.MAX_ROOTS` (64) workspaces are in scope, newest first.
   - `browser4.agent.allowDestructive` *(default: `true`)* — **deprecated**, prefer `access`.
     When `false`, `delete`/`copy`/`move` are refused. It is **not** a read-only switch: `write`/
@@ -707,15 +709,16 @@ docker run -d -p 18182:18182 `
   ```
 
   The roots are **read-only**: `write`/`append`/`replace`/`delete`/`copy`/`move` stay confined to
-  the workspace, its mirrored module roots and the **checkout those mirrors come from** (a task that
+  the workspace, its mirrored module roots, the **checkout those mirrors come from** (a task that
   mirrors a repository may edit the repository it is developing — a boundary grant, not a readable
-  root), and a write into a readable root is refused (the audit counts it as `READ_ONLY`; the model
-  gets `PERMISSION_DENIED | code=PATH_DENIED` with the hint). The shell's *working directory* is
-  restricted to those project roots too: the checkout is a valid `workingDir`, a toolchain cache
-  (`%TEMP%`, `~/.m2`, the JDK, `C:\Windows`) is not. Use
-  `browser4.agent.allowExternalAccess=true` for a deliberate, audited write escape
-  hatch. Reading is independent of the preset — `--access read` narrows workspace *power*, not the
-  readable roots — and `coding.permissions` prints the roots in effect. The OS credential stores
+  root) and, unless `browser4.agent.allowTaskWorkspaceWrites=false`, the other tasks' workspaces in
+  the day window above; a write into a readable root is refused (the audit counts it as `READ_ONLY`;
+  the model gets `PERMISSION_DENIED | code=PATH_DENIED` with the hint). The shell's *working
+  directory* is restricted to those project roots too: the checkout is a valid `workingDir`, a
+  toolchain cache (`%TEMP%`, `~/.m2`, the JDK, `C:\Windows`) is not. Use
+  `browser4.agent.allowExternalAccess=true` for a deliberate, audited write escape hatch. Reading is
+  independent of the preset — `--access read` narrows workspace *power*, not the readable roots —
+  and `coding.permissions` prints the roots in effect. The OS credential stores
   (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) stay refused even when a readable root
   contains them.
 
@@ -935,6 +938,8 @@ All are JVM system properties (set with `BROWSER4_SERVER_OPTS` or `-D…` when y
 | `browser4.agent.access` | `full` | Access preset (`full` / `write` / `read-build` / `read`). Unknown backend value is logged and falls back to `full`; an unknown `--access` flag is rejected. |
 | `browser4.agent.readPaths` | data root + source checkout | Folders the coding tools may read outside the workspace, read-only (`;`-separated, `~` expanded). Credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) stay refused whatever the list says. |
 | `browser4.agent.access.unattended` | unset (`full` + network) | Preset derived for a task with no TTY. `deny` removes workspace power entirely; explicit `--access` wins; the derivation is audited `ACCESS_APPROVED(source=default)`. Unknown value warns once and stays `full`. |
+| `browser4.agent.allowTaskWorkspaceWrites` | `true` | A run may also write other tasks' workspaces (`<app data>/agent/<yyyy>/<MM>/<dd>/<agent-uuid>/workspace[.<task-id>]`), inside the `taskWorkspaceWriteDays` window and at most 64 roots; `workspace.archive`, `<app data>/agent/skills` and isolated worktrees stay out, the preset still bounds it. The default costs attribution — `filesChanged` then means "written by this run", not "produced by it"; `false` restores the workspace-only boundary and that guarantee. |
+| `browser4.agent.taskWorkspaceWriteDays` | `7` | Day directories the task-workspace scan looks at, clamped to `1..400` (the root cap stays `TaskWorkspaces.MAX_ROOTS` = 64). |
 | `browser4.agent.shell.workspaceBoundary` | `on` | Advisory fast-fail: refuses literal absolute paths outside the workspace. Not an enforcement layer; the sandbox is. |
 | `browser4.agent.shell.forbidBootstrap` | `on` | Refuses `b4w build\|stop\|install\|upgrade\|uninstall\|recover` and the bootstrap build/recovery scripts: a task must not rebuild the runtime executing it. Builds via `coding.mvnBuild`/`coding.verify` stay allowed. |
 | `browser4.agent.shell.pathGuard` | `on` | **Deprecated**, advisory: refuses command arguments naming credential locations. Does not relax protected subtrees; sandbox still enforces. |
