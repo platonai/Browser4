@@ -4381,6 +4381,39 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "agent-trace",
+            description: "List an agent task's trace artifacts, or page one (the full audit trail: exact prompts, complete tool payloads, usage, page timeline)",
+            category: Category::Agent,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
+            options: &[
+                OptionDef { name: "file", description: "Artifact to read, as listed without this option (e.g. cli-tool-trace.jsonl, cli-prompt/1.request.json)", is_bool: false, short: None },
+                OptionDef { name: "offset", description: "First line of the artifact to print (0-based; continue with the offset the page reports)", is_bool: false, short: None },
+                OptionDef { name: "limit", description: "Lines per page (default 200, server cap 2000)", is_bool: false, short: None },
+                OptionDef { name: "json", description: "Print the served envelope (listing or page) instead of the panel", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            // A read-only projection of GET /api/commands/{id}/trace[/file]: the step log is the
+            // summary, the trace is the audit trail behind it (issue #652, gap 5).
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({
+                    "id": get_str(args, "id").unwrap_or_default(),
+                    "file": get_str(args, "file"),
+                });
+                // Options arrive as strings; the handler accepts either shape, but sending a
+                // number keeps this command consistent with every other numeric option.
+                if let Some(v) = get_str(args, "offset").and_then(|s| s.trim().parse::<u64>().ok()) {
+                    params["offset"] = json!(v);
+                }
+                if let Some(v) = get_str(args, "limit").and_then(|s| s.trim().parse::<usize>().ok()) {
+                    params["limit"] = json!(v);
+                }
+                params
+            },
+        },
+        CommandDef {
             name: "agent-result",
             description: "Get the result of a completed agent task",
             category: Category::Agent,

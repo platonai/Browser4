@@ -53,6 +53,37 @@ reader fell behind). `--json` returns the same facts as one object.
 > `GET /api/commands/{id}/events` (decision steps with a bounded `detail`), plus
 > `GET /api/agent/{id}/access`. An MCP-only client reaches the same facts through
 > `command.events` / `command.stats` / `command.input`; there is no CLI-only magic here.
+### The full audit trail: `agent trace`
+
+The step log is a **summary** — bounded, previewed, safe to follow live. `agent trace <task-id>`
+reads the **audit trail** the run wrote to disk: the exact prompt the model saw in each round
+(every message, every tool request), one line per executed tool with its complete arguments and
+complete output, the provider's usage per request, the page timeline, and the compaction ledger.
+It is keyed by the agent's own uuid on the backend, so the task id was useless for finding it
+before the mapping existed — which is why the command exists at all.
+
+```bash
+browser4-cli agent trace <task-id>                                  # what the run left behind
+browser4-cli agent trace <task-id> --file cli-tool-trace.jsonl      # page one artifact
+browser4-cli agent trace <task-id> --file cli-tool-trace.jsonl --offset 200 --limit 200
+browser4-cli agent trace <task-id> --json                           # the served envelope
+```
+
+Without `--file` it lists the artifacts (name, size, last write) and the run directory. With
+`--file` it prints the artifact's lines **verbatim** with a `lines 1-200 of 3401` header and, when
+there is more, the `--offset` that continues. `--json` prints what the backend served, so a script
+never parses the table.
+
+Credential-bearing values are redacted **when the trace is written** (tool arguments and outputs,
+typed values for password fields, URL query parameters, and every prompt message) and **again when
+it is read**, so a password typed into a form does not appear in the output. A missing trace is a
+loud error with its two causes: tracing was off for that run
+(`AgentConfig.logInferenceToFile=false`), or the retention policy
+(`browser4.agent.trace.retentionDays`, default 7) already removed it.
+
+> The endpoint behind it is public too: `GET /api/commands/{id}/trace` (list) and
+> `GET /api/commands/{id}/trace/file?name=&offset=&limit=` (page; the `*.jsonl` streams and the
+> `cli-prompt/*.request.json` dumps). Any MCP-only client or dashboard reads the same files.
 
 ## When to Use
 

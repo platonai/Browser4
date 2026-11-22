@@ -1713,6 +1713,156 @@ pub(super) fn test_agent_run_interactive_marks_unattended(ctx: &mut E2ECtx) {
     );
 }
 
+/// `agent trace <id>` reads the audit trail behind a task by the id a caller knows: the
+/// listing (artifact, size, last write), one artifact paged by line, and the same facts as
+/// JSON — the surface the backend gained in issue #652's last gap.
+pub(super) fn test_agent_trace_lists_and_pages_artifacts(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task_id = "agent-task-1";
+    mock_server.set_command_trace(
+        task_id,
+        serde_json::json!({
+            "taskId": task_id,
+            "runDir": "/data/logs/agent/2026-11-22/aaaa",
+            "files": [
+                {"name": "cli-tool-trace.jsonl", "bytes": 12_697, "modifiedAt": "2026-11-22T04:12:31.123Z"},
+                {"name": "cli-prompt/1.request.json", "bytes": 512, "modifiedAt": "2026-11-22T04:12:29.000Z"},
+            ],
+        }),
+    );
+    mock_server.set_command_trace_file(
+        task_id,
+        "cli-tool-trace.jsonl",
+        vec![
+            r#"{"seq":1,"tool":"coding.read","arguments":"{\"path\":\"a.kt\"}"}"#.to_string(),
+            r#"{"seq":2,"tool":"coding.shell","arguments":"{\"command\":\"mvnw test\"}"}"#.to_string(),
+            r#"{"seq":3,"tool":"coding.verify"}"#.to_string(),
+        ],
+    );
+
+    // The listing: what the run left behind, and where it lives.
+    let listing = run_command(ctx, &["agent", "trace", task_id]);
+    let stdout = &listing.stdout;
+    assert!(
+        stdout.contains("agent-task-1"),
+        "the panel names the task:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("/data/logs/agent/2026-11-22/aaaa"),
+        "the run dir is part of the answer (a local operator opens it, retention ages it out):\n{stdout}"
+    );
+    assert!(
+        stdout.contains("cli-tool-trace.jsonl") && stdout.contains("12.4 KB"),
+        "each artifact is listed with its size:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("cli-prompt/1.request.json"),
+        "prompt dumps are part of the served surface:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("2026-11-22 04:12:31"),
+        "the last write tells a finished run from a live one:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("--file"),
+        "the panel says how to read one:\n{stdout}"
+    );
+
+    // One page of one artifact, verbatim.
+    let page = run_command(
+        ctx,
+        &["agent", "trace", task_id, "--file", "cli-tool-trace.jsonl", "--limit", "2"],
+    );
+    let stdout = &page.stdout;
+    assert!(
+        stdout.contains("cli-tool-trace.jsonl  lines 1-2 of 3"),
+        "the page says where it sits:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(r#""seq":1"#) && stdout.contains(r#""seq":2"#),
+        "the payload is printed verbatim:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains(r#""seq":3"#),
+        "the page respects --limit:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("--offset 2"),
+        "a partial page says how to continue:\n{stdout}"
+    );
+
+    // The continuation reads the rest, without suggesting another one.
+    let rest = run_command(
+        ctx,
+        &["agent", "trace", task_id, "--file", "cli-tool-trace.jsonl", "--offset", "2"],
+    );
+    let stdout = &rest.stdout;
+    assert!(
+        stdout.contains(r#""seq":3"#),
+        "--offset continues where the page stopped:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("--offset"),
+        "the last page has nothing left to suggest:\n{stdout}"
+    );
+
+    // `--json` is the served envelope, so a script never parses the table.
+    let json_page = run_command(
+        ctx,
+        &["agent", "trace", task_id, "--file", "cli-tool-trace.jsonl", "--json"],
+    );
+    let envelope: serde_json::Value =
+        serde_json::from_str(strip_snapshot_output(&json_page.stdout).trim())
+            .unwrap_or_else(|error| panic!("--json must emit one envelope ({error}): {}", json_page.stdout));
+    assert_eq!(envelope["output"]["raw"]["taskId"], task_id);
+    assert_eq!(envelope["output"]["raw"]["totalLines"], 3);
+    assert_eq!(envelope["output"]["raw"]["lines"][0].as_str().unwrap().contains(r#""seq":1"#), true);
+
+    // The endpoint is actually what was asked: one listing call, then page calls.
+    let calls = mock_server.command_trace_calls();
+    assert!(
+        calls.contains(&format!("{task_id}|")),
+        "the listing must hit /trace: {calls:?}"
+    );
+    assert!(
+        calls.contains(&format!("{task_id}|cli-tool-trace.jsonl")),
+        "the page must hit /trace/file with the artifact name: {calls:?}"
+    );
+}
+
+/// A task the backend has no trace for fails loudly with the two causes, instead of
+/// rendering an empty panel that could be mistaken for "the run did nothing".
+pub(super) fn test_agent_trace_reports_a_missing_trace(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let result = run_command_expecting_failure(
+        ctx,
+        &["agent", "trace", "agent-task-missing"],
+        "No trace is indexed",
+    );
+    let combined = format!("{}{}", result.stdout, result.stderr);
+    assert!(
+        combined.contains("No trace is indexed for task 'agent-task-missing'"),
+        "the error names the task:\n{combined}"
+    );
+    assert!(
+        combined.contains("Tracing may be off"),
+        "the error names the first cause:\n{combined}"
+    );
+    assert!(
+        combined.contains("retention"),
+        "the error names the second cause:\n{combined}"
+    );
+}
 /// `agent supervise <id>` answers "is it converging, and will it be judged done?" in one
 /// panel: the counters next to the file mutations, the finish gate's verdict, the failing
 /// verification checks, the repair round and any pending approval (issue #652).

@@ -574,27 +574,34 @@ class CommandController(
     }
 
     /**
-     * One page of one trace stream: `GET /api/commands/{id}/trace/{file}?offset=&limit=`.
+     * One page of one trace artifact: `GET /api/commands/{id}/trace/file?name=&offset=&limit=`.
+     *
+     * The artifact name is a **query parameter**, not a path segment: a prompt dump lives at
+     * `cli-prompt/<ts>.<seq>.request.json`, and a `/` inside a `@PathVariable` would not match
+     * (Spring matches one segment; sending `%2F` is rejected by the firewall). A query parameter
+     * carries the relative name unchanged, and the executor still refuses anything that is not a
+     * trace artifact inside the run dir.
      *
      * Paged by line because a long run's tool stream is megabytes of JSONL. Every line is
      * redacted on the way out: the current build redacts when it writes, and this also covers a
      * trace written by an older build in the same data dir.
      *
      * @param id task id
-     * @param file stream name (`cli-tool-trace.jsonl`, `cli-usage.jsonl`, …); any other name is
-     *   rejected — the trace directory is not a file browser
+     * @param name artifact name relative to the run dir (`cli-tool-trace.jsonl`,
+     *   `cli-prompt/1.request.json`, …); any other name is rejected — the trace directory is not
+     *   a file browser
      * @param offset first line to return (0-based)
      * @param limit page size (clamped to 2000)
-     * @return `200` + [CommandTraceFileResponse], `404` when the task or the stream is unknown
+     * @return `200` + [CommandTraceFileResponse], `404` when the task or the artifact is unknown
      * */
-    @GetMapping("/{id}/trace/{file}")
+    @GetMapping("/{id}/trace/file")
     fun getTraceFile(
         @PathVariable id: String,
-        @PathVariable file: String,
+        @RequestParam(name = "name") name: String,
         @RequestParam(name = "offset", defaultValue = "0") offset: Int,
         @RequestParam(name = "limit", defaultValue = "500") limit: Int,
     ): ResponseEntity<CommandTraceFileResponse> {
-        val page = commandExecutor.traceFile(id, file, offset, limit)
+        val page = commandExecutor.traceFile(id, name, offset, limit)
             ?: return ResponseEntity.notFound().build()
         return ResponseEntity.ok(page)
     }

@@ -150,6 +150,7 @@ pub fn public_command_name(name: &str) -> &str {
         "webminer-views" => "webminer views",
         "agent-cancel" => "agent cancel",
         "agent-supervise" => "agent supervise",
+        "agent-trace" => "agent trace",
         "tool-call" => "tool call",
         "tool-list" => "tool list",
         "chat-result" => "chat result",
@@ -2598,6 +2599,50 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli agent supervise agent-task-1 --json".to_string());
     }
 
+    if cmd.name == "agent-trace" {
+        lines.push("Notes:".to_string());
+        lines.push("  - Accepts the task ID returned by `agent run`.".to_string());
+        lines.push(
+            "  - The step log (`agent events`) is the live summary; the trace is the audit trail the"
+                .to_string(),
+        );
+        lines.push(
+            "    run wrote: the exact prompt per round, every tool's complete arguments and output,"
+                .to_string(),
+        );
+        lines.push("    provider usage per request, and the page timeline.".to_string());
+        lines.push(
+            "  - Without --file it lists the artifacts (name, size, last write). With --file it pages"
+                .to_string(),
+        );
+        lines.push(
+            "    one artifact by line: --offset continues where a page stopped, --limit sizes it"
+                .to_string(),
+        );
+        lines.push("    (default 200).".to_string());
+        lines.push(
+            "  - Credentials are redacted when the trace is written and again when it is read, so a"
+                .to_string(),
+        );
+        lines.push(
+            "    password typed into a form never appears in the output. A missing trace means tracing"
+                .to_string(),
+        );
+        lines.push(
+            "    was off for that run or the retention policy (browser4.agent.trace.retentionDays)"
+                .to_string(),
+        );
+        lines.push("    already removed it.".to_string());
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli agent trace agent-task-1".to_string());
+        lines.push("  browser4-cli agent trace agent-task-1 --file cli-tool-trace.jsonl".to_string());
+        lines.push(
+            "  browser4-cli agent trace agent-task-1 --file cli-tool-trace.jsonl --offset 200"
+                .to_string(),
+        );
+        lines.push("  browser4-cli agent trace agent-task-1 --json".to_string());
+    }
     if cmd.name == "agent-result" {
         lines.push("Notes:".to_string());
         lines.push("  - Accepts the task ID returned by `agent run`.".to_string());

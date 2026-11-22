@@ -1233,6 +1233,53 @@ pub async fn get_command_stats_with_timeout(
     send_rest_response(client.get(url).timeout(timeout)).await
 }
 
+/// List a task's trace artifacts: `GET /api/commands/{id}/trace`.
+///
+/// The trace directory is keyed by the agent's own uuid, so this endpoint is the only way a
+/// caller holding a task id can find the audit trail behind it (issue #652, gap 5). A 404 means
+/// "no trace indexed": tracing was off for the run, or retention already removed it.
+pub async fn get_command_trace(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<RestResponse, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/commands/{task_id}/trace"));
+    send_rest_response(
+        client
+            .get(url)
+            .timeout(std::time::Duration::from_secs(30)),
+    )
+    .await
+}
+
+/// One page of one trace artifact:
+/// `GET /api/commands/{id}/trace/file?name=<name>&offset=<offset>&limit=<limit>`.
+///
+/// `name` is a query parameter, not a path segment: a prompt dump lives under `cli-prompt/`, and
+/// a `/` cannot appear in a Spring path variable.
+pub async fn get_command_trace_file(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+    name: &str,
+    offset: u64,
+    limit: usize,
+) -> Result<RestResponse, String> {
+    let url = build_endpoint_url(
+        base_url,
+        &format!(
+            "/api/commands/{task_id}/trace/file?name={}&offset={offset}&limit={limit}",
+            urlencoding::encode(name)
+        ),
+    );
+    send_rest_response(
+        client
+            .get(url)
+            .timeout(std::time::Duration::from_secs(30)),
+    )
+    .await
+}
+
 /// Queue a user message for a running agent task:
 /// `POST /api/commands/{id}/input`.
 ///

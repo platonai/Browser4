@@ -1013,7 +1013,18 @@ struct MockBrowser4State {
     command_stats_disabled: bool,
     /// Recorded `GET /api/commands/{id}/stats` task ids.
     command_stats_calls: Vec<String>,
-    /// Recorded `/api/agent/{id}/access...` calls as "METHOD route" (the
+    /// Scripted trace listings per task id, served by `GET /api/commands/{id}/trace`.
+    ///
+    /// The backend serves what a run actually wrote (artifact names, sizes, last write); the
+    /// mock scripts that envelope so the CLI's listing panel is testable without a real run
+    /// (issue #652, gap 5).
+    custom_command_trace: HashMap<String, serde_json::Value>,
+    /// Scripted trace artifact lines per `"{taskId}|{name}"`, served by
+    /// `GET /api/commands/{id}/trace/file?name=`.
+    custom_command_trace_files: HashMap<String, Vec<String>>,
+    /// Recorded `GET /api/commands/{id}/trace[/file]` calls as "taskId|name" (an empty name
+    /// is the listing request).
+    command_trace_calls: Vec<String>,    /// Recorded `/api/agent/{id}/access...` calls as "METHOD route" (the
     /// interactive session's `/access`, `/approve` and `/deny` commands).
     agent_access_calls: Vec<String>,
     /// Task ids whose events endpoint keeps reporting `running` until a steering
@@ -1281,6 +1292,33 @@ impl MockBrowser4Server {
 
     /// Pretend this backend predates the stats endpoint (404), so `/stats`
     /// exercises its local-counting fallback.
+    /// Script the trace listing `GET /api/commands/{id}/trace` serves for [task_id].
+    fn set_command_trace(&self, task_id: &str, listing: serde_json::Value) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .custom_command_trace
+            .insert(task_id.to_string(), listing);
+    }
+
+    /// Script the lines `GET /api/commands/{id}/trace/file?name=` serves for [task_id] and
+    /// [name]; the mock pages them with the request's offset/limit.
+    fn set_command_trace_file(&self, task_id: &str, name: &str, lines: Vec<String>) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .custom_command_trace_files
+            .insert(format!("{task_id}|{name}"), lines);
+    }
+
+    /// Recorded `GET /api/commands/{id}/trace[/file]` calls as "taskId|name".
+    fn command_trace_calls(&self) -> Vec<String> {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .command_trace_calls
+            .clone()
+    }
     fn disable_command_stats(&self) {
         self.state
             .lock()
@@ -1981,7 +2019,79 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             }
             write_http_response(&mut stream, "200 OK", "application/json", &response.to_string());
         }
-        // ---- agent task run statistics (interactive `/stats`) ----
+        // ---- agent task full run trace (agent trace) ----
+        _ if method == "GET"
+            && route.starts_with("/api/commands/")
+            && route.ends_with("/trace/file") =>
+        {
+            let Some(task_id) = route
+                .strip_prefix("/api/commands/")
+                .and_then(|rest| rest.strip_suffix("/trace/file"))
+            else {
+                write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+                return;
+            };
+            let name = query_param(&path, "name").unwrap_or_default();
+            let offset: usize = query_param(&path, "offset")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0);
+            let limit: usize = query_param(&path, "limit")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(500);
+
+            let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
+            guard.command_trace_calls.push(format!("{task_id}|{name}"));
+            let scripted = guard
+                .custom_command_trace_files
+                .get(&format!("{task_id}|{name}"))
+                .cloned();
+            drop(guard);
+
+            let Some(lines) = scripted else {
+                write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+                return;
+            };
+            let total = lines.len();
+            let page: Vec<String> = lines.into_iter().skip(offset).take(limit).collect();
+            let response = serde_json::json!({
+                "taskId": task_id,
+                "file": name,
+                "offset": offset,
+                "limit": limit,
+                "totalLines": total,
+                "lines": page,
+            })
+            .to_string();
+            write_http_response(&mut stream, "200 OK", "application/json", &response);
+        }
+        _ if method == "GET"
+            && route.starts_with("/api/commands/")
+            && route.ends_with("/trace") =>
+        {
+            let Some(task_id) = route
+                .strip_prefix("/api/commands/")
+                .and_then(|rest| rest.strip_suffix("/trace"))
+            else {
+                write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+                return;
+            };
+            let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
+            guard.command_trace_calls.push(format!("{task_id}|"));
+            let listing = guard.custom_command_trace.get(task_id).cloned();
+            drop(guard);
+
+            match listing {
+                Some(listing) => write_http_response(
+                    &mut stream,
+                    "200 OK",
+                    "application/json",
+                    &listing.to_string(),
+                ),
+                None => {
+                    write_http_response(&mut stream, "404 Not Found", "text/plain", "not found")
+                }
+            }
+        }        // ---- agent task run statistics (interactive `/stats`) ----
         _ if method == "GET"
             && route.starts_with("/api/commands/")
             && route.ends_with("/stats") =>

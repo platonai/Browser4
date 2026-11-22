@@ -37,6 +37,7 @@ mod update_check;
 mod agent_interactive;
 mod agent_result;
 mod agent_supervise;
+mod agent_trace;
 mod timing;
 
 use std::collections::{HashMap, HashSet};
@@ -16915,6 +16916,84 @@ async fn handle_agent_supervise(
     Ok(())
 }
 
+/// `agent trace <id>`: the audit trail behind a task, or one page of it.
+///
+/// The step log (`agent events`) is a live summary; the trace is what the run actually wrote —
+/// the exact prompt per round, every tool's complete arguments and output, provider usage, the
+/// page timeline. It is keyed by the agent's own uuid on the backend, so the task id alone used
+/// to be useless for finding it (issue #652, gap 5). A missing trace is reported with its two
+/// causes (tracing off, retention) instead of a bare 404.
+async fn handle_agent_trace(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let id = tool_params
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    if id.is_empty() {
+        return Err("Task ID is required.".to_string());
+    }
+    let file = tool_params
+        .get("file")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .trim();
+    let offset = agent_trace::number_param(tool_params, "offset").unwrap_or(0);
+    let limit = agent_trace::number_param(tool_params, "limit")
+        .filter(|value| *value > 0)
+        .map(|value| value as usize)
+        .unwrap_or(agent_trace::TRACE_PAGE_DEFAULT);
+
+    let response = if file.is_empty() {
+        crate::http::get_command_trace(client, base_url, id).await?
+    } else {
+        crate::http::get_command_trace_file(client, base_url, id, file, offset, limit).await?
+    };
+    if agent_trace::is_not_found(response.status, &response.body) {
+        json_field("task_id", json!(id));
+        json_field(
+            "error",
+            json!(format!("No trace is indexed for task {}", id)),
+        );
+        return Err(format!(
+            "No trace is indexed for task '{}'. Tracing may be off for that run, or the retention policy (browser4.agent.trace.retentionDays) already removed it. Run `agent trace` right after an `agent run` that had tracing enabled.",
+            id
+        ));
+    }
+    if !response.is_success() {
+        return Err(format!(
+            "Could not read the trace of task {} (HTTP {}): {}",
+            id,
+            response.status,
+            response.body.trim()
+        ));
+    }
+
+    json_field("task_id", json!(id));
+    if file.is_empty() {
+        let listing = agent_trace::parse_listing(&response.body)?;
+        json_field("raw", agent_trace::listing_json(&listing));
+        if json_active() {
+            return Ok(());
+        }
+        for line in agent_trace::render_listing(&listing) {
+            cli_println!("{}", line);
+        }
+    } else {
+        let page = agent_trace::parse_page(&response.body)?;
+        json_field("raw", agent_trace::page_json(&page));
+        if json_active() {
+            return Ok(());
+        }
+        for line in agent_trace::render_page(&page) {
+            cli_println!("{}", line);
+        }
+    }
+    Ok(())
+}
+
 async fn handle_agent_result(
     client: &Client,
     base_url: &str,
@@ -31955,6 +32034,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "agent-run" => Some("agent run"),
         "agent-status" => Some("agent status"),
         "agent-supervise" => Some("agent supervise"),
+        "agent-trace" => Some("agent trace"),
         "agent-result" => Some("agent result"),
         "agent-list" => Some("agent list"),
         "agent-cancel" => Some("agent cancel"),
@@ -34950,7 +35030,12 @@ async fn run(
         }
         "agent-supervise" => {
             handle_agent_supervise(&client, &base_url, &tool_params).await?;
+        }        "agent-trace" => {
+            handle_agent_trace(&client, &base_url, &tool_params).await?;
         }
+
+
+
         "agent-result" => {
             handle_agent_result(&client, &base_url, &tool_params).await?;
         }
