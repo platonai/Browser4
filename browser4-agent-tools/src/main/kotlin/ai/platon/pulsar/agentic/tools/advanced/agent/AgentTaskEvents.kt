@@ -529,15 +529,16 @@ object AgentTaskEventSanitizer {
         "apikey", "cvv", "credit-card", "cardnumber",
     )
 
-    /** Fallback redaction for argument blobs that are not valid JSON. */
-    private val INLINE_SECRET = Regex(
-        """(?i)("(?:[^"]*?(?:password|passwd|pwd|secret|token|api_?key|authorization|cookie)[^"]*?)"\s*:\s*)"(?:[^"\\]|\\.)*""""
+    /** Substrings that make a JSON-shaped key a credential (the old inline-rule vocabulary). */
+    private val INLINE_SENSITIVE_MARKERS = listOf(
+        "password", "passwd", "pwd", "secret", "token",
+        "apikey", "api_key", "authorization", "cookie",
     )
 
     /**
      * Fallback redaction for CLI-style flags — a `coding.shell` command such as
      * `cli --password hunter2 --token abc` is as sensitive as a JSON body, and
-     * it never matches [INLINE_SECRET].
+     * it is not a JSON-shaped pair.
      * */
     private val INLINE_FLAG_SECRET = Regex(
         """(?i)(--?(?:password|passwd|pwd|secret|token|api[-_]?key|authorization|cookie)[=\s]+)("[^"]*"|'[^']*'|\S+)"""
@@ -695,11 +696,104 @@ object AgentTaskEventSanitizer {
     }
 
     private fun redactRaw(raw: String): String {
-        val jsonish = INLINE_SECRET.replace(raw) { match ->
-            "${match.groupValues[1]}\"$REDACTED\""
-        }
+        val jsonish = redactInlineSecrets(raw)
         return INLINE_FLAG_SECRET.replace(jsonish) { match ->
             "${match.groupValues[1]}$REDACTED"
         }
     }
+
+    /**
+     * Replace the value of every JSON-shaped `"key": "value"` pair whose key names a
+     * credential, in a raw argument blob that is not valid JSON.
+     *
+     * A **linear scan**, not a regex: the previous rule's value body
+     * `(?:[^"\\]|\\.)*` makes Java's regex engine recurse once per character, so a
+     * credential with a multi-kilobyte quoted value could throw `StackOverflowError`
+     * on the default 1 MB thread stack while sanitizing an event. Only the shape the
+     * old rule accepted is rewritten (double-quoted key and value); anything it could
+     * not classify is left untouched.
+     */
+    private fun redactInlineSecrets(raw: String): String {
+        val length = raw.length
+        var index = 0
+        var copied = 0
+        var out: StringBuilder? = null
+        while (index < length) {
+            if (raw[index] != '"' || isEscaped(raw, index)) {
+                index++
+                continue
+            }
+            val keyEnd = findQuotedEnd(raw, index, '"')
+            if (keyEnd < 0) {
+                index++
+                continue
+            }
+            val colon = skipRegexSpaces(raw, keyEnd + 1)
+            if (colon >= length || raw[colon] != ':') {
+                index = keyEnd + 1
+                continue
+            }
+            if (!containsCredentialMarker(raw, index + 1, keyEnd)) {
+                index = keyEnd + 1
+                continue
+            }
+            val valueStart = skipRegexSpaces(raw, colon + 1)
+            if (valueStart >= length || raw[valueStart] != '"') {
+                index = keyEnd + 1
+                continue
+            }
+            val valueEnd = findQuotedEnd(raw, valueStart, '"')
+            if (valueEnd < 0) {
+                index = keyEnd + 1
+                continue
+            }
+            val builder = out ?: StringBuilder(length).also { out = it }
+            builder.append(raw, copied, valueStart)
+            builder.append('"').append(REDACTED).append('"')
+            copied = valueEnd + 1
+            index = copied
+        }
+        val builder = out ?: return raw
+        builder.append(raw, copied, length)
+        return builder.toString()
+    }
+
+    private fun containsCredentialMarker(text: String, start: Int, endExclusive: Int): Boolean {
+        val key = text.substring(start, endExclusive).lowercase()
+        return INLINE_SENSITIVE_MARKERS.any { key.contains(it) }
+    }
+
+    /** The index of the closing [quote] for a string starting at [start], or `-1`. */
+    private fun findQuotedEnd(text: String, start: Int, quote: Char): Int {
+        var i = start + 1
+        while (i < text.length) {
+            when {
+                text[i] == '\\' -> i += 2
+                text[i] == quote -> return i
+                else -> i++
+            }
+        }
+        return -1
+    }
+
+    /** True when the quote at [index] is escaped by an odd number of backslashes. */
+    private fun isEscaped(text: String, index: Int): Boolean {
+        var backslashes = 0
+        var i = index - 1
+        while (i >= 0 && text[i] == '\\') {
+            backslashes++
+            i--
+        }
+        return backslashes % 2 == 1
+    }
+
+    private fun skipRegexSpaces(text: String, start: Int): Int {
+        var i = start
+        while (i < text.length && isRegexSpace(text[i])) i++
+        return i
+    }
+
+    /** The `\s` class (ASCII) the replaced regex used, not Unicode whitespace. */
+    private fun isRegexSpace(c: Char): Boolean =
+        c == ' ' || c == '\t' || c == '\n' || c == '\u000B' || c == '\u000C' || c == '\r'
 }
