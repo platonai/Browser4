@@ -231,6 +231,19 @@ data class AgentTaskEvent(
         const val TYPE_ISOLATION_MERGE = "isolation.merge"
 
         /**
+         * A `coding.requestAccess` call is waiting for an operator (`detail`: `requestId`,
+         * `effect`, `target`, `reason`, `requestedBy`).
+         *
+         * The queue was observable only by polling `GET /api/agent/{taskId}/access`, so an
+         * unattended supervisor could not tell that the agent was BLOCKED on an approval
+         * rather than working (issue #652, P1-6).
+         */
+        const val TYPE_ACCESS_REQUESTED = "access.requested"
+
+        /** A pending access request was approved or denied (`detail`: `requestId`, `decision`, `reason`). */
+        const val TYPE_ACCESS_RESOLVED = "access.resolved"
+
+        /**
          * Version stamped on every event this build writes (see
          * [AgentTaskEvent.schemaVersion]).
          *

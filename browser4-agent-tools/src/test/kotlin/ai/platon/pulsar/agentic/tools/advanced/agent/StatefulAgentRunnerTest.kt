@@ -11,6 +11,11 @@ import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.api.model.BrowserUseState
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.config.VolatileConfig
+import ai.platon.pulsar.coding.AccessApprovalEvent
+import ai.platon.pulsar.coding.AccessDecision
+import ai.platon.pulsar.coding.AccessRequest
+import ai.platon.pulsar.coding.Effect
+import ai.platon.pulsar.coding.Target
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.just
@@ -1086,6 +1091,42 @@ class StatefulAgentRunnerTest {
             val modelText = events.last { it.type == AgentRunEvent.MODEL_TEXT }
             assertTrue(modelText.text!!.startsWith("Plan:"), modelText.text)
             assertTrue(modelText.text!!.endsWith("…"), "a model message is still head-truncated: ${modelText.text}")
+        } finally {
+            runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("an approval request and its decision become steps of the task's log")
+    fun accessRequestsReachTheLog() {
+        val runner = StatefulAgentRunner(mockSession(mockAgent(AgentHistory(), null)))
+        try {
+            val status = runner.create()
+            val request = AccessRequest(
+                id = "req-1",
+                effect = Effect.FS_WRITE,
+                target = Target.PathTarget(Path.of("/etc/hosts")),
+                reason = "the run needs to edit /etc/hosts",
+                ttlSeconds = null,
+                requestedAt = Instant.now(),
+            )
+
+            // "waiting for an operator" is a state a supervisor has to notice: an
+            // unattended run parked on an approval looks exactly like a slow tool.
+            runner.recordAccessEvent(status, AccessApprovalEvent(request, AccessDecision.REQUESTED))
+            runner.recordAccessEvent(
+                status,
+                AccessApprovalEvent(request, AccessDecision.DENIED, reason = "protected path"),
+            )
+
+            val pending = runner.events(status.id).last { it.type == AgentTaskEvent.TYPE_ACCESS_REQUESTED }
+            assertEquals("req-1", pending.detail!!["requestId"])
+            assertEquals("fs.write", pending.detail!!["effect"])
+            assertTrue(pending.text!!.contains("waiting for approval"), pending.text)
+
+            val resolved = runner.events(status.id).last { it.type == AgentTaskEvent.TYPE_ACCESS_RESOLVED }
+            assertEquals("denied", resolved.detail!!["decision"])
+            assertEquals("protected path", resolved.detail!!["reason"])
         } finally {
             runner.close()
         }

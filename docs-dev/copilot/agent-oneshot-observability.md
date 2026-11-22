@@ -595,8 +595,9 @@ P0-A…P0-F 全部落地，全部为**新增可空字段 / 新增事件类型 / 
 |---|---|---|
 | P1-1 预览保留尾部 | `AgentTaskEventSanitizer.previewKeepingTail()`；`StatefulAgentRunner.recordRunEvent` 只对 `tool.result` 使用 | 工具输出的"结论"在末尾（编译器错误、`Tests run: …`），原来的头部截断恰好把它切掉。现在输出 `head…tail`，共享 240 字预算（尾部 45%），仍是一行、仍在码点边界切断；模型文本保持头部截断（它的开头才是重点） |
 | P1-5 干预 correlationId | `PendingUserMessage`（agentic）、`StatefulAgentRunner.enqueueInput` 返回 `inputId`、`POST /{id}/input` 与 `command.input` 回带 `inputId`、交付的 `steer` / `follow_up` 步骤带 `detail.inputIds` | `accepted=true` 只证明"入队"；现在调用方能在事件流里认出自己那条消息。未交付的线（`steering.undelivered` / `follow_up.undelivered`）带同一个 `inputId`，两种结局都可对照 |
+| P1-6 权限审批进流 | `AccessApprovals.observer` + `AccessApprovalEvent`（browser4-coding）；`StatefulAgentRunner.recordAccessEvent` 写入 `access.requested` / `access.resolved`，观察者在 applyAccessPolicy 后安装、任务结束时清除 | 无人值守时"卡在等审批"与"工具很慢"外观相同；现在是一条明确的步骤，且 `/approve` / `/deny` 的结果也回到流里。观察者异常被吞掉，绝不影响审批裁决 |
 
 ### 9.4 未做（仍留在 §7 后续路线）
 
-事件持久化、事件级 SSE、trace 读取 API、`access.requested`、`b4.run` span、结构化目标、
-`agent supervise` 命令。这些属于 P1/P2，不阻断"外部智能体监督"。
+事件持久化、事件级 SSE、trace 读取 API、`b4.run` span、结构化目标、`agent supervise` 命令。
+这些属于 P1/P2，不阻断"外部智能体监督"。

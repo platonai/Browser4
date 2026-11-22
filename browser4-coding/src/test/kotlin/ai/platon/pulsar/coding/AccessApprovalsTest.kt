@@ -93,6 +93,53 @@ class AccessApprovalsTest {
     }
 
     @Test
+    @DisplayName("the queue reports every visible change to its observer")
+    fun testObserverSeesTheQueueChanges(@TempDir root: Path) {
+        // The task runner turns these into `access.requested` / `access.resolved` steps, so an
+        // unattended supervisor learns that the run is parked on an approval instead of
+        // assuming it is working (issue #652, P1-6).
+        val approvals = approvals(root)
+        val seen = mutableListOf<String>()
+        approvals.observer = { event -> seen += "${event.decision}:${event.request.id}" }
+
+        val request = approvals.request(Effect.FS_WRITE, pathTarget(root, "a.txt"), "fix the import")
+        approvals.approve(request.id, AccessSource.REST)
+
+        assertEquals(listOf("REQUESTED:${request.id}", "APPROVED:${request.id}"), seen)
+    }
+
+    @Test
+    @DisplayName("a rail refusal is reported as a denial, not left looking pending")
+    fun testObserverSeesARailRefusal(@TempDir root: Path) {
+        val approvals = approvals(root)
+        val seen = mutableListOf<AccessDecision>()
+        approvals.observer = { event -> seen += event.decision }
+
+        // A credential location is refused at request time: the queue never holds it as pending,
+        // and the observer must see the denial so the stream does not show a stuck request.
+        val request = approvals.request(
+            Effect.SECRET_READ,
+            Target.PathTarget(root.resolve("id_rsa")),
+            "the run wants to read a key",
+        )
+
+        assertEquals(listOf(AccessDecision.REQUESTED, AccessDecision.DENIED), seen, "request=$request")
+        assertEquals(AccessState.DENIED, request.state)
+    }
+
+    @Test
+    @DisplayName("a broken observer never breaks the approval decision")
+    fun testBrokenObserverIsContained(@TempDir root: Path) {
+        val approvals = approvals(root)
+        approvals.observer = { error("boom") }
+
+        val request = approvals.request(Effect.FS_WRITE, pathTarget(root, "a.txt"))
+        val approved = approvals.approve(request.id, AccessSource.REST)
+
+        assertEquals(AccessState.APPROVED, approved!!.state, "the observer is a listener, not a participant")
+    }
+
+    @Test
     @DisplayName("a ttl grant expires lazily on the next decision and allows a fresh request")
     fun testGrantExpiresLazily(@TempDir root: Path) {
         PermissionAudit.reset()

@@ -32,6 +32,38 @@ enum class AccessSource(val id: String) {
 /** The lifecycle of one [AccessRequest]. */
 enum class AccessState { PENDING, APPROVED, DENIED, EXPIRED }
 
+/** Which visible change of the approval queue an observer is told about. */
+enum class AccessDecision {
+    /** A new request is waiting for an operator. */
+    REQUESTED,
+
+    /** An operator (or the strategy file) granted it. */
+    APPROVED,
+
+    /** An operator, or a rail, refused it. */
+    DENIED,
+}
+
+/**
+ * One visible change of a task's approval queue.
+ *
+ * The queue used to be observable only by polling `GET /api/agent/{taskId}/access`: an
+ * unattended supervisor could not tell that the agent was STUCK waiting for an approval, and the
+ * decision was invisible until someone read the REST view (issue #652, P1-6). This is the value
+ * handed to [AccessApprovals.observer], which the task runner turns into an `access.requested` /
+ * `access.resolved` step.
+ *
+ * @property request the request as it is now (its [AccessRequest.state] tells the outcome)
+ * @property decision what just happened
+ * @property reason why it was decided; `null` for [AccessDecision.REQUESTED] (the model's own
+ *   reason travels on the request itself)
+ */
+data class AccessApprovalEvent(
+    val request: AccessRequest,
+    val decision: AccessDecision,
+    val reason: String? = null,
+)
+
 /**
  * One `coding.requestAccess` call.
  *
@@ -178,6 +210,16 @@ class AccessApprovals(
 
     private val requests = ConcurrentHashMap<String, AccessRequest>()
 
+    /**
+     * Notified on every visible change of the queue ([AccessApprovalEvent]).
+     *
+     * A lambda rather than an event type: browser4-coding knows nothing about the task event
+     * stream, and the runner (which does) installs the observer for its own task and clears it
+     * when the task ends — the companion agent, and with it this queue, is rebuilt per task.
+     */
+    @Volatile
+    var observer: ((AccessApprovalEvent) -> Unit)? = null
+
     /** Dedupe key (`effect|target`) to request id, so a retry does not create a second entry. */
     private val dedupe = ConcurrentHashMap<String, String>()
 
@@ -224,11 +266,19 @@ class AccessApprovals(
         // store is refused immediately with `ACCESS_DENIED` instead of becoming a pending item no
         // operator could ever approve. The approval-time check stays — the policy can change between
         // the request and the decision, and a FILE entry may be older than the rail.
+        notify(AccessApprovalEvent(request, AccessDecision.REQUESTED))
         val violation = guardrailViolation(effect, target)
         if (violation != null) {
             deny(request.id, requestedBy, violation)
         }
         return request
+    }
+
+    /** Report one queue change to [observer], never letting a broken observer affect the decision. */
+    private fun notify(event: AccessApprovalEvent) {
+        val listener = observer ?: return
+        runCatching { listener(event) }
+            .onFailure { logger.warn("access approval observer failed: {}", it.message) }
     }
 
     /**
@@ -311,6 +361,7 @@ class AccessApprovals(
             detail = "${request.id} effect=${request.effect.id} target=${request.target.describe()} " +
                 "source=${source.id} expiresAt=${expiresAt ?: "task-end"}",
         )
+        notify(AccessApprovalEvent(request, AccessDecision.APPROVED, reason = null))
         return request
     }
 
@@ -333,6 +384,7 @@ class AccessApprovals(
             detail = "${request.id} effect=${request.effect.id} target=${request.target.describe()} " +
                 "source=${source.id}${reason?.let { " reason=$it" } ?: ""}",
         )
+        notify(AccessApprovalEvent(request, AccessDecision.DENIED, reason = request.decisionReason))
         return request
     }
 

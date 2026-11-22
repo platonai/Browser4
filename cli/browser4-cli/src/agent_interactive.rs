@@ -1048,6 +1048,51 @@ impl Renderer {
                     self.time_prefix()
                 ))
             }
+            // Permission queue (issue #652, P1-6): a run parked on an approval looks exactly
+            // like a slow tool, so the live view says it is WAITING — and says what the
+            // operator's answer was, instead of only changing on the next poll of
+            // `GET /api/agent/{taskId}/access`.
+            "access.requested" => {
+                let detail = event.detail.as_ref()?;
+                let target = detail
+                    .get("target")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("(unknown)");
+                let effect = detail
+                    .get("effect")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("access");
+                let request_id = detail
+                    .get("requestId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
+                Some(format!(
+                    "{}   ⏸ waiting for approval: {effect} {target} ({request_id}) — \
+                     /approve {request_id} in `agent run -i`, or POST /api/agent/{{taskId}}/access/{request_id}/approve",
+                    self.time_prefix()
+                ))
+            }
+            "access.resolved" => {
+                let detail = event.detail.as_ref()?;
+                let decision = detail
+                    .get("decision")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("decided");
+                let request_id = detail
+                    .get("requestId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
+                let reason = detail
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .filter(|reason| !reason.is_empty());
+                let icon = if decision == "approved" { "✔" } else { "✖" };
+                let tail = reason.map(|r| format!(" — {}", truncate(r, 140))).unwrap_or_default();
+                Some(format!(
+                    "{}   {icon} access {decision}: {request_id}{tail}",
+                    self.time_prefix()
+                ))
+            }
             _ => None,
         }
     }
@@ -4994,6 +5039,25 @@ mod tests {
         let line = renderer.format(&amended).expect("an amendment is worth a line");
         assert!(line.contains("amended"), "{line}");
         assert!(line.contains("+2 file(s)"), "{line}");
+
+        // The permission queue: a run parked on an approval used to look exactly like a slow
+        // tool, and the decision only appeared on the next access poll (issue #652, P1-6).
+        let mut waiting = event("access.requested");
+        waiting.detail = Some(serde_json::json!({
+            "requestId": "req-1", "effect": "fs.write", "target": "/etc/hosts",
+        }));
+        let line = renderer.format(&waiting).expect("a pending approval is worth a line");
+        assert!(line.contains("waiting for approval"), "{line}");
+        assert!(line.contains("fs.write /etc/hosts"), "{line}");
+        assert!(line.contains("/approve req-1"), "the line must name the way out: {line}");
+
+        let mut denied = event("access.resolved");
+        denied.detail = Some(serde_json::json!({
+            "requestId": "req-1", "decision": "denied", "reason": "credential locations are never approved",
+        }));
+        let line = renderer.format(&denied).expect("a decision is worth a line");
+        assert!(line.contains("access denied: req-1"), "{line}");
+        assert!(line.contains("never approved"), "{line}");
     }
 
     #[test]

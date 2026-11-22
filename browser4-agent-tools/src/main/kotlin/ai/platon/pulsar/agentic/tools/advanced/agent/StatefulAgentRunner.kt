@@ -15,7 +15,9 @@ import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
 import ai.platon.pulsar.api.AbstractWebDriver
 import ai.platon.pulsar.api.Browser
+import ai.platon.pulsar.coding.AccessDecision
 import ai.platon.pulsar.coding.AccessPreset
+import ai.platon.pulsar.coding.AccessApprovalEvent
 import ai.platon.pulsar.coding.AgentAccessPolicy
 import ai.platon.pulsar.coding.CodingWorkspace
 import ai.platon.pulsar.coding.IsolationGate
@@ -396,6 +398,49 @@ open class StatefulAgentRunner(
         text = AgentTaskEventSanitizer.preview(text),
         detail = detail,
     )
+
+    /**
+     * Translate one approval-queue change into a step of this task's log.
+     *
+     * Two steps, not one: "waiting for an operator" is the state a supervisor must notice — an
+     * unattended run parked on an approval looks exactly like a slow tool otherwise — and the
+     * decision is what unblocks it.
+     *
+     * @param status the task the request belongs to
+     * @param event the queue change reported by [ai.platon.pulsar.coding.AccessApprovals]
+     */
+    internal fun recordAccessEvent(status: AgentTaskStatus, event: AccessApprovalEvent) {
+        val request = event.request
+        val base = mapOf(
+            "requestId" to request.id,
+            "effect" to request.effect.id,
+            "target" to request.target.describe(),
+        )
+        when (event.decision) {
+            AccessDecision.REQUESTED -> recordStructuredEvent(
+                status,
+                AgentTaskEvent.TYPE_ACCESS_REQUESTED,
+                detail = base + mapOf(
+                    "reason" to request.reason,
+                    "requestedBy" to request.requestedBy.id,
+                ),
+                text = "waiting for approval: ${request.effect.id} ${request.target.describe()}" +
+                    (request.reason?.let { " — $it" } ?: ""),
+            )
+
+            AccessDecision.APPROVED, AccessDecision.DENIED -> recordStructuredEvent(
+                status,
+                AgentTaskEvent.TYPE_ACCESS_RESOLVED,
+                detail = base + mapOf(
+                    "decision" to event.decision.name.lowercase(),
+                    "reason" to event.reason,
+                    "expiresAt" to request.expiresAt?.toString(),
+                ),
+                text = "${event.decision.name.lowercase()}: ${request.effect.id} ${request.target.describe()}" +
+                    (event.reason?.let { " — $it" } ?: ""),
+            )
+        }
+    }
 
     /**
      * Append the terminal failure step, carrying the machine-readable reason.
@@ -1493,6 +1538,14 @@ open class StatefulAgentRunner(
                     taskPolicy.copy(mode = ai.platon.pulsar.coding.AgentMode.BROWSE)
                 }
                 it.agentToolManager.applyAccessPolicy(policyWithMode, status.id)
+                // The approval queue is per task (applyAccessPolicy builds a fresh one), so the
+                // observer is installed here and cleared in the finally: a `coding.requestAccess`
+                // that waits for an operator becomes a step of THIS task's stream instead of a
+                // fact only a poller of `GET /api/agent/{taskId}/access` can find (#652, P1-6).
+                it.agentToolManager.accessApprovals?.observer = { event ->
+                    runCatching { recordAccessEvent(status, event) }
+                        .onFailure { error -> logger.warn("recording an access decision failed: {}", error.message) }
+                }
                 // Explicit coding flag, never auto-detected: the coding flag is
                 // opt-in per call (`command_run`'s coding argument, e.g. the CLI's
                 // agent run --coding). A resumed run inherits it from its checkpoint.
@@ -1660,6 +1713,9 @@ open class StatefulAgentRunner(
                 it.runEventListener = null
                 it.steeringSource = null
                 it.followUpSource = null
+                // The approval queue is dropped by resetAccessPolicy below; clear the
+                // observer first so nothing reports into a finished task's log.
+                it.agentToolManager.accessApprovals?.observer = null
                 // Write point 3 (§6.1): record the terminal task state in the
                 // workspace manifest. Done from finally so cancelled/failed runs
                 // are still recorded.
