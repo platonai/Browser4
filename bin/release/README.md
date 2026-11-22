@@ -118,6 +118,11 @@ checks and previews the tag and release notes; it never creates or pushes anythi
   `-message` is given). Falls back to commit-derived sections only if no agent
   is available. The tag message (What's New + curated sections) is also
   prepended into the GitHub Release body by `release.yml`.
+- **Annotated tag message**: the notes are written with
+  `git tag -a --cleanup=whitespace`, so the `### Features` / `### Fixes` /
+  `### Documentation` headings reach the release body. Git's default
+  `--cleanup=strip` reads every line starting with `#` as a comment and drops
+  it — v4.16.10 published as one unlabelled bullet list that way.
 - Supports `-remote`, `-message`, `-Apply`, `-DryRun`, and `-Agent`.
 - **Non-interactive hosts (CI/automation)**: set `BROWSER4_RELEASE_YES=1`
   to auto-confirm every interactive prompt (Read-Host throws in

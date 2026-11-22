@@ -404,6 +404,55 @@ Assert-NotMatch -Label 'MAIN README: no longer asks users to pass -SyncMain' `
     -Haystack $readmeText -Pattern '-SyncMain'
 
 # ===================================================================
+# TESTS: the annotated tag keeps its markdown '###' section headings
+# ===================================================================
+Write-Host "━━━ Tag message: curated '###' headings survive git's cleanup ━━━" -ForegroundColor Cyan
+
+# Regression this guards: v4.16.10 shipped as one unlabelled bullet list.
+# `git tag -a -m` defaults to `--cleanup=strip`, which treats every line
+# starting with '#' as a comment and drops it — so '### Features' and friends
+# vanished from the tag message, and release.yml (which prepends that message
+# into the GitHub Release body) could only publish the bare bullets.
+Assert-Match -Label 'TAGMSG script: creates the annotated tag with --cleanup=whitespace' `
+    -Haystack $scriptText -Pattern 'git tag -a \$newTag -m \$effectiveMessage --cleanup=whitespace'
+
+# Prove the flag is what preserves the headings, not a git-version accident:
+# same message, same repository, only the cleanup mode differs.
+$gitCmd = Get-Command git -ErrorAction SilentlyContinue
+if (-not $gitCmd) {
+    Write-Host "    SKIP: git not on PATH — cannot verify the cleanup mode end to end." -ForegroundColor Yellow
+} else {
+    $probeRoot = Join-Path ([System.IO.Path]::GetTempPath()) "b4-tagmsg-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    New-Item -ItemType Directory -Path $probeRoot -Force | Out-Null
+    try {
+        & git -C $probeRoot init --quiet 2>&1 | Out-Null
+        & git -C $probeRoot -c user.name=test -c user.email=test@example.invalid commit --quiet --allow-empty -m 'init' 2>&1 | Out-Null
+        $probeMessage = "Browser4 v0.0.0`n`n### Features`n- a feature`n`n### Fixes`n- a fix"
+
+        & git -C $probeRoot -c user.name=test -c user.email=test@example.invalid tag -a strip-probe -m $probeMessage 2>&1 | Out-Null
+        $stripped = (& git -C $probeRoot tag -l --format='%(contents)' strip-probe) -join "`n"
+
+        & git -C $probeRoot -c user.name=test -c user.email=test@example.invalid tag -a keep-probe -m $probeMessage --cleanup=whitespace 2>&1 | Out-Null
+        $kept = (& git -C $probeRoot tag -l --format='%(contents)' keep-probe) -join "`n"
+
+        Assert-Returns -Label 'TAGMSG git default: strip mode drops the ### headings (the bug)' `
+            -Actual $stripped.Contains('### Features') -Expected $false
+        Assert-Returns -Label 'TAGMSG git --cleanup=whitespace: keeps the ### headings' `
+            -Actual $kept.Contains('### Features') -Expected $true
+        $missingSections = @('### Features', '### Fixes' | Where-Object { -not $kept.Contains($_) })
+        Assert-Returns -Label 'TAGMSG git --cleanup=whitespace: keeps every section heading' `
+            -Actual $missingSections.Count -Expected 0
+        Assert-Returns -Label 'TAGMSG git --cleanup=whitespace: keeps the bullet lines' `
+            -Actual ($kept.Contains('- a feature') -and $kept.Contains('- a fix')) -Expected $true
+    } finally {
+        Remove-Item -Path $probeRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Assert-Match -Label 'TAGMSG README: documents the heading-preserving cleanup mode' `
+    -Haystack $readmeText -Pattern 'cleanup=whitespace'
+
+# ===================================================================
 # Summary
 # ===================================================================
 Write-Host ''

@@ -819,7 +819,14 @@ try {
         git tag $newTag
         Write-Host "Created lightweight tag: $newTag"
     } else {
-        git tag -a $newTag -m $effectiveMessage
+        # `git tag -a -m` defaults to `--cleanup=strip`, which treats every line
+        # starting with '#' as a comment and drops it — including the markdown
+        # headings ('### Features', '### Fixes', …) of the curated notes. Those
+        # headings are what `release.yml` prepends into the GitHub Release body,
+        # so v4.16.10 published as one unlabelled bullet list. `whitespace` is
+        # `strip` without the comment removal: headings survive, trailing
+        # whitespace is still normalized.
+        git tag -a $newTag -m $effectiveMessage --cleanup=whitespace
         Write-Host "Created annotated tag: $newTag"
     }
 
