@@ -36,6 +36,7 @@ mod tips;
 mod update_check;
 mod agent_interactive;
 mod agent_result;
+mod agent_supervise;
 mod timing;
 
 use std::collections::{HashMap, HashSet};
@@ -16836,6 +16837,84 @@ fn sync_agent_status_to_local(task_id: &str, status_json: &str) {
     let _ = write_async_tasks(&list, None);
 }
 
+async fn handle_agent_supervise(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let id = tool_params
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    if id.is_empty() {
+        return Err("Task ID is required.".to_string());
+    }
+
+    // The status envelope is the one source the view cannot do without: an id this
+    // backend does not know must fail loudly instead of rendering an empty panel.
+    let status_body = get_command_status(client, base_url, id).await?;
+    if agent_supervise::status_is_not_found(&status_body) {
+        json_field("task_id", json!(id));
+        json_field(
+            "error",
+            json!(format!("No agent task found with id {}", id)),
+        );
+        return Err(format!(
+            "No agent task found with id '{}'. Run `agent list` to see tracked tasks.",
+            id
+        ));
+    }
+    let mut supervision = agent_supervise::parse_status_envelope(&status_body)?;
+    if supervision.task_id.is_empty() {
+        supervision.task_id = id.to_string();
+    }
+
+    // The other three sources are value-adds with a short budget each: a slow or older
+    // endpoint must cost the panel a line, never the answer (the same rule the completion
+    // line follows). A failure here leaves that section as "unknown".
+    let stats_budget = std::time::Duration::from_secs(5);
+    if let Ok(response) = crate::http::get_command_stats_with_timeout(client, base_url, id, stats_budget).await {
+        if response.is_success() {
+            agent_supervise::apply_stats(&mut supervision, &response.body);
+        }
+    }
+    if let Ok(response) = crate::http::get_command_events(
+        client,
+        base_url,
+        id,
+        0,
+        agent_supervise::events_limit(),
+    )
+    .await
+    {
+        if response.is_success() {
+            if let Some(page) = agent_supervise::decode_events(&response.body) {
+                agent_supervise::apply_events(&mut supervision, &page);
+            }
+        }
+    }
+    if let Ok(response) = crate::http::get_agent_access_view(client, base_url, id).await {
+        if response.is_success() {
+            agent_supervise::apply_access(&mut supervision, &response.body);
+        }
+    }
+
+    let snapshot = agent_supervise::to_json(&supervision);
+    json_field("task_id", json!(id));
+    json_field("raw", snapshot.clone());
+
+    if json_active() {
+        // `--json` prints the envelope this tool filled in; the panel would be noise
+        // beside a machine-readable object (the same contract as `agent status`).
+        return Ok(());
+    }
+    for line in agent_supervise::render(&supervision) {
+        cli_println!("{}", line);
+    }
+    Ok(())
+}
+
 async fn handle_agent_result(
     client: &Client,
     base_url: &str,
@@ -31875,6 +31954,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
     match command {
         "agent-run" => Some("agent run"),
         "agent-status" => Some("agent status"),
+        "agent-supervise" => Some("agent supervise"),
         "agent-result" => Some("agent result"),
         "agent-list" => Some("agent list"),
         "agent-cancel" => Some("agent cancel"),
@@ -34867,6 +34947,9 @@ async fn run(
         }
         "agent-status" => {
             handle_agent_status(&client, &base_url, &tool_params).await?;
+        }
+        "agent-supervise" => {
+            handle_agent_supervise(&client, &base_url, &tool_params).await?;
         }
         "agent-result" => {
             handle_agent_result(&client, &base_url, &tool_params).await?;

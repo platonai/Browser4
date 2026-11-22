@@ -37,7 +37,22 @@ browser4-cli agent run "Open browser4.io and summarize the hero section"
 # agent run prints a UUID task id (e.g. 3b27930e-48bc-4460-aae7-be521f0a9194)
 browser4-cli agent status <task-id>   # poll until "status": "done"
 browser4-cli agent result <task-id>
+browser4-cli agent supervise <task-id>  # judge the run: converging? about to be judged failed?
 ```
+
+`agent status` answers "is it alive", `agent result` answers "what did it produce", and
+`agent supervise` answers the two questions neither can: **is the run approaching the goal**
+(tool calls next to the file mutations, the read-only streak) and **will it be judged done**
+(the finish gate's verdict and violations, the failing `coding.verify` checks, the repair
+round, the isolation decision). It also lists pending `coding.requestAccess` approvals with
+the line that approves them, and reports the step log's retained window (`resynced` when a
+reader fell behind). `--json` returns the same facts as one object.
+
+> The three sources it aggregates are public: `command_status` (its envelope now carries
+> `mutations`, `readOnlyRounds` and `failureDetail`), `GET /api/commands/{id}/stats` and
+> `GET /api/commands/{id}/events` (decision steps with a bounded `detail`), plus
+> `GET /api/agent/{id}/access`. An MCP-only client reaches the same facts through
+> `command.events` / `command.stats` / `command.input`; there is no CLI-only magic here.
 
 ## When to Use
 

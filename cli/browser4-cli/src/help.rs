@@ -149,6 +149,7 @@ pub fn public_command_name(name: &str) -> &str {
         "webminer-all" => "webminer all",
         "webminer-views" => "webminer views",
         "agent-cancel" => "agent cancel",
+        "agent-supervise" => "agent supervise",
         "tool-call" => "tool call",
         "tool-list" => "tool list",
         "chat-result" => "chat result",
@@ -2565,6 +2566,36 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli agent status agent-task-1".to_string());
+    }
+
+    if cmd.name == "agent-supervise" {
+        lines.push("Notes:".to_string());
+        lines.push("  - Accepts the task ID returned by `agent run`.".to_string());
+        lines.push(
+            "  - One read-only view of the run: counters next to the file mutations (is it converging?),"
+                .to_string(),
+        );
+        lines.push(
+            "    the finish gate / coding.verify verdicts, repair rounds, pending approvals, and the"
+                .to_string(),
+        );
+        lines.push(
+            "    cursor window of the step log. `agent status` answers \"is it alive\", `agent result`"
+                .to_string(),
+        );
+        lines.push("    answers \"what did it produce\"; this answers \"will it be judged done\".".to_string());
+        lines.push(
+            "  - Works on a running and a finished task, and keeps working when the run log expired:"
+                .to_string(),
+        );
+        lines.push(
+            "    the failure evidence travels on the status envelope, so it survives a restart."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli agent supervise agent-task-1".to_string());
+        lines.push("  browser4-cli agent supervise agent-task-1 --json".to_string());
     }
 
     if cmd.name == "agent-result" {

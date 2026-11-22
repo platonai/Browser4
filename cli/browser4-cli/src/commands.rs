@@ -4363,6 +4363,24 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "agent-supervise",
+            description: "Supervise an agent task: progress vs file changes, gate and verify verdicts, repair rounds and pending approvals in one view",
+            category: Category::Agent,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
+            options: &[
+                OptionDef { name: "json", description: "Emit the same facts as one JSON object (stats, window, gate, verdict, repair, access) instead of the panel", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
+            // A read-only aggregation over command_status + /stats + /events + /access:
+            // no single MCP tool answers "is it converging, and will it be judged done".
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                json!({ "id": get_str(args, "id").unwrap_or_default() })
+            },
+        },
+        CommandDef {
             name: "agent-result",
             description: "Get the result of a completed agent task",
             category: Category::Agent,

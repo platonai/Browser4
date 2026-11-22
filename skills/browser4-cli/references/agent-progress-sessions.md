@@ -19,6 +19,7 @@ the `/stats` numbers, the completion line — or when a step stream misbehaves.
 | `agent run "<task>" --wait` | A progress line every few seconds, then the result. |
 | `agent run "<task>" --follow` | Every step: tool calls, the model's own text, slow/failed tools, then the result. |
 | `agent run -i` | An interactive session: tasks one after another, steering, `/status`, `/cancel`, … |
+| `agent supervise <task-id>` | One panel judging the run: counters vs file changes, gate/verify verdicts, repair rounds, pending approvals. Works on a live or finished task, and after a restart. |
 
 ## Quick Index
 

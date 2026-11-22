@@ -1712,3 +1712,115 @@ pub(super) fn test_agent_run_interactive_marks_unattended(ctx: &mut E2ECtx) {
         command_call.arguments
     );
 }
+
+/// `agent supervise <id>` answers "is it converging, and will it be judged done?" in one
+/// panel: the counters next to the file mutations, the finish gate's verdict, the failing
+/// verification checks, the repair round and any pending approval (issue #652).
+pub(super) fn test_agent_supervise_reports_progress_and_verdicts(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task_id = "agent-task-1";
+    mock_server.set_command_status_response(
+        task_id,
+        serde_json::json!({
+            "taskId": task_id,
+            "status": "running",
+            "statusCode": 200,
+            "elapsedMs": 252_000,
+            "mutations": 0,
+            "readOnlyRounds": 6,
+            "statusTool": "command_status",
+        }),
+    );
+    // A live run: the same decision steps as the follow scenario, minus the terminal one,
+    // plus what a rejected verdict produces — a repair round and an engine nudge.
+    let mut events = scripted_decision_events();
+    events.retain(|event| event.get("type").and_then(|v| v.as_str()) != Some("task.done"));
+    events.push(serde_json::json!({
+        "seq": 8,
+        "type": "repair.round",
+        "detail": {"round": 1, "maxRounds": 3, "reason": "compile browser4-browser failed (exit 1)"}
+    }));
+    events.push(serde_json::json!({
+        "seq": 9,
+        "type": "nudge",
+        "detail": {"kind": "coding", "readOnlyRounds": 6, "mutations": 0}
+    }));
+    mock_server.set_command_events(task_id, events);
+    mock_server.set_command_stats(
+        task_id,
+        serde_json::json!({
+            "rounds": 9,
+            "modelRequests": 41,
+            "toolCalls": 175,
+            "toolFailures": 3,
+            "inputTokens": 48_231,
+            "outputTokens": 6_120,
+            "totalTokens": 54_351,
+            "cachedInputTokens": 38_585,
+            "cacheReported": true,
+            "events": 8,
+            "droppedEvents": 0,
+            "mutations": 0,
+            "readOnlyRounds": 6,
+            "toolCounts": {"b4.run": 120, "coding.read": 40},
+        }),
+    );
+
+    let run_result = run_command(ctx, &["agent", "supervise", task_id]);
+    let stdout = &run_result.stdout;
+
+    assert!(
+        stdout.contains("agent-task-1 · running"),
+        "the header names the task and its status:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("175 call(s) · 3 failed (b4.run 120, coding.read 40)"),
+        "the tool counters must come from /stats:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("files    0 changed"),
+        "tool calls next to file mutations is the convergence signal:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("not converging"),
+        "a run with tools but no writes must be called out:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("gate     ✗ rejected"),
+        "the finish gate's verdict must be visible:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("verify   ✗ failed browser4-browser"),
+        "the failing verification check must be visible:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("repair   round 1/3"),
+        "the repair round must be visible:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("access   ⏸ 1 pending"),
+        "a blocked approval must not look like work:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("next     agent result agent-task-1"),
+        "the panel says what to do next:\n{stdout}"
+    );
+
+    // `--json` is the same facts for a machine: the panel is not printed beside it.
+    let json_run = run_command(ctx, &["agent", "supervise", task_id, "--json"]);
+    let envelope: serde_json::Value = serde_json::from_str(strip_snapshot_output(&json_run.stdout).trim())
+        .unwrap_or_else(|error| panic!("--json must emit one envelope ({error}): {}", json_run.stdout));
+    let raw = &envelope["output"]["raw"];
+    assert_eq!(raw["taskId"], task_id);
+    assert_eq!(raw["stats"]["toolCalls"], 175);
+    assert_eq!(raw["stats"]["mutations"], 0);
+    assert_eq!(raw["gate"]["passed"], false);
+    assert_eq!(raw["verdict"]["passed"], false);
+    assert_eq!(raw["repair"]["round"], 1);
+    assert_eq!(raw["access"]["pending"][0]["requestId"], "req-1");
+}

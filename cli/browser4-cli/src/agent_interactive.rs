@@ -161,52 +161,52 @@ const TOP_TOOLS: usize = 5;
 
 /// One step of a task as served by `GET /api/commands/{id}/events`.
 #[derive(Debug, Clone, Default, PartialEq)]
-struct TaskEvent {
-    seq: u64,
-    kind: String,
-    epoch_millis: i64,
-    tool: Option<String>,
-    arguments: Option<String>,
-    ok: Option<bool>,
-    duration_ms: Option<i64>,
-    text: Option<String>,
-    turn: Option<i64>,
+pub(crate) struct TaskEvent {
+    pub(crate) seq: u64,
+    pub(crate) kind: String,
+    pub(crate) epoch_millis: i64,
+    pub(crate) tool: Option<String>,
+    pub(crate) arguments: Option<String>,
+    pub(crate) ok: Option<bool>,
+    pub(crate) duration_ms: Option<i64>,
+    pub(crate) text: Option<String>,
+    pub(crate) turn: Option<i64>,
     /// Provider-reported tokens of one model request (`run.usage` steps).
-    input_tokens: Option<u64>,
-    output_tokens: Option<u64>,
-    total_tokens: Option<u64>,
+    pub(crate) input_tokens: Option<u64>,
+    pub(crate) output_tokens: Option<u64>,
+    pub(crate) total_tokens: Option<u64>,
     /// Prompt tokens the provider served from its prompt cache, when it reported
     /// cache details (`None` = unknown, which is not the same as 0).
-    cached_input_tokens: Option<u64>,
+    pub(crate) cached_input_tokens: Option<u64>,
     /// Prompt tokens the request wrote into the provider prompt cache
     /// (Anthropic-style APIs; `None` = unreported).
-    cache_write_input_tokens: Option<u64>,
+    pub(crate) cache_write_input_tokens: Option<u64>,
     /// The run's effective token budget (`run.usage` steps; 0 = unlimited).
-    budget_tokens: Option<u64>,
+    pub(crate) budget_tokens: Option<u64>,
     /// Tokens consumed by the run so far, this request included.
-    cumulative_tokens: Option<u64>,
+    pub(crate) cumulative_tokens: Option<u64>,
     /// Machine-readable failure reason (`task.failed`/`task.cancelled` steps).
-    error_code: Option<String>,
+    pub(crate) error_code: Option<String>,
     /// Whether `agent run --resume <id>` can continue the task.
-    resumable: Option<bool>,
+    pub(crate) resumable: Option<bool>,
     /// The id shared by a tool call and its result (`tool.call`/`tool.result`).
     ///
     /// The exact pairing key. The line numbering still falls back to the
     /// name heuristic when a backend does not send it.
-    call_id: Option<String>,
+    pub(crate) call_id: Option<String>,
     /// Structured payload of a decision step (`gate.evaluated`, `verify.verdict`,
     /// `repair.round`, `nudge`, `isolation.merge`, …).
     ///
     /// Held as raw JSON so `--ndjson` can forward it unchanged, and so the
     /// renderer can pull one field (a violation count, a repair round) without a
     /// typed struct per event.
-    detail: Option<Value>,
+    pub(crate) detail: Option<Value>,
     /// Version of the backend's event model (absent on rows written before it).
-    schema_version: Option<i64>,
+    pub(crate) schema_version: Option<i64>,
     /// Cumulative file mutations of the run as of this step (`round.start`; gauge).
-    mutations: Option<u64>,
+    pub(crate) mutations: Option<u64>,
     /// Consecutive coding rounds without a mutation (`round.start`; gauge).
-    read_only_rounds: Option<i64>,
+    pub(crate) read_only_rounds: Option<i64>,
 }
 
 impl TaskEvent {
@@ -293,18 +293,18 @@ impl TaskEvent {
 
 /// One page of the step log.
 #[derive(Debug, Clone, Default, PartialEq)]
-struct EventsPage {
-    status: String,
-    done: bool,
-    next_seq: u64,
-    events: Vec<TaskEvent>,
+pub(crate) struct EventsPage {
+    pub(crate) status: String,
+    pub(crate) done: bool,
+    pub(crate) next_seq: u64,
+    pub(crate) events: Vec<TaskEvent>,
     /// Seq of the oldest step the backend still retains (0 = empty/unknown).
-    first_retained_seq: u64,
+    pub(crate) first_retained_seq: u64,
     /// Steps the backend evicted from its bounded buffer over the log's lifetime.
-    dropped: u64,
+    pub(crate) dropped: u64,
     /// True when our cursor had fallen behind the retained window: the page is a
     /// tail, not a continuation, so steps were missed rather than never produced.
-    resynced: bool,
+    pub(crate) resynced: bool,
 }
 
 /// Parse a `GET /api/commands/{id}/events` body.
@@ -314,7 +314,7 @@ struct EventsPage {
 /// cursor is unchanged) instead of killing the session. A page that stays
 /// malformed is handled by [`TaskFollower::recover_unparseable_page`], which
 /// narrows the page and finally steps over the one unreadable step.
-fn parse_events_page(body: &str) -> Result<EventsPage, String> {
+pub(crate) fn parse_events_page(body: &str) -> Result<EventsPage, String> {
     let value: Value = serde_json::from_str(body)
         .map_err(|e| format!("could not parse the events response as JSON: {e}"))?;
 
@@ -545,30 +545,30 @@ fn parse_status_progress(body: &str) -> StatusProgress {
 /// session observed itself ([RunStats::observe]). The verdict whether a report is
 /// local is carried by [TaskStatsReport::local], never inferred from the numbers.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct RunStats {
+pub(crate) struct RunStats {
     /// Outer agent rounds (`round.start` steps).
-    rounds: u64,
+    pub(crate) rounds: u64,
     /// Successful model requests (`run.usage` steps): one per LLM API call.
-    model_requests: u64,
-    tool_calls: u64,
-    tool_failures: u64,
-    steer_messages: u64,
-    input_tokens: u64,
-    output_tokens: u64,
-    total_tokens: u64,
+    pub(crate) model_requests: u64,
+    pub(crate) tool_calls: u64,
+    pub(crate) tool_failures: u64,
+    pub(crate) steer_messages: u64,
+    pub(crate) input_tokens: u64,
+    pub(crate) output_tokens: u64,
+    pub(crate) total_tokens: u64,
     /// Prompt tokens served from the provider prompt cache, when reported.
-    cached_input_tokens: u64,
+    pub(crate) cached_input_tokens: u64,
     /// Prompt tokens written into the provider prompt cache, when reported.
-    cache_write_input_tokens: u64,
+    pub(crate) cache_write_input_tokens: u64,
     /// True when at least one model request reported cache details; `false`
     /// means the cache counters are unknown, not 0.
-    cache_reported: bool,
+    pub(crate) cache_reported: bool,
     /// Every step the run emitted (retained plus evicted).
-    events: u64,
+    pub(crate) events: u64,
     /// Steps evicted from the backend's bounded buffer.
-    dropped_events: u64,
+    pub(crate) dropped_events: u64,
     /// Per-tool call counts, unordered until rendered.
-    tool_counts: Vec<(String, u64)>,
+    pub(crate) tool_counts: Vec<(String, u64)>,
 }
 
 impl RunStats {
@@ -622,7 +622,7 @@ impl RunStats {
     ///
     /// A run whose provider omits usage made [Self::model_requests] calls but its
     /// token numbers are *unknown* — a report must not claim "0 tokens".
-    fn tokens_reported(&self) -> bool {
+    pub(crate) fn tokens_reported(&self) -> bool {
         self.input_tokens > 0 || self.output_tokens > 0 || self.total_tokens > 0
     }
 
@@ -630,7 +630,7 @@ impl RunStats {
     ///
     /// `None` when no model request reported cache details (an unknown cache is
     /// not a 0% hit rate) or when the run counted no prompt tokens.
-    fn cache_hit_ratio(&self) -> Option<f64> {
+    pub(crate) fn cache_hit_ratio(&self) -> Option<f64> {
         if self.cache_reported && self.input_tokens > 0 {
             Some(self.cached_input_tokens as f64 / self.input_tokens as f64)
         } else {
@@ -639,7 +639,7 @@ impl RunStats {
     }
 
     /// The most-called tools, highest count first (at most [TOP_TOOLS]).
-    fn top_tools(&self, limit: usize) -> Vec<(String, u64)> {
+    pub(crate) fn top_tools(&self, limit: usize) -> Vec<(String, u64)> {
         let mut tools = self.tool_counts.clone();
         tools.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         tools.truncate(limit);
@@ -678,25 +678,25 @@ impl RunStats {
 
 /// One task's statistics as reported to the user.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct TaskStatsReport {
-    task_id: String,
+pub(crate) struct TaskStatsReport {
+    pub(crate) task_id: String,
     /// The task's status word (`running|done|failed|cancelled|unknown`).
-    status: String,
-    is_done: bool,
-    elapsed_ms: Option<u64>,
-    stats: RunStats,
+    pub(crate) status: String,
+    pub(crate) is_done: bool,
+    pub(crate) elapsed_ms: Option<u64>,
+    pub(crate) stats: RunStats,
     /// True when [Self::stats] was counted by this session instead of served by
     /// the backend.
-    local: bool,
+    pub(crate) local: bool,
     /// Cumulative file mutations of the run (a gauge; `None` when the engine never
     /// reported one — a browsing task does not track file mutations).
     ///
     /// Shown next to the tool-call count because that pair is the run's convergence
     /// signal: hundreds of tool calls with zero mutations is a run that will not
     /// reach the goal (issue #652).
-    mutations: Option<u64>,
+    pub(crate) mutations: Option<u64>,
     /// Consecutive coding rounds that ran tools without changing a file (gauge).
-    read_only_rounds: Option<u64>,
+    pub(crate) read_only_rounds: Option<u64>,
 }
 
 /// Parse a `GET /api/commands/{id}/stats` body.
@@ -705,7 +705,7 @@ struct TaskStatsReport {
 /// must not die on a field the backend stopped sending. A body with no `stats`
 /// object at all is an error (there is nothing to report), which the caller
 /// surfaces as "could not read stats".
-fn parse_task_stats(body: &str) -> Result<TaskStatsReport, String> {
+pub(crate) fn parse_task_stats(body: &str) -> Result<TaskStatsReport, String> {
     let value: Value = serde_json::from_str(body)
         .map_err(|e| format!("could not parse the stats response as JSON: {e}"))?;
     let stats = value
@@ -1278,7 +1278,7 @@ fn format_duration_ms(duration_ms: i64) -> String {
 
 /// A run's duration: `18.4s` under a minute, `3m12s` under an hour, `1h04m`
 /// above — a coding run can last hours, and `7200.0s` is unreadable.
-fn format_run_duration(duration_ms: u64) -> String {
+pub(crate) fn format_run_duration(duration_ms: u64) -> String {
     if duration_ms < 60_000 {
         return format!("{:.1}s", duration_ms as f64 / 1000.0);
     }
@@ -1307,7 +1307,7 @@ pub(crate) fn format_thousands(value: u64) -> String {
 ///
 /// A usage line has to fit next to the elapsed time; the exact digit string is
 /// what `agent result --json` / `/stats` are for.
-fn format_token_amount(value: u64) -> String {
+pub(crate) fn format_token_amount(value: u64) -> String {
     if value >= 1_000_000 {
         format!("{:.2}M", value as f64 / 1_000_000.0)
     } else if value >= 10_000 {

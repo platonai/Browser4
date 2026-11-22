@@ -742,6 +742,9 @@ class CommandToolExecutor(
             // the same poll that says "running". `null` stays absent = never reported.
             mutations = status.mutations,
             readOnlyRounds = status.readOnlyRounds,
+            // Structured failure evidence (P0-C): a poll of the envelope answers "which
+            // gate rule, which files, which check" without a second call.
+            failureDetail = status.failureDetail,
         )
     }
 

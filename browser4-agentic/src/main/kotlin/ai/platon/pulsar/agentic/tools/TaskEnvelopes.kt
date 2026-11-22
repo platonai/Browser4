@@ -75,6 +75,7 @@ object TaskEnvelopes {
             "effectiveTokenBudget": {"type": "integer"},
             "mutations": {"type": "integer"},
             "readOnlyRounds": {"type": "integer"},
+            "failureDetail": {"type": "object"},
             "statusTool": {"type": "string"},
             "resultTool": {"type": "string"},
             "cancelTool": {"type": "string"},
@@ -180,6 +181,8 @@ object TaskEnvelopes {
      *   MCP-only client can discover the supervision surface instead of having to know
      *   the REST endpoints exist
      * @param statsTool name of the tool that reads this task's run counters
+     * @param failureDetail structured failure evidence of a failed task (gate violations,
+     *   verification checks, repair rounds, isolation decision); absent for a healthy one
      */
     fun of(
         taskId: String,
@@ -196,6 +199,7 @@ object TaskEnvelopes {
         effectiveTokenBudget: Long? = null,
         mutations: Long? = null,
         readOnlyRounds: Int? = null,
+        failureDetail: Map<String, Any?>? = null,
         statusTool: String? = null,
         resultTool: String? = null,
         cancelTool: String? = null,
@@ -218,6 +222,10 @@ object TaskEnvelopes {
         effectiveTokenBudget?.let { envelope["effectiveTokenBudget"] = it }
         mutations?.let { envelope["mutations"] = it }
         readOnlyRounds?.let { envelope["readOnlyRounds"] = it }
+        // The failure evidence rides the envelope too: `agent status` / `command_status`
+        // is what a supervisor polls, and "which rule, which check" must not require a
+        // second call to `/events` (issue #652, P0-C).
+        failureDetail?.takeIf { it.isNotEmpty() }?.let { envelope["failureDetail"] = it }
         statusTool?.let { envelope["statusTool"] = it }
         resultTool?.let { envelope["resultTool"] = it }
         cancelTool?.let { envelope["cancelTool"] = it }
