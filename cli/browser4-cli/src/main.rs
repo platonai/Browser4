@@ -28166,6 +28166,37 @@ fn npm_global_has_browser4_cli(npm: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Latest `browser4-cli` version as published on the npm registry.
+///
+/// Fallback for `resolve_latest_cli_release_tag` when the release mirrors
+/// cannot be reached: `npm view` answers from the registry the CLI would be
+/// installed from.  `None` means "unknown" (offline, npm missing, ...).
+fn resolve_latest_cli_version_from_npm(npm: &str) -> Option<String> {
+    let output = std::process::Command::new(npm)
+        .args([
+            "view",
+            "browser4-cli",
+            "version",
+            // `upgrade` must not stall on a slow registry: bound npm's own
+            // network wait instead of blocking the upgrade for minutes.
+            "--fetch-timeout=15000",
+            "--fetch-retries=0",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if version.is_empty() {
+        None
+    } else {
+        Some(version)
+    }
+}
+
 /// Whether the CLI self-upgrade step should be skipped entirely.
 ///
 /// The e2e harness sets this so install/upgrade scenarios never touch npm or
@@ -28174,6 +28205,93 @@ fn self_upgrade_skip_requested() -> bool {
     std::env::var(CLI_SELF_UPGRADE_SKIP_ENV)
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
+}
+
+/// Compare two dotted version strings by their numeric components only.
+///
+/// A leading `v` and any suffix (`-SNAPSHOT`, `-rc1`, …) are ignored: the
+/// self-upgrade only needs to know whether a *newer* release exists, and a
+/// locally built `4.16.11-SNAPSHOT` must not be replaced by the older
+/// published `4.16.10`.
+fn compare_dotted_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    fn parts(raw: &str) -> Vec<u64> {
+        let core = raw.trim().trim_start_matches(['v', 'V']);
+        // Drop a pre-release / build suffix (`-SNAPSHOT`, `-rc1`, `+abc`).
+        let core = core.split(['-', '+']).next().unwrap_or(core);
+        core.split(|c: char| !c.is_ascii_digit())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse::<u64>().unwrap_or(0))
+            .collect()
+    }
+    let (mut pa, mut pb) = (parts(a), parts(b));
+    while pa.len() < pb.len() {
+        pa.push(0);
+    }
+    while pb.len() < pa.len() {
+        pb.push(0);
+    }
+    pa.cmp(&pb)
+}
+
+/// Whether `target` is a strictly newer release than the running `current`.
+///
+/// `upgrade_cli_binary` short-circuits on this: an installation that is already
+/// current must say so and touch neither npm nor the install script.
+fn cli_upgrade_needed(target: &str, current: &str) -> bool {
+    compare_dotted_versions(target, current) == std::cmp::Ordering::Greater
+}
+
+/// What `upgrade` says when the running CLI is already at (or above) the
+/// target release — the case that used to fall through into npm / the install
+/// script and ended in `npm error code EEXIST` or a hung re-install.
+///
+/// Returns the stdout line plus an optional stderr note.  An explicitly
+/// requested older `--tag` is reported as "newer than requested" instead of
+/// claiming the running version is the latest one.
+fn cli_upgrade_skip_message(
+    target: &str,
+    current: &str,
+    explicit_tag: bool,
+) -> (String, Option<String>) {
+    let ordering = compare_dotted_versions(target, current);
+    if ordering == std::cmp::Ordering::Less {
+        if explicit_tag {
+            return (
+                format!(
+                    "browser4-cli {current} is newer than the requested release {target}; nothing to do."
+                ),
+                None,
+            );
+        }
+        // A local build (4.16.11-SNAPSHOT) ahead of the newest published release.
+        return (
+            format!("browser4-cli is already at the latest version ({current})."),
+            Some(format!("   Newest published release: {target}.")),
+        );
+    }
+    (
+        format!("browser4-cli is already at the latest version ({current})."),
+        None,
+    )
+}
+
+/// The latest published `browser4-cli` release tag, resolved through the same
+/// mirror-aware metadata lookup the runtime upgrade uses.
+///
+/// Bounded by a short timeout: an unreachable mirror must not stall
+/// `browser4-cli upgrade` (`None` = "unknown", the caller then falls back to
+/// the install paths).
+async fn resolve_latest_cli_release_tag() -> Option<String> {
+    let mirrors = daemon::load_mirrors();
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        daemon::resolve_latest_tag(&mirrors),
+    )
+    .await
+    {
+        Ok(Some((tag, _info))) => Some(tag),
+        _ => None,
+    }
 }
 
 /// URL of the platform-specific install script used to self-upgrade the CLI.
@@ -28308,8 +28426,37 @@ async fn upgrade_cli_binary(tag: Option<&str>) {
         return;
     }
 
-    // ── 1. npm (preferred) ──
-    if let Some(npm) = resolve_npm() {
+    // ── 0. Already at (or above) the target version? ──
+    // Resolve what would be installed and compare it with the running binary
+    // first.  An up-to-date install must say so and stop: running the upgrade
+    // paths anyway produced `npm error code EEXIST` (a script-installed CLI
+    // collides with npm's shim) and then hung inside the install script.
+    let target_version = match tag {
+        Some(t) => Some(t.trim().trim_start_matches(['v', 'V']).to_string()),
+        None => match resolve_latest_cli_release_tag().await {
+            Some(t) => Some(t.trim().trim_start_matches(['v', 'V']).to_string()),
+            None => resolve_npm()
+                .and_then(resolve_latest_cli_version_from_npm)
+                .map(|v| v.trim().trim_start_matches(['v', 'V']).to_string()),
+        },
+    };
+    if let Some(target) = target_version.as_deref() {
+        if !cli_upgrade_needed(target, VERSION) {
+            let (message, note) = cli_upgrade_skip_message(target, VERSION, tag.is_some());
+            cli_println!("{message}");
+            if let Some(note) = note {
+                eprintln!("{note}");
+            }
+            return;
+        }
+        eprintln!("Upgrading browser4-cli {VERSION} -> {target}...");
+    }
+
+    // ── 1. npm (only when npm really owns this installation) ──
+    // `npm install -g` over a script-installed binary collides with the
+    // existing shim (`EEXIST`), so npm is the right route only when the
+    // package is registered as an npm global package.
+    if let Some(npm) = resolve_npm().filter(|npm| npm_global_has_browser4_cli(npm)) {
         eprintln!("Upgrading browser4-cli binary via npm...");
 
         let package_spec = match tag {
@@ -28349,6 +28496,8 @@ async fn upgrade_cli_binary(tag: Option<&str>) {
                 eprintln!("   Falling back to install script...");
             }
         }
+    } else if resolve_npm().is_some() {
+        eprintln!("browser4-cli is not an npm global package; using the install script instead.");
     }
 
     // ── 2. Platform-specific install script (fallback) ──
@@ -28455,12 +28604,16 @@ async fn upgrade_cli_binary(tag: Option<&str>) {
     }
     #[cfg(not(windows))]
     {
-        let result = tokio::task::spawn_blocking(|| {
+        // `--skip-backend`: `handle_upgrade` performs the runtime upgrade
+        // itself; without it the script runs `browser4-cli upgrade` again and
+        // the two nested upgrades block each other.  The env guard keeps a
+        // nested self-upgrade from starting even if the script changes.
+        let script_url = cli_install_script_url().to_string();
+        let result = tokio::task::spawn_blocking(move || {
+            let command = format!("curl -fsSL {script_url} | bash -s -- --skip-backend");
             std::process::Command::new("sh")
-                .args([
-                    "-c",
-                    "curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash",
-                ])
+                .args(["-c", &command])
+                .env(CLI_SELF_UPGRADE_SKIP_ENV, "1")
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
                 .output()
@@ -51049,6 +51202,50 @@ linkGroups:
         assert!(self_upgrade_skip_requested(), "'true' must skip");
         let _guard3 = set_env(CLI_SELF_UPGRADE_SKIP_ENV, "0");
         assert!(!self_upgrade_skip_requested(), "'0' must not skip");
+    }
+
+    #[test]
+    fn compare_dotted_versions_ignores_prefix_and_suffix() {
+        use std::cmp::Ordering;
+        assert_eq!(compare_dotted_versions("4.16.10", "4.16.10"), Ordering::Equal);
+        assert_eq!(compare_dotted_versions("v4.16.10", "4.16.10"), Ordering::Equal);
+        assert_eq!(compare_dotted_versions("4.16", "4.16.0"), Ordering::Equal);
+        assert_eq!(compare_dotted_versions("4.16.10-rc1", "4.16.10"), Ordering::Equal);
+        assert_eq!(compare_dotted_versions("4.16.11-SNAPSHOT", "4.16.11"), Ordering::Equal);
+        assert_eq!(compare_dotted_versions("4.16.11", "4.16.10"), Ordering::Greater);
+        assert_eq!(compare_dotted_versions("4.17.0", "4.16.99"), Ordering::Greater);
+        assert_eq!(compare_dotted_versions("4.16.10", "4.16.11"), Ordering::Less);
+    }
+
+    #[test]
+    fn cli_upgrade_needed_only_for_a_strictly_newer_release() {
+        // Already current: `upgrade` must report "already at the latest version"
+        // and stop instead of running npm / the install script.
+        assert!(!cli_upgrade_needed("4.16.10", "4.16.10"));
+        // A local build ahead of the newest published release must not downgrade.
+        assert!(!cli_upgrade_needed("4.16.10", "4.16.11"));
+        assert!(!cli_upgrade_needed("v4.16.10", "4.16.11-SNAPSHOT"));
+        // A genuinely newer release still upgrades.
+        assert!(cli_upgrade_needed("4.16.11", "4.16.10"));
+        assert!(cli_upgrade_needed("v4.17.0", "4.16.11-SNAPSHOT"));
+    }
+
+    #[test]
+    fn cli_upgrade_skip_message_explains_why_nothing_happens() {
+        // Same release: one clean line, no npm / install-script noise.
+        let (line, note) = cli_upgrade_skip_message("4.16.10", "4.16.10", false);
+        assert!(line.contains("already at the latest version (4.16.10)"), "got: {line}");
+        assert!(note.is_none(), "got: {note:?}");
+
+        // Local build ahead of the newest release: say so, but do not downgrade.
+        let (line, note) = cli_upgrade_skip_message("4.16.10", "4.16.11-SNAPSHOT", false);
+        assert!(line.contains("already at the latest version"), "got: {line}");
+        assert_eq!(note.as_deref(), Some("   Newest published release: 4.16.10."));
+
+        // Explicit older `--tag` must not be described as "the latest version".
+        let (line, note) = cli_upgrade_skip_message("4.15.0", "4.16.11", true);
+        assert!(line.contains("newer than the requested release 4.15.0"), "got: {line}");
+        assert!(note.is_none(), "got: {note:?}");
     }
 
     #[test]
