@@ -32967,7 +32967,9 @@ fn resolve_batch_commands(
 /// - The compiled plan of a step is what the executor runs, so a step never compiles twice.
 ///
 /// A step that cannot be compiled is reported and skipped; the steps that do compile still run,
-/// and the batch still continues past a *runtime* failure unless `--bail` was given. That is the
+/// and the batch still continues past a *runtime* failure unless `--bail` was given. `--bail`
+/// keeps the documented order semantics: the batch stops at the first failure in execution order —
+/// compile or runtime — after the steps before it have run. That is the
 /// documented batch contract (`AGENTS.md`, `help batch`, and the e2e batch scenarios), so this
 /// function deliberately does not turn a compile error into "nothing runs".
 fn compile_batch_steps(
@@ -33015,25 +33017,31 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
     let compiled = compile_batch_steps(&commands, &command_map, stdin_available);
 
     let mut failures: Vec<String> = Vec::new();
-    for failure in compiled.iter().filter_map(|step| step.as_ref().err()) {
-        eprintln!("{failure}");
-        failures.push(failure.clone());
-    }
-    if bail && !failures.is_empty() {
-        // --bail stops before the first *runnable* step too: the caller asked to stop at the
-        // first failure, and every compile failure is already known.
-        return Err(CliError(
-            ExitCode::BatchPartial,
-            format!("{} batch command(s) failed.", failures.len()),
-        ));
+    if !bail {
+        for failure in compiled.iter().filter_map(|step| step.as_ref().err()) {
+            eprintln!("{failure}");
+            failures.push(failure.clone());
+        }
     }
 
     // The batch runs on the client, one compiled step at a time, through the same executor the
     // equivalent standalone command uses. A failing step is reported and — unless --bail was
     // given — the batch continues with the next command.
     for (index, step) in compiled.iter().enumerate() {
-        // An unbuildable step was reported above; nothing to execute.
-        let Ok(plan) = step else { continue };
+        let plan = match step {
+            Ok(plan) => plan,
+            // An unbuildable step: without --bail it was reported above and skipping it is
+            // enough. With --bail it is the first failure in execution order, so the steps
+            // before it have already run and the ones after it must not.
+            Err(failure) => {
+                if bail {
+                    eprintln!("{failure}");
+                    failures.push(failure.clone());
+                    break;
+                }
+                continue;
+            }
+        };
 
         if let Err(error) =
             execute_batch_step(&client, &base_url, plan, global.session_name.as_deref()).await
