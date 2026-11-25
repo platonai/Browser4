@@ -15,7 +15,7 @@
 
 [English](README.md) | 简体中文 | [中国镜像](https://gitee.com/platonai_galaxyeye/Browser4)
 
-> ⭐ **Browser4 对你有帮助？** 运行 `browser4-cli star` —— 已登录 GitHub CLI（`gh`）时，确认一次即由它代你加星（`--gh` 跳过确认）；否则它会用你已登录的浏览器打开本仓库，Star 由你自己点。
+> ⭐ **Browser4 对你有帮助？** 运行 `browser4-cli star` —— 已登录 GitHub CLI 时它代你加星，否则用你的浏览器打开本仓库。
 
 <!-- TOC -->
 **目录**
