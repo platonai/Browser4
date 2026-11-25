@@ -719,7 +719,10 @@ object AgentTaskEventSanitizer {
         var copied = 0
         var out: StringBuilder? = null
         while (index < length) {
-            if (raw[index] != '"' || isEscaped(raw, index)) {
+            // Do not skip escaped opening quotes: the old regex attempted a match at every `"`,
+            // so an embedded or half-escaped credential pair is redacted too — the conservative
+            // direction for a sanitizer. `findQuotedEnd` still honours escapes *inside* a string.
+            if (raw[index] != '"') {
                 index++
                 continue
             }
@@ -759,8 +762,12 @@ object AgentTaskEventSanitizer {
     }
 
     private fun containsCredentialMarker(text: String, start: Int, endExclusive: Int): Boolean {
-        val key = text.substring(start, endExclusive).lowercase()
-        return INLINE_SENSITIVE_MARKERS.any { key.contains(it) }
+        // Compare with `ignoreCase`, not `lowercase()`: `String.lowercase()` follows the default
+        // locale, which lowercases `I` to a dotless `ı` under tr/az and would miss the markers that
+        // contain `i` (`apikey`, `api_key`, `authorization`, `cookie`) on upper-case keys. The old
+        // `(?i)` regex folded ASCII case locale-independently, so `ignoreCase` keeps that behaviour.
+        val key = text.substring(start, endExclusive)
+        return INLINE_SENSITIVE_MARKERS.any { key.contains(it, ignoreCase = true) }
     }
 
     /** The index of the closing [quote] for a string starting at [start], or `-1`. */
@@ -774,17 +781,6 @@ object AgentTaskEventSanitizer {
             }
         }
         return -1
-    }
-
-    /** True when the quote at [index] is escaped by an odd number of backslashes. */
-    private fun isEscaped(text: String, index: Int): Boolean {
-        var backslashes = 0
-        var i = index - 1
-        while (i >= 0 && text[i] == '\\') {
-            backslashes++
-            i--
-        }
-        return backslashes % 2 == 1
     }
 
     private fun skipRegexSpaces(text: String, start: Int): Int {
