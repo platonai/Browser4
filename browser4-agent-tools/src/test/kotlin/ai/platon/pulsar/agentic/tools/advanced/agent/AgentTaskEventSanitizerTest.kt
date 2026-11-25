@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.assertTimeout
 import org.junit.jupiter.api.function.ThrowingSupplier
 import java.time.Duration
+import java.util.Locale
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -103,6 +104,39 @@ class AgentTaskEventSanitizerTest {
 
         assertFalse(redacted.contains("hunter2"), redacted)
         assertFalse(redacted.contains("xyz"), redacted)
+    }
+
+    @Test
+    @DisplayName("upper-case credential keys are redacted regardless of the default locale")
+    fun redactsUpperCaseKeysUnderTurkishLocale() {
+        // `String.lowercase()` follows the default locale and lowercases `I` to a dotless `ı`
+        // under tr/az, which would miss the markers that contain `i`. The comparison must stay
+        // locale-independent, like the `(?i)` regex it replaced.
+        val previous = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"))
+            for (key in listOf("APIKEY", "API_KEY", "AUTHORIZATION", "COOKIE")) {
+                val redacted = AgentTaskEventSanitizer.arguments(
+                    "coding.shell",
+                    "not json {\"$key\":\"super-secret-value\"}",
+                )!!
+                assertFalse(redacted.contains("super-secret-value"), "$key was not redacted: $redacted")
+            }
+        } finally {
+            Locale.setDefault(previous)
+        }
+    }
+
+    @Test
+    @DisplayName("a half-escaped credential pair is still redacted")
+    fun redactsHalfEscapedCredentialPair() {
+        // The old regex attempted a match at every `"`, so a credential pair whose key opening
+        // quote is escaped was still redacted. Skipping escaped opening quotes would leak it.
+        val redacted = AgentTaskEventSanitizer.arguments(
+            "coding.shell",
+            """not json \"password": "hunter2"""",
+        )!!
+        assertFalse(redacted.contains("hunter2"), redacted)
     }
 
     @Test
