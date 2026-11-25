@@ -156,6 +156,7 @@ bin/maintenance/state/*.lock
 **/--help/
 /.junie/
 /.workbuddy/
+/.trae/
 /.claude/
 /.coworker/
 /.b4scratch/
