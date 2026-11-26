@@ -987,6 +987,19 @@ docker run -d -p 18182:18182 `
   round to the digest + nudge form (the pre-2026-11-21 behaviour). Neither changes the
   per-task token budget or the model's output cap.
 
+* **`browser4.agent.intent.enabled`** *(default: `true`)*
+  Ask the model to state the purpose of each next step, and report that line as a
+  `model.intent` step in the task's event log. The line accompanies the tool call the model
+  is about to make (`Intent: <what> — <why>`, at most 25 words), so `agent run --follow`,
+  `agent run -i` and the web console can show *why* a tool is running instead of only which
+  one — the text next to a tool-calling response used to be dropped.
+
+  One switch covers both halves: `false` removes the prompt section too, so nothing is paid
+  for a line nobody renders. It can be overridden per task — `command.run(intent=false)`,
+  `POST /api/commands/plain?intent=false` (what the web console's «下一步意图» switch sends),
+  `agent run -i`'s `/intent off` — and the override is reset when the task ends, like the
+  other per-task flags.
+
 * **`browser4.agent.copyTaskInputs`** *(default: `true`)*
   Before a task runs, copy the files its instruction references but that live outside the agent
   workspace into `<workspace>/.b4inputs/`, and tell the model the workspace-relative paths in the
@@ -1014,6 +1027,57 @@ docker run -d -p 18182:18182 `
   advisory fast-fail check, not a security boundary; the OS sandbox (`browser4.agent.sandbox`)
   is what a process cannot cross. Set `off` only for a local workflow that genuinely needs
   to pass an absolute external path.
+
+### Auto-generated skill summaries (agent skill auto-summary)
+
+After a successful agent task, the backend can distill the run into a reusable
+`SKILL.md` draft under `<app data>/agent/skills-drafts/`. The whole mechanism is
+**off by default** and is a best-effort post-success side effect: any failure is
+logged and swallowed, never changing the task's success status or verdict. Drafts
+are reviewed and promoted manually through `GET /api/skills/drafts` and
+`POST /api/skills/drafts/{id}/promote`, or auto-registered only when
+`registerMode=auto`. Repeated similar runs append a new `## Examples` entry to the
+existing skill and bump its patch version instead of creating duplicates.
+
+All are JVM system properties (set with `BROWSER4_SERVER_OPTS` or `-D…` when you
+start the backend):
+
+* **`browser4.agent.skill.summary.enabled`** *(default: `false`)* — master switch.
+  `false` (the default) makes every downstream step a no-op, so there is zero
+  behaviour change unless explicitly enabled.
+* **`browser4.agent.skill.summary.registerMode`** *(default: `draft`)* — one of
+  `draft` (write the draft only, never register — the most conservative usable
+  value), `auto` (register a validated draft into the runtime registry), or `off`
+  (disable even when `enabled=true`).
+* **`browser4.agent.skill.summary.minRounds`** *(default: `1`)* — minimum agent
+  rounds a task must reach before a summary is considered. Browse and research
+  tasks complete in a single round regardless of how many tools they call, so the
+  work bar is carried by `minToolCalls`; raise this only if you want multi-round
+  (plan → act → verify) runs exclusively.
+* **`browser4.agent.skill.summary.minToolCalls`** *(default: `5`)* — minimum tool
+  calls a task must make before a summary is considered.
+* **`browser4.agent.skill.summary.requireMutation`** *(default: `true`)* — when
+  `true`, a task must mutate at least one file to qualify, so pure query and
+  read-only runs are skipped. Browse tasks write deliverables into an isolated
+  workspace and record no mutation; set this to `false` to let those runs qualify.
+* **`browser4.agent.skill.summary.browseMinScore`** *(default: `6`)* — reuse-score
+  bar for runs without file mutations (browse/research). The score is
+  `toolKinds + 3 × strategySwitches − 2 × verbatimRetries`, where a strategy switch
+  is a failed call followed by a successful different approach (same tool with
+  different arguments, or a different tool), and a verbatim retry is the same tool
+  called again with identical arguments. A single-pass simple run scores low and is
+  skipped; a multi-round run that corrected itself scores high.
+* **`browser4.agent.skill.summary.dedupSimilarity`** *(default: `0.85`)* — Jaccard
+  similarity threshold (`0.0`–`1.0`) over prompt tokens; a hit at or above this
+  routes the run to the existing skill's append path instead of creating a new draft.
+* **`browser4.agent.skill.summary.cooldownHours`** *(default: `6`)* — hours before
+  the same fingerprint can be appended to again; within the window the run is skipped.
+* **`browser4.agent.skill.summary.draftsDir`** *(default: `<app data>/agent/skills-drafts`)*
+  — override the directory where generated drafts and the dedup `index.json` are stored.
+
+```bash
+BROWSER4_SERVER_OPTS="-Dbrowser4.agent.skill.summary.enabled=true -Dbrowser4.agent.skill.summary.registerMode=auto" browser4-cli open
+```
 
 ### Agent permission switches at a glance
 

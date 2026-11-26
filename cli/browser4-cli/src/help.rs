@@ -2318,10 +2318,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    /dirs [clear] lists or drops those grants; /coding, /quiet, /verbose and"
+            "    /dirs [clear] lists or drops those grants; /coding, /quiet, /verbose, /intent,"
                 .to_string(),
         );
-        lines.push("    /noop-limit tune the other knobs live.".to_string());
+        lines.push("    /tools and /noop-limit tune the other knobs live.".to_string());
         lines.push(
             "    The session banner prints a browser URL (…/agent.html?session=…) bound to the".to_string(),
         );
@@ -2415,6 +2415,13 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(
             "    /verbose [on|off] adds round markers and fast successful tools.".to_string(),
         );
+        lines.push(
+            "  - In the session, /intent [on|off] shows the purpose the model states for each".to_string(),
+        );
+        lines.push(
+            "    next step (off also stops asking for it, so the line costs no tokens), and".to_string(),
+        );
+        lines.push("    /tools [on|off] shows the tool call/result lines.".to_string());
         lines.push(
             "  - In the session, /stats reports the run's LLM rounds and requests, token usage"
                 .to_string(),

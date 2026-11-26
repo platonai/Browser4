@@ -143,6 +143,8 @@ class CommandControllerTest {
                     anyOrNull(),
                     // workspace (14th parameter, defaulted) — the console's dialog may name it.
                     anyOrNull(),
+                    // intent (15th parameter, defaulted) — the console's live-view switch.
+                    anyOrNull(),
                 )
             ).thenReturn("agent-task-9")
 
@@ -180,6 +182,8 @@ class CommandControllerTest {
                     anyOrNull(),
                     // workspace (14th parameter, defaulted) — see the async test above.
                     anyOrNull(),
+                    // intent (15th parameter, defaulted) — see the async test above.
+                    anyOrNull(),
                 )
             ).thenReturn(status)
 
@@ -203,6 +207,8 @@ class CommandControllerTest {
                         anyOrNull(), anyOrNull(), anyOrNull(),
                         // workspace (14th): the one value this test is about.
                         anyOrNull(),
+                        // intent (15th, defaulted): every parameter needs its matcher.
+                        anyOrNull(),
                     )
                 ).thenReturn("agent-task-ws")
 
@@ -217,6 +223,7 @@ class CommandControllerTest {
                     anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(),
                     anyOrNull(), anyOrNull(), anyOrNull(),
                     eq(dir.toAbsolutePath().normalize()),
+                    anyOrNull(),
                 )
             } finally {
                 dir.toFile().deleteRecursively()

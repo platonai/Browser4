@@ -988,11 +988,12 @@ open class StatefulAgentRunner(
         unrestricted: Boolean? = null,
         rewindTaskId: String? = null,
         workspace: Path? = null,
+        intent: Boolean? = null,
     ): AgentTaskStatus {
         val status = create()
         execute(
             plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId,
-            tokenBudget, addDirs, unrestricted, rewindTaskId, workspace,
+            tokenBudget, addDirs, unrestricted, rewindTaskId, workspace, intent,
         )
         return status
     }
@@ -1021,11 +1022,12 @@ open class StatefulAgentRunner(
         unrestricted: Boolean? = null,
         rewindTaskId: String? = null,
         workspace: Path? = null,
+        intent: Boolean? = null,
     ): Job {
         val job = taskScope.launch(start = CoroutineStart.LAZY) {
             execute(
                 plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
-                resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace,
+                resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace, intent,
             )
         }
         runningJobs[status.id] = job
@@ -1102,6 +1104,7 @@ open class StatefulAgentRunner(
         unrestricted: Boolean? = null,
         rewindTaskId: String? = null,
         workspace: Path? = null,
+        intent: Boolean? = null,
     ) {
         // Attribute the row to its session before the task is queued: the console's
         // sidebar must show a freshly submitted task under its conversation (and under the
@@ -1113,7 +1116,7 @@ open class StatefulAgentRunner(
             runMutex.withLock {
                 executeSerialized(
                     plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
-                    resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace,
+                    resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace, intent,
                 )
             }
         } catch (e: CancellationException) {
@@ -1385,6 +1388,7 @@ open class StatefulAgentRunner(
         unrestricted: Boolean? = null,
         rewindTaskId: String? = null,
         workspace: Path? = null,
+        intent: Boolean? = null,
     ) {
         val agent = session.companionAgent
 
@@ -1561,6 +1565,15 @@ open class StatefulAgentRunner(
             // shared across tasks).
             (agent as? RobustBrowserAgent)?.let {
                 it.noopLimitOverride = noopLimit
+                // Per-task "next step intent" switch (`command.run(intent=…)`,
+                // `?intent=` on the REST command endpoint): the live views render the
+                // one-line purpose the model states with each tool call, and asking for
+                // that line costs tokens — so a caller that hides it must also stop
+                // paying for it.
+                it.stepIntentOverride = intent
+                if (intent != null) {
+                    logger.info("Agent task {} (session={}): step intent {}", status.id, session.uuid, intent)
+                }
                 // Per-task token budget (`agent run --token-budget`): a per-run
                 // override, NOT a process-wide config write — the next task in this
                 // session (or another session) must keep the configured default. The
@@ -1894,6 +1907,9 @@ open class StatefulAgentRunner(
                 // to the configured default (a task-level choice must not leak).
                 it.tokenBudgetOverride = null
                 it.codingMode = false
+                // Per-task intent switch: cleared like the other overrides, so a task
+                // that hid the intent line does not hide it for the next one.
+                it.stepIntentOverride = null
                 // Detach this task's live feed and steering queue: the companion
                 // agent is shared, and a stale listener would keep reporting into
                 // a finished task's log (and a stale steering source would drain

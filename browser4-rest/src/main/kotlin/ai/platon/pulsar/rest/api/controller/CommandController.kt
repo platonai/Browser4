@@ -227,6 +227,10 @@ class CommandController(
      *        backend's per-task workspace. The value is validated **before** the task is
      *        submitted, so a bad path is a `400` on the request instead of a task that fails
      *        after it started.
+     * @param intent Whether this task states the purpose of each next step (`model.intent`
+     *        steps). Omitted keeps the server default (`browser4.agent.intent.enabled`);
+     *        `false` also removes the instruction from the system prompt, so a client that
+     *        hides the line does not pay for it.
      * @return `200` + [CommandStatus] for sync, `202` + [CommandSubmitResponse] for async,
      *         `400` + [CommandStatus] for an unusable workspace.
      * */
@@ -237,6 +241,7 @@ class CommandController(
         @RequestParam(name = "async") async: Boolean? = null,
         @RequestParam(name = "mode") mode: String? = null,
         @RequestParam(name = "workspace", required = false) workspace: String? = null,
+        @RequestParam(name = "intent", required = false) intent: Boolean? = null,
     ): ResponseEntity<Any> {
         fun isAsync(): Boolean {
             val modeIsAsync = mode?.lowercase() == "async"
@@ -276,14 +281,14 @@ class CommandController(
                 .body(
                     CommandSubmitResponse(
                         commandExecutor.submitPlainCommand(
-                            effectiveSessionId, plainCommand, workspace = taskWorkspace,
+                            effectiveSessionId, plainCommand, workspace = taskWorkspace, intent = intent,
                         )
                     )
                 )
         } else {
             ResponseEntity.ok(
                 commandExecutor.executePlainCommand(
-                    effectiveSessionId, plainCommand, workspace = taskWorkspace,
+                    effectiveSessionId, plainCommand, workspace = taskWorkspace, intent = intent,
                 )
             )
         }

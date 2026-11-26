@@ -134,6 +134,18 @@ data class AgentTaskEvent(
         /** The model answered with plain text instead of a tool call. */
         const val TYPE_MODEL_TEXT = "model.text"
 
+        /**
+         * The one-line purpose the model stated together with a tool call.
+         *
+         * The text that accompanies a tool-calling response used to be discarded, so a live view
+         * could show only WHICH tool ran, never why. Emitted only when a response carries both
+         * tool calls and non-blank text (a text-only answer stays [TYPE_MODEL_TEXT]), and only
+         * while the task's intent switch is on. It is a live-view step only: the session
+         * transcript ignores it (`SessionConversation.noteEvent`), because the same text is
+         * already carried by the assistant message the conversation keeps.
+         */
+        const val TYPE_MODEL_INTENT = "model.intent"
+
         /** A user steering message was injected into the run. */
         const val TYPE_STEER = "steer"
 
@@ -247,6 +259,16 @@ data class AgentTaskEvent(
 
         /** A pending access request was approved or denied (`detail`: `requestId`, `decision`, `reason`). */
         const val TYPE_ACCESS_RESOLVED = "access.resolved"
+
+        // ── Post-success side effect: auto skill summary ────────────────────
+        //
+        // Emitted AFTER `task.done` when `browser4.agent.skill.summary.enabled`
+        // is on. It is a best-effort side effect of a *successful* run: it never
+        // changes the task's verdict, and a failure here is recorded, not
+        // propagated. `detail` carries `action` (`collect` | `skip` | `generate`
+        // | `append` | `fail`), `reason`, and where applicable `skillId` /
+        // `durationMs`. Unknown type is ignored by existing consumers by
+        // construction, so no schema bump is needed.
 
         // ── Goal steps (docs-dev/copilot/agent-goal-mode.md) ─────────────────
         //

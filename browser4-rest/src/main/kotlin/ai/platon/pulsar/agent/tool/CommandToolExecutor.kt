@@ -164,6 +164,14 @@ class CommandToolExecutor(
                         "with `resumeTaskId` or `sharedWorkspace`; omit (or leave empty) to keep the " +
                         "per-task workspace.",
                 ),
+                ToolSpec.Arg(
+                    "intent", "Boolean?", "null",
+                    "Whether this task states the purpose of each next step: the model writes one " +
+                        "short `Intent: <what> — <why>` line with every tool call, reported as a " +
+                        "`model.intent` step in the task's event log. `false` also drops the " +
+                        "instruction from the system prompt, so nothing is paid for a line nobody " +
+                        "renders. Omit to use `browser4.agent.intent.enabled` (on by default).",
+                ),
             ),
             returnType = "String",
             description = "Execute a plain command (URL, instruction, or agent task). " +
@@ -193,6 +201,8 @@ class CommandToolExecutor(
                 <dir>"): an existing absolute directory, used in place (no per-task copy,
                 no worktree, no merge, never archived), incompatible with resumeTaskId and
                 sharedWorkspace. With coding=true the backend's own checkout is refused.
+                intent=false hides the purpose line the model states with each tool call
+                ("model.intent" steps) and drops the instruction that asks for it.
             """.trimIndent(),
             examples = listOf(
                 ToolExample(
@@ -518,7 +528,7 @@ class CommandToolExecutor(
                     allowed = setOf(
                         "command", "async", "noopLimit", "engine", "coding", "freshWorkspace", "sharedWorkspace",
                         "access", "unattended", "resumeTaskId", "rewindTaskId", "tokenBudget", "addDirs",
-                        "unrestricted", "workspace",
+                        "unrestricted", "workspace", "intent",
                     ) + SESSION_ARG,
                     // `agent run --resume <id>` may omit the task text: the instruction
                     // comes from the interrupted task's checkpoint. Validated below.
@@ -596,15 +606,19 @@ class CommandToolExecutor(
                     ?.takeIf { it.isNotEmpty() }
                     ?.let { TaskWorkspaceOverride.resolve(it, coding = coding == true) }
                 TaskWorkspaceOverride.requireCompatibleWorkspaceFlags(workspace, resumeTaskId, sharedWorkspace)
+                // Per-task "next step intent" switch: decides both whether the model is
+                // asked for a one-line purpose per tool call and whether that line is
+                // reported as a `model.intent` step.
+                val intent = paramBool(args, "intent", functionName, required = false, default = null)
                 if (isAsync) {
                     service.submitPlainCommand(
                         sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
-                        resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace,
+                        resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace, intent,
                     )
                 } else {
                     val status = service.executePlainCommand(
                         sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
-                        resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace,
+                        resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace, intent,
                     )
                     pulsarObjectMapper().writeValueAsString(status)
                 }
