@@ -31,6 +31,10 @@ browser4-cli eval "element => element.textContent" --ref e5
   an unresolved Promise… re-run with --await`) instead of pretending a value came back.
   A batch that returns `{}` is this case, not empty data.
 - The expression runs against the live DOM; JS exceptions are surfaced as CLI errors.
+- **A script may start with a top-level `return`.** It is wrapped in an invoked function
+  before evaluation, so a body copied out of a page routine (`return { … }`) returns its
+  value instead of failing. This applies to the first token only: a `return` after a
+  leading comment is not detected, and there the syntax error is reported as an error.
 - Only the **return value** is printed — `console.log` output is not part of eval's result
   (read it with `browser4-cli console`).
 - Anything beyond a trivial expression belongs in `--file`, `--stdin` or `--base64` (see [shell-quoting.md](shell-quoting.md)).

@@ -9680,12 +9680,56 @@ fn spawn_outside_windows_job(
 
     let hidden_script = windows_wmi_create_script(&command_line, launch_working_dir, true);
     let plain_script = windows_wmi_create_script(&command_line, launch_working_dir, false);
-    let pid = run_wmi_create_with_fallback(&hidden_script, &plain_script, startup_log_path)?;
+    let pid = run_wmi_create_with_fallback(&hidden_script, &plain_script, Some(startup_log_path))?;
     append_startup_log_message(
         startup_log_path,
         format!("Win32_Process.Create created the backend with pid {pid}."),
     );
     Ok(LaunchedBackend::Detached { pid })
+}
+
+/// Create a fire-and-forget child outside this shell's process tree.
+///
+/// The Windows escape used by [`spawn_backend_command`] is not backend-specific:
+/// a host that reaps descendants by walking `ParentProcessId` also kills the
+/// background auto-update agent, which is why its prefetch never completed
+/// (#638). Long-lived children spawned by this CLI therefore go through the
+/// same decision:
+///
+/// - Windows host that tree-kills shell descendants → `Win32_Process.Create`
+///   (parent = `WmiPrvSE.exe`, hidden console, retried without the startup info
+///   when the provider rejects it);
+/// - every other host and platform → plain `spawn()`.
+///
+/// `command` keeps its stdio and creation flags: the WMI path uses only its
+/// command line, the plain path uses the prepared `Command` as-is.
+///
+/// Returns the created pid for the WMI path; `None` for a plain spawn, whose
+/// handle stays with the caller.
+///
+/// WMI-created children inherit the **provider's** environment, not this
+/// process's — a caller that depends on environment settings must forward them
+/// explicitly (see `spawn_update_agent`).
+pub fn spawn_outside_host_tree(
+    command: &mut Command,
+    #[allow(unused_variables)] working_dir: &Path,
+) -> io::Result<Option<u32>> {
+    #[cfg(windows)]
+    {
+        if windows_host_tree_kills_shell_descendants() {
+            let command_line = windows_command_line(command);
+            let hidden_script = windows_wmi_create_script(&command_line, working_dir, true);
+            let plain_script = windows_wmi_create_script(&command_line, working_dir, false);
+            return run_wmi_create_with_fallback(&hidden_script, &plain_script, None).map(Some);
+        }
+        command.spawn()?;
+        Ok(None)
+    }
+    #[cfg(not(windows))]
+    {
+        command.spawn()?;
+        Ok(None)
+    }
 }
 
 /// Create the backend with a hidden console, falling back to a visible one.
@@ -9696,21 +9740,27 @@ fn spawn_outside_windows_job(
 /// backend at all. The fallback is safe to retry because a failed attempt never
 /// reports a pid: `ReturnValue != 0` means nothing was created, and a script
 /// error aborts before `Win32_Process.Create` runs.
+///
+/// `startup_log_path` is `None` for children that have no startup log (the
+/// background update agent, #638); the hidden-console warning still goes to
+/// stderr, which such children already redirect to null.
 #[cfg(windows)]
 fn run_wmi_create_with_fallback(
     hidden_script: &str,
     plain_script: &str,
-    startup_log_path: &Path,
+    startup_log_path: Option<&Path>,
 ) -> io::Result<u32> {
     match run_wmi_create_script(hidden_script) {
         Ok(pid) => Ok(pid),
         Err(error) => {
             let warning = format!(
-                "Creating the backend with a hidden console failed ({error}); retrying \
+                "Creating the process with a hidden console failed ({error}); retrying \
                  without Win32_ProcessStartup — a terminal window may stay visible while \
-                 the backend runs."
+                 it runs."
             );
-            append_startup_log_message(startup_log_path, warning.clone());
+            if let Some(path) = startup_log_path {
+                append_startup_log_message(path, warning.clone());
+            }
             eprintln!("{warning}");
             run_wmi_create_script(plain_script).map_err(|fallback_error| {
                 io::Error::new(
@@ -11209,8 +11259,9 @@ mod tests {
             temp.path(),
             false,
         );
-        let pid = run_wmi_create_with_fallback(failing_script, &plain_script, &startup_log_path)
-            .expect("the plain attempt must create the backend after the hidden one fails");
+        let pid =
+            run_wmi_create_with_fallback(failing_script, &plain_script, Some(&startup_log_path))
+                .expect("the plain attempt must create the backend after the hidden one fails");
 
         assert!(
             windows_pid_is_alive(pid),
@@ -11240,8 +11291,9 @@ mod tests {
             "$ErrorActionPreference = 'Stop'; [Console]::Error.Write('hidden rejected'); exit 1";
         let plain_script =
             "$ErrorActionPreference = 'Stop'; [Console]::Error.Write('plain rejected'); exit 1";
-        let error = run_wmi_create_with_fallback(hidden_script, plain_script, &startup_log_path)
-            .expect_err("both attempts failing must be an error");
+        let error =
+            run_wmi_create_with_fallback(hidden_script, plain_script, Some(&startup_log_path))
+                .expect_err("both attempts failing must be an error");
         let message = error.to_string();
         assert!(
             message.contains("plain rejected") && message.contains("hidden rejected"),
@@ -11472,6 +11524,70 @@ mod tests {
         //    surrogate is a 30-second ping that terminates itself.
         let _ = Command::new("taskkill")
             .args(["/F", "/PID", &backend_pid.to_string()])
+            .output();
+    }
+
+    /// #638: the background auto-update agent is a long-lived child too, and it
+    /// used a plain `spawn()` — so the prefetch download was killed with the
+    /// command's descendant tree in exactly the hosts above. Asserting the
+    /// shared escape (`spawn_outside_host_tree`) keeps the updater out of that
+    /// tree, and that the process outlives a tree kill that claims a plainly
+    /// spawned sibling.
+    ///
+    /// `ping` plays the agent; the host class is pinned with the documented
+    /// override because a GitHub runner carries no toolhost marker.
+    #[cfg(windows)]
+    #[test]
+    fn wmi_spawned_child_outside_host_tree_survives_a_process_tree_kill() {
+        let _env_guard = lock_env_mutex();
+        let _spawn_override = BackendSpawnOverride::set("wmi");
+        let temp = tempfile::TempDir::new().expect("temp dir");
+
+        let mut agent_command = Command::new("ping");
+        agent_command
+            .args(["-n", "30", "127.0.0.1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let agent_pid = spawn_outside_host_tree(&mut agent_command, temp.path())
+            .expect("WMI spawn must succeed")
+            .expect(
+                "a tree-killing host must create the child through Win32_Process.Create; \
+                 a plain Command::spawn dies with the host's process tree",
+            );
+        assert!(
+            windows_pid_is_alive(agent_pid),
+            "the WMI-created child (pid {agent_pid}) must be running"
+        );
+        assert_ne!(
+            windows_parent_pid(agent_pid),
+            std::process::id(),
+            "the child's parent must be WmiPrvSE (outside the caller's tree)"
+        );
+
+        // A plainly spawned sibling shares this process's tree and dies with it.
+        let mut tree_member = Command::new("ping")
+            .args(["-n", "30", "127.0.0.2"])
+            .spawn()
+            .expect("plain spawn");
+        let tree_member_pid = tree_member.id();
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &tree_member_pid.to_string()])
+            .output();
+        let _ = tree_member.wait();
+        assert!(
+            !windows_pid_is_alive(tree_member_pid),
+            "the plainly spawned tree member (pid {tree_member_pid}) must die with the tree kill"
+        );
+        assert!(
+            windows_pid_is_alive(agent_pid),
+            "the WMI-created child (pid {agent_pid}) must survive the tree kill that \
+             claimed the plainly spawned process"
+        );
+
+        // Cleanup; a panicking assert above leaves only a 30-second ping behind.
+        let _ = Command::new("taskkill")
+            .args(["/F", "/PID", &agent_pid.to_string()])
             .output();
     }
 

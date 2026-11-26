@@ -24,6 +24,22 @@ Silent failures (no output, no error) were a known issue before the 4.11.x fix �
 | `Promise` (an async expression without `--await`) | **error**: `The expression returned an unresolved Promise … re-run with --await` |
 | `0`, `false`, `"hello"`, `42`, etc. | The value as-is |
 | `throw new Error(...)` | Error message surfaced to stderr |
+| syntax error (e.g. a top-level `return` the wrapper could not turn into an
+expression) | **error**: the page-side exception text is reported; the call is not `null`+`ok` |
+
+### Top-level `return` and page-side exceptions
+
+A script whose first token is `return` is a function body, not an expression. The
+backend wraps it in an invoked function before evaluation
+(`wrapTopLevelReturn` in `AbstractToolExecutor.kt`), so the authored `return`
+keeps its value. A `return` that a wrapper cannot reach (after a leading
+comment, or inside an expression) used to make Chrome answer with a
+`SyntaxError` that was dropped into a bare `null` with `status: ok` — the
+`eval "return { ok: 1 }"` report in #658.
+
+Every `JsEvaluation` that carries a page-side exception is now a **failure**
+with the exception text (`jsEvaluationIssue`), instead of being flattened to
+`null`; a top-level `return` in that script is named as the likely cause.
 
 > **Note:** `undefined` and `null` both arrive from CDP without a `value` field, so the
 > backend distinguishes them with the CDP `type` (`cdpType == "undefined"`) before the

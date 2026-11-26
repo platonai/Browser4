@@ -28906,16 +28906,35 @@ async fn maybe_auto_update(command: &str, base_url: &str, global: &GlobalFlags) 
 /// Launch the detached background updater process.  Fire-and-forget: stdio is
 /// nulled and the child is never waited on, so it outlives this invocation.
 ///
+/// On a Windows host that reaps the command's descendant tree (AI-agent shells,
+/// see #632) a plain `spawn()` child is killed within milliseconds of being
+/// created, so the prefetch never completed (#638).  The launch therefore goes
+/// through [`daemon::spawn_outside_host_tree`], which asks the WMI provider to
+/// create the process (parent = `WmiPrvSE.exe`) for exactly those hosts; every
+/// other host keeps the plain spawn.
+///
 /// Returns whether the child was started; the caller only records the
 /// prefetch attempt (and its retry window) on success.
 fn spawn_update_agent(plan: &update_check::PrefetchPlan) -> bool {
     let Ok(exe) = std::env::current_exe() else {
         return false;
     };
-    let mut cmd = std::process::Command::new(exe);
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| {
+        exe.parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default()
+    });
+    let mut cmd = std::process::Command::new(&exe);
     cmd.arg("__update-agent").arg("--tag").arg(&plan.tag);
     if plan.self_upgrade {
         cmd.arg("--self-upgrade");
+    }
+    // A WMI-created agent inherits WmiPrvSE's environment instead of ours, so
+    // the settings that decide where it downloads from and where it records
+    // the outcome have to travel on the command line — otherwise a proxied or
+    // mirrored host silently loses every prefetch.
+    for (key, value) in forwarded_update_agent_env() {
+        cmd.arg("--env").arg(format!("{key}={value}"));
     }
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -28927,13 +28946,48 @@ fn spawn_update_agent(plan: &update_check::PrefetchPlan) -> bool {
         const DETACHED_PROCESS: u32 = 0x00000008;
         cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
     }
-    cmd.spawn().is_ok()
+    daemon::spawn_outside_host_tree(&mut cmd, &working_dir).is_ok()
+}
+
+/// Environment variables that change what the auto-update agent does.
+///
+/// The agent downloads a runtime bundle and records the result, so proxy,
+/// mirror and directory overrides are behavioural, not cosmetic: losing them
+/// turns a successful prefetch into a failure that looks like a network error.
+const UPDATE_AGENT_ENV_KEYS: &[&str] = &[
+    "BROWSER4_CLI_PROXY",
+    "https_proxy",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "HTTP_PROXY",
+    "all_proxy",
+    "ALL_PROXY",
+    "no_proxy",
+    "NO_PROXY",
+    "BROWSER4_MIRRORS_CONFIG",
+    "BROWSER4_RUNTIME_DIR",
+    "BROWSER4_CLI_STATE_DIR",
+    "BROWSER4_CLI_FORCE_REMOTE_BUNDLE",
+];
+
+/// The [`UPDATE_AGENT_ENV_KEYS`] that are set in this process, as `KEY=VALUE`.
+fn forwarded_update_agent_env() -> Vec<(String, String)> {
+    UPDATE_AGENT_ENV_KEYS
+        .iter()
+        .filter_map(|key| {
+            std::env::var(key)
+                .ok()
+                .filter(|value| !value.is_empty())
+                .map(|value| ((*key).to_string(), value))
+        })
+        .collect()
 }
 
 /// Entry point of the hidden `__update-agent` command.
 async fn handle_update_agent(global: &GlobalFlags) -> Result<(), CliError> {
     let mut tag: Option<String> = None;
     let mut self_upgrade = false;
+    let mut forwarded_env: Vec<(String, String)> = Vec::new();
     let args: Vec<&str> = global.args.iter().skip(1).map(String::as_str).collect();
     let mut i = 0;
     while i < args.len() {
@@ -28946,6 +29000,12 @@ async fn handle_update_agent(global: &GlobalFlags) -> Result<(), CliError> {
                 self_upgrade = true;
                 i += 1;
             }
+            "--env" => {
+                if let Some(pair) = args.get(i + 1).and_then(|raw| parse_env_assignment(raw)) {
+                    forwarded_env.push(pair);
+                }
+                i += 2;
+            }
             _ => i += 1,
         }
     }
@@ -28955,8 +29015,26 @@ async fn handle_update_agent(global: &GlobalFlags) -> Result<(), CliError> {
             "__update-agent requires --tag <tag>".to_string(),
         ));
     };
+    apply_forwarded_env(&forwarded_env);
     run_update_agent(&tag, self_upgrade).await;
     Ok(())
+}
+
+/// Split a `KEY=VALUE` argument; an empty key is not an assignment.
+fn parse_env_assignment(raw: &str) -> Option<(String, String)> {
+    let (key, value) = raw.split_once('=')?;
+    if key.trim().is_empty() {
+        return None;
+    }
+    Some((key.to_string(), value.to_string()))
+}
+
+/// Apply the environment the spawning CLI forwarded (see
+/// [`forwarded_update_agent_env`]).
+fn apply_forwarded_env(pairs: &[(String, String)]) {
+    for (key, value) in pairs {
+        std::env::set_var(key, value);
+    }
 }
 
 /// The background updater body: mirror `handle_upgrade`'s runtime steps for
@@ -37048,6 +37126,38 @@ mod tests {
             std::env::remove_var(key);
         }
         EnvGuard { key, prev, _lock: lock }
+    }
+
+    /// The update agent may inherit WmiPrvSE's environment (#638), so the
+    /// spawning CLI has to carry the behavioural settings on its command line.
+    #[test]
+    fn update_agent_env_is_forwarded_as_key_value_pairs() {
+        let _proxy = set_env("BROWSER4_CLI_PROXY", "http://127.0.0.1:7890");
+
+        let forwarded = forwarded_update_agent_env();
+
+        assert!(
+            forwarded.contains(&(
+                "BROWSER4_CLI_PROXY".to_string(),
+                "http://127.0.0.1:7890".to_string()
+            )),
+            "the proxy must travel with the spawn: {forwarded:?}"
+        );
+    }
+
+    #[test]
+    fn update_agent_env_assignments_round_trip() {
+        assert_eq!(
+            parse_env_assignment("HTTPS_PROXY=http://proxy:8080"),
+            Some(("HTTPS_PROXY".to_string(), "http://proxy:8080".to_string()))
+        );
+        // Values may contain '=' (a proxy query string does).
+        assert_eq!(
+            parse_env_assignment("A=a=b"),
+            Some(("A".to_string(), "a=b".to_string()))
+        );
+        assert_eq!(parse_env_assignment("=missing-key"), None);
+        assert_eq!(parse_env_assignment("NO_SEPARATOR"), None);
     }
 
     /// Ordinary, long-enough page text: keeps the block signatures and the

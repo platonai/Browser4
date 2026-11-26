@@ -366,6 +366,24 @@ class BrowserTabToolExecutorTest {
     }
 
     @Test
+    fun `eval honors a top-level return by wrapping the script in a function`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            val wrapped = "(function() {\nreturn { ok: 1 }\n})()"
+            `when`(driver.evaluateValueDetail(wrapped, awaitPromise = false, world = JsWorld.MAIN))
+                .thenReturn(JsEvaluation(value = mapOf("ok" to 1), cdpType = "object"))
+
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "eval", mutableMapOf<String, Any?>("expression" to "return { ok: 1 }")),
+                driver
+            )
+
+            assertEquals(mapOf("ok" to 1), result.value)
+            verify(driver).evaluateValueDetail(wrapped, awaitPromise = false, world = JsWorld.MAIN)
+        }
+    }
+
+    @Test
     fun `help advertises selector optional type and press`() {
         val typeHelp = executor.help("type")
         val pressHelp = executor.help("press")

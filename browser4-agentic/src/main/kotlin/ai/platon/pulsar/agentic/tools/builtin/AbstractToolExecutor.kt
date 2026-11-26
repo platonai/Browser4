@@ -174,7 +174,7 @@ abstract class AbstractToolExecutor : ToolExecutor {
             // (`MCPToolController` renders the value), so a Promise used to arrive as
             // `{}` and an undefined as a bare `null` (2026-10-28: three `eval`s of a
             // 20-page batch silently lost their data).
-            val issue = jsEvaluationIssue(r as? JsEvaluation)
+            val issue = jsEvaluationIssue(r as? JsEvaluation, args["expression"] as? String)
             val evaluate = TcEvaluate(
                 value = issue?.text ?: value,
                 className = if (issue != null) null else className,
@@ -329,12 +329,36 @@ internal data class JsEvaluationIssue(val text: String, val failure: Boolean)
  * (`main.rs`, `eval` output) so `eval --json` still emits `null`.
  *
  * @param evaluation the raw evaluation; null for non-JS tool results
+ * @param expression the evaluated script, used to explain a page-side exception
+ *   caused by a top-level `return`; null when the caller has no script text
  */
-internal fun jsEvaluationIssue(evaluation: JsEvaluation?): JsEvaluationIssue? {
+internal fun jsEvaluationIssue(evaluation: JsEvaluation?, expression: String? = null): JsEvaluationIssue? {
     if (evaluation == null) return null
     val subtype = evaluation.cdpSubtype?.lowercase()
     val type = evaluation.cdpType?.lowercase()
+    val jsException = evaluation.exception
     return when {
+        // A page-side exception (syntax error, ReferenceError, ...) carries no value
+        // and no CDP type, so it used to be flattened to `null` with `status: ok`:
+        // `eval "return { ok: 1 }"` reported success and no data (#658) because
+        // `JsUtils.toCDPCompatibleExpression` strips the leading `return`, the
+        // remainder stops being a valid expression, and Chrome's SyntaxError was
+        // discarded along with every other exception.
+        jsException != null -> JsEvaluationIssue(
+            buildString {
+                append("The expression raised a JavaScript exception: ")
+                append(jsException.text?.takeIf { it.isNotBlank() } ?: "no error text provided")
+                if (expression != null && startsWithTopLevelReturn(expression)) {
+                    append(
+                        ". The script starts with a top-level `return`, which a page script " +
+                            "cannot execute — end with the value, drop the `return`, or wrap the " +
+                            "body in a function"
+                    )
+                }
+                append('.')
+            },
+            failure = true,
+        )
         // A promise value is not the result: without `--await` the CLI serialized it as
         // `{}`, and the model treated that as the extracted data (2026-10-28 run).
         subtype == "promise" -> JsEvaluationIssue(
@@ -353,6 +377,31 @@ internal fun jsEvaluationIssue(evaluation: JsEvaluation?): JsEvaluationIssue? {
         else -> null
     }
 }
+
+/**
+ * Whether [script] opens with a top-level `return`.
+ *
+ * Conservative on purpose: only the first token counts, so `returnValue()` and a
+ * `return` inside a string or a later statement never match. Scripts that reach a
+ * `return` after a leading comment are not detected — they still fail loudly
+ * through [jsEvaluationIssue] instead of silently returning `null`.
+ */
+internal fun startsWithTopLevelReturn(script: String): Boolean =
+    TOP_LEVEL_RETURN_REGEX.containsMatchIn(script)
+
+/**
+ * Wrap a script that opens with a top-level `return` in an invoked function.
+ *
+ * `eval` accepts a *script* (a function body copied from a page routine), but the
+ * driver evaluates it as an expression and strips a leading `return`, so the value
+ * was dropped — or, when the remainder is not a valid expression, the whole call
+ * silently became `null` (#658). The wrapper keeps the authored `return`
+ * meaningful; ordinary expressions are returned untouched.
+ */
+internal fun wrapTopLevelReturn(script: String): String =
+    if (startsWithTopLevelReturn(script)) "(function() {\n$script\n})()" else script
+
+private val TOP_LEVEL_RETURN_REGEX = Regex("^\\s*return\\b")
 
 /**
  * Prefix of the plain-mode notice for a JS `undefined` result.
