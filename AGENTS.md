@@ -44,6 +44,30 @@ The server-side batch endpoint (`MCPToolController.handleCommandBatch()` →
 - **Cursor positioning:** `DOM.focus()` + `Input.dispatchMouseEvent` (click) may leave cursor at 0. Fix: `setSelectionRange(99999, 99999)` after focus+click.
 - **`Input.insertText` racing:** 0ms delay between chars drops `input` events. Fix: use same inter-char delay as `type()` via `randomDelayMillis("type")` (90-240ms).
 
+### Windows background children: one entry point
+
+Any child process that must outlive the command (`__update-agent`, `loop`
+workers, the backend) goes through `daemon::spawn_outside_host_tree`
+(`cli/browser4-cli/src/daemon.rs`). It picks `Win32_Process.Create` on hosts
+that reap descendants by `ParentProcessId` (detected via `TOOLHOST_IPC_NAME` /
+`TOOLHOST_RUNTIME_MODE`, overridable with `BROWSER4_WINDOWS_BACKEND_SPAWN=wmi|spawn`),
+and a plain `spawn()` everywhere else.
+
+`DETACHED_PROCESS` / `CREATE_NO_WINDOW` / `CREATE_NEW_PROCESS_GROUP` only detach
+the **console** — the parent pointer still belongs to the CLI, so such a child is
+killed with the caller's tree. That misconception already produced two separate
+defects (#632 backend, #638 auto-update prefetch, plus the `loop` workers on the
+same path); do not add a third spawn site that re-implements it. Notes:
+
+- `Win32_Process.Create` inherits the provider's environment, so behavioural env
+  (proxy, mirrors, runtime dir) must be forwarded explicitly — see
+  `spawn_update_agent` and its `--env` arguments.
+- It also inherits no std handles: pass a log path to
+  `spawn_outside_host_tree` and the redirect is rebuilt as `cmd /c … >> log 2>&1`.
+- Regression coverage lives in `daemon.rs` / `main.rs` tests behind
+  `#[cfg(windows)]` (`wmi_spawned_*`, `spawn_detached_creates_*`); keep them
+  passing or the behaviour is untested.
+
 ### Direct CDP methods: mandatory review gates
 
 Any method that implements behavior by calling CDP directly (or by evaluating

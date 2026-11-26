@@ -9692,20 +9692,32 @@ fn spawn_outside_windows_job(
 ///
 /// The Windows escape used by [`spawn_backend_command`] is not backend-specific:
 /// a host that reaps descendants by walking `ParentProcessId` also kills the
-/// background auto-update agent, which is why its prefetch never completed
-/// (#638). Long-lived children spawned by this CLI therefore go through the
-/// same decision:
+/// background auto-update agent (its prefetch never completed, #638) and the
+/// `loop` workers. Long-lived children spawned by this CLI therefore go through
+/// the same decision:
 ///
 /// - Windows host that tree-kills shell descendants → `Win32_Process.Create`
 ///   (parent = `WmiPrvSE.exe`, hidden console, retried without the startup info
 ///   when the provider rejects it);
 /// - every other host and platform → plain `spawn()`.
 ///
-/// `command` keeps its stdio and creation flags: the WMI path uses only its
-/// command line, the plain path uses the prepared `Command` as-is.
+/// `command` keeps its creation flags and any explicitly-piped Stdio: the WMI
+/// path uses only its command line, the plain path uses the prepared `Command`
+/// as-is. Since `Win32_Process.Create` takes no handles, `log_path` — when
+/// given — is redirected inside the created command line (`>> log 2>&1`) so a
+/// WMI-created child still writes the log the plain path would get from
+/// `Stdio`.
 ///
-/// Returns the created pid for the WMI path; `None` for a plain spawn, whose
-/// handle stays with the caller.
+/// **Callers must not open `log_path` themselves and attach it to `command`'s
+/// Stdio.** On the WMI path the child opens the log via `cmd /c` redirection,
+/// and a handle held open by this process conflicts with the share mode
+/// `cmd.exe` requests when it opens the file — the child then exits
+/// immediately with an empty log. This is exactly what stranded `loop --resume`
+/// workers (and any other caller passing a log) on tree-killing hosts, part of
+/// the #638 family. The plain path opens and attaches the log here, so callers
+/// only ever pass the path; nothing is held open across the WMI branch.
+///
+/// Returns the pid; the child is never waited on.
 ///
 /// WMI-created children inherit the **provider's** environment, not this
 /// process's — a caller that depends on environment settings must forward them
@@ -9713,23 +9725,72 @@ fn spawn_outside_windows_job(
 pub fn spawn_outside_host_tree(
     command: &mut Command,
     #[allow(unused_variables)] working_dir: &Path,
-) -> io::Result<Option<u32>> {
+    log_path: Option<&Path>,
+) -> io::Result<u32> {
     #[cfg(windows)]
-    {
-        if windows_host_tree_kills_shell_descendants() {
-            let command_line = windows_command_line(command);
-            let hidden_script = windows_wmi_create_script(&command_line, working_dir, true);
-            let plain_script = windows_wmi_create_script(&command_line, working_dir, false);
-            return run_wmi_create_with_fallback(&hidden_script, &plain_script, None).map(Some);
-        }
-        command.spawn()?;
-        Ok(None)
+    if windows_host_tree_kills_shell_descendants() {
+        // WMI path: the log is redirected on the command line (`>> log`). The
+        // log file is deliberately *not* opened here — see the doc comment.
+        let command_line = wmi_command_line(command, log_path)?;
+        let hidden_script = windows_wmi_create_script(&command_line, working_dir, true);
+        let plain_script = windows_wmi_create_script(&command_line, working_dir, false);
+        return run_wmi_create_with_fallback(&hidden_script, &plain_script, None);
     }
-    #[cfg(not(windows))]
-    {
-        command.spawn()?;
-        Ok(None)
+    // Plain path (non-Windows, or Windows hosts that don't reap by tree):
+    // attach the log to Stdio directly. Opened here rather than by the caller
+    // so the WMI branch above can never inherit a held-open handle.
+    if let Some(path) = log_path {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        command.stdout(file.try_clone()?);
+        command.stderr(file);
     }
+    Ok(command.spawn()?.id())
+}
+
+/// The command line handed to `Win32_Process.Create`, with the caller's log
+/// redirect rebuilt as an explicit `cmd /c` one.
+///
+/// `Win32_Process.Create` accepts no std handles, so a WMI-created child cannot
+/// inherit the log file the plain path gets from `Stdio`. `cmd /c` owns the
+/// redirection instead; the outer quoted form keeps `cmd` from re-parsing the
+/// already quoted program path.
+#[cfg(windows)]
+fn wmi_command_line(command: &Command, log_path: Option<&Path>) -> io::Result<String> {
+    let command_line = windows_command_line(command);
+    let Some(log_path) = log_path else {
+        return Ok(command_line);
+    };
+    let log = log_path.to_string_lossy();
+    if log.contains('"') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("a log path cannot be redirected for Win32_Process.Create: {log}"),
+        ));
+    }
+    Ok(format!("cmd /c \"{command_line} >> \"{log}\" 2>&1\""))
+}
+
+/// The parent pid of a live process, via WMI; `0` when it cannot be read.
+///
+/// Windows-only support for the spawn regression tests: proving that a child
+/// created through [`spawn_outside_host_tree`] is **not** parented by this
+/// process is the observable form of "it left the caller's process tree".
+#[cfg(windows)]
+#[allow(dead_code)] // only referenced from `#[cfg(test)]` regression tests; silence the non-test build
+pub fn windows_parent_process_id(pid: u32) -> u32 {
+    let script =
+        format!("(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').ParentProcessId");
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .expect("powershell must be available on Windows");
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .unwrap_or(0)
 }
 
 /// Create the backend with a hidden console, falling back to a visible one.
@@ -11549,12 +11610,8 @@ mod tests {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        let agent_pid = spawn_outside_host_tree(&mut agent_command, temp.path())
-            .expect("WMI spawn must succeed")
-            .expect(
-                "a tree-killing host must create the child through Win32_Process.Create; \
-                 a plain Command::spawn dies with the host's process tree",
-            );
+        let agent_pid = spawn_outside_host_tree(&mut agent_command, temp.path(), None)
+            .expect("WMI spawn must succeed");
         assert!(
             windows_pid_is_alive(agent_pid),
             "the WMI-created child (pid {agent_pid}) must be running"
@@ -11589,6 +11646,42 @@ mod tests {
         let _ = Command::new("taskkill")
             .args(["/F", "/PID", &agent_pid.to_string()])
             .output();
+    }
+
+    /// `Win32_Process.Create` inherits no std handles, so a WMI-created child
+    /// with a log file must get an explicit `cmd /c ... >> log 2>&1` redirect.
+    /// The `loop` workers rely on that per-loop log (`#638` follow-up).
+    #[cfg(windows)]
+    #[test]
+    fn wmi_spawned_child_redirects_its_output_to_the_requested_log() {
+        let _env_guard = lock_env_mutex();
+        let _spawn_override = BackendSpawnOverride::set("wmi");
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let log_path = temp.path().join("child.log");
+        std::fs::write(&log_path, "").expect("create the log file");
+
+        let mut child = Command::new("cmd");
+        child
+            .args(["/c", "echo", "wmi-log-line"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        spawn_outside_host_tree(&mut child, temp.path(), Some(&log_path))
+            .expect("WMI spawn must succeed");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            let logged = std::fs::read_to_string(&log_path).unwrap_or_default();
+            if logged.contains("wmi-log-line") {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the WMI-created child wrote nothing to {}: {logged:?}",
+                log_path.display()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
     }
 
     /// `true` while the pid is a live process, via `tasklist` (fast, no WMI).
@@ -11633,17 +11726,7 @@ mod tests {
     /// The parent pid of a live process via WMI; `0` when it cannot be read.
     #[cfg(windows)]
     fn windows_parent_pid(pid: u32) -> u32 {
-        let script = format!(
-            "(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').ParentProcessId"
-        );
-        let output = Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .output()
-            .expect("powershell must be available on Windows");
-        String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .parse()
-            .unwrap_or(0)
+        windows_parent_process_id(pid)
     }
 
     /// Acquire the shared environment lock, tolerating a poisoned lock from a
