@@ -885,16 +885,15 @@ jobs:
             target: x86_64-pc-windows-gnu
             binary: browser4-cli-win32-x64.exe
             use_zigbuild: false
-          - name: macOS x64
+          # macOS x64 + ARM64 combined into one job on macos-latest (Apple
+          # Silicon): the arm64 target builds natively, x64 cross-compiles
+          # with rustc's built-in linker. Two jobs on the same runner would
+          # double the queue load and has caused 2–5 minute waits during
+          # recent releases.
+          - name: macOS
             os: macos-latest
-            target: x86_64-apple-darwin
-            binary: browser4-cli-darwin-x64
-            use_zigbuild: false
-          - name: macOS ARM64
-            os: macos-latest
-            target: aarch64-apple-darwin
-            binary: browser4-cli-darwin-arm64
-            use_zigbuild: false
+            targets: ["x86_64-apple-darwin", "aarch64-apple-darwin"]
+            binaries: ["browser4-cli-darwin-x64", "browser4-cli-darwin-arm64"]
 
     steps:
       - name: Checkout repository
@@ -915,7 +914,7 @@ jobs:
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
         with:
           toolchain: stable
-          targets: ${{ matrix.target }}
+          targets: ${{ runner.os == 'macOS' && join(matrix.targets, ',') || matrix.target }}
 
       - name: Install cross-compilation tools (Linux)
         if: runner.os == 'Linux'
@@ -953,20 +952,13 @@ jobs:
         with:
           workspaces: cli/browser4-cli
 
-      - name: Build with zigbuild
-        if: matrix.use_zigbuild
-        shell: bash
-        run: cargo zigbuild --release --manifest-path ${{ env.CLI_MANIFEST_PATH }} --target ${{ matrix.target }}
-
-      - name: Build with cargo
-        if: ${{ !matrix.use_zigbuild }}
-        shell: bash
-        run: cargo build --release --manifest-path ${{ env.CLI_MANIFEST_PATH }} --target ${{ matrix.target }}
-
-      - name: Copy binary artifact
+      - name: Build binaries (native)
+        if: ${{ !matrix.use_zigbuild && runner.os != 'macOS' }}
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p artifacts
+          cargo build --release --manifest-path ${{ env.CLI_MANIFEST_PATH }} --target ${{ matrix.target }}
           if [[ "${{ matrix.target }}" == *"windows"* ]]; then
             cp cli/browser4-cli/target/${{ matrix.target }}/release/browser4-cli.exe artifacts/${{ matrix.binary }}
           else
@@ -974,17 +966,85 @@ jobs:
             chmod +x artifacts/${{ matrix.binary }}
           fi
 
-      - name: Upload artifact
-        if: needs.prepare.outputs.should_publish_artifacts == 'true'
+      - name: Build binaries (zigbuild)
+        if: ${{ matrix.use_zigbuild }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cargo zigbuild --release --manifest-path ${{ env.CLI_MANIFEST_PATH }} --target ${{ matrix.target }}
+          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
+            cp cli/browser4-cli/target/${{ matrix.target }}/release/browser4-cli.exe artifacts/${{ matrix.binary }}
+          else
+            cp cli/browser4-cli/target/${{ matrix.target }}/release/browser4-cli artifacts/${{ matrix.binary }}
+            chmod +x artifacts/${{ matrix.binary }}
+          fi
+
+      - name: Build binaries (macOS combined)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          # matrix.targets and matrix.binaries are parallel lists of strings.
+          targets=( ${{ join(matrix.targets, ' ') }} )
+          binaries=( ${{ join(matrix.binaries, ' ') }} )
+          for i in "${!targets[@]}"; do
+            tgt="${targets[$i]}"
+            bin="${binaries[$i]}"
+            echo "::group::Building $tgt -> $bin"
+            cargo build --release --manifest-path ${{ env.CLI_MANIFEST_PATH }} --target "$tgt"
+            cp "cli/browser4-cli/target/$tgt/release/browser4-cli" "artifacts/$bin"
+            chmod +x "artifacts/$bin"
+            echo "::endgroup::"
+          done
+
+      - name: Upload single artifact
+        if: ${{ needs.prepare.outputs.should_publish_artifacts == 'true' && runner.os != 'macOS' }}
         uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.binary }}
           path: artifacts/${{ matrix.binary }}
           retention-days: 7
 
+      - name: Upload macOS artifacts
+        if: ${{ needs.prepare.outputs.should_publish_artifacts == 'true' && runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          binaries=( ${{ join(matrix.binaries, ' ') }} )
+          for bin in "${binaries[@]}"; do
+            echo "::group::Uploading $bin"
+            UPLOAD_URL="${{ github.api_url }}/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts"
+            FILE_SIZE=$(stat -f%z "artifacts/$bin" 2>/dev/null || stat -c%s "artifacts/$bin")
+            CONTENT_TYPE=$(file -b --mime-type "artifacts/$bin" 2>/dev/null || echo "application/octet-stream")
+            RESULT=$(curl -s -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "$UPLOAD_URL" \
+              -H "Content-Type: application/json" \
+              -d "{\"name\":\"$bin\",\"path\":\"artifacts/$bin\"}")
+            UPLOAD_BASE=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['upload_url'])")
+            curl -sS -X PUT \
+              -H "Content-Type: $CONTENT_TYPE" \
+              -H "Content-Length: $FILE_SIZE" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              --data-binary @"artifacts/$bin" \
+              "${UPLOAD_BASE}?name=$bin&url_type=actions_download" > /dev/null
+            echo "::endgroup::"
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build-runtime-bundles:
     name: Build runtime bundle (${{ matrix.name }})
-    needs: [prepare, build-core-and-docker]
+    # Serialise after build-cli-binaries: that job consumes one macos-latest
+    # runner per CLI target on its own matrix entries; adding it here lets
+    # the macOS ARM64 run finish before the runtime bundle on the same runner
+    # starts, capping concurrent macos-latest usage at 1 at a time instead of
+    # 3 (CLI x 2 + runtime bundle). Linux and Windows entries also wait but
+    # their queues have capacity — the macOS gate is the reason.
+    needs: [prepare, build-core-and-docker, build-cli-binaries]
     if: |
       always() &&
       needs.prepare.result == 'success' &&
