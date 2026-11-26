@@ -98,6 +98,20 @@ data class AgentRunEvent(
         /** The model answered with plain text instead of a tool call. */
         const val MODEL_TEXT = "model.text"
 
+        /**
+         * The one-line purpose the model wrote alongside a tool call.
+         *
+         * A model that requests tools usually also explains WHY in the same response, and that
+         * text used to be dropped: only the closing text-only answer reached [MODEL_TEXT]. The
+         * live views (`agent run --follow`, `agent run -i`, the web console) show what the agent
+         * is about to do instead of only which tool it invoked.
+         *
+         * Emitted only when the response BOTH carries tool calls and non-blank text, so it never
+         * duplicates [MODEL_TEXT] (which is the text-only answer). Suppressed when the per-task
+         * intent switch is off ([RobustBrowserAgent.stepIntentEnabled]).
+         */
+        const val MODEL_INTENT = "model.intent"
+
         /** A user steering message was injected into the run. */
         const val STEER = "steer"
 

@@ -286,6 +286,11 @@
   .step:last-child { border-bottom: 0; }
   .step.tech { display: none; }
   .steps.show-tech .step.tech { display: grid; }
+  /* Live-view switches: each hides one family of rows, without dropping anything from
+     the log — turning it back on shows every later step of those kinds. The purpose
+     line ("下一步：目的与动机") and the tool rows are the two a reader may want apart. */
+  .steps.hide-intent .step-intent { display: none; }
+  .steps.hide-toolcalls .step-tool { display: none; }
   .step-icon { text-align: center; font-size: 13px; line-height: 1.5; opacity: .95; }
   .step-content { min-width: 0; }
   .step-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
@@ -572,6 +577,8 @@
         </button>
         <span class="spacer"></span>
         <span id="elapsed" class="mono run-elapsed">—</span>
+        <label class="switch" title="显示模型为下一步写的目的与动机"><input type="checkbox" id="intentToggle" checked> 下一步意图</label>
+        <label class="switch" title="显示工具的调用与结果"><input type="checkbox" id="toolToggle" checked> 工具调用</label>
         <label class="switch"><input type="checkbox" id="verboseToggle"> 技术细节</label>
         <label class="switch"><input type="checkbox" id="autoScroll" checked> 自动滚动</label>
         <button id="cancelBtn" type="button" class="btn danger small hidden">停止任务</button>
@@ -704,13 +711,17 @@
   const STORE_SIDEBAR = 'b4.agent.web.sidebar';
   /** The workspace new tasks run in (`''` = per-task temporary directory). */
   const STORE_WORKSPACE = 'b4.agent.web.workspace';
+  /** Live-view switch: render the purpose the model states for each next step. */
+  const STORE_INTENT = 'b4.agent.web.intent';
+  /** Live-view switch: render the tool call/result rows. */
+  const STORE_TOOLCALLS = 'b4.agent.web.toolcalls';
   /** How often the workspace/session tree refreshes while the tab is visible. */
   const SIDEBAR_REFRESH_MS = 15000;
 
   /** Event names the backend publishes on the SSE step stream. */
   const SSE_EVENT_TYPES = [
     'task.created', 'task.started', 'round.start', 'tool.call', 'tool.result',
-    'model.text', 'steer', 'steering.undelivered', 'follow_up', 'follow_up.undelivered',
+    'model.text', 'model.intent', 'steer', 'steering.undelivered', 'follow_up', 'follow_up.undelivered',
     'run.usage', 'task.done', 'task.failed', 'task.cancelled',
     'verify.verdict', 'gate.evaluated', 'repair.round', 'repair.exhausted',
     'finish.repair', 'finish.amend', 'nudge', 'isolation.merge',
@@ -736,7 +747,7 @@
   const TIPS_RUNNING = [
     '插一句话不会打断任务：agent 会在下一轮看到它。',
     '勾选「等当前步骤结束后再继续」，它会在收尾前读你的补充。',
-    '步骤里的 🔧 是工具调用，💬 是模型的思路。',
+    '步骤里的 🔧 是工具调用，🧭 是下一步的目的，💬 是模型的思路。',
     '超过 20 秒没有新步骤通常是在等页面或模型，不是卡死。',
     '点「执行过程」的标题可以收起这块，专心看结果。',
   ];
@@ -1153,6 +1164,19 @@
     while (box.children.length > 1200) box.removeChild(box.firstChild);
   }
 
+  /**
+   * Apply the two live-view switches to the step list (the CSS `.hide-*` rules).
+   *
+   * Rendering is unconditional so turning a switch back on shows the following steps
+   * immediately; the rows already displayed come back too, because they were never
+   * dropped.
+   */
+  function applyViewSwitches() {
+    const steps = $('steps');
+    steps.classList.toggle('hide-intent', !$('intentToggle').checked);
+    steps.classList.toggle('hide-toolcalls', !$('toolToggle').checked);
+  }
+
   function afterAppend(row) {
     trimSteps();
     if (atBottom() || $('autoScroll').checked) {
@@ -1247,7 +1271,7 @@
       entry = addRow({
         icon: '🔧', title: (ev.tool || 'tool') + ' 的结果', mono: true,
         badges: [badge(ev.ok === false ? '失败' : '完成', ev.ok === false ? 'err' : 'ok')],
-        detail: shorten(ev.text || '', 260), timeMs: ev.epochMillis,
+        detail: shorten(ev.text || '', 260), timeMs: ev.epochMillis, cls: 'step-tool',
       });
     } else {
       if (entry.running && entry.running.parentNode) entry.running.remove();
@@ -1271,6 +1295,22 @@
     details.appendChild(el('summary', '', '工具输出（' + value.length + ' 字符）'));
     details.appendChild(el('pre', '', value.length > 20000 ? value.slice(0, 20000) + '\n…（已截断，完整内容看 trace）' : value));
     return details;
+  }
+
+  /**
+   * The purpose the model stated with its tool calls ("what happens next, and why").
+   *
+   * A separate row from 模型的思路 on purpose: this one belongs to the step that follows
+   * it, so it is always a short sentence — no clamping, no expand button. `/intent` in
+   * the terminal and this row are the same event (`model.intent`).
+   */
+  function renderIntent(ev) {
+    const text = String(ev.text || '').trim();
+    if (!text) return;
+    const parts = addRow({
+      icon: '🧭', title: '下一步：目的与动机', timeMs: ev.epochMillis, cls: 'step-intent',
+    });
+    parts.content.appendChild(el('div', 'step-text', text));
   }
 
   function renderModelText(ev) {
@@ -1402,6 +1442,7 @@
     if (type === 'tool.call') renderToolCall(ev);
     else if (type === 'tool.result') renderToolResult(ev);
     else if (type === 'model.text') renderModelText(ev);
+    else if (type === 'model.intent') renderIntent(ev);
     else if (type === 'steer' || type === 'follow_up' || type === 'steering.undelivered' || type === 'follow_up.undelivered') renderSteer(ev);
     else if (type === 'access.requested') renderAccess(ev);
     else if (type === 'goal.pinned') renderGoal(ev);
@@ -1581,8 +1622,11 @@
       // The workspace is chosen in the settings dialog (and follows the session that was
       // switched to): it must be a query parameter because the body is the task text.
       const workspaceQuery = state.workspace ? '&workspace=' + enc(state.workspace) : '';
+      // The intent switch is a backend choice, not only a CSS one (see the toggle
+      // binding): `false` also drops the system-prompt instruction that asks for it.
+      const intentQuery = $('intentToggle').checked ? '' : '&intent=false';
       const response = await apiFetch(
-        '/api/commands/plain?async=true&sessionId=' + enc(state.session) + workspaceQuery,
+        '/api/commands/plain?async=true&sessionId=' + enc(state.session) + workspaceQuery + intentQuery,
         { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: task },
         180000,
       );
@@ -2599,6 +2643,21 @@
     });
     $('verboseToggle').addEventListener('change', () => {
       $('steps').classList.toggle('show-tech', $('verboseToggle').checked);
+    });
+    // The two live-view switches. They persist per browser, and the intent one also
+    // reaches the backend on submit (`intent=false`): the line exists only because the
+    // model is asked to write it, so hiding it must stop asking — otherwise the page
+    // would pay tokens for rows it never shows.
+    $('intentToggle').checked = readStore(STORE_INTENT) !== 'off';
+    $('toolToggle').checked = readStore(STORE_TOOLCALLS) !== 'off';
+    applyViewSwitches();
+    $('intentToggle').addEventListener('change', () => {
+      writeStore(STORE_INTENT, $('intentToggle').checked ? 'on' : 'off');
+      applyViewSwitches();
+    });
+    $('toolToggle').addEventListener('change', () => {
+      writeStore(STORE_TOOLCALLS, $('toolToggle').checked ? 'on' : 'off');
+      applyViewSwitches();
     });
     $('steps').addEventListener('scroll', () => {
       if (atBottom()) show($('jumpBtn'), false);

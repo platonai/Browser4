@@ -13,7 +13,10 @@ import ai.platon.pulsar.agentic.agents.RunPhaseClock
 import ai.platon.pulsar.agentic.common.AgentPaths
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.detail.DefaultServerSideAgentEventHandlers
+import ai.platon.pulsar.agentic.inference.InferenceEngine
 import ai.platon.pulsar.agentic.model.AgentHistory
+import ai.platon.pulsar.agentic.tools.advanced.agent.skillsummary.SkillSummarizer
+import ai.platon.pulsar.agentic.tools.advanced.agent.skillsummary.SkillSummaryConfig
 import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
 import ai.platon.pulsar.api.AbstractWebDriver
 import ai.platon.pulsar.api.Browser
@@ -456,6 +459,58 @@ open class StatefulAgentRunner(
     /** Append one of the runner's own lifecycle steps for [status]. */
     private fun recordLifecycle(status: AgentTaskStatus, type: String, text: String? = null) {
         eventLog(status.id).append(type, text = AgentTaskEventSanitizer.preview(text))
+    }
+
+    /**
+     * Post-success side effect: asynchronously trigger the auto skill summary.
+     *
+     * Only called from the success branch (failed/cancelled runs go through
+     * [recordFailure] and never reach here). Fully async + best-effort: any
+     * exception is logged and swallowed, never touching the task's success state
+     * or verdict (AC-3/AC-4, NFR-1). Disabled by default via [SkillSummaryConfig].
+     */
+    private fun triggerAutoSkillSummary(status: AgentTaskStatus) {
+        val config = SkillSummaryConfig.load()
+        if (!SkillSummarizer.shouldRun(config)) return
+        taskScope.launch {
+            try {
+                // Prefer the in-memory log: it is authoritative. The on-disk shard keeps only
+                // its tail and drops rows under back pressure, so a truncated head loses
+                // `round.start` and makes a long run look like it had zero rounds.
+                val events = runCatching { eventLog(status.id).eventsAfter(0, Int.MAX_VALUE) }
+                    .getOrNull()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?: eventStore.load(status.id, 1000)
+                // Reuse the session's companion agent for the LLM call (same provider / config as
+                // the task just run). If the agent is not a BasicBrowserAgent or the call fails,
+                // the generator degrades to writing context.json only — never blocks the main
+                // flow or affects the task's success (NFR-1).
+                val agent = session.companionAgent as? BasicBrowserAgent
+                val llmCall: (suspend (instruction: String, contextText: String) -> String?)? =
+                    if (agent == null) null else { instruction, context ->
+                        try {
+                            InferenceEngine(agent).summarize(instruction, context)
+                        } catch (e: java.util.concurrent.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            logger.debug("skill summary LLM call failed: {}", e.message)
+                            null
+                        }
+                    }
+                SkillSummarizer.maybeSummarize(
+                    status,
+                    events,
+                    { type, detail, text -> recordStructuredEvent(status, type, detail, text) },
+                    config,
+                    llmCall,
+                )
+            } catch (e: java.util.concurrent.CancellationException) {
+                // Cancellation must keep propagating: swallowing it here would break close().
+                throw e
+            } catch (e: Exception) {
+                logger.warn("auto skill summary trigger failed for {}: {}", status.id, e.message)
+            }
+        }
     }
 
     /**
@@ -988,11 +1043,12 @@ open class StatefulAgentRunner(
         unrestricted: Boolean? = null,
         rewindTaskId: String? = null,
         workspace: Path? = null,
+        intent: Boolean? = null,
     ): AgentTaskStatus {
         val status = create()
         execute(
             plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId,
-            tokenBudget, addDirs, unrestricted, rewindTaskId, workspace,
+            tokenBudget, addDirs, unrestricted, rewindTaskId, workspace, intent,
         )
         return status
     }
@@ -1021,11 +1077,12 @@ open class StatefulAgentRunner(
         unrestricted: Boolean? = null,
         rewindTaskId: String? = null,
         workspace: Path? = null,
+        intent: Boolean? = null,
     ): Job {
         val job = taskScope.launch(start = CoroutineStart.LAZY) {
             execute(
                 plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
-                resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace,
+                resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace, intent,
             )
         }
         runningJobs[status.id] = job
@@ -1102,6 +1159,7 @@ open class StatefulAgentRunner(
         unrestricted: Boolean? = null,
         rewindTaskId: String? = null,
         workspace: Path? = null,
+        intent: Boolean? = null,
     ) {
         // Attribute the row to its session before the task is queued: the console's
         // sidebar must show a freshly submitted task under its conversation (and under the
@@ -1113,7 +1171,7 @@ open class StatefulAgentRunner(
             runMutex.withLock {
                 executeSerialized(
                     plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
-                    resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace,
+                    resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace, intent,
                 )
             }
         } catch (e: CancellationException) {
@@ -1385,6 +1443,7 @@ open class StatefulAgentRunner(
         unrestricted: Boolean? = null,
         rewindTaskId: String? = null,
         workspace: Path? = null,
+        intent: Boolean? = null,
     ) {
         val agent = session.companionAgent
 
@@ -1561,6 +1620,15 @@ open class StatefulAgentRunner(
             // shared across tasks).
             (agent as? RobustBrowserAgent)?.let {
                 it.noopLimitOverride = noopLimit
+                // Per-task "next step intent" switch (`command.run(intent=…)`,
+                // `?intent=` on the REST command endpoint): the live views render the
+                // one-line purpose the model states with each tool call, and asking for
+                // that line costs tokens — so a caller that hides it must also stop
+                // paying for it.
+                it.stepIntentOverride = intent
+                if (intent != null) {
+                    logger.info("Agent task {} (session={}): step intent {}", status.id, session.uuid, intent)
+                }
                 // Per-task token budget (`agent run --token-budget`): a per-run
                 // override, NOT a process-wide config write — the next task in this
                 // session (or another session) must keep the configured default. The
@@ -1894,6 +1962,9 @@ open class StatefulAgentRunner(
                 // to the configured default (a task-level choice must not leak).
                 it.tokenBudgetOverride = null
                 it.codingMode = false
+                // Per-task intent switch: cleared like the other overrides, so a task
+                // that hid the intent line does not hide it for the next one.
+                it.stepIntentOverride = null
                 // Detach this task's live feed and steering queue: the companion
                 // agent is shared, and a stale listener would keep reporting into
                 // a finished task's log (and a stale steering source would drain
@@ -1999,6 +2070,9 @@ open class StatefulAgentRunner(
                 recordFailure(status)
             } else {
                 recordLifecycle(status, AgentTaskEvent.TYPE_DONE, status.message)
+                // Post-success side effect: summarize the run into a reusable SKILL.
+                // Async + best-effort — never changes this task's success/verdict (AC-3/4, NFR-1).
+                triggerAutoSkillSummary(status)
             }
             // Close the task in the session's conversation: the next instruction
             // inherits its transcript (see [SessionConversation]), so a multi-task

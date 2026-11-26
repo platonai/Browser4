@@ -97,7 +97,7 @@ object ModuleMap {
         "browser4-boot" to listOf(
             "browser4-apps/browser4-bundle", "browser4-apps/browser4-standalone", "browser4-rest",
         ),
-        "browser4-coding" to listOf("browser4-agentic"),
+        "browser4-coding" to listOf("browser4-agent-tools", "browser4-agentic"),
         "browser4-core" to listOf(
             "browser4-core/browser4-parse", "browser4-core/browser4-protocol",
         ),

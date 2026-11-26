@@ -240,4 +240,61 @@ class SkillControllerTest {
 
         assertEquals(HttpStatus.NOT_FOUND, response.statusCode)
     }
+
+    // ---- listDrafts() / promoteDraft() ----
+
+    @Test
+    @DisplayName("listDrafts returns draft list from service")
+    fun testListDraftsReturnsDraftList() {
+        val service = Mockito.mock(SkillService::class.java)
+        val draft = SkillService.DraftSummary(
+            id = "refactor-auth-1732456789012",
+            skillId = "refactor-auth",
+            generatedAt = 1732456789012L,
+            sourceTaskId = "task-1",
+            version = "1.0.0",
+            description = "Refactored auth flow",
+            registered = false,
+        )
+        Mockito.`when`(service.listDrafts()).thenReturn(listOf(draft))
+        val controller = SkillController(service)
+
+        val response = controller.listDrafts()
+
+        assertEquals(HttpStatus.OK, response.statusCode)
+        assertEquals(1, response.body?.size)
+        assertEquals("refactor-auth", response.body?.get(0)?.skillId)
+        assertEquals(false, response.body?.get(0)?.registered)
+        Mockito.verify(service).listDrafts()
+    }
+
+    @Test
+    @DisplayName("promoteDraft returns 200 and forwards to service on success")
+    fun testPromoteDraftReturns200OnSuccess() = kotlinx.coroutines.runBlocking {
+        val service = Mockito.mock(SkillService::class.java)
+        Mockito.`when`(service.promoteDraft(any(), any())).thenReturn(sampleInstallResult)
+        val controller = SkillController(service)
+
+        val response = controller.promoteDraft("refactor-auth-1732456789012", overwrite = false)
+
+        assertEquals(HttpStatus.OK, response.statusCode)
+        val body = response.body!!
+        assertEquals(true, body["success"])
+        assertEquals("web-scraping", body["skillId"])
+        Mockito.verify(service).promoteDraft("refactor-auth-1732456789012", false)
+    }
+
+    @Test
+    @DisplayName("promoteDraft returns 400 when draft is missing")
+    fun testPromoteDraftReturns400WhenMissing() = kotlinx.coroutines.runBlocking {
+        val service = Mockito.mock(SkillService::class.java)
+        Mockito.`when`(service.promoteDraft(any(), any()))
+            .thenThrow(IllegalArgumentException("Draft not found"))
+        val controller = SkillController(service)
+
+        val response = controller.promoteDraft("missing-123", overwrite = false)
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.statusCode)
+        assertEquals(false, response.body!!["success"])
+    }
 }

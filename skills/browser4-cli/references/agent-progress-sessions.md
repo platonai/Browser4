@@ -49,6 +49,7 @@ Task submitted: 3b27930e-48bc-4460-aae7-be521f0a9194
 [00:04] #2 browser_snapshot
 [00:09]   ↳ #1 b4.run ok in 6.2s
 [00:12]   ⋯ The grid shows prices in a second column; I will extract both.
+[00:12]   » Intent: query the price column — to build the CSV with both fields
 [00:15] #3 htmlsnapshot_query(sql="...")
 ✔ Agent completed in 41.3s · 3b27930e-48bc-4460-aae7-be521f0a9194 · 3 round(s) · 39 tool(s) · 54.4k tokens
 
@@ -65,6 +66,7 @@ Files written (1) · workspace: ~/.browser4/agent/workspace.3b27…
 - **A run parked on a permission is labelled, not mistaken for a slow tool**: `⏸ waiting for approval: fs.write /etc/hosts (req-1) — /approve req-1 in `agent run -i`, or POST …` when `coding.requestAccess` queues a request, and `✔ access approved: req-1` / `✖ access denied: req-1 — <reason>` once someone answers.
 - Arguments are shown as `key="value"` for the keys a reader can act on (`selector`, `ref`, `url`, `path`, `file`, `args`, `text`, `query`, `sql`, `command`) — at most three, then `+N` for the rest. A shape with none of those keys falls back to the compact JSON, so nothing is hidden.
 - Prose lines (the model's own text, steering) are marked `⋯` / `↪` and wrap to `COLUMNS` (clamped 40–400, default 100), the continuation indented under the marker instead of running back to column 0. Structured lines (calls and results) deliberately stay one line — they are what people grep and copy.
+- **The purpose of the next step is its own line**: `» Intent: <what> — <why>` is the text the model writes together with a tool call (that text used to be dropped, so the view showed only WHICH tool ran). `/intent off` hides it and also stops the backend asking for it — the line costs tokens, so hiding it must not keep paying for it; `/tools off` hides the tool rows instead. Both switches are live for a running task and remembered for the next ones.
 - **Long silences are not a hang.** After 30 s without a step the live view prints `[00:39]   ⋯ still running · 5 step(s) · 30s since the last step`, then at most one more every 30 s. A single slow tool (three minutes inside one `b4.run`) used to print nothing at all in between. Terminal only — a piped log, `--quiet`, `--json` and `--ndjson` carry steps and nothing else. `-i` behaves the same.
 - **A gap in the step stream is reported, never silent.** Steps live in a bounded per-task buffer (1000); if the follower falls behind it, the backend says `resynced=true` and the live view prints `⚠ fell behind the retained step window — N step(s) dropped, resumed at seq M` (in `--ndjson` the same fact arrives as `{"type":"events.resynced","firstRetainedSeq":…,"dropped":N,"after":…}`). Before this, the page was simply empty and a lost stretch looked like a stalled agent.
 - **The steps survive a backend restart.** Each task's steps are written to `<data>/agent/events/<taskId>.jsonl` (write-behind; the same bounded window, rotated at ~4 MB, aged out with the task TTL), and the endpoint restores them on demand, keeping their original `seq` — so a follower that reconnects after a restart continues from its cursor instead of finding an empty process next to a terminal status row. A restored window starts `dropped` at 0: what was evicted before the restart is gone from the shard too, and `firstRetainedSeq` says where the remaining window begins.
@@ -247,6 +249,8 @@ Session commands:
 | `/coding [on\|off]` | Treat following tasks as coding tasks |
 | `/quiet [on\|off]` | Silence the session's human lines — the same effect as the global `-q`, for the rest of this session (bare `/quiet` flips it) |
 | `/verbose [on\|off]` | Also print round markers (`· round 2`) and fast successful tools (`↳ #1 b4.run ok in 40ms`) — the troubleshooting view, off by default |
+| `/intent [on\|off]` | Show the purpose the model states for each next step (`» Intent: open the product page — to read its price`). Off also stops the backend asking for it, so the line costs no tokens |
+| `/tools [on\|off]` | Show the tool call/result lines (`#1 b4.run`, `↳ #1 b4.run ok in 40ms`); the steps stay recorded, so turning it back on shows the next ones |
 | `/noop-limit <n>` | Consecutive no-op abort threshold (blank resets) |
 | `/events [n]` | Raw JSON of the last n steps (default 20) |
 | `/quit` | Leave the session |

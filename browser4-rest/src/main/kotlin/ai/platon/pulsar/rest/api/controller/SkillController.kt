@@ -22,6 +22,8 @@ import kotlin.io.path.*
  * | `POST`   | `/api/skills/install`      | Install from path or zip |
  * | `DELETE` | `/api/skills/{id}`         | Uninstall a skill        |
  * | `POST`   | `/api/skills/{id}/reload`  | Reload a skill           |
+ * | `GET`    | `/api/skills/drafts`       | List auto-generated drafts |
+ * | `POST`   | `/api/skills/drafts/{id}/promote` | Promote a draft into the registry |
  */
 @RestController
 @CrossOrigin
@@ -234,6 +236,50 @@ class SkillController(
             logger.warn("Cannot reload skill '{}': {}", id, e.message)
             ResponseEntity.badRequest().body(
                 mapOf("success" to false, "skillId" to id, "message" to (e.message ?: "Cannot reload"))
+            )
+        }
+    }
+
+    /**
+     * List auto-generated skill drafts awaiting review or promotion.
+     */
+    @GetMapping("/drafts")
+    fun listDrafts(): ResponseEntity<List<SkillService.DraftSummary>> {
+        val drafts = skillService.listDrafts()
+        logger.info("Listed {} skill draft(s)", drafts.size)
+        return ResponseEntity.ok(drafts)
+    }
+
+    /**
+     * Promote an auto-generated draft into the runtime registry by installing it.
+     *
+     * @param id         the draft directory name (as returned by [listDrafts])
+     * @param overwrite  if true, overwrite an existing registered skill with the same id
+     */
+    @PostMapping("/drafts/{id}/promote")
+    suspend fun promoteDraft(
+        @PathVariable id: String,
+        @RequestParam(value = "overwrite", defaultValue = "false") overwrite: Boolean,
+    ): ResponseEntity<Map<String, Any?>> {
+        return try {
+            val result = skillService.promoteDraft(id, overwrite)
+            ResponseEntity.ok(
+                mapOf(
+                    "success" to result.success,
+                    "skillId" to result.skillId,
+                    "message" to result.message,
+                    "deployedPath" to result.deployedPath,
+                )
+            )
+        } catch (e: IllegalArgumentException) {
+            logger.warn("Draft not found for promote: {}", id)
+            ResponseEntity.badRequest().body(
+                mapOf("success" to false, "message" to (e.message ?: "Invalid draft"))
+            )
+        } catch (e: IllegalStateException) {
+            logger.warn("Cannot promote draft '{}': {}", id, e.message)
+            ResponseEntity.status(409).body(
+                mapOf("success" to false, "message" to (e.message ?: "Cannot promote"))
             )
         }
     }

@@ -349,6 +349,22 @@ endpoints under `/api/skills`:
 | `POST` | `/api/skills/install` | Install from a server-side `path` or a multipart `file` zip, with optional `overwrite` |
 | `DELETE` | `/api/skills/{id}` | Uninstall a skill |
 | `POST` | `/api/skills/{id}/reload` | Reload a filesystem-backed skill from its source directory |
+| `GET` | `/api/skills/drafts` | List auto-generated skill drafts (off by default; see below) |
+| `POST` | `/api/skills/drafts/{id}/promote` | Install a draft into the registry, with optional `overwrite` |
+
+#### Auto-generated skill drafts
+
+When `browser4.agent.skill.summary.enabled=true`, a successful agent run is distilled into a
+reusable `SKILL.md` draft under `<app data>/agent/skills-drafts/` — never written back into the
+repository `skills/` tree. The mechanism is conservative and best-effort: it is off by default,
+any failure is swallowed and never affects the task's success status or verdict, and
+`registerMode` defaults to `draft` so generated skills are never auto-activated — they must be
+promoted manually through the endpoint above (or set `registerMode=auto` to register validated
+drafts immediately). Repeated similar runs append a new `## Examples` entry to the existing draft
+and bump its patch version instead of creating duplicates, and every generated file is scanned by
+the same `SecretRedactor` used for task events so no secrets leak into a draft. See
+[`docs/config.md`](../../../../../docs/config.md) under "Auto-generated skill summaries" for all
+`browser4.agent.skill.summary.*` properties.
 
 `SkillMCPToolExecutor` (`browser4-rest`) mounts the management surface as a parallel set of
 `skill.*` MCP tools: `skill.list`, `skill.info`, `skill.install` (takes a server-side `path`, unlike

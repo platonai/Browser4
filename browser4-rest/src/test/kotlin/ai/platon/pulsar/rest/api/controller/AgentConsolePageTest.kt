@@ -82,6 +82,29 @@ class AgentConsolePageTest {
     }
 
     @Test
+    @DisplayName("the live view can hide the step purpose and the tool rows independently")
+    fun consolePageExposesTheStepViewSwitches() {
+        listOf("intentToggle", "toolToggle").forEach { id ->
+            assertTrue(html.contains("id=\"$id\""), "missing live-view switch #$id")
+        }
+        // A hidden family of rows stays rendered and is hidden by one class on the log, so
+        // turning the switch back on shows the following steps at once.
+        assertTrue(
+            html.contains(".steps.hide-intent .step-intent"),
+            "the intent rows need their own switch"
+        )
+        assertTrue(
+            html.contains(".steps.hide-toolcalls .step-tool"),
+            "the tool rows need their own switch"
+        )
+        assertTrue(html.contains("model.intent"), "the page must render the model.intent steps")
+        // The intent switch also reaches the backend: the line exists only because the system
+        // prompt asks for it, so hiding it must stop the request (and its token cost).
+        assertTrue(html.contains("&intent=false"), "hiding the intent line must reach the backend")
+        assertTrue(html.contains("b4.agent.web.intent"), "the switch is remembered across visits")
+    }
+
+    @Test
     @DisplayName("the console page has one composer: no separate steer box, no fixed tutorial steps")
     fun consolePageHasASingleComposer() {
         assertFalse(html.contains("id=\"steerInput\""), "steering must reuse the one composer input")

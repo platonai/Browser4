@@ -32,6 +32,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
@@ -1443,6 +1444,86 @@ class StatefulAgentRunnerTest {
             assertFalse(ahead.resynced)
         } finally {
             runner.close()
+        }
+    }
+
+    @Test
+    @DisplayName("TR-2.1/TR-2.4 a successful task triggers auto skill summary and the event replays from the store")
+    fun successfulTaskTriggersAutoSkillSummaryAndReplays() {
+        // Default is OFF (conservative): opt in for this test only.
+        System.setProperty("browser4.agent.skill.summary.enabled", "true")
+        System.setProperty("browser4.agent.skill.summary.registerMode", "draft")
+        try {
+            runBlocking {
+                val agent = mockAgent(
+                    history = AgentHistory(mutableListOf(state(1, "summarize task", "run-s"))),
+                    lastRunSessionId = "run-s",
+                )
+                coEvery { agent.run(any<String>()) } returns AgentHistory(
+                    mutableListOf(state(1, "summarize task", "run-s"), state(2, "summarize task", "run-s"))
+                )
+                val runner = StatefulAgentRunner(mockSession(agent))
+                try {
+                    val status = AgentTaskStatus()
+                    runner.execute("summarize task", status)
+                    assertTrue(status.isDone, "task must finish successfully to trigger the summary hook")
+
+                    // triggerAutoSkillSummary runs on taskScope (async). Poll the replayable
+                    // event store until the skill.summarize event lands (TR-2.4).
+                    withTimeout(8000) {
+                        while (runner.events(status.id).none { it.type == AgentTaskEvent.TYPE_SKILL_SUMMARIZE }) {
+                            delay(50)
+                        }
+                    }
+                    val replay = runner.events(status.id)
+                    assertTrue(
+                        replay.any { it.type == AgentTaskEvent.TYPE_SKILL_SUMMARIZE },
+                        "a skill.summarize event must be present in the replayed stream (TR-2.1)",
+                    )
+                } finally {
+                    runner.close()
+                }
+            }
+        } finally {
+            System.clearProperty("browser4.agent.skill.summary.enabled")
+            System.clearProperty("browser4.agent.skill.summary.registerMode")
+        }
+    }
+
+    @Test
+    @DisplayName("AC-2 a failed task never triggers the auto skill summary hook")
+    fun failedTaskDoesNotTriggerAutoSkillSummary() {
+        System.setProperty("browser4.agent.skill.summary.enabled", "true")
+        System.setProperty("browser4.agent.skill.summary.registerMode", "draft")
+        try {
+            runBlocking {
+                val agent = mockAgent(
+                    history = AgentHistory(mutableListOf(state(1, "summarize task", "run-s"))),
+                    lastRunSessionId = "run-s",
+                )
+                coEvery { agent.run(any<String>()) } throws IllegalStateException("kaboom")
+                val runner = StatefulAgentRunner(mockSession(agent))
+                try {
+                    val status = AgentTaskStatus()
+                    runner.execute("summarize task", status)
+                    assertNotEquals(ResourceStatus.SC_OK, status.statusCode, "task must fail for this test")
+
+                    // The summary hook only fires on the success path. Give any stray async
+                    // emission a window to land, then assert it never did (AC-2).
+                    val landed = withTimeoutOrNull(2000) {
+                        while (runner.events(status.id).none { it.type == AgentTaskEvent.TYPE_SKILL_SUMMARIZE }) {
+                            delay(50)
+                        }
+                        true
+                    }
+                    assertNull(landed, "a failed task must not emit a skill.summarize event (AC-2)")
+                } finally {
+                    runner.close()
+                }
+            }
+        } finally {
+            System.clearProperty("browser4.agent.skill.summary.enabled")
+            System.clearProperty("browser4.agent.skill.summary.registerMode")
         }
     }
 

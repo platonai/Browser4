@@ -808,6 +808,14 @@ struct Renderer {
     /// successful tools. `/verbose on` in the session; off otherwise (format plan
     /// P2-2).
     verbose: bool,
+    /// Print the purpose line the model states with each tool call
+    /// (`model.intent` steps). `/intent off` hides it; on by default because it is
+    /// the one line that says WHY a tool is about to run.
+    show_intent: bool,
+    /// Print the tool lines themselves (`tool.call` / `tool.result`). `/tools off`
+    /// silences them; the call numbering still advances so a re-enabled view is
+    /// consistent.
+    show_tool_calls: bool,
 }
 
 /// How many model requests between two progress usage lines.
@@ -835,6 +843,8 @@ impl Renderer {
             warned_80: false,
             exhausted_printed: false,
             verbose: false,
+            show_intent: true,
+            show_tool_calls: true,
         }
     }
 
@@ -879,6 +889,12 @@ impl Renderer {
                 // the same `#n`, which is the only way to tell two calls of the
                 // same tool apart.
                 self.pending_calls.push((tool.to_string(), index));
+                // `/tools off` hides the tool lines but must not disturb the
+                // bookkeeping above: the queue is drained by the result, and the
+                // numbering has to stay aligned with a view that turns them back on.
+                if !self.show_tool_calls {
+                    return None;
+                }
                 let args = event
                     .arguments
                     .as_deref()
@@ -897,6 +913,9 @@ impl Renderer {
                 // Drains even when the line below is skipped: a fast success
                 // renders nothing, but it still frees its call.
                 let call = self.take_pending_call(tool);
+                if !self.show_tool_calls {
+                    return None;
+                }
                 let failed = event.ok == Some(false);
                 let slow = event.duration_ms.unwrap_or(0) >= SLOW_TOOL_MS;
                 // `/verbose` also shows the fast successes — the ones that are
@@ -935,6 +954,20 @@ impl Renderer {
                         duration
                     ))
                 }
+            }
+            "model.intent" => {
+                let text = event.text.as_deref().unwrap_or_default();
+                if text.is_empty() || !self.show_intent {
+                    return None;
+                }
+                // `»` marks "the model's stated purpose for the next step". Wrapped
+                // like the model's own text: one step's intent is a sentence, not a
+                // single short line.
+                let gutter = format!("{}   » ", self.time_prefix());
+                Some(
+                    wrap_with_gutter(&truncate(text, MODEL_TEXT_PREVIEW), &gutter, self.width)
+                        .join("\n"),
+                )
             }
             "model.text" => {
                 let text = event.text.as_deref().unwrap_or_default();
@@ -2994,6 +3027,17 @@ struct Repl {
     /// `/verbose on`: the step renderer also shows round markers and fast
     /// successful tools.
     verbose: bool,
+    /// `/intent off`: stop asking the backend for the model's per-step purpose line
+    /// and stop rendering it. The switch is sent with every submitted task, because
+    /// turning it off is also what removes the instruction (and its token cost).
+    show_intent: bool,
+    /// The explicit `/intent on|off` the user asked for, sent verbatim so that `on`
+    /// also overrides a backend default of off; `None` means "never touched it, keep
+    /// the server default".
+    intent_override: Option<bool>,
+    /// `/tools off`: hide the tool call/result lines, keeping only the intent (or
+    /// model) lines and the events that are always printed.
+    show_tool_calls: bool,
     current: Option<TaskFollower>,
     last_task: Option<String>,
     /// Session generation [Self::last_task] was started in.
@@ -3093,6 +3137,9 @@ impl Repl {
             tty: io::stdin().is_terminal(),
             quiet: quiet_enabled(),
             verbose: false,
+            show_intent: true,
+            intent_override: None,
+            show_tool_calls: true,
             current: None,
             last_task: None,
             last_task_generation: 0,
@@ -3497,9 +3544,22 @@ impl Repl {
             color_enabled(),
             self.quiet,
         ));
+        self.sync_view_flags();
         self.out(&format!(
             "… following task {task_id} again — live steps resume"
         ));
+    }
+
+    /// Apply this session's live-view switches to the current follower.
+    ///
+    /// A follower attached after `/verbose`, `/intent` or `/tools` must inherit the
+    /// session's choices; otherwise re-attaching silently reverts the view.
+    fn sync_view_flags(&mut self) {
+        if let Some(follower) = self.current.as_mut() {
+            follower.renderer.verbose = self.verbose;
+            follower.renderer.show_intent = self.show_intent;
+            follower.renderer.show_tool_calls = self.show_tool_calls;
+        }
     }
 
     /// `/followup <text>`: queue a message that is delivered when the task would
@@ -3627,9 +3687,7 @@ impl Repl {
         ));
         // A follower created after `/verbose on` starts verbose; `/quiet on`
         // already arrived through the constructor's `quiet` argument.
-        if let Some(follower) = self.current.as_mut() {
-            follower.renderer.verbose = self.verbose;
-        }
+        self.sync_view_flags();
         self.prompt_pending = false;
         // Pull the first page now instead of waiting for the next tick: the
         // opening steps show up immediately, and a task that already finished
@@ -3686,6 +3744,15 @@ impl Repl {
         // `--unrestricted` is a session-wide grant, exactly like `--add-dir`: every
         // task this REPL submits carries it until `-i` exits.
         crate::apply_unrestricted(&mut extra, self.unrestricted);
+        // `/intent on|off` reaches the backend, not just the renderer: the line is only
+        // produced because the system prompt asks for it, so toggling it locally without
+        // telling the backend would either keep paying tokens for a hidden line or render
+        // nothing. An explicit toggle is sent verbatim (`on` must override a server
+        // default of off); an untouched switch sends nothing and leaves the server
+        // default (`browser4.agent.intent.enabled`) as the single source of truth.
+        if let Some(value) = self.intent_override {
+            extra["intent"] = json!(value);
+        }
         extra
     }
 
@@ -3774,9 +3841,7 @@ impl Repl {
                     color_enabled(),
                     self.quiet,
                 ));
-                if let Some(follower) = self.current.as_mut() {
-                    follower.renderer.verbose = self.verbose;
-                }
+                self.sync_view_flags();
                 self.prompt_pending = false;
                 self.poll_and_recover().await;
             }
@@ -4015,6 +4080,10 @@ impl Repl {
             "followup" | "follow-up" => self.follow_up(argument).await,
             "quiet" => self.set_quiet(argument),
             "verbose" => self.set_verbose(argument),
+            // `/intent [on|off]`: the model's one-line "what happens next, and why".
+            // `/tools [on|off]`: the tool call/result lines themselves.
+            "intent" => self.set_intent(argument),
+            "tools" => self.set_tool_calls(argument),
             "noop-limit" => self.set_noop_limit(argument),
             "session" => {
                 let session = self.session_id().unwrap_or_else(|| "default".to_string());
@@ -4229,6 +4298,9 @@ impl Repl {
         self.out("  /dirs [clear]      list the folders granted in this session, or drop them all");
         self.out("  /quiet [on|off]    silence the session's human lines (like -q)");
         self.out("  /verbose [on|off]  also print round markers and fast successful tools");
+        self.out("  /intent [on|off]   show the purpose the model states for each next step");
+        self.out("                     (off also stops asking for it, so it costs no tokens)");
+        self.out("  /tools [on|off]    show the tool call/result lines");
         self.out("  /noop-limit <n>    consecutive no-op abort threshold (blank resets)");
         self.out("  /events [n]        raw JSON of the last n steps (default 20)");
         self.out("  /stats [task-id]   run statistics: LLM rounds/requests, tokens, tool calls");
@@ -4687,6 +4759,57 @@ impl Repl {
             } else {
                 "off"
             }
+        ));
+    }
+
+    /// `/intent [on|off]`: render the purpose the model states for the next step.
+    ///
+    /// The switch covers both halves of the feature on purpose: the line exists only
+    /// because the model was asked to write it, so hiding it while still paying for
+    /// the instruction would be the worst of both. It is sent with every subsequent
+    /// task of this session ([`Self::payload_with`]).
+    fn set_intent(&mut self, argument: &str) {
+        let Some(value) = parse_toggle(argument) else {
+            self.out(&format!(
+                "usage: /intent [on|off] (got '{}')",
+                argument.trim()
+            ));
+            return;
+        };
+        self.show_intent = value.unwrap_or(!self.show_intent);
+        self.intent_override = Some(self.show_intent);
+        if let Some(follower) = self.current.as_mut() {
+            follower.renderer.show_intent = self.show_intent;
+        }
+        self.out(&format!(
+            "intent {}",
+            if self.show_intent {
+                "on — the model states the purpose of each next step"
+            } else {
+                "off — no intent line, and the backend stops asking for it"
+            }
+        ));
+    }
+
+    /// `/tools [on|off]`: render the tool call/result lines.
+    ///
+    /// Pure client-side: the steps are always recorded by the backend, so turning it
+    /// back on shows the following ones immediately.
+    fn set_tool_calls(&mut self, argument: &str) {
+        let Some(value) = parse_toggle(argument) else {
+            self.out(&format!(
+                "usage: /tools [on|off] (got '{}')",
+                argument.trim()
+            ));
+            return;
+        };
+        self.show_tool_calls = value.unwrap_or(!self.show_tool_calls);
+        if let Some(follower) = self.current.as_mut() {
+            follower.renderer.show_tool_calls = self.show_tool_calls;
+        }
+        self.out(&format!(
+            "tool calls {}",
+            if self.show_tool_calls { "on" } else { "off" }
         ));
     }
 
@@ -6610,6 +6733,74 @@ mod tests {
         assert!(line.contains("ok in 40ms"), "{line}");
     }
 
+    /// `model.intent`: the purpose the model states for the next step is its own kind of
+    /// row — shown by default, hidden by `/intent off`, independent of the tool rows.
+    #[test]
+    fn intent_line_renders_and_the_switch_hides_it() {
+        let mut renderer = Renderer::new(Instant::now(), false, false);
+        let mut intent = event("model.intent");
+        intent.text = Some("Intent: open the product page — to read its price".to_string());
+        let line = renderer
+            .format(&intent)
+            .expect("the intent line prints by default");
+        assert!(line.contains("open the product page"), "{line}");
+        assert!(line.contains('»'), "the intent row has its own marker: {line}");
+
+        renderer.show_intent = false;
+        assert!(renderer.format(&intent).is_none(), "/intent off hides it");
+
+        // The tool rows have their own switch: hiding the intent does not silence them.
+        let mut call = event("tool.call");
+        call.tool = Some("b4.run".to_string());
+        assert!(renderer.format(&call).is_some());
+    }
+
+    /// `/tools off` hides the tool rows but must keep the call bookkeeping intact, or a
+    /// result that arrives while they are hidden would shift the `#n` of a later call.
+    #[test]
+    fn tool_rows_can_be_hidden_without_disturbing_the_numbering() {
+        let mut renderer = Renderer::new(Instant::now(), false, false);
+        renderer.show_tool_calls = false;
+        let mut first = event("tool.call");
+        first.tool = Some("b4.run".to_string());
+        assert!(renderer.format(&first).is_none(), "/tools off hides the call");
+
+        let mut result = event("tool.result");
+        result.tool = Some("b4.run".to_string());
+        result.ok = Some(false);
+        assert!(
+            renderer.format(&result).is_none(),
+            "/tools off hides the result too"
+        );
+        assert!(
+            renderer.pending_calls.is_empty(),
+            "the hidden result still drains its call"
+        );
+
+        renderer.show_tool_calls = true;
+        let mut second = event("tool.call");
+        second.tool = Some("fill".to_string());
+        let line = renderer.format(&second).expect("shown again");
+        assert!(
+            line.contains("#2"),
+            "the hidden call still consumed #1: {line}"
+        );
+    }
+
+    /// `/intent off` reaches the backend, not only the renderer: the line is produced
+    /// because the prompt asks for it, so hiding it must stop the request. "On" sends
+    /// nothing, keeping the server default as the single definition of the switch.
+    #[test]
+    fn payload_carries_intent_only_while_it_is_switched_off() {
+        let client = Client::builder().build().expect("client");
+        let mut repl = Repl::new(&client, "http://localhost:1", &json!({}), None);
+        assert_eq!(repl.payload().get("intent"), None, "the default sends nothing");
+        repl.set_intent("off");
+        assert_eq!(repl.payload().get("intent"), Some(&json!(false)));
+        repl.set_intent("on");
+        assert_eq!(repl.payload().get("intent"), None);
+    }
+
     /// `/quiet` and `/verbose` must reach the follower that is already running —
     /// a toggle that only applies to the next task is a bug waiting to be filed.
     #[test]
@@ -6627,6 +6818,22 @@ mod tests {
         assert!(
             repl.current.as_ref().expect("follower").renderer.verbose,
             "verbose must reach the running follower"
+        );
+
+        repl.set_intent("off");
+        assert!(!repl.show_intent);
+        assert!(
+            !repl.current.as_ref().expect("follower").renderer.show_intent,
+            "intent must reach the running follower"
+        );
+        repl.set_tool_calls("off");
+        assert!(
+            !repl.current
+                .as_ref()
+                .expect("follower")
+                .renderer
+                .show_tool_calls,
+            "the tool switch must reach the running follower"
         );
 
         repl.set_quiet("on");

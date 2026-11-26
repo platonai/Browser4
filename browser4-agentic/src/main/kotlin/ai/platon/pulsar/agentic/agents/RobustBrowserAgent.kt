@@ -86,6 +86,31 @@ private const val CLI_STEERING_PREFIX =
 private const val CLI_FOLLOW_UP_PREFIX =
     "[User follow-up — sent while this task was finishing. The task continues with it; " +
         "it is the next instruction in this same conversation.]"
+
+/**
+ * Server-side default of the per-task "next step intent" switch.
+ *
+ * `false` turns the feature off everywhere it has not been overridden — including the
+ * instruction below, so the prompt costs nothing when nobody reads the line.
+ */
+private const val STEP_INTENT_ENABLED_KEY = "browser4.agent.intent.enabled"
+
+/**
+ * System-prompt section that asks the model to state the purpose of each next step.
+ *
+ * The text accompanies a tool-calling response, which used to be discarded: the live views
+ * therefore showed only WHAT ran, never why. One short line is enough for that, and asking
+ * for it here (rather than in every tool description) keeps it in one place. It is only
+ * appended while the task's intent switch is on, so turning the feature off removes both
+ * the rendering and its token cost.
+ */
+private const val CLI_STEP_INTENT_INSTRUCTION =
+    "### Step intent (shown to the user)\n\n" +
+        "Before each tool call, write ONE plain-text line stating the next step and its reason:\n" +
+        "`Intent: <what you are about to do> — <why>`. At most 25 words, no markdown, no lists.\n" +
+        "State the purpose of the step, not its parameters. When the task is finished, call\n" +
+        "`system.taskComplete` (or answer) as usual — no `Intent:` line then."
+
 /**
  * Explicit tool domains exposed to the CLI engine (design v0.2 §4.4; memory §7.1).
  *
@@ -317,6 +342,24 @@ internal data class RoundToolRecord(
  */
 internal fun cliToolLoopMaxIterations(configured: Int, codingMode: Boolean): Int =
     configured.coerceAtLeast(if (codingMode) 60 else 40)
+
+/**
+ * The purpose line a tool-calling response carries, or `null` when it has none.
+ *
+ * "Intent" means the text that accompanies a tool request: a model that alternates
+ * between `Intent: …` and a tool call explains WHY it is about to act, and that text
+ * used to be dropped (only a text-only answer became `model.text`). A response without
+ * tool calls is a closing report, and a response without text says nothing extra — both
+ * return `null`, so the intent step never duplicates `model.text`.
+ *
+ * The response is read defensively: this only feeds a live view, so an unexpected shape
+ * must degrade to "no intent" instead of failing the model request it describes.
+ */
+internal fun stepIntentOf(response: ChatResponse): String? {
+    val aiMessage = runCatching { response.aiMessage() }.getOrNull() ?: return null
+    if (aiMessage.toolExecutionRequests().isNullOrEmpty()) return null
+    return aiMessage.text()?.trim()?.takeIf { it.isNotEmpty() }
+}
 
 /**
  * The "progress so far" block appended to an overflow continuation.
@@ -959,6 +1002,30 @@ open class RobustBrowserAgent(
      */
     @Volatile
     override var codingMode: Boolean = false
+
+    /**
+     * Per-task override of the "next step intent" switch.
+     *
+     * Set by [ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner] from the
+     * task's `intent` argument (`command.run(intent=…)`, `POST /api/commands/plain?intent=`,
+     * the interactive `/intent` command). `null` keeps the server default
+     * ([STEP_INTENT_ENABLED_KEY], on by default); like the other per-task overrides it is
+     * reset when the task ends, because the companion agent is shared.
+     */
+    @Volatile
+    var stepIntentOverride: Boolean? = null
+
+    /**
+     * Whether this run asks the model for a one-line "what and why" before each tool call,
+     * and reports it as [AgentRunEvent.MODEL_INTENT].
+     *
+     * One switch for both halves on purpose: rendering a line the model was never asked to
+     * write shows nothing, and asking for a line nobody renders pays tokens for nothing.
+     */
+    val stepIntentEnabled: Boolean
+        get() = stepIntentOverride
+            ?: runCatching { session.sessionConfig.getBoolean(STEP_INTENT_ENABLED_KEY, true) }
+                .getOrDefault(true)
 
     private val closed = AtomicBoolean(false)
     val isClosed: Boolean get() = closed.get()
@@ -2049,6 +2116,10 @@ open class RobustBrowserAgent(
                     }
                 }
                 emitUsageEvent(response, turn, budget = tokenBudget)
+                // Live view: the purpose the model stated for the tool calls it just
+                // requested. `model.text` only carries a text-only answer, so without this
+                // the reasoning behind each step never reached a follower.
+                emitStepIntent(response, turn)
             },
             onToolResult = { req, result, durationMs ->
                 // Live view: one event per executed tool (`agent run --follow`).
@@ -2306,6 +2377,27 @@ open class RobustBrowserAgent(
                 cumulativeTokens = budget?.consumedTotal,
             )
         )
+    }
+
+    /**
+     * Report the model's stated purpose for the tool calls of one response.
+     *
+     * Only a response that BOTH requests tools and carries text has an intent to report:
+     * a text-only answer is the run's closing report ([AgentRunEvent.MODEL_TEXT]), and a
+     * text-less tool request says nothing extra. Off when the task's intent switch is off.
+     *
+     * Reading the response is guarded: a rendering aid must never fail the request it
+     * describes.
+     *
+     * @param response the provider's answer for this request
+     * @param turn 1-based outer round the request belongs to
+     */
+    private fun emitStepIntent(response: ChatResponse, turn: Int) {
+        if (!stepIntentEnabled) return
+        val intent = runCatching { stepIntentOf(response) }
+            .onFailure { logger.debug("intent step skipped: {}", it.message) }
+            .getOrNull() ?: return
+        emitRunEvent(AgentRunEvent(AgentRunEvent.MODEL_INTENT, text = intent, turn = turn))
     }
 
     /**
@@ -2974,6 +3066,12 @@ open class RobustBrowserAgent(
         // model about its boundaries in the first round, and a `--access full` task running on a
         // backend configured for `read` must not be told it is restricted.
         append(CliAgentPrompt.hygiene(codingMode, agentWorkspaceDir, agentToolManager.accessPolicy))
+        // The intent line is asked for only while a view renders it: with the switch off the
+        // model must not spend tokens writing a line nobody shows.
+        if (stepIntentEnabled) {
+            append("\n\n")
+            append(CLI_STEP_INTENT_INSTRUCTION)
+        }
         // Operator-supplied guidance goes last, after every engine-owned section.
         val externalAppend = CliAgentPrompt.externalAppend(conf)
         if (externalAppend.isNotEmpty()) {
