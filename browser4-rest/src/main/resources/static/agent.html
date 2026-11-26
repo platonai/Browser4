@@ -1,0 +1,2751 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src http: https:; img-src data:; base-uri 'none'; form-action 'none'">
+<meta name="description" content="Browser4：在浏览器里提交 agent 任务、实时看每一步、插话、停止、读结果。">
+<title>Browser4 · agent run -i 的网页版</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #161d26;
+    --panel2: #1c2530;
+    --panel3: #212c39;
+    --border: #2c3a48;
+    --border-soft: #22303d;
+    --text: #d7e1ea;
+    --muted: #8ba0b0;
+    --muted2: #6d8395;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --blue: #58a6ff;
+    --purple: #bc8cff;
+    --mono: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+    /* Left column width; 0 when the sidebar is collapsed (see body.sidebar-collapsed). */
+    --sidebar-w: 288px;
+    /* Measured from the docked composer at runtime (see observeComposer). */
+    --composer-h: 172px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  html { scroll-padding-bottom: calc(var(--composer-h) + 28px); }
+  body {
+    min-height: 100vh;
+    background: radial-gradient(1200px 600px at 80% -10%, #17222e 0%, var(--bg) 55%) fixed;
+    color: var(--text);
+    font: 14px/1.6 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+    /* Right column: the sidebar offset plus the shell's own padding. */
+    padding: 22px 22px calc(var(--composer-h) + 34px) calc(var(--sidebar-w) + 26px);
+    transition: padding-left .16s ease;
+  }
+  body.sidebar-collapsed { --sidebar-w: 0px; }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, kbd, pre, .mono { font-family: var(--mono); }
+  code { background: #0b1117; border: 1px solid var(--border-soft); border-radius: 5px; padding: 1px 5px; font-size: 12.5px; }
+  kbd {
+    font-size: 11px; padding: 1px 5px; border-radius: 4px; color: var(--muted);
+    border: 1px solid var(--border); border-bottom-width: 2px; background: var(--panel2);
+  }
+  .hidden { display: none !important; }
+  .wrap { max-width: 1120px; margin: 0 auto; }
+
+  /* ---------- header ---------- */
+  header.top {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 16px;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .logo {
+    width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center;
+    font: 800 15px/1 -apple-system, "Segoe UI", Roboto, sans-serif; letter-spacing: .3px; color: #0d1117;
+    background: linear-gradient(135deg, #58a6ff, #3fb950); flex: none;
+  }
+  h1 { font-size: 18px; line-height: 1.25; margin: 0; font-weight: 650; }
+  .top-right { margin-left: auto; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12.5px; }
+  .top-links { display: flex; gap: 12px; }
+  .top-links a { color: var(--muted); }
+  .top-links a:hover { color: var(--blue); }
+
+  /* ---------- main ---------- */
+  .main {
+    display: flex; flex-direction: column; gap: 16px;
+    min-height: calc(100vh - 132px);
+  }
+  /* Idle: the headline and the composer sit in the middle of the work area (the layout the
+     page opens with). The class lands on <body> when a task starts or a session is opened. */
+  body:not(.composer-docked) .main { justify-content: center; }
+  body:not(.composer-docked) #runPanel,
+  body:not(.composer-docked) #resultCard { display: none; }
+  body.composer-docked #idleHero { display: none; }
+  .idle-hero { text-align: center; max-width: 680px; margin: 0 auto 22px; }
+  .idle-logo {
+    width: 46px; height: 46px; margin: 0 auto 14px; border-radius: 14px; display: grid; place-items: center;
+    font: 800 17px/1 -apple-system, "Segoe UI", Roboto, sans-serif; letter-spacing: .3px; color: #0d1117;
+    background: linear-gradient(135deg, #58a6ff, #3fb950); box-shadow: 0 10px 30px rgba(63, 185, 80, .18);
+  }
+  .idle-hero h2 { margin: 0 0 8px; font-size: 24px; line-height: 1.3; font-weight: 680; letter-spacing: .2px; }
+  .idle-hero p { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.6; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 14px 16px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
+  }
+
+  /* ---------- layout: a fixed session column on the left, content on the right ---------- */
+  .sidebar {
+    position: fixed; top: 0; bottom: 0; left: 0; z-index: 40;
+    width: var(--sidebar-w); display: flex; flex-direction: column; gap: 9px;
+    padding: 16px 12px 14px; overflow: hidden;
+    background: var(--panel); border-right: 1px solid var(--border);
+    box-shadow: 8px 0 30px rgba(0, 0, 0, 0.18);
+  }
+  body.sidebar-collapsed .sidebar { display: none; }
+  .sidebar-head { display: flex; align-items: center; gap: 6px; flex: none; }
+  .sidebar-title { font-size: 12.5px; font-weight: 650; letter-spacing: .2px; }
+  .sidebar-head .spacer { flex: 1; }
+  .sidebar-head .btn { padding: 2px 7px; }
+  .btn.spin { animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .session-tree { flex: 1 1 auto; overflow-y: auto; display: flex; flex-direction: column; gap: 7px; min-height: 40px; }
+  .ws-group { border: 1px solid var(--border-soft); border-radius: 10px; overflow: hidden; background: #0d131a; }
+  .ws-head {
+    width: 100%; display: flex; align-items: center; gap: 6px; padding: 6px 8px;
+    background: var(--panel2); color: var(--text); border: 0; font: inherit; font-size: 12px;
+    font-weight: 600; cursor: pointer; text-align: left;
+  }
+  .ws-head:hover { background: #1a2430; }
+  .ws-head .chev { color: var(--muted); font-size: 10px; transition: transform .12s ease; flex: none; }
+  .ws-group.collapsed .ws-head .chev { transform: rotate(-90deg); }
+  .ws-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ws-badge { margin-left: auto; font-size: 10.5px; color: var(--muted); font-weight: 500; }
+  .ws-path {
+    padding: 0 8px 5px; font-size: 10.5px; color: var(--muted2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ws-group.collapsed .ws-path, .ws-group.collapsed .ws-body { display: none; }
+  .ws-body { display: flex; flex-direction: column; }
+  .sess {
+    appearance: none; display: flex; flex-direction: column; gap: 1px; width: 100%;
+    padding: 6px 8px; text-align: left; cursor: pointer; color: var(--text);
+    background: transparent; border: 0; border-top: 1px solid var(--border-soft); font: inherit;
+  }
+  .sess:hover { background: var(--panel2); }
+  .sess.active { background: #10202f; box-shadow: inset 2px 0 0 var(--blue); }
+  .sess-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .sess-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: none; }
+  .sess-dot.live { background: var(--green); }
+  .sess-dot.running { background: var(--blue); animation: pulse 1.4s ease-in-out infinite; }
+  .sess-name { font-family: var(--mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sess-now { margin-left: auto; font-size: 10px; color: var(--blue); flex: none; }
+  .sess-meta { font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sidebar-empty { font-size: 11.5px; color: var(--muted); padding: 6px 2px; line-height: 1.5; }
+  .sidebar-foot { display: flex; gap: 7px; }
+  .sidebar-foot .btn { flex: 1; justify-content: center; }
+  /* A restored session reads like a transcript, not like a live run. */
+  .restore-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 2px 2px 8px; }
+  .restore-title { font-size: 12.5px; font-weight: 650; }
+  .restore-actions { margin-left: auto; display: flex; gap: 7px; flex-wrap: wrap; }
+  .turn-role {
+    font-size: 10px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase;
+    color: var(--muted); border: 1px solid var(--border-soft); border-radius: 5px; padding: 0 5px;
+  }
+  .turn-role.task { color: var(--green); border-color: #245c33; }
+  .turn-role.model { color: var(--purple); border-color: #4b3a6b; }
+  .turn-role.tool { color: var(--blue); border-color: #1f4c78; }
+  .turn-role.result { color: var(--muted2); }
+  .turn-role.user { color: var(--yellow); border-color: #5a4415; }
+  .turn-role.outcome { color: var(--muted); }
+  .turn-text { font-size: 12.5px; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+  @media (max-width: 940px) {
+    /* Narrow screens: the sidebar becomes a drawer over the content instead of a column. */
+    body { --sidebar-w: 0px; padding-left: 22px; }
+    .sidebar { width: min(330px, 86vw); z-index: 50; box-shadow: 12px 0 44px rgba(0, 0, 0, 0.55); }
+  }
+
+  /* ---------- pills / badges / buttons ---------- */
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px; padding: 3px 11px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; border: 1px solid var(--border); color: var(--muted);
+    background: var(--panel2); white-space: nowrap;
+  }
+  .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .9; }
+  .pill.ok { color: var(--green); border-color: #245c33; background: #10241a; }
+  .pill.busy { color: var(--blue); border-color: #1f4c78; background: #10202f; }
+  .pill.warn { color: var(--yellow); border-color: #5a4415; background: #241d0c; }
+  .pill.err { color: var(--red); border-color: #6a2624; background: #2a1211; }
+  .pill.idle { color: var(--muted); }
+  .pill.pulse::before { animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border-radius: 6px;
+    font-size: 11px; font-weight: 600; border: 1px solid var(--border); color: var(--muted);
+    background: var(--panel2); white-space: nowrap;
+  }
+  .badge.ok { color: var(--green); border-color: #245c33; }
+  .badge.err { color: var(--red); border-color: #6a2624; }
+  .badge.busy { color: var(--blue); border-color: #1f4c78; }
+  .badge.info { color: var(--purple); border-color: #4b3a6b; }
+
+  .btn {
+    appearance: none; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    border: 1px solid var(--border); background: var(--panel2); color: var(--text);
+    border-radius: 9px; padding: 8px 13px; font: inherit; font-size: 13px; cursor: pointer;
+    transition: background .12s ease, border-color .12s ease, transform .05s ease;
+  }
+  .btn:hover:not(:disabled) { background: var(--panel3); border-color: #3a4b5c; }
+  .btn:active:not(:disabled) { transform: translateY(1px); }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+  .btn:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--blue); outline-offset: 2px;
+  }
+  .btn.primary {
+    background: linear-gradient(180deg, #2f81f7, #1f6feb); border-color: #1f6feb; color: #fff; font-weight: 600;
+  }
+  .btn.primary:hover:not(:disabled) { background: linear-gradient(180deg, #3b8bfa, #2777f0); border-color: #3b8bfa; }
+  .btn.danger { color: #ffb4b0; border-color: #6a2624; background: #2a1211; }
+  .btn.danger:hover:not(:disabled) { background: #3a1715; border-color: #8a322f; }
+  .btn.ghost { background: transparent; }
+  .btn.ghost:hover:not(:disabled) { background: var(--panel2); }
+  .btn.small { padding: 5px 10px; font-size: 12px; border-radius: 8px; }
+  .btn.big { padding: 11px 18px; font-size: 14.5px; border-radius: 10px; }
+  .linkbtn {
+    appearance: none; border: 0; background: none; color: var(--blue); cursor: pointer;
+    font: inherit; font-size: 12px; padding: 0;
+  }
+  .linkbtn:hover { text-decoration: underline; }
+
+  /* ---------- banner ---------- */
+  .banner {
+    display: flex; gap: 10px; align-items: flex-start; padding: 11px 13px;
+    border-radius: 10px; background: #2a1211; border: 1px solid #6a2624; color: #ffc9c6; font-size: 12.5px;
+  }
+  .banner .grow { flex: 1; min-width: 0; }
+  .banner b { color: #fff; }
+  .banner code { background: #1d0d0c; border-color: #5c2220; color: #ffd9d6; }
+  .banner .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
+
+  /* ---------- run panel (the execution log, collapsible) ---------- */
+  .run {
+    padding: 12px 14px 14px;
+    display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0;
+  }
+  .run.collapsed { flex: 0 0 auto; }
+  .run-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .run-head .spacer { flex: 1; }
+  .run-toggle {
+    appearance: none; border: 0; background: none; color: var(--text); cursor: pointer;
+    display: inline-flex; align-items: center; gap: 7px; padding: 0; font: inherit;
+  }
+  .run-title { font-size: 15px; font-weight: 650; line-height: 1.3; }
+  .run-toggle .chev { color: var(--muted2); font-size: 12px; transition: transform .15s ease; }
+  .run.collapsed .run-toggle .chev { transform: rotate(-90deg); }
+  .run-toggle:hover .run-title { color: var(--blue); }
+  .run.collapsed .run-body { display: none; }
+  .run.collapsed { padding-bottom: 12px; }
+  .run-hint { display: none; }
+  .run.collapsed .run-hint { display: inline; }
+  .run-elapsed { color: var(--muted); font-size: 12px; }
+
+  .switch { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; cursor: pointer; user-select: none; }
+  .switch input { accent-color: #1f6feb; }
+  .taskchip {
+    display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 7px;
+    border: 1px solid var(--border); background: var(--panel2); color: var(--muted);
+    font: inherit; font-size: 11.5px; cursor: pointer;
+  }
+  .taskchip:hover { color: var(--text); border-color: #3a4b5c; }
+  .taskchip .copyhint { color: var(--blue); }
+  .live-note { margin: 9px 0 4px; font-size: 12.5px; color: var(--muted); min-height: 1.4em; }
+  .live-note.err { color: #ff9c98; }
+  .heartbeat { font-size: 11.5px; color: var(--muted2); min-height: 1.2em; margin-bottom: 4px; }
+
+  .run-body { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+  .steps {
+    flex: 1 1 auto; position: relative;
+    border: 1px solid var(--border); border-radius: 11px; background: #0b1117;
+    max-height: calc(100vh - var(--composer-h) - 250px);
+    min-height: 160px; overflow: auto; padding: 4px 2px; scroll-behavior: smooth;
+  }
+  .empty {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+    padding: 30px 18px; text-align: center;
+  }
+  .empty .empty-icon { font-size: 28px; line-height: 1; margin-bottom: 2px; }
+  .empty p { margin: 2px 0; color: var(--text); }
+  .empty p.small, .empty p.muted { color: var(--muted); font-size: 12.5px; }
+
+  .step {
+    display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 8px; align-items: start;
+    padding: 8px 10px; border-bottom: 1px solid #141d26; font-size: 12.5px;
+  }
+  .step:last-child { border-bottom: 0; }
+  .step.tech { display: none; }
+  .steps.show-tech .step.tech { display: grid; }
+  .step-icon { text-align: center; font-size: 13px; line-height: 1.5; opacity: .95; }
+  .step-content { min-width: 0; }
+  .step-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .step-name { font-weight: 600; overflow-wrap: anywhere; }
+  .step-name.mono { font-size: 12px; }
+  .step-badges { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+  .step-detail { margin-top: 2px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; max-height: 4.6em; overflow: hidden; }
+  .step-text { margin-top: 2px; color: #c3d2de; font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .step-text.clamped {
+    display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .step-time { color: #5d7284; font-size: 10.5px; padding-top: 2px; white-space: nowrap; }
+  .step.lifecycle .step-name { color: var(--blue); }
+  .step.good .step-name { color: var(--green); }
+  .step.bad .step-name { color: var(--red); }
+  .step.mine { background: #122131; }
+  .step.mine .step-name { color: var(--blue); }
+  .step.divider {
+    display: block; padding: 6px 10px; color: var(--muted2); font-size: 10.5px;
+    background: #0d151d; border-bottom: 1px solid #141d26; letter-spacing: .3px;
+  }
+  details.more { margin-top: 4px; }
+  details.more > summary { cursor: pointer; color: var(--blue); font-size: 11.5px; list-style: none; }
+  details.more > summary::-webkit-details-marker { display: none; }
+  details.more > summary:hover { text-decoration: underline; }
+  details.more pre {
+    margin: 5px 0 0; padding: 8px 10px; max-height: 260px; overflow: auto; border-radius: 8px;
+    background: #0a0f14; border: 1px solid var(--border-soft); color: #b9c8d4;
+    font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .steps-foot { display: flex; justify-content: center; margin-top: 7px; min-height: 0; }
+
+  /* ---------- result (the payoff) ---------- */
+  .result {
+    border-color: #2d4d67;
+    background:
+      radial-gradient(900px 240px at 15% -20%, rgba(47,129,247,.20), transparent 70%),
+      linear-gradient(180deg, #17232f, var(--panel) 260px);
+    padding: 16px 18px 18px;
+  }
+  .result-hero { border-bottom: 1px solid var(--border-soft); padding-bottom: 12px; }
+  .result-hero-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .result-hero-top h2 { margin: 0; font-size: 16px; font-weight: 650; }
+  .result-hero-top .spacer { flex: 1; }
+  .result-headline { margin: 10px 0 0; font-size: 16.5px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .result-headline:empty { display: none; }
+  .result-headline .result-empty { margin: 0; color: var(--muted); font-size: 13px; }
+  .result-stats { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 11px; }
+  .stat-chip {
+    display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 11px; border-radius: 999px;
+    background: rgba(28, 37, 48, .85); border: 1px solid var(--border-soft);
+    font-size: 11.5px; color: var(--muted2); white-space: nowrap;
+  }
+  .stat-chip b { color: var(--text); font-size: 12.5px; font-weight: 650; }
+  .alert {
+    padding: 11px 13px; border-radius: 10px; font-size: 12.5px; margin-top: 12px;
+    background: #2a1211; border: 1px solid #6a2624; color: #ffc9c6;
+  }
+  .alert b { color: #fff; }
+  .alert .alert-actions { margin-top: 9px; }
+  .alert.warn { background: #241d0c; border-color: #5a4415; color: #dcc38a; }
+  .alert.warn b { color: #ffdd9a; }
+  .result-section {
+    margin-top: 14px; padding: 12px 14px; border-radius: 11px;
+    background: #121a22; border: 1px solid var(--border-soft);
+  }
+  .result-section > h3 {
+    margin: 0 0 8px; font-size: 11.5px; font-weight: 650; letter-spacing: .5px; color: var(--muted);
+    text-transform: uppercase;
+  }
+  .summary { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
+  .result-section ul { margin: 0; padding-left: 20px; }
+  .result-section li { margin: 4px 0; overflow-wrap: anywhere; }
+  .result-section li.files { font-family: var(--mono); font-size: 12px; }
+  .result-section table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  .result-section th, .result-section td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+  .result-section th { color: var(--muted); font-weight: 600; width: 30%; overflow-wrap: anywhere; }
+  .path { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .next-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 8px; }
+  .next {
+    appearance: none; text-align: left; cursor: pointer; font: inherit; font-size: 12.5px;
+    display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 10px; color: var(--text);
+    background: var(--panel2); border: 1px solid var(--border); transition: border-color .12s ease, background .12s ease;
+  }
+  .next:hover { border-color: #3f6d94; background: var(--panel3); }
+  .next .next-text { flex: 1; min-width: 0; }
+  .next .next-go { color: var(--blue); font-size: 11.5px; white-space: nowrap; opacity: .85; }
+  .next:hover .next-go { opacity: 1; }
+  details.raw { margin-top: 14px; }
+  details.raw > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  details.raw > summary:hover { color: var(--text); }
+  details.raw pre {
+    margin: 7px 0 0; padding: 10px 12px; max-height: 320px; overflow: auto; border-radius: 9px;
+    background: #0a0f14; border: 1px solid var(--border-soft); font-size: 11.5px;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+
+  /* ---------- composer: centered while idle, docked to the bottom once a task runs ---------- */
+  .composer-wrap { position: static; padding: 0; background: none; }
+  body.composer-docked .composer-wrap {
+    position: fixed; left: var(--sidebar-w); right: 0; bottom: 0; z-index: 40;
+    padding: 12px 22px 16px;
+    background: linear-gradient(180deg, rgba(15,20,25,0), rgba(15,20,25,.86) 34%, rgba(15,20,25,.97));
+    backdrop-filter: blur(8px);
+    transition: left .16s ease;
+  }
+  .composer {
+    max-width: 780px; margin: 0 auto;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+    padding: 9px 12px 10px; box-shadow: 0 18px 50px rgba(0, 0, 0, .38);
+    transition: border-color .12s ease, box-shadow .12s ease, max-width .16s ease;
+  }
+  body.composer-docked .composer { max-width: 1120px; box-shadow: 0 -12px 44px rgba(0, 0, 0, .42); }
+  .composer:focus-within {
+    border-color: #33506a;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, .5), 0 0 0 1px rgba(88, 166, 255, .18);
+  }
+  .tips {
+    display: flex; align-items: center; gap: 7px; padding: 1px 3px 7px;
+    font-size: 12px; color: var(--muted2); min-height: 19px; transition: opacity .3s ease;
+  }
+  .tips.fade { opacity: .12; }
+  .tip-spark { color: var(--purple); font-size: 11px; flex: none; }
+  #taskInput {
+    width: 100%; background: #0c1218; color: var(--text); border: 1px solid var(--border);
+    border-radius: 11px; padding: 10px 12px; font: inherit; line-height: 1.55;
+    resize: none; min-height: 56px; max-height: 168px; overflow-y: auto; display: block;
+  }
+  #taskInput::placeholder { color: #5f7383; }
+  .examples { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+  .ex {
+    appearance: none; border: 1px dashed var(--border); background: transparent; color: var(--muted);
+    border-radius: 999px; padding: 3px 11px; font: inherit; font-size: 11.5px; cursor: pointer; text-align: left;
+  }
+  .ex:hover { color: var(--text); border-color: #3f5568; background: var(--panel2); }
+  /* The composer's control row: the workspace the next task runs in (the one dropdown this
+     layout keeps in the dialog), plus the send action on the right. */
+  .composer-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 9px; }
+  .composer-controls .spacer { flex: 1; }
+  .composer-controls .hint { color: var(--muted2); font-size: 12px; }
+  .composer-controls .hint b { color: var(--muted); }
+  .ws-pick { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 62%; }
+  .ws-pick-label { color: var(--muted); font-size: 11.5px; flex: none; }
+  .ws-pick select {
+    min-width: 0; max-width: 100%; padding: 4px 8px; font: inherit; font-size: 11.5px;
+    font-family: var(--mono); color: var(--text); background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 999px; text-overflow: ellipsis;
+  }
+  .ws-pick select:focus-visible { outline: 2px solid #1f4c78; outline-offset: 1px; }
+  .ex:disabled { opacity: .5; cursor: not-allowed; }
+  .composer-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 9px; }
+  .composer-actions .spacer { flex: 1; }
+  .composer-actions .hint { color: var(--muted2); font-size: 12px; }
+  .composer-actions .hint b { color: var(--muted); }
+  #submitBtn { min-width: 96px; }
+
+  /* ---------- settings dialog ---------- */
+  dialog.settings {
+    width: min(640px, calc(100vw - 32px)); margin: 9vh auto auto;
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 16px; padding: 18px 20px; box-shadow: 0 30px 80px rgba(0, 0, 0, .6);
+  }
+  dialog.settings::backdrop { background: rgba(5, 8, 11, .7); backdrop-filter: blur(3px); }
+  .settings-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .settings-head h2 { margin: 0; font-size: 15px; font-weight: 650; }
+  .settings-head .btn { margin-left: auto; }
+  .adv-grid { display: grid; gap: 14px; }
+  .adv-grid label { font-size: 12px; color: var(--muted); display: block; }
+  .adv-grid label > .mono { color: var(--text); }
+  .adv-grid .hint { font-size: 11.5px; color: var(--muted2); }
+  .input-row { display: flex; gap: 6px; margin-top: 6px; }
+  .input-row input { flex: 1; min-width: 0; padding: 7px 10px; font-size: 12.5px; }
+  .input-row select {
+    flex: 1; min-width: 0; padding: 7px 10px; font-size: 12.5px; font-family: var(--mono);
+    background: #0c1218; color: var(--text); border: 1px solid var(--border); border-radius: 9px;
+  }
+  .input-row .btn { flex: none; }
+  .note {
+    margin: 16px 0 0; padding: 9px 12px; border-radius: 9px; font-size: 12px; line-height: 1.55;
+    background: var(--panel2); border: 1px solid var(--border-soft); color: var(--muted);
+  }
+  .note b { color: var(--text); }
+  .note.warn { border-color: #5a4415; background: #241d0c; color: #dcc38a; }
+  .note.warn b { color: #ffdd9a; }
+
+  /* ---------- toast ---------- */
+  #toast {
+    position: fixed; right: 18px; bottom: calc(var(--composer-h) + 16px); z-index: 50;
+    max-width: min(420px, calc(100vw - 36px));
+    padding: 10px 14px; border-radius: 10px; font-size: 12.5px; line-height: 1.5;
+    background: #1c2a38; border: 1px solid #2f4a63; color: var(--text);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, .4); opacity: 0; transform: translateY(8px);
+    transition: opacity .16s ease, transform .16s ease; pointer-events: none;
+  }
+  #toast.show { opacity: 1; transform: translateY(0); }
+  #toast.ok { border-color: #245c33; background: #10241a; color: #b7f0c3; }
+  #toast.warn { border-color: #5a4415; background: #241d0c; color: #ffdd9a; }
+  #toast.err { border-color: #6a2624; background: #2a1211; color: #ffc9c6; }
+
+  @media (max-width: 720px) {
+    body { padding-left: 12px; padding-right: 12px; }
+    .composer-wrap { padding-left: 10px; padding-right: 10px; }
+    .top-links { display: none; }
+    .run-head .switch { display: none; }
+    .result-headline { font-size: 15px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  }
+</style>
+</head>
+<body>
+<!-- ---------- left column: workspaces -> sessions, full height ---------- -->
+<aside id="sidebar" class="sidebar" aria-label="工作区与会话">
+  <div class="sidebar-head">
+    <span class="sidebar-title">工作区 · 会话</span>
+    <span class="spacer"></span>
+    <button id="sidebarRefresh" class="btn small ghost" type="button" title="刷新会话列表">⟳</button>
+    <button id="sidebarCollapse" class="btn small ghost" type="button" title="收起侧边栏">‹</button>
+  </div>
+  <div id="sessionTree" class="session-tree" role="tree" aria-label="按工作区分组的会话"></div>
+  <div id="sidebarEmpty" class="sidebar-empty">还没有会话。提交一个任务，它就会出现在这里。</div>
+  <div class="sidebar-foot">
+    <button id="sidebarNewSession" class="btn small" type="button" title="开一个新会话">＋ 新会话</button>
+  </div>
+</aside>
+
+<!-- ---------- right column: header, run panel, result ---------- -->
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">B4</div>
+      <h1>Browser4</h1>
+    </div>
+    <div class="top-right">
+      <button id="sidebarToggle" class="btn small ghost" type="button" aria-expanded="true" aria-controls="sidebar"
+        title="收起 / 展开左侧的工作区与会话">☰ 收起会话</button>
+      <span id="backendPill" class="pill idle">正在检查后端…</span>
+      <div class="top-links">
+        <a id="linkStatus" href="/status.html" target="_blank" rel="noopener">状态面板</a>
+        <a id="linkPages" href="/pages.html" target="_blank" rel="noopener">页面截图</a>
+      </div>
+      <button id="openSettingsBtn" class="btn small ghost" type="button" title="会话、后端地址与已有任务">⚙ 设置</button>
+    </div>
+  </header>
+
+  <main class="main">
+    <!-- Idle: the headline + composer sit in the middle of the work area. Once a task runs
+         (or a session is opened) the composer docks to the bottom and this disappears. -->
+    <div id="idleHero" class="idle-hero">
+      <div class="idle-logo" aria-hidden="true">B4</div>
+      <h2>让 agent 在浏览器里替你做</h2>
+      <p>一句话说清要它做什么。它会在浏览器里打开页面、点击、读取，把结果和写出的文件交回来。</p>
+    </div>
+    <div id="backendBanner" class="banner hidden" role="alert">
+      <div class="grow">
+        <b>连不上后端 <span id="backendBannerUrl" class="mono"></span></b>
+        <div>
+          后端没启动，或者地址/端口不对。在终端里运行
+          <code>browser4-cli open https://example.com</code>（源码树用
+          <code>pwsh ./b4w.ps1 open https://example.com</code>）即可拉起默认的
+          <code>18182</code> 端口。
+        </div>
+        <div class="actions">
+          <button id="retryBackendBtn" type="button" class="btn small">重新检测</button>
+          <button id="closeBannerBtn" type="button" class="btn small ghost">先不管</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- run: what it is doing, collapsible ---------- -->
+    <section id="runPanel" class="card run" aria-labelledby="runTitle">
+      <div class="run-head">
+        <button id="runToggle" type="button" class="run-toggle" aria-expanded="true" title="收起 / 展开执行过程">
+          <span class="chev" aria-hidden="true">▾</span>
+          <span id="runTitle" class="run-title">执行过程</span>
+        </button>
+        <span id="runPill" class="pill idle">空闲</span>
+        <span id="stepCount" class="hint"></span>
+        <span id="sourceBadge" class="badge info hidden" title="步骤的传输方式"></span>
+        <span class="hint run-hint">点标题展开每一步</span>
+        <button type="button" id="taskChip" class="taskchip hidden" title="点击复制完整任务 ID">
+          <span class="mono" id="taskIdShort"></span><span class="copyhint">复制</span>
+        </button>
+        <span class="spacer"></span>
+        <span id="elapsed" class="mono run-elapsed">—</span>
+        <label class="switch"><input type="checkbox" id="verboseToggle"> 技术细节</label>
+        <label class="switch"><input type="checkbox" id="autoScroll" checked> 自动滚动</label>
+        <button id="cancelBtn" type="button" class="btn danger small hidden">停止任务</button>
+      </div>
+
+      <div id="runBody" class="run-body">
+        <div id="liveNote" class="live-note" aria-live="polite">还没有任务。在下面写一句话，按 Ctrl+Enter 开始。</div>
+        <div id="heartbeat" class="heartbeat"></div>
+
+        <div id="steps" class="steps" role="log" aria-label="任务的实时步骤">
+          <div id="stepsEmpty" class="empty">
+            <div class="empty-icon" aria-hidden="true">🤖</div>
+            <p><b>它会在浏览器里替你做。</b></p>
+            <p class="muted">每一步（打开页面、点击、读取、思考）都会出现在这里。</p>
+          </div>
+        </div>
+        <div class="steps-foot">
+          <button id="jumpBtn" type="button" class="btn small hidden">有新步骤 · 跳到最新 ↓</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- result: the main thing once the task ends ---------- -->
+    <section id="resultCard" class="card result hidden" aria-labelledby="resultTitle">
+      <div class="result-hero">
+        <div class="result-hero-top">
+          <h2 id="resultTitle">结果</h2>
+          <span id="resultBadge" class="pill idle">—</span>
+          <span class="spacer"></span>
+          <button id="copyResultBtn" type="button" class="btn small ghost">复制 JSON</button>
+        </div>
+        <div id="resultHeadline" class="result-headline"></div>
+        <div id="resultStats" class="result-stats"></div>
+      </div>
+      <div id="resultBody"></div>
+      <details class="raw">
+        <summary>原始 JSON（给脚本用）</summary>
+        <pre id="rawJson"></pre>
+      </details>
+    </section>
+
+    <!-- ---------- the one composer: centered while idle, docked once a task runs ---------- -->
+    <div id="composerWrap" class="composer-wrap">
+      <div id="composer" class="composer">
+        <div id="tips" class="tips" aria-live="off">
+          <span class="tip-spark" aria-hidden="true">✦</span>
+          <span id="tipText"></span>
+        </div>
+        <textarea id="taskInput" rows="2" spellcheck="false" aria-label="任务描述"
+          placeholder="用一句话说清要它做什么，例如：打开 https://example.com ，把页面标题和第一段文字告诉我。"></textarea>
+        <div id="composerControls" class="composer-controls">
+          <label class="ws-pick" title="新任务在哪个目录里就地读写（工作区必须已存在）">
+            <span class="ws-pick-label">工作区</span>
+            <select id="workspaceSelect" autocomplete="off">
+              <option value="">临时工作区（每个任务自己的目录）</option>
+            </select>
+          </label>
+          <button id="refreshWorkspacesBtn" class="btn small ghost" type="button" title="重新读取工作区列表">⟳</button>
+          <span class="spacer"></span>
+          <span id="submitHint" class="hint"><b>Ctrl+Enter</b> 开始任务</span>
+          <button id="submitBtn" class="btn primary" type="button">开始任务</button>
+        </div>
+        <div id="examples" class="examples" aria-label="示例任务">
+          <button class="ex" type="button" data-task="打开 https://example.com ，告诉我页面标题和第一段文字。">打开一个网页并总结</button>
+          <button class="ex" type="button" data-task="打开 https://news.ycombinator.com ，把首页前 5 条新闻的标题和链接列出来。">列出一个页面的前 5 条内容</button>
+          <button class="ex" type="button" data-task="打开 https://www.bing.com ，搜索 “Browser4”，把第一条结果的标题和链接告诉我。">搜索一个关键词</button>
+        </div>
+        <div class="composer-actions">
+          <label id="runningOptions" class="switch hidden"><input type="checkbox" id="followupToggle"> 等当前步骤结束后再继续</label>
+          <span class="spacer"></span>
+          <span id="composerSession" class="hint mono"></span>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<dialog id="settingsDialog" class="settings" aria-labelledby="settingsTitle">
+  <div class="settings-head">
+    <h2 id="settingsTitle">会话与连接</h2>
+    <button id="closeSettingsBtn" type="button" class="btn small ghost">关闭</button>
+  </div>
+  <div class="adv-grid">
+    <label>当前会话：<span id="sessionLabel" class="mono"></span>
+      <span class="hint">同一会话会记住上文；终端里可以用 <code>-s &lt;会话&gt;</code> 复用</span>
+      <div class="input-row">
+        <input id="sessionInput" type="text" class="mono" autocomplete="off" spellcheck="false">
+        <button id="copySessionBtn" type="button" class="btn small ghost">复制</button>
+        <button id="newSessionBtn" type="button" class="btn small ghost">新会话</button>
+      </div>
+    </label>
+    <label>后端地址：<span class="hint">默认本机 <code>18182</code>；用 <code>file://</code> 打开本页时才需要改</span>
+      <div class="input-row">
+        <input id="backendInput" type="url" class="mono" autocomplete="off" spellcheck="false">
+        <button id="saveBackendBtn" type="button" class="btn small ghost">保存并检测</button>
+      </div>
+    </label>
+    <label>查看已有任务：<span class="hint">粘贴 <code>agent run</code> 打印的任务 ID，可以看它的实时步骤</span>
+      <div class="input-row">
+        <input id="taskIdInput" type="text" class="mono" placeholder="例如 5b0c3f2a-…" autocomplete="off" spellcheck="false">
+        <button id="loadTaskBtn" type="button" class="btn small ghost">查看</button>
+      </div>
+    </label>
+  </div>
+  <p class="note">
+    <b>不会弹逐项审批。</b>这个页面按「无人值守」方式提交：写文件、跑命令会按后端的
+    <code>browser4.agent.access.unattended</code> 策略直接执行（默认 full，仍受工作区边界和受保护路径约束）。
+    想让每一步敏感操作都由你确认，请用终端 <code>agent run -i</code> 的 <code>/approve</code>。
+  </p>
+</dialog>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<noscript>
+  <div class="wrap" style="padding:20px;color:#ffc9c6;">这个页面需要启用 JavaScript 才能提交任务。</div>
+</noscript>
+
+<script>
+(() => {
+  'use strict';
+
+  // ---------------------------------------------------------------------------
+  // Constants
+  // ---------------------------------------------------------------------------
+  const SAME_ORIGIN = /^https?:$/.test(location.protocol);
+  const DEFAULT_BACKEND = 'http://127.0.0.1:18182';
+  const STORE_SESSION = 'b4.agent.web.session';
+  const STORE_BACKEND = 'b4.agent.web.backend';
+  /** The sidebar's own preferences (collapsed panel, folded workspace groups). */
+  const STORE_SIDEBAR = 'b4.agent.web.sidebar';
+  /** The workspace new tasks run in (`''` = per-task temporary directory). */
+  const STORE_WORKSPACE = 'b4.agent.web.workspace';
+  /** How often the workspace/session tree refreshes while the tab is visible. */
+  const SIDEBAR_REFRESH_MS = 15000;
+
+  /** Event names the backend publishes on the SSE step stream. */
+  const SSE_EVENT_TYPES = [
+    'task.created', 'task.started', 'round.start', 'tool.call', 'tool.result',
+    'model.text', 'steer', 'steering.undelivered', 'follow_up', 'follow_up.undelivered',
+    'run.usage', 'task.done', 'task.failed', 'task.cancelled',
+    'verify.verdict', 'gate.evaluated', 'repair.round', 'repair.exhausted',
+    'finish.repair', 'finish.amend', 'nudge', 'isolation.merge',
+    'access.requested', 'access.resolved',
+    'goal.pinned', 'plan.update', 'goal.changed',
+  ];
+
+  const TASK_PLACEHOLDER = '用一句话说清要它做什么，例如：打开 https://example.com ，把页面标题和第一段文字告诉我。';
+  const STEER_PLACEHOLDER = '插一句话：agent 会在下一轮看到它，不会打断当前任务。例如：用中文回答 · 只看前 3 条 · 结果整理成表格。';
+
+  /**
+   * Short hints rotated above the composer. They are deliberately not a fixed
+   * tutorial: the page shows one at a time and swaps it every few seconds.
+   */
+  const TIPS_IDLE = [
+    '写一句话说清要它做什么，例如：打开 example.com，告诉我页面标题。',
+    '也可以让它搜索、点按钮、填表单、翻页，用人话描述就行。',
+    '任务写得越具体，结果越好；需要的话把完整网址一起写上。',
+    '第一次运行要先启动浏览器，10–60 秒才开始出步骤，不是卡死。',
+    '结果里的「接着做」点一下就直接执行，同一个会话还记得上文。',
+    'Ctrl+Enter 也能开始任务。',
+  ];
+  const TIPS_RUNNING = [
+    '插一句话不会打断任务：agent 会在下一轮看到它。',
+    '勾选「等当前步骤结束后再继续」，它会在收尾前读你的补充。',
+    '步骤里的 🔧 是工具调用，💬 是模型的思路。',
+    '超过 20 秒没有新步骤通常是在等页面或模型，不是卡死。',
+    '点「执行过程」的标题可以收起这块，专心看结果。',
+  ];
+
+  /** Storage that never throws: file:// pages and private modes can refuse it. */
+  function readStore(key) {
+    try { return localStorage.getItem(key); } catch (ignored) { return null; }
+  }
+  function writeStore(key, value) {
+    try { localStorage.setItem(key, value); } catch (ignored) { /* memory-only session */ }
+  }
+
+  // ---------------------------------------------------------------------------
+  // State
+  // ---------------------------------------------------------------------------
+  const state = {
+    backend: DEFAULT_BACKEND,
+    session: '',
+    taskId: null,
+    running: false,
+    finished: false,
+    submitting: false,
+    lastSeq: 0,
+    seen: new Set(),
+    toolRows: new Map(),
+    startedAt: null,
+    lastEventAt: null,
+    source: 'idle',
+    sse: null,
+    polling: false,
+    stats: null,
+    failure: null,
+    backendUp: null,
+    resultRevealed: false,
+    lastTaskText: '',
+    steering: false,
+    toastTimer: null,
+    ticker: null,
+    /** The workspace → session tree last read from `/api/agent/sessions`. */
+    sessionTree: null,
+    /** Serialized tree: a poll that changes nothing must not re-render (focus/scroll churn). */
+    sessionTreeSignature: '',
+    /** Whether the whole sidebar is collapsed (persisted, see [STORE_SIDEBAR]). */
+    sidebarCollapsed: false,
+    /** Folded workspace groups, keyed by group id (persisted with [STORE_SIDEBAR]). */
+    sidebarGroups: {},
+    /** The workspace new tasks run in: an absolute directory, or `''` for the per-task default. */
+    workspace: '',
+  };
+
+  // ---------------------------------------------------------------------------
+  // DOM helpers
+  // ---------------------------------------------------------------------------
+  const $ = (id) => document.getElementById(id);
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+
+  function clear(node) {
+    while (node && node.firstChild) node.removeChild(node.firstChild);
+  }
+
+  function show(node, visible) {
+    if (!node) return;
+    node.classList.toggle('hidden', !visible);
+  }
+
+  function scrollToBottom(force) {
+    const box = $('steps');
+    if (!box) return;
+    if (force || $('autoScroll').checked) {
+      box.scrollTop = box.scrollHeight;
+      show($('jumpBtn'), false);
+    }
+  }
+
+  function atBottom() {
+    const box = $('steps');
+    return box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Layout: the collapsible run panel, the docked composer and the rotating tips
+  // ---------------------------------------------------------------------------
+  /** Collapse the execution log so the result owns the main area. */
+  function setRunCollapsed(collapsed) {
+    const panel = $('runPanel');
+    if (!panel) return;
+    const next = !!collapsed;
+    panel.classList.toggle('collapsed', next);
+    const toggle = $('runToggle');
+    if (toggle) toggle.setAttribute('aria-expanded', next ? 'false' : 'true');
+  }
+
+  /** Grow the one textarea to its content, up to a cap, so it stays a small dock. */
+  function autoGrow() {
+    const input = $('taskInput');
+    if (!input) return;
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 168) + 'px';
+  }
+
+  /**
+   * Publish the composer's real height as a CSS variable. The page body pads
+   * itself by that amount, so the dock never covers the last step or the result.
+   */
+  function observeComposer() {
+    const wrap = $('composerWrap');
+    if (!wrap) return;
+    const apply = () => {
+      const height = Math.ceil(wrap.getBoundingClientRect().height);
+      if (height > 0) document.documentElement.style.setProperty('--composer-h', height + 'px');
+    };
+    apply();
+    if (typeof ResizeObserver === 'function') new ResizeObserver(apply).observe(wrap);
+    window.addEventListener('resize', apply);
+  }
+
+  let tipTimer = null;
+  let tipIndex = 0;
+  let tipSet = TIPS_IDLE;
+
+  function renderTip() {
+    const node = $('tipText');
+    if (!node) return;
+    node.textContent = tipSet[tipIndex % tipSet.length];
+  }
+
+  function setTipsMode(mode) {
+    tipSet = mode === 'running' ? TIPS_RUNNING : TIPS_IDLE;
+    tipIndex = 0;
+    renderTip();
+  }
+
+  /** Rotate one hint at a time — guidance that never turns into a fixed wall of text. */
+  function startTips() {
+    renderTip();
+    if (tipTimer) return;
+    tipTimer = setInterval(() => {
+      const strip = $('tips');
+      if (!strip) return;
+      strip.classList.add('fade');
+      setTimeout(() => {
+        tipIndex += 1;
+        renderTip();
+        strip.classList.remove('fade');
+      }, 320);
+    }, 7000);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Formatting helpers
+  // ---------------------------------------------------------------------------
+  function shorten(text, max) {
+    const value = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+    return value.length > max ? value.slice(0, max - 1) + '…' : value;
+  }
+
+  function fmtClock(ms) {
+    const date = new Date(ms || Date.now());
+    return date.toLocaleTimeString('zh-CN', { hour12: false });
+  }
+
+  function fmtDuration(ms) {
+    const seconds = Math.max(0, Math.round(ms / 1000));
+    if (seconds < 60) return seconds + ' 秒';
+    const minutes = Math.floor(seconds / 60);
+    const rest = seconds % 60;
+    return minutes + ' 分 ' + String(rest).padStart(2, '0') + ' 秒';
+  }
+
+  function fmtTokens(n) {
+    if (!n) return '0';
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + 'k';
+    return String(n);
+  }
+
+  function fmtMs(ms) {
+    const value = Number(ms) || 0;
+    if (value < 1000) return value + 'ms';
+    if (value < 60000) return (value / 1000).toFixed(1) + 's';
+    return fmtDuration(value);
+  }
+
+  function statusText(word) {
+    switch (word) {
+      case 'queued': return '排队中';
+      case 'running': return '运行中';
+      case 'done': return '已完成';
+      case 'failed': return '失败';
+      case 'cancelled': return '已停止';
+      case 'notfound': return '未找到';
+      case 'unknown': return '状态未知';
+      default: return '空闲';
+    }
+  }
+
+  function setRunPill(word) {
+    const pill = $('runPill');
+    const cls = {
+      queued: 'pill warn pulse', running: 'pill busy pulse', done: 'pill ok',
+      failed: 'pill err', cancelled: 'pill warn', notfound: 'pill warn', idle: 'pill idle',
+    }[word] || 'pill warn';
+    pill.className = cls;
+    pill.textContent = word === 'idle' ? '空闲' : statusText(word);
+  }
+
+  function setLiveNote(text, isError) {
+    const note = $('liveNote');
+    note.textContent = text || '';
+    note.classList.toggle('err', !!isError);
+  }
+
+  /**
+   * How this task's steps are arriving. The badge stays visible after the run so
+   * "the stream fell back to polling" is a fact the user can still see, instead of
+   * a transient note the next step overwrites.
+   */
+  function setSourceBadge(kind) {
+    const badgeNode = $('sourceBadge');
+    if (kind === 'sse') {
+      badgeNode.className = 'badge info';
+      badgeNode.textContent = '实时流';
+      badgeNode.title = '步骤由后端 SSE 实时推送';
+    } else if (kind === 'poll') {
+      badgeNode.className = 'badge';
+      badgeNode.textContent = '轮询';
+      badgeNode.title = '实时流不可用，改为轮询步骤（不影响使用）';
+    } else {
+      badgeNode.className = 'badge info hidden';
+      badgeNode.textContent = '';
+      badgeNode.title = '';
+    }
+  }
+
+  function toast(message, kind) {
+    const node = $('toast');
+    node.textContent = message;
+    node.className = 'show ' + (kind || '');
+    clearTimeout(state.toastTimer);
+    state.toastTimer = setTimeout(() => { node.className = ''; }, 4200);
+  }
+
+  async function copyText(text) {
+    if (!text) return false;
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (ignored) { /* fall through to the legacy path */ }
+    try {
+      const area = el('textarea');
+      area.value = text;
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      const ok = document.execCommand('copy');
+      area.remove();
+      return ok;
+    } catch (ignored) {
+      return false;
+    }
+  }
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const enc = (value) => encodeURIComponent(String(value || ''));
+
+  // ---------------------------------------------------------------------------
+  // HTTP helpers
+  // ---------------------------------------------------------------------------
+  class ApiError extends Error {
+    constructor(status, body) {
+      super(extractMessage(body) || ('HTTP ' + status));
+      this.name = 'ApiError';
+      this.status = status;
+      this.body = body;
+    }
+  }
+
+  function extractMessage(body) {
+    if (!body) return '';
+    if (typeof body === 'string') return body.slice(0, 600);
+    const candidate = body.message || body.error || body.detail || body.title;
+    return candidate ? String(candidate).slice(0, 600) : '';
+  }
+
+  function apiUrl(path) {
+    const base = state.backend.replace(/\/+$/, '');
+    return base + path;
+  }
+
+  async function apiFetch(path, options, timeoutMs) {
+    const controller = new AbortController();
+    const limit = timeoutMs || 20000;
+    const timer = setTimeout(() => controller.abort(), limit);
+    try {
+      return await fetch(apiUrl(path), Object.assign({ cache: 'no-store', signal: controller.signal }, options || {}));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function apiJson(path, options, timeoutMs) {
+    const response = await apiFetch(path, options, timeoutMs);
+    const text = await response.text();
+    let body = null;
+    if (text) {
+      try { body = JSON.parse(text); } catch (ignored) { body = text; }
+    }
+    if (!response.ok) throw new ApiError(response.status, body);
+    return body;
+  }
+
+  function friendlyError(error) {
+    if (!error) return '未知错误';
+    if (error.name === 'AbortError') return '请求超时（后端可能还在启动，稍后再试）';
+    if (error instanceof ApiError) return 'HTTP ' + error.status + ' · ' + error.message;
+    if (error.message && /Failed to fetch|NetworkError|Load failed/i.test(error.message)) {
+      return '连不上后端 ' + state.backend;
+    }
+    return error.message || String(error);
+  }
+
+  // ---------------------------------------------------------------------------
+  // URLs
+  // ---------------------------------------------------------------------------
+  const statusPath = () => '/api/commands/' + enc(state.taskId) + '/status?sessionId=' + enc(state.session);
+  const resultPath = () => '/api/commands/' + enc(state.taskId) + '/result?sessionId=' + enc(state.session);
+  const statsPath = () => '/api/commands/' + enc(state.taskId) + '/stats?sessionId=' + enc(state.session);
+  const inputPath = () => '/api/commands/' + enc(state.taskId) + '/input';
+  const cancelPath = () => '/api/commands/' + enc(state.taskId) + '/cancel';
+  const eventsPath = (after) => '/api/commands/' + enc(state.taskId) + '/events?after=' + after +
+    '&limit=200&sessionId=' + enc(state.session);
+  const streamPath = () => '/api/commands/' + enc(state.taskId) + '/events/stream' +
+    '?limit=200&sessionId=' + enc(state.session);
+
+  function syncUrl() {
+    if (!history.replaceState) return;
+    try {
+      const params = new URLSearchParams(location.search);
+      if (state.session) params.set('session', state.session);
+      if (state.taskId) params.set('task', state.taskId); else params.delete('task');
+      const sameOrigin = SAME_ORIGIN && state.backend === location.origin;
+      if (sameOrigin || state.backend === DEFAULT_BACKEND) params.delete('backend');
+      else params.set('backend', state.backend);
+      const query = params.toString();
+      history.replaceState(null, '', location.pathname + (query ? '?' + query : ''));
+    } catch (ignored) {
+      // A file:// document can refuse history writes; the page still works, only
+      // the refresh-restores-the-task convenience is lost.
+    }
+  }
+
+  function applyBackendLinks() {
+    $('linkStatus').href = apiUrl('/status.html');
+    $('linkPages').href = apiUrl('/pages.html');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Backend probe
+  // ---------------------------------------------------------------------------
+  function setBackendPill(up, detail) {
+    const pill = $('backendPill');
+    if (up === true) {
+      pill.className = 'pill ok';
+      pill.textContent = '后端已连接';
+      pill.title = state.backend;
+    } else if (up === false) {
+      pill.className = 'pill err';
+      pill.textContent = '后端未连接';
+      pill.title = detail || state.backend;
+    } else {
+      pill.className = 'pill idle pulse';
+      pill.textContent = '正在检查后端…';
+      pill.title = state.backend;
+    }
+  }
+
+  async function probeBackend(quiet) {
+    if (!quiet) setBackendPill(null);
+    try {
+      // Any answer from /api/commands proves the backend is up: an unknown id is a 404.
+      const response = await apiFetch('/api/commands/probe-' + Date.now() + '/status?sessionId=' + enc(state.session), {}, 5000);
+      const up = response.status === 404 || response.ok;
+      state.backendUp = up;
+      setBackendPill(up, 'HTTP ' + response.status);
+      show($('backendBanner'), !up);
+      $('backendBannerUrl').textContent = state.backend;
+      return up;
+    } catch (error) {
+      state.backendUp = false;
+      setBackendPill(false, friendlyError(error));
+      show($('backendBanner'), true);
+      $('backendBannerUrl').textContent = state.backend;
+      return false;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Step rendering
+  // ---------------------------------------------------------------------------
+  function hideEmptyState() {
+    const empty = $('stepsEmpty');
+    if (empty) empty.remove();
+  }
+
+  function trimSteps() {
+    const box = $('steps');
+    while (box.children.length > 1200) box.removeChild(box.firstChild);
+  }
+
+  function afterAppend(row) {
+    trimSteps();
+    if (atBottom() || $('autoScroll').checked) {
+      scrollToBottom(true);
+    } else {
+      show($('jumpBtn'), true);
+    }
+    state.lastEventAt = Date.now();
+    updateStepCount();
+  }
+
+  function updateStepCount() {
+    const count = $('steps').querySelectorAll('.step:not(.divider)').length;
+    $('stepCount').textContent = count ? count + ' 步' : '';
+  }
+
+  function addRow(options) {
+    const row = el('div', 'step ' + (options.cls || '') + (options.tech ? ' tech' : ''));
+    row.appendChild(el('div', 'step-icon', options.icon || '•'));
+    const content = el('div', 'step-content');
+    const top = el('div', 'step-top');
+    const name = el('span', 'step-name' + (options.mono ? ' mono' : ''), options.title || '');
+    top.appendChild(name);
+    let badges = null;
+    if (options.badges && options.badges.length) {
+      badges = el('span', 'step-badges');
+      options.badges.forEach((badge) => badges.appendChild(badge));
+      top.appendChild(badges);
+    }
+    content.appendChild(top);
+    if (options.detail) content.appendChild(el('div', 'step-detail mono', options.detail));
+    row.appendChild(content);
+    row.appendChild(el('time', 'step-time mono', fmtClock(options.timeMs)));
+    $('steps').appendChild(row);
+    hideEmptyState();
+    afterAppend(row);
+    return { row, top, content, badges };
+  }
+
+  function badge(text, kind) {
+    return el('span', 'badge ' + (kind || ''), text);
+  }
+
+  function addDivider(text) {
+    const row = el('div', 'step divider', text);
+    row.style.display = 'block';
+    $('steps').appendChild(row);
+    hideEmptyState();
+    afterAppend(row);
+  }
+
+  function toolKey(ev) {
+    return ev.callId || ('seq:' + ev.seq);
+  }
+
+  function renderToolCall(ev) {
+    const tool = ev.tool || 'tool';
+    const running = badge('执行中', 'busy');
+    const parts = addRow({
+      icon: '🔧', title: tool, mono: true, badges: [running],
+      detail: ev.arguments ? shorten(ev.arguments, 260) : '',
+      timeMs: ev.epochMillis, cls: 'step-tool',
+    });
+    state.toolRows.set(toolKey(ev), {
+      row: parts.row, content: parts.content, badges: parts.badges,
+      running, tool, seq: ev.seq,
+    });
+    if (state.toolRows.size > 400) {
+      const oldest = state.toolRows.keys().next().value;
+      state.toolRows.delete(oldest);
+    }
+  }
+
+  function renderToolResult(ev) {
+    let matchedKey = null;
+    let entry = null;
+    if (ev.callId && state.toolRows.has(ev.callId)) {
+      matchedKey = ev.callId;
+      entry = state.toolRows.get(ev.callId);
+    }
+    if (!entry) {
+      // Pair by tool name with the oldest unmatched call (old backends had no callId).
+      for (const [key, candidate] of state.toolRows.entries()) {
+        if (candidate.tool === ev.tool && candidate.running) {
+          matchedKey = key;
+          entry = candidate;
+          break;
+        }
+      }
+    }
+    if (!entry) {
+      entry = addRow({
+        icon: '🔧', title: (ev.tool || 'tool') + ' 的结果', mono: true,
+        badges: [badge(ev.ok === false ? '失败' : '完成', ev.ok === false ? 'err' : 'ok')],
+        detail: shorten(ev.text || '', 260), timeMs: ev.epochMillis,
+      });
+    } else {
+      if (entry.running && entry.running.parentNode) entry.running.remove();
+      if (entry.badges) {
+        entry.badges.appendChild(badge(ev.ok === false ? '失败' : '完成', ev.ok === false ? 'err' : 'ok'));
+        if (typeof ev.durationMs === 'number') {
+          entry.badges.appendChild(badge(fmtMs(ev.durationMs), 'info'));
+        }
+      }
+      entry.row.classList.add(ev.ok === false ? 'bad' : 'good');
+      entry.running = null;
+      state.toolRows.delete(matchedKey);
+      if (ev.text) entry.content.appendChild(outputDetails(ev.text));
+      if (ev.errorCode) entry.content.appendChild(el('div', 'step-detail', '错误码：' + ev.errorCode));
+    }
+  }
+
+  function outputDetails(text) {
+    const value = String(text || '');
+    const details = el('details', 'more');
+    details.appendChild(el('summary', '', '工具输出（' + value.length + ' 字符）'));
+    details.appendChild(el('pre', '', value.length > 20000 ? value.slice(0, 20000) + '\n…（已截断，完整内容看 trace）' : value));
+    return details;
+  }
+
+  function renderModelText(ev) {
+    const text = String(ev.text || '').trim();
+    if (!text) return;
+    const parts = addRow({ icon: '💬', title: '模型的思路', timeMs: ev.epochMillis });
+    const body = el('div', 'step-text' + (text.length > 320 ? ' clamped' : ''), text);
+    parts.content.appendChild(body);
+    if (text.length > 320) {
+      const toggle = el('button', 'linkbtn', '展开');
+      toggle.addEventListener('click', () => {
+        const clamped = body.classList.toggle('clamped');
+        toggle.textContent = clamped ? '展开' : '收起';
+      });
+      parts.content.appendChild(toggle);
+    }
+  }
+
+  function renderSteer(ev) {
+    const mine = ev.type === 'steer' || ev.type === 'follow_up';
+    addRow({
+      icon: mine ? '✍️' : '⚠️',
+      title: mine ? (ev.type === 'follow_up' ? '你的补充指令（已生效）' : '你的插话（已生效）') : '插话没有送到',
+      detail: ev.text || '',
+      cls: 'mine',
+      timeMs: ev.epochMillis,
+    });
+  }
+
+  function renderAccess(ev) {
+    const detail = ev.detail || {};
+    const what = detail.effect || detail.target || '一次受保护的操作';
+    const text = '等待授权：' + what +
+      (detail.requestId ? '（请求 ' + detail.requestId + '）' : '') +
+      (detail.reason ? '，原因：' + detail.reason : '') +
+      ' — 网页控制台不能审批，请在终端 agent run -i 里处理。';
+    addRow({ icon: '🔐', title: '需要你批准', detail: text, cls: 'bad', timeMs: ev.epochMillis });
+  }
+
+  function renderGoal(ev) {
+    const detail = ev.detail || {};
+    const text = detail.text || ev.text || '';
+    if (!text) return;
+    addRow({
+      icon: '🎯', title: '目标（引擎每轮都会钉住它）',
+      detail: shorten(text, 600), timeMs: ev.epochMillis,
+    });
+  }
+
+  function renderPlan(ev) {
+    const detail = ev.detail || {};
+    const steps = detail.steps != null ? detail.steps : '?';
+    const done = detail.done != null ? detail.done : '?';
+    const pending = detail.pending != null ? detail.pending : '?';
+    addRow({
+      icon: '🗺️', title: '计划进度 ' + done + '/' + steps + (pending ? '（' + pending + ' 步待做）' : ''),
+      timeMs: ev.epochMillis, tech: true,
+    });
+  }
+
+  function renderUsage(ev) {
+    const tokens = ev.totalTokens != null ? ev.totalTokens : ((ev.inputTokens || 0) + (ev.outputTokens || 0));
+    addRow({
+      icon: '🪙', title: '第 ' + (ev.turn != null ? ev.turn : '?') + ' 轮 · ' + fmtTokens(tokens) + ' tokens',
+      timeMs: ev.epochMillis, tech: true,
+    });
+  }
+
+  function renderDecision(ev) {
+    const detail = ev.detail || {};
+    const text = ev.text ? shorten(ev.text, 160) : '';
+    const parts = addRow({
+      icon: '🧭', title: ev.type + (text ? ' · ' + text : ''),
+      timeMs: ev.epochMillis, tech: true,
+    });
+    if (Object.keys(detail).length) {
+      const details = el('details', 'more');
+      details.appendChild(el('summary', '', '结构化细节'));
+      details.appendChild(el('pre', '', JSON.stringify(detail, null, 2)));
+      parts.content.appendChild(details);
+    }
+  }
+
+  function renderLifecycle(ev) {
+    switch (ev.type) {
+      case 'task.created':
+        setRunPill('queued');
+        addRow({ icon: '📥', title: '任务已创建，等待执行', timeMs: ev.epochMillis, cls: 'lifecycle' });
+        setLiveNote('任务已进入队列，等待后端开始…');
+        break;
+      case 'task.started':
+        setRunPill('running');
+        addRow({ icon: '▶️', title: '开始执行', timeMs: ev.epochMillis, cls: 'lifecycle' });
+        setLiveNote('正在执行。每一步都会出现在这里；慢的时候是在等页面或模型。');
+        break;
+      case 'task.done':
+        addRow({ icon: '✅', title: '任务完成', timeMs: ev.epochMillis, cls: 'good' });
+        void finishTask('done');
+        break;
+      case 'task.failed': {
+        const text = ev.text || '任务失败';
+        state.failure = { text, errorCode: ev.errorCode || null, resumable: ev.resumable || false };
+        addRow({
+          icon: '❌', title: '任务失败', detail: shorten(text, 400), cls: 'bad', timeMs: ev.epochMillis,
+        });
+        const hint = failureHint(text, ev.errorCode);
+        if (hint) addRow({ icon: '💡', title: '可以这样处理', detail: hint, cls: 'bad' });
+        void finishTask('failed');
+        break;
+      }
+      case 'task.cancelled':
+        addRow({ icon: '⏹', title: '任务已停止', timeMs: ev.epochMillis, cls: 'lifecycle' });
+        void finishTask('cancelled');
+        break;
+      default:
+        break;
+    }
+  }
+
+  function renderEvent(ev) {
+    if (!ev || typeof ev.seq !== 'number') return;
+    if (state.seen.has(ev.seq)) return;
+    state.seen.add(ev.seq);
+    if (ev.seq > state.lastSeq) state.lastSeq = ev.seq;
+    state.lastEventAt = Date.now();
+    hideEmptyState();
+
+    const type = ev.type || '';
+    if (type === 'tool.call') renderToolCall(ev);
+    else if (type === 'tool.result') renderToolResult(ev);
+    else if (type === 'model.text') renderModelText(ev);
+    else if (type === 'steer' || type === 'follow_up' || type === 'steering.undelivered' || type === 'follow_up.undelivered') renderSteer(ev);
+    else if (type === 'access.requested') renderAccess(ev);
+    else if (type === 'goal.pinned') renderGoal(ev);
+    else if (type === 'plan.update') renderPlan(ev);
+    else if (type === 'run.usage') renderUsage(ev);
+    else if (type === 'round.start') addDivider('── 第 ' + (ev.turn != null ? ev.turn : '?') + ' 轮 · ' + fmtClock(ev.epochMillis) + ' ──');
+    else if (type === 'task.created' || type === 'task.started' || type === 'task.done' || type === 'task.failed' || type === 'task.cancelled') renderLifecycle(ev);
+    else if (type) renderDecision(ev);
+
+    updateStepCount();
+  }
+
+  /**
+   * One malformed step must not stop the live view: the stream carries many
+   * independently versioned event types, and an unknown shape is still just a row.
+   */
+  function renderEventSafely(ev) {
+    try {
+      renderEvent(ev);
+    } catch (error) {
+      console.error('agent console: could not render step', ev && ev.type, error);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Following: SSE first, cursor polling as the fallback
+  // ---------------------------------------------------------------------------
+  function stopFollowing() {
+    if (state.sse) {
+      state.sse.close();
+      state.sse = null;
+    }
+    state.polling = false;
+    state.source = 'idle';
+  }
+
+  /** One interval for the whole page: it only re-renders text, never talks to the backend. */
+  function startTicker() {
+    if (state.ticker) return;
+    state.ticker = setInterval(() => {
+      if (!state.running) return;
+      if (state.startedAt) $('elapsed').textContent = '⏱ ' + fmtDuration(Date.now() - state.startedAt);
+      const idle = Date.now() - (state.lastEventAt || state.startedAt || Date.now());
+      $('heartbeat').textContent = idle > 20000
+        ? '还在运行：最近 ' + Math.round(idle / 1000) + ' 秒没有新步骤（模型思考或长工具调用），不是卡死。'
+        : '';
+    }, 1000);
+  }
+
+  function startFollowing() {
+    stopFollowing();
+    state.source = 'sse';
+    if (typeof EventSource === 'undefined') {
+      startPolling('浏览器不支持实时流，已自动切换为轮询');
+      return;
+    }
+    setSourceBadge('sse');
+    const source = new EventSource(apiUrl(streamPath()));
+    state.sse = source;
+    const onFrame = (event) => {
+      if (!event || !event.data) return;
+      let payload = null;
+      try { payload = JSON.parse(event.data); } catch (ignored) { return; }
+      renderEventSafely(payload);
+    };
+    SSE_EVENT_TYPES.forEach((type) => source.addEventListener(type, onFrame));
+    source.onmessage = onFrame;
+    source.onerror = () => {
+      if (state.sse !== source) return;
+      source.close();
+      state.sse = null;
+      if (!state.finished) startPolling('实时流断开，已自动切换为轮询（不影响使用）');
+    };
+  }
+
+  function startPolling(reason) {
+    if (state.sse) { state.sse.close(); state.sse = null; }
+    if (state.polling) return;
+    state.polling = true;
+    state.source = 'poll';
+    setSourceBadge('poll');
+    setLiveNote(reason || '正在同步任务步骤…');
+
+    (async function pollLoop() {
+      let failures = 0;
+      while (state.polling && !state.finished) {
+        try {
+          const page = await apiJson(eventsPath(state.lastSeq), {}, 20000);
+          failures = 0;
+          (page.events || []).forEach(renderEventSafely);
+          if (page.resynced) toast('部分早期步骤已被后端清理，从最新的一段继续显示', 'warn');
+          if (page.done) { await finishTask(page.status || 'done'); return; }
+          await sleep(700);
+        } catch (error) {
+          if (!state.polling || state.finished) return;
+          if (error instanceof ApiError && error.status === 404) {
+            const recovery = await recoverFinishedTask();
+            if (recovery === 'done') return;
+            setLiveNote(
+              recovery === 'running'
+                ? '任务似乎还在运行，但后端已经读不到它的步骤日志（可能后端重启过）。可以稍后重新打开这个任务看结果。'
+                : '后端查不到这个任务的事件了（可能重启过或已被清理）。',
+              true,
+            );
+            stopFollowing();
+            setRunningUi(false);
+            return;
+          }
+          failures += 1;
+          if (failures >= 5) {
+            setLiveNote('同步步骤失败：' + friendlyError(error) + '（会自动重试）', true);
+          }
+          await sleep(Math.min(5000, 700 * failures));
+        }
+      }
+    })();
+  }
+
+  /**
+   * A cursor poll returned 404: either the task finished and its log went away,
+   * or the backend no longer knows the id. Never re-open a stream in a loop —
+   * a missing log is a terminal condition for the live view.
+   */
+  async function recoverFinishedTask() {
+    try {
+      const status = await apiJson(statusPath(), {}, 8000);
+      if (status && status.isDone) {
+        await finishTask(statusWord(status));
+        return 'done';
+      }
+      if (status) return 'running';
+    } catch (ignored) { /* reported as missing below */ }
+    return 'missing';
+  }
+
+  // ---------------------------------------------------------------------------
+  // The one composer: a new task when idle, a steering message while a task runs
+  // ---------------------------------------------------------------------------
+  async function submitTask() {
+    if (state.submitting) return;
+    const text = ($('taskInput').value || '').trim();
+    if (!text) {
+      setLiveNote('先写一句话：要它打开哪个页面、拿到什么。', true);
+      $('taskInput').focus();
+      return;
+    }
+    if (state.running && state.taskId) {
+      await sendSteer(text);
+      return;
+    }
+    await startTask(text);
+  }
+
+  async function startTask(text) {
+    const task = String(text || '').trim();
+    if (!task || state.running || state.submitting) return;
+    state.lastTaskText = task;
+
+    resetRunUi();
+    // The composer sinks to the bottom as soon as there is a run to watch: the centered
+    // hero is the idle page, not a place to read steps.
+    setComposerDocked(true);
+    state.submitting = true;
+    state.running = true;
+    state.finished = false;
+    state.startedAt = Date.now();
+    state.lastEventAt = Date.now();
+    setRunningUi(true);
+    setRunPill('queued');
+    setLiveNote('正在提交任务…');
+    $('elapsed').textContent = '⏱ 0 秒';
+    $('submitBtn').disabled = true;
+    $('submitBtn').textContent = '提交中…';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    try {
+      // The workspace is chosen in the settings dialog (and follows the session that was
+      // switched to): it must be a query parameter because the body is the task text.
+      const workspaceQuery = state.workspace ? '&workspace=' + enc(state.workspace) : '';
+      const response = await apiFetch(
+        '/api/commands/plain?async=true&sessionId=' + enc(state.session) + workspaceQuery,
+        { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: task },
+        180000,
+      );
+      const raw = await response.text();
+      if (!response.ok) {
+        let body = raw;
+        try { body = JSON.parse(raw); } catch (ignored) { /* keep the text */ }
+        throw new ApiError(response.status, body);
+      }
+      let payload = null;
+      try { payload = raw ? JSON.parse(raw) : null; } catch (ignored) { payload = null; }
+      const taskId = payload && (payload.id || payload.taskId);
+      if (!taskId) throw new Error('后端没有返回任务 ID：' + shorten(raw || '(空响应)', 300));
+
+      state.taskId = taskId;
+      $('taskInput').value = '';
+      autoGrow();
+      $('taskIdShort').textContent = taskId.slice(0, 8) + '…';
+      show($('taskChip'), true);
+      syncUrl();
+      setRunPill('queued');
+      setLiveNote('任务已提交，正在等第一步…（第一次运行要先启动浏览器，可能 10–60 秒）');
+      startFollowing();
+      startTicker();
+      // The session and its workspace appear (or change) with this task.
+      void loadSessions(false);
+    } catch (error) {
+      state.running = false;
+      setRunningUi(false);
+      setRunPill('failed');
+      const message = friendlyError(error);
+      setLiveNote('提交失败：' + message, true);
+      show($('stepsEmpty'), false);
+      addRow({ icon: '❌', title: '提交失败', detail: message, cls: 'bad' });
+      const hint = failureHint(message, error && error.status === 404 ? 'ROUTE' : null);
+      if (hint) addRow({ icon: '💡', title: '可以这样处理', detail: hint, cls: 'bad' });
+      if (!state.backendUp) show($('backendBanner'), true);
+      toast('提交失败：' + message, 'err');
+    } finally {
+      state.submitting = false;
+      $('submitBtn').disabled = false;
+      $('submitBtn').textContent = state.running ? '发送' : '开始任务';
+    }
+  }
+
+
+  // ---------------------------------------------------------------------------
+  // Finishing a task
+  // ---------------------------------------------------------------------------
+  function statusWord(status) {
+    if (!status) return 'unknown';
+    if (status.isDone) {
+      if (status.cancelled) return 'cancelled';
+      return Number(status.statusCode) === 200 ? 'done' : 'failed';
+    }
+    return status.processState === 'created' ? 'queued' : 'running';
+  }
+
+  async function finishTask(word) {
+    if (state.finished) return;
+    // A new task can only start after this function re-enables the form; the id
+    // guard also covers "查看已有任务" replacing the run while the outcome loads.
+    const taskId = state.taskId;
+    state.finished = true;
+    state.running = false;
+    stopFollowing();
+    setRunningUi(false);
+    setRunPill(word === 'unknown' ? 'done' : word);
+    $('elapsed').textContent = state.startedAt ? '⏱ ' + fmtDuration(Date.now() - state.startedAt) : '—';
+    $('heartbeat').textContent = '';
+    setLiveNote(word === 'failed' ? '任务失败，原因见结果的红色提示。' :
+      word === 'cancelled' ? '任务已停止。已经完成的步骤仍保留在上面。' : '任务结束，正在读取结果…');
+    // Keep the form locked until the result is rendered: submitting another task
+    // mid-load would race the outcome of the previous one into the new view.
+    $('submitBtn').disabled = true;
+    $('submitBtn').textContent = '读取结果…';
+
+    try {
+      let status = null;
+      try {
+        status = await apiJson(statusPath(), {}, 10000);
+      } catch (ignored) { /* the step log is often enough */ }
+      if (state.taskId !== taskId) return;
+
+      if (status && status.isDone && status.statusCode && Number(status.statusCode) !== 200 && !state.failure) {
+        state.failure = { text: status.message || '任务失败', errorCode: status.errorCode || null, resumable: !!status.resumable };
+      }
+      const finalWord = status ? statusWord(status) : word;
+      setRunPill(finalWord === 'unknown' ? 'done' : finalWord);
+
+      const result = await fetchResultWithRetry();
+      if (state.taskId !== taskId) return;
+      renderResult(result, status);
+      const stats = await fetchStats();
+      if (state.taskId !== taskId) return;
+      renderStats(stats);
+      setLiveNote(finalWord === 'failed'
+        ? '任务失败。原因见结果的红色提示；可以改一下任务再试。'
+        : finalWord === 'cancelled'
+          ? '任务已停止。已经完成的步骤仍保留在上面。'
+          : '任务结束。结果在下面的「结果」里；想接着做，就在同一个会话里写下一句，或点结果里的「接着做」。');
+      if (finalWord === 'done') toast('任务完成', 'ok');
+      else if (finalWord === 'failed') toast('任务失败，看看结果里的原因', 'err');
+    } finally {
+      if (state.taskId === taskId) {
+        $('submitBtn').disabled = false;
+        $('submitBtn').textContent = '开始任务';
+      }
+      // The task's terminal row is what the sidebar shows; refresh it now instead of
+      // waiting for the next poll.
+      void loadSessions(false);
+    }
+  }
+
+  async function fetchResultWithRetry() {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        const result = await apiJson(resultPath(), {}, 10000);
+        if (result) return result;
+      } catch (error) {
+        if (!(error instanceof ApiError) || (error.status !== 404 && error.status !== 500)) break;
+      }
+      await sleep(400);
+    }
+    return null;
+  }
+
+  async function fetchStats() {
+    try {
+      return await apiJson(statsPath(), {}, 8000);
+    } catch (ignored) {
+      return null;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Result rendering
+  // ---------------------------------------------------------------------------
+  function renderStats(stats) {
+    state.stats = stats;
+    const box = $('resultStats');
+    clear(box);
+    if (!stats) return;
+    const counters = stats.stats || {};
+    const chips = [];
+    if (stats.elapsedMs != null) chips.push(['耗时', fmtDuration(stats.elapsedMs)]);
+    if (counters.rounds) chips.push(['轮数', String(counters.rounds)]);
+    if (counters.toolCalls) {
+      chips.push(['工具调用', counters.toolCalls +
+        (counters.toolFailures ? '（' + counters.toolFailures + ' 次失败）' : '')]);
+    }
+    if (counters.totalTokens) {
+      chips.push(['tokens', fmtTokens(counters.totalTokens)]);
+      if (counters.cacheReported && counters.inputTokens && counters.cachedInputTokens > 0) {
+        chips.push(['缓存命中', Math.round(100 * counters.cachedInputTokens / counters.inputTokens) + '%']);
+      }
+    } else if (counters.modelRequests) {
+      chips.push(['模型请求', counters.modelRequests + ' 次']);
+    }
+    chips.forEach(([label, value]) => {
+      const chip = el('span', 'stat-chip');
+      chip.appendChild(el('b', '', value));
+      chip.appendChild(document.createTextNode(label));
+      box.appendChild(chip);
+    });
+  }
+
+  function section(title, content) {
+    const wrap = el('div', 'result-section');
+    wrap.appendChild(el('h3', '', title));
+    wrap.appendChild(content);
+    return wrap;
+  }
+
+  function renderResult(result, status) {
+    const card = $('resultCard');
+    const headline = $('resultHeadline');
+    const body = $('resultBody');
+    clear(headline);
+    clear(body);
+    show(card, true);
+
+    const word = status ? statusWord(status) : (state.failure ? 'failed' : 'done');
+    const badge = $('resultBadge');
+    const badgeClass = { done: 'ok', failed: 'err', cancelled: 'warn' }[word] || 'warn';
+    badge.className = 'pill ' + badgeClass;
+    badge.textContent = statusText(word);
+
+    const failureText = (state.failure && state.failure.text) ||
+      (status && status.message) || '任务没有正常完成，具体原因见上面的步骤。';
+    if (word === 'failed') {
+      const alert = el('div', 'alert');
+      alert.appendChild(el('b', '', '任务失败。'));
+      alert.appendChild(el('div', '', failureText));
+      const code = (state.failure && state.failure.errorCode) || (status && status.errorCode);
+      if (code) alert.appendChild(el('div', '', '错误码：' + code));
+      const hint = failureHint(failureText, code);
+      if (hint) alert.appendChild(el('div', '', '💡 ' + hint));
+      if (state.lastTaskText) {
+        const actions = el('div', 'alert-actions');
+        const retry = el('button', 'btn small', '重试这个任务');
+        retry.addEventListener('click', () => {
+          toast('重新执行同一个任务', 'ok');
+          startTask(state.lastTaskText);
+        });
+        actions.appendChild(retry);
+        alert.appendChild(actions);
+      }
+      body.appendChild(alert);
+    }
+
+    if (!result) {
+      headline.appendChild(el('p', 'result-empty', '没有拿到结构化结果。上面的「执行过程」就是它这次做的全部动作。'));
+      const empty = el('div', 'alert warn');
+      empty.appendChild(el('b', '', '没有拿到结构化结果。'));
+      empty.appendChild(el('div', '', '上面的步骤就是它这次做的全部动作；失败原因通常写在红色行里。'));
+      body.appendChild(empty);
+      $('rawJson').textContent = status ? JSON.stringify(status, null, 2) : '';
+      // Without a structured result the step log is the evidence: leave it open.
+      finishResultLayout(false);
+      return;
+    }
+
+    if (result.summary) headline.appendChild(el('p', '', result.summary));
+    if (Array.isArray(result.keyFindings) && result.keyFindings.length) {
+      const list = el('ul');
+      result.keyFindings.forEach((item) => list.appendChild(el('li', '', item)));
+      body.appendChild(section('关键发现', list));
+    }
+    if (result.fields && Object.keys(result.fields).length) {
+      const table = el('table');
+      Object.entries(result.fields).forEach(([key, value]) => {
+        const row = el('tr');
+        row.appendChild(el('th', '', key));
+        row.appendChild(el('td', '', value));
+        table.appendChild(row);
+      });
+      body.appendChild(section('字段', table));
+    }
+    if (Array.isArray(result.filesChanged) && result.filesChanged.length) {
+      const list = el('ul');
+      result.filesChanged.forEach((file) => list.appendChild(el('li', 'files', file)));
+      body.appendChild(section('写出的文件', list));
+    }
+    if (Array.isArray(result.problems) && result.problems.length) {
+      const list = el('ul');
+      result.problems.forEach((problem) => list.appendChild(el('li', '', problem)));
+      body.appendChild(section('遗留问题', list));
+    }
+    if (Array.isArray(result.links) && result.links.length) {
+      const list = el('ul');
+      result.links.slice(0, 100).forEach((link) => {
+        const item = el('li');
+        if (/^https?:\/\//i.test(String(link))) {
+          const anchor = el('a', '', link);
+          anchor.href = link;
+          anchor.target = '_blank';
+          anchor.rel = 'noopener noreferrer';
+          item.appendChild(anchor);
+        } else {
+          item.textContent = link;
+        }
+        list.appendChild(item);
+      });
+      body.appendChild(section('链接', list));
+    }
+    if (result.workspace) {
+      const path = el('div', 'path');
+      path.appendChild(el('code', '', result.workspace));
+      const copy = el('button', 'btn small ghost', '复制路径');
+      copy.addEventListener('click', async () => {
+        toast((await copyText(result.workspace)) ? '路径已复制' : '复制失败，请手动选中', 'ok');
+      });
+      path.appendChild(copy);
+      body.appendChild(section('工作目录', path));
+    }
+    if (Array.isArray(result.nextSuggestions) && result.nextSuggestions.length) {
+      const grid = el('div', 'next-grid');
+      result.nextSuggestions.slice(0, 5).forEach((suggestion) => {
+        const text = String(suggestion || '').trim();
+        if (!text) return;
+        const button = el('button', 'next');
+        button.title = '点击直接执行：' + text;
+        button.appendChild(el('span', 'next-text', text));
+        button.appendChild(el('span', 'next-go', '执行 →'));
+        button.addEventListener('click', () => {
+          toast('已开始：' + shorten(text, 60), 'ok');
+          startTask(text);
+        });
+        grid.appendChild(button);
+      });
+      if (grid.children.length) body.appendChild(section('接着做（点一下直接执行）', grid));
+    }
+
+    $('rawJson').textContent = JSON.stringify(result, null, 2);
+    finishResultLayout();
+  }
+
+  /**
+   * A finished run belongs to its result: collapse the execution log to a slim
+   * strip and bring the strip + the result underneath into view once.
+   */
+  function finishResultLayout(collapse) {
+    if (collapse !== false) setRunCollapsed(true);
+    if (state.resultRevealed) return;
+    state.resultRevealed = true;
+    const anchor = $('runPanel') || $('resultCard');
+    setTimeout(() => anchor && anchor.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+  }
+
+  function failureHint(text, code) {
+    const value = String(text || '').toLowerCase();
+    if (code === 'ROUTE') return '后端没有这个接口，可能是版本太旧：升级后会恢复。';
+    if (/连不上后端|请求超时/.test(text || '')) {
+      return '确认后端在运行：在终端执行 browser4-cli open https://example.com（源码树用 pwsh ./b4w.ps1 open https://example.com），再点「重新检测」。';
+    }
+    if (code === 'TOKEN_BUDGET') {
+      return 'Token 预算用完了。可以在终端用 agent run --token-budget <更大的数> 继续，或把任务拆小。';
+    }
+    if (code === 'NOOP_LIMIT') {
+      return '连续几轮没有进展，引擎主动停了。把任务说得更具体，或先在终端 agent run -i 里试。';
+    }
+    if (code === 'CANCELLED') return '任务是你自己停掉的，已完成的部分仍在上面。';
+    if (value.includes('llm') || value.includes('api key') || value.includes('no model') || value.includes('model is not configured')) {
+      return '后端还没配置模型 Key。设置 DEEPSEEK_API_KEY / OPENROUTER_API_KEY 等环境变量后重启后端。';
+    }
+    if (value.includes('approval') || value.includes('access') || value.includes('permission')) {
+      return '任务需要授权。请在终端 agent run -i 里逐项审批，网页控制台不能代为批准。';
+    }
+    if (value.includes('browser') || value.includes('chrome') || value.includes('cdp')) {
+      return '浏览器可能没启动或端口被占用。打开「状态面板」看看，或重启后端。';
+    }
+    return null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Steering and cancelling
+  // ---------------------------------------------------------------------------
+  /** Send the composer text to the running task instead of starting a new one. */
+  async function sendSteer(text) {
+    if (!state.running || !state.taskId) {
+      toast('当前没有在跑的任务；直接把它写成新任务吧', 'warn');
+      return false;
+    }
+    if (state.steering) return false;
+    state.steering = true;
+    const deliverAs = $('followupToggle').checked ? 'followUp' : 'steer';
+    const button = $('submitBtn');
+    button.disabled = true;
+    button.textContent = '发送中…';
+    try {
+      const payload = await apiJson(inputPath(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, deliverAs }),
+      }, 15000);
+      if (payload && payload.accepted) {
+        $('taskInput').value = '';
+        autoGrow();
+        toast((payload.message || '已排队') + ' · 生效后会在步骤里出现', 'ok');
+        return true;
+      }
+      // The text stays in the composer: the task ended while the user was typing.
+      toast((payload && payload.message) || '任务已结束，这句没有送到', 'warn');
+      return false;
+    } catch (error) {
+      toast('插话失败：' + friendlyError(error), 'err');
+      return false;
+    } finally {
+      state.steering = false;
+      button.disabled = false;
+      button.textContent = '发送';
+    }
+  }
+
+  async function cancelTask() {
+    if (!state.running || !state.taskId) {
+      toast('当前没有在跑的任务', 'warn');
+      return;
+    }
+    if (!window.confirm('停止这个任务？已经做出的修改不会回滚，但你会立刻拿回控制权。')) return;
+    try {
+      const payload = await apiJson(cancelPath(), { method: 'POST' }, 15000);
+      if (payload && payload.cancelled) {
+        toast('已请求停止，等它收尾…', 'warn');
+        setLiveNote('正在停止…（agent 会在下一个检查点退出）');
+      } else if (payload && payload.message) {
+        toast(payload.message, 'warn');
+      }
+    } catch (error) {
+      toast('停止失败：' + friendlyError(error), 'err');
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // UI state
+  // ---------------------------------------------------------------------------
+  function setRunningUi(running) {
+    show($('cancelBtn'), running);
+    show($('runningOptions'), running);
+    show($('examples'), !running);
+    $('submitBtn').disabled = false;
+    $('submitBtn').textContent = running ? '发送' : '开始任务';
+    $('taskInput').placeholder = running ? STEER_PLACEHOLDER : TASK_PLACEHOLDER;
+    $('submitHint').innerHTML = running
+      ? '<b>Enter</b> 发送 · <b>Shift+Enter</b> 换行 · 插话不会打断当前任务'
+      : '<b>Ctrl+Enter</b> 开始任务 · 写得越具体，结果越好';
+    $('runPill').classList.toggle('pulse', running);
+    document.querySelectorAll('#examples .ex').forEach((button) => { button.disabled = running; });
+    setTipsMode(running ? 'running' : 'idle');
+    autoGrow();
+  }
+
+  function resetRunUi() {
+    stopFollowing();
+    state.taskId = null;
+    state.running = false;
+    state.finished = false;
+    state.lastSeq = 0;
+    state.seen.clear();
+    state.toolRows.clear();
+    state.startedAt = null;
+    state.lastEventAt = null;
+    state.stats = null;
+    state.failure = null;
+    state.source = 'idle';
+    state.resultRevealed = false;
+    setRunCollapsed(false);
+    clear($('steps'));
+    const empty = el('div', 'empty');
+    empty.id = 'stepsEmpty';
+    empty.appendChild(el('div', 'empty-icon', '🤖'));
+    const headline = el('p');
+    headline.appendChild(el('b', '', '它会在浏览器里替你做。'));
+    empty.appendChild(headline);
+    empty.appendChild(el('p', 'muted', '每一步（打开页面、点击、读取、思考）都会出现在这里。'));
+    $('steps').appendChild(empty);
+
+    show($('taskChip'), false);
+    show($('resultCard'), false);
+    show($('jumpBtn'), false);
+    show($('cancelBtn'), false);
+    setSourceBadge('none');
+    $('elapsed').textContent = '';
+    $('heartbeat').textContent = '';
+    $('stepCount').textContent = '';
+    setLiveNote('还没有任务。在下面写一句话，按 Ctrl+Enter 开始。');
+    clear($('resultHeadline'));
+    $('resultBody').innerHTML = '';
+    $('resultStats').innerHTML = '';
+    $('rawJson').textContent = '';
+    $('taskInput').placeholder = TASK_PLACEHOLDER;
+    setRunPill('idle');
+    setRunningUi(false);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Existing task loading (?task= or the advanced field)
+  // ---------------------------------------------------------------------------
+  async function loadExistingTask(taskId) {
+    if (!taskId) return;
+    if (state.running) {
+      toast('先等当前任务结束，或点「停止任务」', 'warn');
+      return;
+    }
+    resetRunUi();
+    setComposerDocked(true);
+    state.taskId = taskId;
+    state.running = true;
+    state.finished = false;
+    state.startedAt = Date.now();
+    state.lastEventAt = Date.now();
+    $('taskIdShort').textContent = taskId.slice(0, 8) + '…';
+    show($('taskChip'), true);
+    setRunningUi(true);
+    setLiveNote('正在读取任务 ' + taskId.slice(0, 8) + '…');
+    syncUrl();
+    try {
+      const status = await apiJson(statusPath(), {}, 10000);
+      if (status && status.startedTime) state.startedAt = Date.parse(status.startedTime) || Date.now();
+      // Replay the retained step log even for a finished task: the steps are what
+      // makes the result readable, and an empty log simply means the backend no
+      // longer has them (the terminal event then arrives from the polling fallback).
+      setLiveNote(status && status.isDone
+        ? '正在读取这个任务已经做过的步骤…'
+        : '已连接到任务 ' + taskId.slice(0, 8) + '，正在同步它已经做过的步骤…');
+      startFollowing();
+      startTicker();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        state.running = false;
+        setRunningUi(false);
+        setRunPill('notfound');
+        setLiveNote('找不到这个任务。确认「会话」选对了，或者它已经被后端清理。', true);
+      } else {
+        state.running = false;
+        setRunningUi(false);
+        setRunPill('failed');
+        setLiveNote('读取任务失败：' + friendlyError(error), true);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sidebar: workspaces -> sessions
+  // ---------------------------------------------------------------------------
+  /**
+   * The sidebar's own preferences: whether the panel is collapsed and which workspace
+   * groups are folded. Persisted because a folded workspace is a deliberate choice, not a
+   * per-visit accident.
+   */
+  function readSidebarPrefs() {
+    try {
+      const parsed = JSON.parse(readStore(STORE_SIDEBAR) || '{}');
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (ignored) {
+      return {};
+    }
+  }
+
+  function writeSidebarPrefs() {
+    writeStore(STORE_SIDEBAR, JSON.stringify({
+      collapsed: !!state.sidebarCollapsed,
+      groups: state.sidebarGroups || {},
+    }));
+  }
+
+  function applySidebarLayout() {
+    // One class on <body> drives the layout: it zeroes --sidebar-w (the content's left
+    // padding and the composer's left edge follow it) and hides the column.
+    document.body.classList.toggle('sidebar-collapsed', !!state.sidebarCollapsed);
+    const toggle = $('sidebarToggle');
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', String(!state.sidebarCollapsed));
+      toggle.textContent = state.sidebarCollapsed ? '☰ 会话' : '☰ 收起会话';
+      toggle.title = state.sidebarCollapsed ? '展开工作区与会话侧边栏' : '收起工作区与会话侧边栏';
+    }
+  }
+
+  function setSidebarCollapsed(collapsed) {
+    state.sidebarCollapsed = !!collapsed;
+    writeSidebarPrefs();
+    applySidebarLayout();
+  }
+
+  function initSidebar() {
+    const prefs = readSidebarPrefs();
+    state.sidebarCollapsed = prefs.collapsed === undefined ? window.innerWidth < 940 : !!prefs.collapsed;
+    state.sidebarGroups = prefs.groups && typeof prefs.groups === 'object' ? prefs.groups : {};
+    applySidebarLayout();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Task workspace: chosen in the settings dialog, sent with every submission
+  // ---------------------------------------------------------------------------
+  /**
+   * Fill the dialog's workspace select from the session tree.
+   *
+   * The tree's durable groups are exactly the directories a task may run in; a stored choice
+   * that is no longer listed (its sessions expired) stays selectable, so the operator sees
+   * what will be sent instead of it silently becoming "temporary".
+   */
+  function renderWorkspaceOptions() {
+    const select = $('workspaceSelect');
+    if (!select) return;
+    const current = state.workspace || '';
+    const paths = [];
+    ((state.sessionTree && state.sessionTree.workspaces) || []).forEach((group) => {
+      if (!group.temporary && group.path) paths.push(group.path);
+    });
+    clear(select);
+    const fallback = el('option', '', '临时工作区（默认，每个任务自己的目录）');
+    fallback.value = '';
+    select.appendChild(fallback);
+    paths.forEach((path) => {
+      const option = el('option', '', path);
+      option.value = path;
+      select.appendChild(option);
+    });
+    if (current && !paths.includes(current)) {
+      const stale = el('option', '', current + '（不在当前会话列表里）');
+      stale.value = current;
+      select.appendChild(stale);
+    }
+    select.value = current;
+  }
+
+  function setWorkspace(workspace) {
+    state.workspace = String(workspace || '').trim();
+    writeStore(STORE_WORKSPACE, state.workspace);
+    const select = $('workspaceSelect');
+    if (select) select.value = state.workspace;
+  }
+
+  /**
+   * A session's workspace is where its next task should write, so browsing a session adopts
+   * it. Only a **known** session says anything: an unknown/empty one leaves the persisted
+   * choice alone, because a brand-new session does not imply "temporary".
+   */
+  function adoptSessionWorkspace(context) {
+    setWorkspace(context && context.workspace ? context.workspace : '');
+    renderWorkspaceOptions();
+  }
+
+  /** The composer shows which session the next task joins (it is also in the sidebar). */
+  function syncComposerSession() {
+    const label = $('composerSession');
+    if (label) label.textContent = '会话 ' + sessionDisplayName(state.session);
+  }
+
+  /**
+   * Two composer modes, matching the reference layout: centered in the work area while the
+   * page is idle, docked to the bottom once there is a run to look at.
+   */
+  function setComposerDocked(docked) {
+    document.body.classList.toggle('composer-docked', !!docked);
+  }
+
+  function toggleWorkspaceGroup(groupId) {
+    if (!groupId) return;
+    state.sidebarGroups[groupId] = !state.sidebarGroups[groupId];
+    writeSidebarPrefs();
+    renderSessionTree();
+  }
+
+  /** A short, stable label for a session id; the full id stays in the tooltip. */
+  function shortSessionName(sessionId) {
+    const id = String(sessionId || '');
+    if (id.length <= 22) return id;
+    return id.slice(0, 12) + '…' + id.slice(-4);
+  }
+
+  /** The label the sidebar shows: the backend's anonymous pool gets a readable name. */
+  function sessionDisplayName(sessionId) {
+    const id = String(sessionId || '');
+    if (id === 'DEFAULT') return '默认会话';
+    return shortSessionName(id);
+  }
+
+  function fmtRelative(ms) {
+    const value = Number(ms) || 0;
+    if (!value) return '时间未知';
+    const delta = Math.max(0, Date.now() - value);
+    if (delta < 60000) return '刚刚';
+    if (delta < 3600000) return Math.floor(delta / 60000) + ' 分钟前';
+    if (delta < 86400000) return Math.floor(delta / 3600000) + ' 小时前';
+    return Math.floor(delta / 86400000) + ' 天前';
+  }
+
+  /** Task status word the page already knows how to label (`statusText`). */
+  function taskWord(task) {
+    if (!task) return 'unknown';
+    if (task.status === 'done') {
+      if (task.cancelled) return 'cancelled';
+      return Number(task.statusCode) === 200 ? 'done' : 'failed';
+    }
+    if (task.status === 'created') return 'queued';
+    if (task.status === 'in_progress') return 'running';
+    return 'unknown';
+  }
+
+  function taskBadgeKind(word) {
+    return { done: 'ok', failed: 'err', running: 'busy', queued: '', cancelled: 'warn' }[word] || '';
+  }
+
+  function renderSessionTree() {
+    const tree = $('sessionTree');
+    if (!tree) return;
+    const scrollTop = tree.scrollTop;
+    clear(tree);
+    const groups = (state.sessionTree && state.sessionTree.workspaces) || [];
+    if (!groups.length) {
+      const empty = $('sidebarEmpty');
+      if (empty) {
+        empty.textContent = '还没有会话。提交一个任务，它就会出现在这里；指定了 --workspace 的会话会归到对应的工作区。';
+        show(empty, true);
+      }
+      return;
+    }
+    const empty = $('sidebarEmpty');
+    if (empty) show(empty, false);
+    groups.forEach((group) => {
+      const folded = !!state.sidebarGroups[group.id];
+      const wrap = el('div', 'ws-group' + (folded ? ' collapsed' : ''));
+      const head = el('button', 'ws-head');
+      head.type = 'button';
+      head.title = group.temporary
+        ? '没有指定工作区（agent run --workspace）的会话：每次任务写在自己的临时目录里'
+        : '工作区 ' + (group.path || group.name);
+      head.appendChild(el('span', 'chev', '▾'));
+      head.appendChild(el('span', 'ws-name', group.name));
+      head.appendChild(el('span', 'ws-badge', String(group.sessions.length)));
+      head.addEventListener('click', () => toggleWorkspaceGroup(group.id));
+      wrap.appendChild(head);
+      if (group.path) {
+        const path = el('div', 'ws-path mono', group.path);
+        path.title = group.path;
+        wrap.appendChild(path);
+      }
+      const body = el('div', 'ws-body');
+      group.sessions.forEach((session) => body.appendChild(sessionRow(session)));
+      wrap.appendChild(body);
+      tree.appendChild(wrap);
+    });
+    // Paging through a long list must survive the 15s refresh.
+    tree.scrollTop = scrollTop;
+  }
+
+  function sessionRow(session) {
+    const active = session.sessionId === state.session;
+    const row = el('button', 'sess' + (active ? ' active' : ''));
+    row.type = 'button';
+    row.setAttribute('role', 'treeitem');
+    row.title = session.sessionId;
+    const top = el('div', 'sess-top');
+    const dotClass = session.running ? ' running' : (session.live ? ' live' : '');
+    top.appendChild(el('span', 'sess-dot' + dotClass));
+    top.appendChild(el('span', 'sess-name', sessionDisplayName(session.sessionId)));
+    if (active) top.appendChild(el('span', 'sess-now', '当前'));
+    row.appendChild(top);
+    const meta = [];
+    if (session.taskCount) meta.push(session.taskCount + ' 个任务');
+    else meta.push('还没有任务');
+    if (session.turnCount) meta.push(session.turnCount + ' 轮上下文');
+    if (session.running) meta.push('运行中');
+    meta.push(fmtRelative(session.lastActivity));
+    row.appendChild(el('div', 'sess-meta', meta.join(' · ')));
+    row.addEventListener('click', () => switchSession(session.sessionId));
+    return row;
+  }
+
+  /**
+   * Read the workspace → session tree.
+   *
+   * @param force true bypasses the backend's short reuse cache (the refresh button).
+   */
+  async function loadSessions(force) {
+    const button = $('sidebarRefresh');
+    if (button) button.classList.add('spin');
+    try {
+      const view = await apiJson('/api/agent/sessions' + (force ? '?refresh=true' : ''), {}, 10000);
+      // `generatedAt` changes on every response; only the tree itself may trigger a rebuild.
+      const signature = JSON.stringify((view && view.workspaces) || []);
+      state.sessionTree = view;
+      // The dialog's workspace picker is fed by the same tree; refreshing the tree must not
+      // leave the picker offering a directory that no longer exists.
+      renderWorkspaceOptions();
+      // A poll that changed nothing must not rebuild the DOM: re-rendering every 15s threw
+      // away focus and the tree's scroll position for no visible gain.
+      if (signature !== state.sessionTreeSignature) {
+        state.sessionTreeSignature = signature;
+        renderSessionTree();
+      }
+    } catch (error) {
+      const empty = $('sidebarEmpty');
+      if (empty) {
+        empty.textContent = '会话列表暂时读不到：' + friendlyError(error);
+        show(empty, true);
+      }
+    } finally {
+      if (button) button.classList.remove('spin');
+    }
+  }
+
+  /**
+   * Switch the page to another session: the URL, the stored session and the composer all
+   * follow, then the session's context is restored into the run panel. A running task
+   * belongs to the session that started it, so switching is refused while it runs — the
+   * same rule the settings dialog uses.
+   */
+  function switchSession(sessionId) {
+    if (!sessionId) return;
+    if (state.running) {
+      toast('先等当前任务结束，或点「停止任务」再切换会话', 'warn');
+      return;
+    }
+    const changed = sessionId !== state.session;
+    state.session = sessionId;
+    writeStore(STORE_SESSION, sessionId);
+    $('sessionInput').value = sessionId;
+    $('sessionLabel').textContent = sessionId;
+    syncComposerSession();
+    resetRunUi();
+    // A session view is a run view: the composer docks so the transcript gets the space.
+    setComposerDocked(true);
+    syncUrl();
+    renderSessionTree();
+    if (changed) void probeBackend(true);
+    void loadSessionContext(sessionId);
+  }
+
+  async function startNewSession() {
+    if (state.running) { toast('先等任务结束或停止它', 'warn'); return; }
+    state.session = newSessionId();
+    writeStore(STORE_SESSION, state.session);
+    $('sessionInput').value = state.session;
+    $('sessionLabel').textContent = state.session;
+    syncComposerSession();
+    resetRunUi();
+    // A brand-new session has nothing to show, so the page returns to its idle shape.
+    setComposerDocked(false);
+    syncUrl();
+    void probeBackend(true);
+    renderSessionTree();
+    void loadSessions(false);
+    toast('已换到新会话 ' + state.session, 'ok');
+  }
+
+  /**
+   * Restore one session's context into the run panel.
+   *
+   * What is restored is what the session actually remembers: the conversation turns the
+   * next task would inherit, plus the task rows (id, status, workspace, files) so a
+   * finished task's result is still reachable and a running one can be followed.
+   */
+  async function loadSessionContext(sessionId) {
+    if (!sessionId) return;
+    setRunPill('idle');
+    setLiveNote('正在恢复会话 ' + shortSessionName(sessionId) + ' 的上下文…');
+    try {
+      const context = await apiJson('/api/agent/sessions/' + enc(sessionId) + '/context', {}, 10000);
+      if (state.session !== sessionId) return;
+      // Where this session writes is where its next task should write: the dialog select and
+      // the composer chip follow the session the operator just opened.
+      adoptSessionWorkspace(context);
+      renderSessionContext(context);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        // Nothing to restore yet: keep the friendly empty state instead of replacing it with
+        // a lone divider, and say which session the next task will join.
+        setLiveNote('这个会话还没有可恢复的上下文。在下面写一句话，就会在会话 ' + shortSessionName(sessionId) + ' 里开始。');
+      } else {
+        setLiveNote('恢复会话上下文失败：' + friendlyError(error), true);
+      }
+    }
+  }
+
+  function renderSessionContext(context) {
+    // A restored session is a read-only transcript until the operator submits again: drop
+    // every trace of the previous run (followers, seen events, tool rows) first.
+    resetRunUi();
+    setComposerDocked(true);
+    clear($('steps'));
+    const runningTask = (context.tasks || []).find((task) => ['created', 'in_progress'].includes(task.status));
+    setRunPill('idle');
+    hideEmptyState();
+
+    const head = el('div', 'restore-head');
+    head.appendChild(el('span', 'restore-title', context.workspace
+      ? '工作区 · ' + context.workspace
+      : '临时工作区'));
+    if (context.temporary) head.appendChild(badge('临时', 'info'));
+    head.appendChild(badge((context.taskCount || 0) + ' 个任务'));
+    if (context.turnCount) head.appendChild(badge((context.turnCount || 0) + ' 轮上下文'));
+    if (context.compressed) head.appendChild(badge('含压缩记忆', 'info'));
+    const actions = el('div', 'restore-actions');
+    const newest = (context.tasks || [])[0];
+    if (newest) {
+      const view = el('button', 'btn small', runningTask ? '跟随运行中的任务' : '查看最新任务');
+      view.type = 'button';
+      view.addEventListener('click', () => { void loadExistingTask(newest.id); });
+      actions.appendChild(view);
+    }
+    const resume = el('button', 'btn small ghost', '在这个会话继续');
+    resume.type = 'button';
+    resume.addEventListener('click', () => { $('taskInput').focus(); });
+    actions.appendChild(resume);
+    head.appendChild(actions);
+    $('steps').appendChild(head);
+
+    const turns = context.turns || [];
+    addDivider('会话对话 · ' + (turns.length ? turns.length + ' 轮' : '没有记录')
+      + (context.turnsTruncated ? '（更早的已省略）' : ''));
+    turns.forEach((turn) => addTurnRow(turn));
+
+    const tasks = context.tasks || [];
+    if (tasks.length) {
+      addDivider('这个会话的任务 · ' + tasks.length + (runningTask ? ' · 有任务正在运行' : ''));
+      tasks.forEach((task) => addTaskRow(task));
+    }
+    updateStepCount();
+    setLiveNote(context.temporary
+      ? '已恢复会话（临时工作区）。在下面接着写，就会继续这个会话。'
+      : '已恢复会话。在下面接着写，就会继续这个会话。');
+  }
+
+  function turnLabel(role) {
+    return {
+      task: '任务', model: '模型', tool: '工具', result: '结果', user: '插话', outcome: '结局',
+    }[role] || (role || '记录');
+  }
+
+  function turnIcon(role) {
+    return { task: '🎯', model: '💬', tool: '🔧', result: '↩', user: '🗣', outcome: '🏁' }[role] || '•';
+  }
+
+  function addTurnRow(turn) {
+    const role = String((turn && turn.role) || '');
+    // Every turn is shown: the point of restoring the session is to see the context the
+    // next task inherits, not a filtered summary of it (the turns are already one bounded
+    // line each).
+    const row = el('div', 'step turn');
+    row.appendChild(el('div', 'step-icon', turnIcon(role)));
+    const content = el('div', 'step-content');
+    const top = el('div', 'step-top');
+    top.appendChild(el('span', 'turn-role ' + role, turnLabel(role)));
+    content.appendChild(top);
+    content.appendChild(el('div', 'turn-text', (turn && turn.text) || ''));
+    row.appendChild(content);
+    $('steps').appendChild(row);
+    afterAppend(row);
+  }
+
+  function addTaskRow(task) {
+    const word = taskWord(task);
+    const row = el('div', 'step');
+    row.appendChild(el('div', 'step-icon', '📌'));
+    const content = el('div', 'step-content');
+    const top = el('div', 'step-top');
+    const open = el('button', 'linkbtn', shorten(task.instruction || task.id, 120));
+    open.type = 'button';
+    open.title = '打开这个任务：' + task.id;
+    open.addEventListener('click', () => { void loadExistingTask(task.id); });
+    top.appendChild(open);
+    const badges = el('span', 'step-badges');
+    badges.appendChild(badge(statusText(word), taskBadgeKind(word)));
+    top.appendChild(badges);
+    content.appendChild(top);
+    const details = [];
+    if (task.workspace) details.push(task.workspace + (task.workspaceExplicit ? '' : '（临时目录）'));
+    if (task.filesChanged) details.push(task.filesChanged + ' 个文件');
+    if (task.finishedAt) details.push('完成于 ' + fmtRelative(task.finishedAt));
+    else if (task.lastActivity) details.push(fmtRelative(task.lastActivity));
+    content.appendChild(el('div', 'step-detail mono', details.join(' · ')));
+    row.appendChild(content);
+    row.appendChild(el('time', 'step-time mono', fmtClock(task.lastActivity)));
+    $('steps').appendChild(row);
+    afterAppend(row);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Init
+  // ---------------------------------------------------------------------------
+  function newSessionId() {
+    const bytes = new Uint8Array(4);
+    if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(bytes);
+    else for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+    return 'web-' + Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  }
+
+  function readInitialState() {
+    const params = new URLSearchParams(location.search);
+    const storedBackend = readStore(STORE_BACKEND);
+    const storedSession = readStore(STORE_SESSION);
+    // A page served by a backend talks to that backend unless ?backend= says
+    // otherwise; a stored choice must not outlive the server it was made against.
+    state.backend = (params.get('backend') || (SAME_ORIGIN ? location.origin : storedBackend) || DEFAULT_BACKEND)
+      .replace(/\/+$/, '');
+    state.session = params.get('session') || params.get('s') || storedSession || newSessionId();
+    writeStore(STORE_SESSION, state.session);
+    // The workspace the next task runs in: remembered across visits, `''` for the default.
+    state.workspace = readStore(STORE_WORKSPACE) || '';
+
+    $('sessionInput').value = state.session;
+    $('sessionLabel').textContent = state.session;
+    syncComposerSession();
+    $('backendInput').value = state.backend;
+    $('taskInput').placeholder = TASK_PLACEHOLDER;
+    applyBackendLinks();
+    const taskParam = params.get('task');
+    if (taskParam) $('taskIdInput').value = taskParam;
+    return { taskParam };
+  }
+
+  function bindEvents() {
+    $('submitBtn').addEventListener('click', () => { void submitTask(); });
+
+    const input = $('taskInput');
+    input.addEventListener('input', autoGrow);
+    input.addEventListener('keydown', (event) => {
+      if (event.isComposing) return;
+      const enter = event.key === 'Enter';
+      const withModifier = event.ctrlKey || event.metaKey;
+      if (!enter && !withModifier) return;
+      if (withModifier) {
+        event.preventDefault();
+        void submitTask();
+        return;
+      }
+      // While a task runs the box behaves like a chat line: Enter sends,
+      // Shift+Enter is a newline. Idle, Enter keeps making a new paragraph.
+      if (state.running && !event.shiftKey) {
+        event.preventDefault();
+        void submitTask();
+      }
+    });
+    $('examples').addEventListener('click', (event) => {
+      const button = event.target.closest('.ex');
+      if (!button) return;
+      $('taskInput').value = button.dataset.task || '';
+      autoGrow();
+      $('taskInput').focus();
+    });
+
+    $('cancelBtn').addEventListener('click', cancelTask);
+
+    $('runToggle').addEventListener('click', () => {
+      const panel = $('runPanel');
+      setRunCollapsed(!panel.classList.contains('collapsed'));
+    });
+
+    $('autoScroll').addEventListener('change', () => {
+      if ($('autoScroll').checked) scrollToBottom(true);
+    });
+    $('verboseToggle').addEventListener('change', () => {
+      $('steps').classList.toggle('show-tech', $('verboseToggle').checked);
+    });
+    $('steps').addEventListener('scroll', () => {
+      if (atBottom()) show($('jumpBtn'), false);
+    });
+    $('jumpBtn').addEventListener('click', () => scrollToBottom(true));
+
+    $('taskChip').addEventListener('click', async () => {
+      if (!state.taskId) return;
+      toast((await copyText(state.taskId)) ? '任务 ID 已复制' : '复制失败，请手动选中', 'ok');
+    });
+    $('copyResultBtn').addEventListener('click', async () => {
+      const raw = $('rawJson').textContent;
+      if (!raw) { toast('还没有结果', 'warn'); return; }
+      toast((await copyText(raw)) ? '结果 JSON 已复制' : '复制失败，请手动选中', 'ok');
+    });
+
+    $('copySessionBtn').addEventListener('click', async () => {
+      toast((await copyText(state.session)) ? '会话 ID 已复制' : '复制失败，请手动选中', 'ok');
+    });
+
+    // ---- sidebar: workspace -> session tree ----
+    $('sidebarToggle').addEventListener('click', () => setSidebarCollapsed(!state.sidebarCollapsed));
+    $('sidebarCollapse').addEventListener('click', () => setSidebarCollapsed(true));
+    $('sidebarRefresh').addEventListener('click', () => { void loadSessions(true); });
+    $('sidebarNewSession').addEventListener('click', () => { void startNewSession(); });
+
+    // ---- task workspace picker (in the composer) ----
+    $('workspaceSelect').addEventListener('change', () => {
+      setWorkspace($('workspaceSelect').value);
+      renderWorkspaceOptions();
+      toast(state.workspace ? '新任务会写进 ' + state.workspace : '新任务使用临时工作区', 'ok');
+    });
+    $('refreshWorkspacesBtn').addEventListener('click', () => {
+      void loadSessions(true);
+      renderWorkspaceOptions();
+    });
+
+    $('newSessionBtn').addEventListener('click', () => { void startNewSession(); });
+    $('sessionInput').addEventListener('change', () => {
+      const value = $('sessionInput').value.trim();
+      if (!value) { $('sessionInput').value = state.session; return; }
+      if (state.running) {
+        toast('运行中的任务属于旧会话；结束后再切换', 'warn');
+        $('sessionInput').value = state.session;
+        return;
+      }
+      const changed = value !== state.session;
+      state.session = value;
+      writeStore(STORE_SESSION, state.session);
+      $('sessionLabel').textContent = state.session;
+      syncComposerSession();
+      resetRunUi();
+      syncUrl();
+      probeBackend(true);
+      renderSessionTree();
+      if (changed) void loadSessionContext(state.session);
+      void loadSessions(false);
+    });
+    $('backendInput').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') $('saveBackendBtn').click();
+    });
+    $('saveBackendBtn').addEventListener('click', async () => {
+      const value = $('backendInput').value.trim().replace(/\/+$/, '');
+      if (!/^https?:\/\/[^\s]+$/i.test(value)) {
+        toast('后端地址要以 http:// 或 https:// 开头', 'err');
+        return;
+      }
+      state.backend = value;
+      writeStore(STORE_BACKEND, value);
+      $('backendInput').value = value;
+      applyBackendLinks();
+      syncUrl();
+      const up = await probeBackend();
+      toast(up ? '已连接到 ' + value : '连不上 ' + value, up ? 'ok' : 'err');
+    });
+    $('loadTaskBtn').addEventListener('click', () => {
+      const id = $('taskIdInput').value.trim();
+      if (!id) {
+        toast('先粘贴 agent run 打印的任务 ID', 'warn');
+        $('taskIdInput').focus();
+        return;
+      }
+      loadExistingTask(id);
+    });
+    $('taskIdInput').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') $('loadTaskBtn').click();
+    });
+
+    $('retryBackendBtn').addEventListener('click', async () => {
+      const up = await probeBackend();
+      toast(up ? '后端已连接' : '还是连不上：看看终端里的后端是否启动', up ? 'ok' : 'err');
+    });
+    $('closeBannerBtn').addEventListener('click', () => show($('backendBanner'), false));
+
+    const dialog = $('settingsDialog');
+    const openSettings = () => {
+      if (!dialog) return;
+      if (typeof dialog.showModal === 'function') dialog.showModal();
+      else dialog.setAttribute('open', '');
+    };
+    const closeSettings = () => {
+      if (!dialog) return;
+      if (typeof dialog.close === 'function') dialog.close();
+      else dialog.removeAttribute('open');
+    };
+    $('openSettingsBtn').addEventListener('click', openSettings);
+    $('closeSettingsBtn').addEventListener('click', closeSettings);
+    if (dialog && dialog.addEventListener) {
+      dialog.addEventListener('click', (event) => {
+        if (event.target === dialog) closeSettings();
+      });
+    }
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        document.activeElement && document.activeElement.blur && document.activeElement.blur();
+      }
+    });
+  }
+
+  async function init() {
+    const { taskParam } = readInitialState();
+    initSidebar();
+    bindEvents();
+    renderWorkspaceOptions();
+    resetRunUi();
+    // Restore the empty state's text after resetRunUi rebuilt it.
+    setLiveNote('还没有任务。在下面写一句话，按 Ctrl+Enter 开始。');
+    startTips();
+    observeComposer();
+    autoGrow();
+    probeBackend(true);
+    void loadSessions(true);
+    // A page opened on a session that already has context restores it, so a refresh (or a
+    // console link handed over from `-i`) does not look like a brand-new conversation.
+    if (!taskParam) void loadSessionContext(state.session);
+    // The tree is cheap to read and worth keeping current: a task started from another
+    // terminal shows up here without a reload. Hidden tabs skip it (no wasted requests).
+    setInterval(() => { if (!document.hidden) void loadSessions(false); }, SIDEBAR_REFRESH_MS);
+    if (taskParam) {
+      loadExistingTask(taskParam);
+    }
+    startTicker();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

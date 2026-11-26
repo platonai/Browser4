@@ -185,6 +185,25 @@ class CommandController(
     }
 
     /**
+     * [rejectedStatus] for a plain command, which has no [PageVisitRequest] to echo.
+     *
+     * Kept the same shape (a terminal [CommandStatus]) so a client parsing only the body
+     * learns the same fact as one reading the `400` status line.
+     * */
+    private fun rejectedPlainStatus(message: String): CommandStatus {
+        val now = Instant.now()
+        return CommandStatus(
+            statusCode = ResourceStatus.SC_BAD_REQUEST,
+            processState = "completed",
+            pageStatusCode = ResourceStatus.SC_BAD_REQUEST,
+            message = message,
+        ).also {
+            it.lastModifiedTime = now
+            it.finishTime = now
+        }
+    }
+
+    /**
      * Execute a command with plain text input.
      *
      * When the command normalizer returns a valid [PageVisitRequest],
@@ -203,7 +222,13 @@ class CommandController(
      *        [CommandStatus] object.
      * @param mode Deprecated: use [async] instead. Recognized value: "async". Any other value
      *        triggers a warning and falls back to sync execution.
-     * @return `200` + [CommandStatus] for sync, `202` + [CommandSubmitResponse] for async.
+     * @param workspace Optional directory this task runs in (`agent run --workspace`): an
+     *        absolute path to an existing directory on this machine. Omitted/blank keeps the
+     *        backend's per-task workspace. The value is validated **before** the task is
+     *        submitted, so a bad path is a `400` on the request instead of a task that fails
+     *        after it started.
+     * @return `200` + [CommandStatus] for sync, `202` + [CommandSubmitResponse] for async,
+     *         `400` + [CommandStatus] for an unusable workspace.
      * */
     @PostMapping("/plain")
     suspend fun submitPlainCommand(
@@ -211,6 +236,7 @@ class CommandController(
         @RequestParam(name = "sessionId") sessionId: String? = null,
         @RequestParam(name = "async") async: Boolean? = null,
         @RequestParam(name = "mode") mode: String? = null,
+        @RequestParam(name = "workspace", required = false) workspace: String? = null,
     ): ResponseEntity<Any> {
         fun isAsync(): Boolean {
             val modeIsAsync = mode?.lowercase() == "async"
@@ -232,12 +258,34 @@ class CommandController(
 
         val effectiveSessionId = SessionResolution.firstNamedOrDefault(sessionId)
 
+        // Resolve the workspace before submitting: it defines where the task may write, so an
+        // unusable value must fail the request — not a task that has already started. A plain
+        // command is a browser task, which is why the coding-checkout guard does not apply.
+        val taskWorkspace = try {
+            workspace?.trim()?.takeIf { it.isNotEmpty() }
+                ?.let { ai.platon.pulsar.coding.TaskWorkspaceOverride.resolve(it, coding = false) }
+        } catch (e: IllegalArgumentException) {
+            logger.warn("Rejecting a command with an unusable workspace '{}': {}", workspace, e.message)
+            return ResponseEntity.badRequest()
+                .body(rejectedPlainStatus("Invalid workspace: ${e.message}"))
+        }
+
         return if (isAsync()) {
             ResponseEntity.accepted()
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(CommandSubmitResponse(commandExecutor.submitPlainCommand(effectiveSessionId, plainCommand)))
+                .body(
+                    CommandSubmitResponse(
+                        commandExecutor.submitPlainCommand(
+                            effectiveSessionId, plainCommand, workspace = taskWorkspace,
+                        )
+                    )
+                )
         } else {
-            ResponseEntity.ok(commandExecutor.executePlainCommand(effectiveSessionId, plainCommand))
+            ResponseEntity.ok(
+                commandExecutor.executePlainCommand(
+                    effectiveSessionId, plainCommand, workspace = taskWorkspace,
+                )
+            )
         }
     }
 

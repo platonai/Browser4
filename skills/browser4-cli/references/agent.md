@@ -175,10 +175,20 @@ The block never spends a slot on `/stats`, `/result` or `/new`: those are in `/h
 
 A task's coding tools run under one access **preset** (`full` / `write` / `read-build` / `read`), and a refused step can be approved out of band through `coding.requestAccess` plus the operator endpoints. The preset table, the `PERMISSION_DENIED | code=...` catalogue, the approval/rail rules, the unattended default and the task-scoped reset are in [agent-access.md](agent-access.md).
 
-**Reads are wider than writes.** Browser4's own data root (`~/.browser4`: logs, task data, per-task workspaces, its `tmp/`), `~/.browser4` itself even when a managed `--workspace` moved the data root, the CLI workspace owning `<app data>`, the source checkout, and any folder added with `-Dbrowser4.agent.readPaths=…` are readable from every task — read-only, whatever the preset. The write scope outside the workspace is the checkout a task's workspace **mirrors** (a self-development task edits the code it runs from; the protected rails still apply), plus the other task workspaces a run may write (below). `coding.permissions` lists them; see [agent-access.md](agent-access.md#readable-roots--browser4s-own-folders).
+**Reads are wider than writes.** Browser4's own data root (`~/.browser4`: logs, task data, per-task workspaces, its `tmp/`), `~/.browser4` itself even when a managed checkout moved its data root under `<home>/workspaces`, the CLI workspace owning `<app data>`, the source checkout, and any folder added with `-Dbrowser4.agent.readPaths=…` are readable from every task — read-only, whatever the preset. The write scope outside the workspace is the checkout a task's workspace **mirrors** (a self-development task edits the code it runs from; the protected rails still apply), plus the other task workspaces a run may write (below). `coding.permissions` lists them; see [agent-access.md](agent-access.md#readable-roots--browser4s-own-folders).
 
 **Two layers, one boundary.** The preset and the string checks (`pathGuard`, `workspaceBoundary`, `allowExternalAccess`) decide what the model may *spell* — they are fast-fail and advisory, not enforcement. The boundary is the **execution sandbox**: `coding.shell` and `coding.runCode` run inside it whenever `browser4.agent.sandbox` selects a backend other than `off`, and on the two backends that can execute them the **file mutations** (`coding.write`/`append`/`replace`/`editLines`/`delete`/`mkdir`/`copy`/`move`/`revert`) do too — each change is performed by a child inside the boundary, so an outside write is refused by the OS, not only by the path check. `b4.run` is a *product* channel: it stays inside the boundary on `windows-low-il`/`windows-acl`, and on the browse AppContainer — which cannot read the profile or reach the host's `127.0.0.1` — it keeps its launch in the backend and `coding.permissions` lists it as not covered. Reads stay in the backend on purpose (in coding mode "read like the user" *is* the goal). A fresh Windows installation defaults to `windows-acl`; existing installations and Linux/macOS stay `off` until switched. When the
 sandbox is active, an OS denial reaches the model as `PERMISSION_DENIED | code=SANDBOX_DENIED | tool=… | needed=…` (raw evidence stays in the log), and an unavailable sandbox — missing account or credential, failed ACLs, failed write probe, unknown id — **fails the task**; there is no unsandboxed fallback. Switch values, defaults, the ACL matrix, the account property and the `off` rollback are in [config.md](../../../docs/config.md).
+
+### Naming the workspace (`--workspace`)
+
+`agent run "<task>" --workspace <dir>` runs the task **in place** in an existing directory you name:
+the agent reads and writes it directly, nothing is copied in or merged out, and Browser4 never
+creates, archives or sweeps it. `--coding` keeps its meaning but still runs in place (no worktree,
+no merge) — which is why the backend's own checkout is refused there — and the flag cannot be
+combined with `--resume` or `--shared-workspace`. In `-i` the directory applies to every task of the
+session and the banner names it. See
+[agent-workspace.md](agent-workspace.md#the-directory-you-name---workspace).
 
 ### Extra folders (`--add-dir`)
 

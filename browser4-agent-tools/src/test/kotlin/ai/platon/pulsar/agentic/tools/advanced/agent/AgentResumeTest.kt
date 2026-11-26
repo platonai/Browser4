@@ -212,6 +212,46 @@ class AgentResumeTest {
     }
 
     @Test
+    @DisplayName("an explicit --workspace directory wins, and refuses the flags that also name a workspace")
+    fun explicitWorkspaceOverridesTheDefaults(@TempDir tmp: Path) {
+        // `agent run --workspace <dir>`: the caller named the directory, so it is the task's
+        // workspace in place — not a per-task copy, not the resume target, not the shared one.
+        val named = Files.createDirectories(tmp.resolve("corpus"))
+        val checkpoint = tmp.resolve("workspace.interrupted")
+
+        assertEquals(
+            named,
+            taskWorkspaceFor(tmp, "task-a", resumeWorkspace = null, sharedWorkspace = null, explicitWorkspace = named),
+        )
+        assertEquals(
+            named,
+            taskWorkspaceFor(
+                tmp, "task-b", resumeWorkspace = checkpoint, sharedWorkspace = true, explicitWorkspace = named,
+            ),
+            "the explicit directory has to beat the other rules even when a caller sends several",
+        )
+
+        // Nothing to refuse when the caller only names the directory, or names no directory.
+        requireCompatibleWorkspaceFlags(named, resumeTaskId = null, sharedWorkspace = null)
+        requireCompatibleWorkspaceFlags(named, resumeTaskId = "  ", sharedWorkspace = false)
+        requireCompatibleWorkspaceFlags(null, resumeTaskId = "task-1", sharedWorkspace = true)
+
+        // Silently ignoring either flag would either run in a directory the caller did not name or
+        // throw away the checkpoint the caller asked to continue: both must fail loudly.
+        val resumeError = assertThrows(IllegalArgumentException::class.java) {
+            requireCompatibleWorkspaceFlags(named, resumeTaskId = "task-1", sharedWorkspace = null)
+        }
+        assertTrue(resumeError.message!!.contains("--workspace"), resumeError.message!!)
+        assertTrue(resumeError.message!!.contains("--resume"), resumeError.message!!)
+
+        val sharedError = assertThrows(IllegalArgumentException::class.java) {
+            requireCompatibleWorkspaceFlags(named, resumeTaskId = null, sharedWorkspace = true)
+        }
+        assertTrue(sharedError.message!!.contains("--workspace"), sharedError.message!!)
+        assertTrue(sharedError.message!!.contains("--shared-workspace"), sharedError.message!!)
+    }
+
+    @Test
     @DisplayName("an unrestricted grant is carried by the checkpoint, so a resume keeps it")
     fun checkpointCarriesTheUnrestrictedGrant() {
         // Decision (2026-11-14): a resume keeps the grant and cannot drop it — the continued

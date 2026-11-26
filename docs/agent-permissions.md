@@ -281,6 +281,7 @@ REST 控制器**故意不开 CORS**：批准等于授予写文件/执行命令�
 | 无人值守默认 | `-Dbrowser4.agent.access.unattended` | `full` + 允许网络；`deny` 用 `denyTools=coding.*,skill.*` 表达 |
 | 任务预设 | `agent run --access <preset>` | 继承服务端 |
 | 额外目录 | `agent run --add-dir`、REPL `/add-dir`、`/dirs [clear]` | 无 |
+| 指定工作区 | `agent run --workspace <dir>`（就地运行，不隔离、不合并；`--coding` 下拒绝后端自身 checkout） | 无（每任务独立工作区） |
 | 其他任务工作区 | `-Dbrowser4.agent.allowTaskWorkspaceWrites`、窗口 `-Dbrowser4.agent.taskWorkspaceWriteDays` | **开**（写其他任务的 `workspace[.<task-id>]`；`workspace.archive`、`agent/skills`、隔离 worktree 不在内） |
 | 全权 | `agent run --unrestricted` | 关 |
 | 可读根 | `-Dbrowser4.agent.readPaths` | Browser4 数据根、`~/.browser4`、CLI 工作区、源检出 |

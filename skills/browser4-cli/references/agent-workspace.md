@@ -48,6 +48,7 @@ backend `<agent data>` is `~/.browser4/workspaces/<workspace-id>/app-data`.
 | `agent run "<task>" --coding` | an isolated **git worktree** of the checkout: `<repo>/.browser4/worktrees/<task-id>` (it has `.git`; the change is merged back as a patch) |
 | `agent run --resume <task-id>` | the **interrupted** task's workspace, so the rows/files it already wrote are what the new run continues from |
 | `agent run --shared-workspace` | the old shared `…/<agent-uuid>/workspace`, which holds earlier tasks' files |
+| `agent run "<task>" --workspace <dir>` | **`<dir>` itself**, used in place — the caller named the tree |
 | `--fresh-workspace` | accepted for compatibility; a per-task workspace is now the default |
 
 Why isolation is the default: files from an earlier run must never appear in this run's
@@ -87,6 +88,47 @@ run** reported (`filesChanged`); a run that aborted without reporting them still
 the files it wrote (from its mutation log), never older ones. The workspace lives on the
 machine that runs the backend — when the backend is remote, copy the artifacts from
 there (or have the agent return the data inline).
+
+### The directory you name (`--workspace`)
+
+```bash
+browser4-cli agent run "Summarize every CSV in this folder" --workspace D:/corpus
+browser4-cli agent run "Port the helpers into this project" --coding --workspace D:/work/port-target
+```
+
+`--workspace <dir>` replaces the per-task directory with a folder **you** name, and the
+task runs **in place** there:
+
+- the agent reads and writes `<dir>` directly — no clone, no mirror, nothing merged out of
+  it, and Browser4 never creates, archives or sweeps it (retention only touches its own
+  per-task workspaces), so whatever is already there is the starting state;
+- `<dir>` must be an **existing directory** on the backend machine. A typo is not turned
+  into an empty folder the run writes into; the submission fails and names the path. A
+  relative path resolves against the shell directory you typed the command in, and a
+  leading `~` is your home directory;
+- `--coding` keeps its meaning (no browser page, coding tool set) but the run is still in
+  place: **no git worktree and no merge**. That is deliberate — a data corpus is a
+  legitimate coding target — and it is why the backend's own coding checkout is
+  **refused** for a coding task: running in place there would bypass the isolated
+  worktree and its verify-gated merge. Drop `--workspace` for that (the default gives the
+  task a worktree), or have the operator set
+  `-Dbrowser4.agent.workspace.isolation=off` and drop it;
+- it cannot be combined with `--resume` (the resume carries its own workspace) or
+  `--shared-workspace` (both name the workspace). The CLI refuses the pair before
+  submitting, and the backend refuses it too;
+- `.browser4/workspace.json` is written **inside** `<dir>` (the task's manifest: what ran,
+  what it wrote). That file is how `agent result` and the finish gate know what the run
+  changed; the deliverable archive is *not* created next to your folder;
+- task inputs still arrive the usual way: a file the instruction names outside `<dir>` is
+  copied into `<dir>/.b4inputs/` before the first model call;
+- in `agent run -i` the directory applies to **every** task of the session and the banner
+  names it;
+- writing there is still bounded by `--access`. `filesChanged` means "written by this
+  run" — a file you left in the folder beforehand is not claimed.
+
+Do not confuse it with `-Dbrowser4.agent.workspace=<checkout>`: that is a backend-wide
+setting naming the checkout coding tasks mirror/worktree from; `--workspace` is this one
+task's directory on the CLI.
 
 ### What it may read by default
 
@@ -333,6 +375,7 @@ Credential locations stay refused. `--access` never widens paths.
 |---|---|---|
 | `--coding` | `agent run` | run in an isolated **git worktree** of the checkout (has `.git`); the change is merged into the main repository as a patch only when `coding.verify` passes |
 | `--shared-workspace` | `agent run` | use the shared `<agent data>/workspace` (earlier tasks' files are visible) instead of this task's own directory |
+| `--workspace <dir>` | `agent run` | run this task **in place** in an existing directory you name: no per-task copy, no worktree, no merge, nothing created/archived/swept; the backend's own coding checkout is refused for `--coding`; incompatible with `--resume` and `--shared-workspace` |
 | `--resume <task-id>` | `agent run` | reuse the interrupted task's workspace (its files are what the new run continues from) |
 | `--fresh-workspace` | `agent run` | accepted for compatibility; per-task isolation is the default now |
 | `--access <preset>` | `agent run` | which *tools* run (`full`/`write`/`read-build`/`read`); never widens paths |
@@ -348,6 +391,9 @@ Credential locations stay refused. `--access` never widens paths.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `PERMISSION_DENIED \| code=PATH_DENIED` | the path is outside the workspace | name the file in the task (it is copied in), use `--add-dir <folder>` for a folder the task must work in, use `--coding`, or enable external access |
+| `--workspace '<…>' is not an existing directory` | the folder is missing on the backend machine (or the path is a file) | create it first — a workspace is never created implicitly — or fix the path |
+| `--workspace cannot be combined with --resume` / `--shared-workspace` | two flags named the workspace | keep exactly one: `--workspace <dir>`, `--resume <id>`, or `--shared-workspace` |
+| `--workspace '<…>' is the backend's coding checkout` | a `--coding` task asked to run in place in the checkout | drop `--workspace` (isolated worktree), or opt out backend-wide with `-Dbrowser4.agent.workspace.isolation=off` |
 | `code=PROTECTED_PATH` | governance file or protected subtree | copy what you need elsewhere; these stay unwritable by design |
 | `code=SENSITIVE_PATH` | credential location | never copied or read; move the data out of `~/.ssh`/`~/.aws`/`~/.browser4` |
 | The agent reports a blocked input in `problems` | the file could not be resolved at all | check the path exists in the checkout, then re-run |

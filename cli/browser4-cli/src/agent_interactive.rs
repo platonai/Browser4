@@ -2973,6 +2973,10 @@ struct Repl {
     coding: bool,
     fresh_workspace: bool,
     shared_workspace: bool,
+    /// `--workspace <dir>`: every task of this session runs in that directory, in place
+    /// (the absolute path the command definition resolved). `None` keeps the per-task
+    /// workspace.
+    workspace: Option<String>,
     /// Per-task token budget (`--token-budget`); `None` keeps the server default.
     token_budget: Option<i64>,
     /// Access preset for this REPL's tasks (`--access`); `None` keeps the
@@ -3053,6 +3057,12 @@ impl Repl {
             .get("sharedWorkspace")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let workspace = params
+            .get("workspace")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|dir| !dir.is_empty())
+            .map(str::to_string);
         let access = params
             .get("access")
             .and_then(|v| v.as_str())
@@ -3075,6 +3085,7 @@ impl Repl {
             coding,
             fresh_workspace,
             shared_workspace,
+            workspace,
             token_budget,
             access,
             add_dirs,
@@ -3160,6 +3171,11 @@ impl Repl {
             // names them after the other knobs instead of hiding the grant.
             line.push_str(&format!(" · add-dir={}", self.add_dirs.join(",")));
         }
+        if let Some(workspace) = self.workspace.as_deref() {
+            // Every task of the session writes there in place: the one knob a long session must
+            // not have to remember from the command line it started with.
+            line.push_str(&format!(" · workspace={workspace}"));
+        }
         if self.unrestricted {
             // A session-wide power grant must never be silent.
             line.push_str(" · unrestricted");
@@ -3170,9 +3186,18 @@ impl Repl {
         if self.quiet {
             line.push_str(" · quiet");
         }
+        // The web console is the same session over the REST API: the banner is the one
+        // place a terminal user can discover it without reading docs, and the session
+        // in the query string is what makes "open the page and keep going" work.
+        let console_url = format!(
+            "{}/agent.html?session={}",
+            self.base_url.trim_end_matches('/'),
+            urlencoding::encode(&session)
+        );
         vec![
             line,
             "  type a task · /help for commands · Ctrl+C cancels the running task".to_string(),
+            format!("  web console: {console_url}  ·  same session"),
         ]
     }
 
@@ -3655,6 +3680,9 @@ impl Repl {
         // Extra folders granted with `--add-dir`: every task of this session keeps
         // the grant, exactly like `--access` does. The list is already absolute.
         crate::apply_add_dirs(&mut extra, &self.add_dirs);
+        // `--workspace <dir>` is session-wide in `-i` mode, exactly like `--add-dir`: every task
+        // this REPL submits runs in that directory, in place. Already absolute.
+        crate::apply_workspace_override(&mut extra, self.workspace.as_deref());
         // `--unrestricted` is a session-wide grant, exactly like `--add-dir`: every
         // task this REPL submits carries it until `-i` exits.
         crate::apply_unrestricted(&mut extra, self.unrestricted);
@@ -6281,7 +6309,7 @@ mod tests {
 
         let default_repl = Repl::new(&client, "http://localhost:1", &json!({}), None);
         let lines = default_repl.banner_lines();
-        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines.len(), 3, "{lines:?}");
         // An unnamed session names its own id: it is not the backend's DEFAULT pool
         // any more, so the banner must say what the session is bound to.
         assert!(
@@ -6295,6 +6323,14 @@ mod tests {
         }
         assert!(
             lines[1].contains("type a task") && lines[1].contains("Ctrl+C cancels"),
+            "{lines:?}"
+        );
+        // The web console shares this session: the URL carries the id, so opening it
+        // continues the same context instead of starting a parallel one.
+        let session = default_repl.session_id().expect("a session id");
+        assert!(
+            lines[2].contains("/agent.html?session=")
+                && lines[2].contains(&*urlencoding::encode(&session)),
             "{lines:?}"
         );
 
@@ -6335,6 +6371,30 @@ mod tests {
         let plain = Repl::new(&client, "http://localhost:1", &json!({}), None);
         assert!(plain.payload().get("addDirs").is_none(), "{:?}", plain.payload());
         assert!(!plain.banner_lines()[0].contains("add-dir="), "{:?}", plain.banner_lines());
+    }
+
+    /// `--workspace <dir>` is session-wide in `-i` mode, exactly like `--add-dir`:
+    /// every task of the session runs in that directory, in place, so the banner has
+    /// to name it — a long session must not have to remember the path from the command
+    /// line it started with.
+    #[test]
+    fn the_repl_forwards_the_workspace_and_names_it_in_the_banner() {
+        let client = Client::builder().build().expect("client");
+        let repl = Repl::new(
+            &client,
+            "http://localhost:1",
+            &json!({"workspace": " /corpus/in-place "}),
+            None,
+        );
+
+        assert_eq!(repl.payload()["workspace"], json!("/corpus/in-place"));
+        let first = &repl.banner_lines()[0];
+        assert!(first.contains("workspace=/corpus/in-place"), "{first}");
+
+        // No flag: the payload must not carry the key at all (per-task workspace).
+        let plain = Repl::new(&client, "http://localhost:1", &json!({}), None);
+        assert!(plain.payload().get("workspace").is_none(), "{:?}", plain.payload());
+        assert!(!plain.banner_lines()[0].contains("workspace="), "{:?}", plain.banner_lines());
     }
 
     /// `--unrestricted` is a session-wide power grant in `-i` mode, exactly like

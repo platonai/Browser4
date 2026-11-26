@@ -16040,6 +16040,34 @@ fn apply_add_dirs(extra: &mut Value, add_dirs: &[String]) {
     }
 }
 
+/// Forward `--workspace <dir>` into the `command.run` payload.
+///
+/// The command definition already resolved the value to an absolute path against
+/// the shell directory the user typed the command in (and expanded a leading `~`),
+/// so this only carries it to the backend. The backend owns the decision that
+/// matters — the directory exists, is a directory, is not a credential store and,
+/// for a coding task, is not its own checkout — because only it knows the machine
+/// the task will run on. A blank value is not a directory and leaves the key out,
+/// which keeps the per-task workspace.
+fn apply_workspace_override(extra: &mut Value, workspace: Option<&str>) {
+    if let Some(dir) = workspace.map(str::trim).filter(|dir| !dir.is_empty()) {
+        extra["workspace"] = json!(dir);
+    }
+}
+
+/// The `--workspace <dir>` value of a parsed `agent run` payload, or `None`.
+///
+/// Blank is "the flag was not usable as a directory": treating it as `None` keeps
+/// the per-task workspace instead of sending an empty path the backend would have
+/// to reject with a less specific message.
+fn workspace_override_of(tool_params: &Value) -> Option<&str> {
+    tool_params
+        .get("workspace")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|dir| !dir.is_empty())
+}
+
 /// Forward `--unrestricted` into the `command.run` payload.
 ///
 /// The flag is the per-task opt-in to run with the current OS user's own
@@ -16126,6 +16154,33 @@ async fn handle_agent_run(
             "--token-budget expects a non-negative integer (0 = unlimited), got '{}'.",
             raw
         ));
+    }
+    // `--workspace <dir>` names the task's workspace itself, so it cannot be combined
+    // with the two flags that also name one. Refused before anything is submitted (and
+    // before the interactive branch) so the user gets the repair hint instead of a task
+    // that is accepted and then fails; the backend refuses the pair as well, for callers
+    // that do not come through the CLI.
+    let workspace = workspace_override_of(tool_params);
+    if let Some(dir) = workspace {
+        if let Some(id) = tool_params
+            .get("resumeTaskId")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        {
+            return Err(format!(
+                "--workspace cannot be combined with --resume ({id}): a resume continues the \
+                 interrupted task in its own workspace, so {dir} would be ignored. Drop --workspace \
+                 to continue that task, or drop --resume to start a new task in this directory."
+            ));
+        }
+        if tool_params.get("sharedWorkspace").and_then(|v| v.as_bool()) == Some(true) {
+            return Err(format!(
+                "--workspace cannot be combined with --shared-workspace: both name the task's \
+                 workspace. Keep --workspace {dir} to use your directory, or --shared-workspace for \
+                 the agent's shared one."
+            ));
+        }
     }
     // Interactive session (`agent run -i`): its own loop owns submission and
     // output, including the optional initial task.
@@ -16221,6 +16276,9 @@ async fn handle_agent_run(
         tool_params.get("rewind").and_then(|v| v.as_str()),
     );
     apply_add_dirs(&mut extra, &add_dirs_of(tool_params.get("addDirs")));
+    // `--workspace <dir>`: the task's directory, used in place. Already absolute (the command
+    // definition resolved it against the shell directory the user typed the command in).
+    apply_workspace_override(&mut extra, workspace);
     apply_unrestricted(
         &mut extra,
         tool_params.get("unrestricted").and_then(|v| v.as_bool()) == Some(true),
@@ -16248,10 +16306,24 @@ async fn handle_agent_run(
                 "sessionId": resolved_session_id,
                 "connection": binding.as_ref().and_then(|(_, connection)| connection.clone()),
                 "task": task,
+                "workspace": workspace,
             })
             .to_string(),
         );
     } else {
+        // Say where the task will write before anything is streamed: an explicit workspace is
+        // used in place, and a `--coding` run there does not create or merge a worktree, so the
+        // operator must know the change lands directly in the named directory.
+        if let Some(dir) = workspace {
+            if tool_params.get("coding").and_then(|v| v.as_bool()) == Some(true) {
+                cli_println!(
+                    "Workspace: {} (in place; no isolated worktree — the change is not merged)",
+                    dir
+                );
+            } else {
+                cli_println!("Workspace: {} (in place)", dir);
+            }
+        }
         match &binding {
             Some((session_id, Some(connection))) => cli_println!(
                 "Task submitted: {} (session={}, {})",
@@ -43699,6 +43771,36 @@ linkGroups:
 
         apply_add_dirs(&mut absent, &add_dirs_of(None));
         assert!(absent.get("addDirs").is_none(), "got {absent}");
+    }
+
+    /// `--workspace <dir>` reaches `command.run` as the absolute directory the task
+    /// must run in; a blank value is not a directory and no value at all leaves the
+    /// key out, so the backend keeps the per-task workspace.
+    #[test]
+    fn apply_workspace_override_forwards_only_a_real_directory() {
+        let mut extra =
+            build_agent_run_extra("cli", None, false, false, false, None, None, None, None);
+        apply_workspace_override(&mut extra, Some(" /corpus "));
+        assert_eq!(extra["workspace"], json!("/corpus"), "got {extra}");
+
+        let mut absent =
+            build_agent_run_extra("cli", None, false, false, false, None, None, None, None);
+        apply_workspace_override(&mut absent, Some("   "));
+        assert!(absent.get("workspace").is_none(), "got {absent}");
+
+        apply_workspace_override(&mut absent, None);
+        assert!(absent.get("workspace").is_none(), "got {absent}");
+    }
+
+    /// The `--workspace` value is read through one helper so the one-shot form and the
+    /// interactive session cannot disagree about what "no directory" means.
+    #[test]
+    fn workspace_override_of_ignores_absent_blank_and_non_string_values() {
+        assert_eq!(workspace_override_of(&json!({"workspace": " /corpus "})), Some("/corpus"));
+        assert_eq!(workspace_override_of(&json!({"workspace": "   "})), None);
+        assert_eq!(workspace_override_of(&json!({"workspace": null})), None);
+        assert_eq!(workspace_override_of(&json!({})), None);
+        assert_eq!(workspace_override_of(&json!({"workspace": 7})), None);
     }
 
     /// `--unrestricted` reaches the backend only when the task asked for it; the key

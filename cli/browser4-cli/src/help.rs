@@ -2323,6 +2323,13 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push("    /noop-limit tune the other knobs live.".to_string());
         lines.push(
+            "    The session banner prints a browser URL (…/agent.html?session=…) bound to the".to_string(),
+        );
+        lines.push(
+            "    same session, where the same tasks can be submitted, watched, steered and stopped."
+                .to_string(),
+        );
+        lines.push(
             "    A bare line while a task runs steers it at the next model round; /followup <text>".to_string(),
         );
         lines.push(
@@ -2527,6 +2534,42 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    (--access read keeps it read-only); coding.permissions lists the folders in effect."
                 .to_string(),
         );
+        lines.push(
+            "  - --workspace <dir> runs this task IN PLACE in an existing directory instead of a"
+                .to_string(),
+        );
+        lines.push(
+            "    per-task workspace: the agent reads and writes there directly, nothing is copied in"
+                .to_string(),
+        );
+        lines.push(
+            "    or merged out, and Browser4 never creates, archives or sweeps the folder. A relative"
+                .to_string(),
+        );
+        lines.push(
+            "    path resolves against your shell directory and a leading ~ is your home directory."
+                .to_string(),
+        );
+        lines.push(
+            "    With --coding the run is still in place (no worktree, no merge), which is the point"
+                .to_string(),
+        );
+        lines.push(
+            "    for a non-git corpus; the backend's own coding checkout is refused there, because an"
+                .to_string(),
+        );
+        lines.push(
+            "    in-place run would bypass the isolated worktree and its verify-gated merge. Cannot"
+                .to_string(),
+        );
+        lines.push(
+            "    be combined with --resume or --shared-workspace. Distinct from the backend-wide"
+                .to_string(),
+        );
+        lines.push(
+            "    -Dbrowser4.agent.workspace=<checkout>, which names the checkout coding tasks mirror."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push(
@@ -2548,6 +2591,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(
             "  browser4-cli agent run \"Port the helpers from ../shared-libs\" --coding --add-dir ../shared-libs"
                 .to_string(),
+        );
+        lines.push(
+            "  browser4-cli agent run \"Summarize every file here\" --workspace D:/corpus".to_string(),
         );
         lines.push(
             "  browser4-cli agent run \"Collect the top 5 products\" --follow".to_string(),
@@ -7832,6 +7878,11 @@ mod tests {
         assert!(help.contains("autonomous agent task"));
         assert!(help.contains("browser4-cli agent run"));
         assert!(help.contains("/stats reports the run's LLM rounds"), "{help}");
+        // `--workspace` must be discoverable from the help alone: it changes where the
+        // task writes, and an undocumented `--coding` in-place run would be a surprise.
+        assert!(help.contains("--workspace <dir>"), "{help}");
+        assert!(help.contains("--shared-workspace"), "{help}");
+        assert!(help.contains("workspace.isolation=off"), "{help}");
         assert!(!help.contains("browser4-cli agent-run"));
     }
 

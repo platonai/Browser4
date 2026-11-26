@@ -141,6 +141,8 @@ class CommandControllerTest {
                     anyOrNull(),
                     // rewindTaskId (13th parameter, defaulted) — same rule.
                     anyOrNull(),
+                    // workspace (14th parameter, defaulted) — the console's dialog may name it.
+                    anyOrNull(),
                 )
             ).thenReturn("agent-task-9")
 
@@ -176,6 +178,8 @@ class CommandControllerTest {
                     // context alignment; a defaulted argument still occupies a matcher
                     // slot, so omitting it fails the whole stub.
                     anyOrNull(),
+                    // workspace (14th parameter, defaulted) — see the async test above.
+                    anyOrNull(),
                 )
             ).thenReturn(status)
 
@@ -183,6 +187,63 @@ class CommandControllerTest {
 
             assertEquals(HttpStatus.OK, response.statusCode)
             assertEquals(status, response.body)
+        }
+    }
+
+    @Test
+    @DisplayName("a plain submission forwards the chosen workspace, so the task runs in place there")
+    fun plainSubmissionForwardsTheWorkspace() {
+        runBlocking {
+            val dir = java.nio.file.Files.createTempDirectory("b4-console-workspace-")
+            try {
+                whenever(
+                    executor.submitPlainCommand(
+                        any(), any(), anyOrNull(), anyOrNull(), anyOrNull(),
+                        anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(),
+                        anyOrNull(), anyOrNull(), anyOrNull(),
+                        // workspace (14th): the one value this test is about.
+                        anyOrNull(),
+                    )
+                ).thenReturn("agent-task-ws")
+
+                val response = controller.submitPlainCommand(
+                    "collect the rows", async = true, workspace = dir.toString(),
+                )
+
+                assertEquals(HttpStatus.ACCEPTED, response.statusCode)
+                assertEquals(CommandSubmitResponse("agent-task-ws"), response.body)
+                verify(executor).submitPlainCommand(
+                    any(), any(), anyOrNull(), anyOrNull(), anyOrNull(),
+                    anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(),
+                    anyOrNull(), anyOrNull(), anyOrNull(),
+                    eq(dir.toAbsolutePath().normalize()),
+                )
+            } finally {
+                dir.toFile().deleteRecursively()
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("an unusable workspace is rejected before a task is created")
+    fun unusableWorkspaceIsRejected() {
+        runBlocking {
+            val dir = java.nio.file.Files.createTempDirectory("b4-console-workspace-")
+            try {
+                val missing = dir.resolve("does-not-exist")
+
+                val response = controller.submitPlainCommand(
+                    "collect the rows", async = true, workspace = missing.toString(),
+                )
+
+                assertEquals(HttpStatus.BAD_REQUEST, response.statusCode)
+                val status = response.body as CommandStatus
+                assertTrue(status.message!!.contains("not an existing directory"), status.message)
+                assertTrue(status.isDone, "a rejected submission must not look pollable")
+                Mockito.verifyNoInteractions(executor)
+            } finally {
+                dir.toFile().deleteRecursively()
+            }
         }
     }
 

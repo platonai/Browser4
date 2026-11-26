@@ -156,6 +156,28 @@ data class AgentTaskStatus(
     var cancelled: Boolean = false
 
     /**
+     * The transport session this task ran in (`command.run`'s `sessionId`) — the CLI's
+     * `-s <name>`, the interactive session's own id, the web console's `web-<hex>`, or
+     * `DEFAULT` for a session-less caller.
+     *
+     * Recorded so an operator surface (the web console's session sidebar,
+     * `agent list`) can group the tasks of one conversation and restore it, instead of
+     * guessing from timestamps. `null` on rows written before the field existed, which
+     * therefore cannot be attributed to a session.
+     */
+    var sessionId: String? = null
+
+    /**
+     * Whether [workspace] was named by the caller (`agent run --workspace <dir>`) rather
+     * than being the runner's own per-task scratch directory.
+     *
+     * The sidebar groups sessions by the directory their tasks used: an explicit
+     * workspace is a durable place the operator named, while a per-task directory under
+     * the agent data root is throw-away — "临时工作区".
+     */
+    var workspaceExplicit: Boolean = false
+
+    /**
      * The directory this task's tools wrote into (the agent's isolated workspace).
      *
      * Recorded when the task starts so a finished task can hand its caller the place
@@ -477,6 +499,11 @@ fun AgentTaskStatus.detachedSnapshot(includeHistory: Boolean = true): AgentTaskS
     snapshot.finishTime = finishTime
     snapshot.submittedTask = submittedTask
     snapshot.failureReason = failureReason
+    // The session the row belongs to and whether its workspace was named by the caller:
+    // `copy()` resets body-declared fields, and without these the persisted row can no
+    // longer be attributed to a session or to a durable workspace.
+    snapshot.sessionId = sessionId
+    snapshot.workspaceExplicit = workspaceExplicit
     snapshot.workspace = workspace
     snapshot.sourceRepo = sourceRepo
     snapshot.isolatedWorkspace = isolatedWorkspace

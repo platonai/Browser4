@@ -987,11 +987,12 @@ open class StatefulAgentRunner(
         addDirs: List<Path> = emptyList(),
         unrestricted: Boolean? = null,
         rewindTaskId: String? = null,
+        workspace: Path? = null,
     ): AgentTaskStatus {
         val status = create()
         execute(
             plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId,
-            tokenBudget, addDirs, unrestricted, rewindTaskId,
+            tokenBudget, addDirs, unrestricted, rewindTaskId, workspace,
         )
         return status
     }
@@ -1019,11 +1020,12 @@ open class StatefulAgentRunner(
         addDirs: List<Path> = emptyList(),
         unrestricted: Boolean? = null,
         rewindTaskId: String? = null,
+        workspace: Path? = null,
     ): Job {
         val job = taskScope.launch(start = CoroutineStart.LAZY) {
             execute(
                 plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
-                resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId,
+                resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace,
             )
         }
         runningJobs[status.id] = job
@@ -1099,12 +1101,19 @@ open class StatefulAgentRunner(
         addDirs: List<Path> = emptyList(),
         unrestricted: Boolean? = null,
         rewindTaskId: String? = null,
+        workspace: Path? = null,
     ) {
+        // Attribute the row to its session before the task is queued: the console's
+        // sidebar must show a freshly submitted task under its conversation (and under the
+        // workspace it named) instead of filing it under "temporary" for as long as it waits
+        // behind another run of the same session.
+        status.sessionId = contextKey ?: session.uuid.toString()
+        status.workspaceExplicit = workspace != null
         try {
             runMutex.withLock {
                 executeSerialized(
                     plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
-                    resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId,
+                    resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace,
                 )
             }
         } catch (e: CancellationException) {
@@ -1375,6 +1384,7 @@ open class StatefulAgentRunner(
         addDirs: List<Path> = emptyList(),
         unrestricted: Boolean? = null,
         rewindTaskId: String? = null,
+        workspace: Path? = null,
     ) {
         val agent = session.companionAgent
 
@@ -1510,6 +1520,11 @@ open class StatefulAgentRunner(
         val speculativeAtStart = MavenBuildSupport().speculativeStats()
 
         try {
+            // `agent run --workspace <dir>` names the task workspace itself, so it cannot be
+            // combined with the two flags that also name one. Refused here (inside the task's
+            // error handling) so the row ends as a failed task carrying the repair hint instead
+            // of a cancelled/queued row nobody can explain.
+            requireCompatibleWorkspaceFlags(workspace, resumeTaskId, sharedWorkspace)
             status.refresh(ResourceStatus.SC_PROCESSING)
             // Record the submitted instruction HERE, before anything can fail: the
             // terminal path remembers cancelled and failed runs (they are exactly the
@@ -1526,6 +1541,12 @@ open class StatefulAgentRunner(
             status.unrestricted = effectiveUnrestricted
             status.addedDirs = addedDirs.map { it.toString() }.takeIf { it.isNotEmpty() }
             status.resumedFrom = resume?.taskId
+            // Which conversation this task belongs to (the operator surfaces group by it)
+            // and whether the caller named the directory it runs in (`--workspace`) or the
+            // runner chose a per-task one. Recorded before the workspace is computed below
+            // because the sidebar needs both even for a task that never starts.
+            status.sessionId = contextKey ?: session.uuid.toString()
+            status.workspaceExplicit = workspace != null
             // The submit-time row says "created"; record the transition to
             // "in progress" immediately so a restart cannot revive a task that had
             // already started as if it were still queued.
@@ -1584,7 +1605,12 @@ open class StatefulAgentRunner(
                 // The worktree creation is often seconds (git + checkout) and used to be
                 // part of the anonymous residue: mark it as its own share of setup.
                 phaseClock.mark(RunPhase.ISOLATION)
-                val started = if (codingMode) {
+                // `--workspace <dir>` is used in place: the caller named the tree, so there is no
+                // task-owned copy to isolate and no merge to apply (`--coding` included — a
+                // non-git corpus is a legitimate coding target). The backend checkout is refused
+                // earlier by TaskWorkspaceOverride, so this can never silently disable the
+                // self-development worktree.
+                val started = if (codingMode && workspace == null) {
                     startIsolation(status.id, session.uuid.toString(), resume?.workspace, sharedWorkspace)
                 } else IsolationStart(null, null)
                 repoLock = started.lock
@@ -1608,17 +1634,29 @@ open class StatefulAgentRunner(
                         }
                 }
                 val taskWorkspace = startedIsolation?.isolatedRoot
-                    ?: taskWorkspaceFor(it.baseDir, status.id, resume?.workspace, sharedWorkspace)
+                    ?: taskWorkspaceFor(it.baseDir, status.id, resume?.workspace, sharedWorkspace, workspace)
                 if (taskWorkspace != null) {
                     java.nio.file.Files.createDirectories(taskWorkspace)
                     it.workspaceDirOverride = taskWorkspace
-                    it.agentToolManager.rebindWorkspace(taskWorkspace)
+                    // Publish the directory NOW, not only once the agent loop starts: a task
+                    // that fails during setup (policy, sandbox) must still be attributable to
+                    // the workspace it was about to write, and the session sidebar groups by
+                    // exactly this field.
+                    status.workspace = taskWorkspace.toString()
+                    // The explicit flag suppresses the coding workspace mirror: linking the
+                    // checkout's modules into a caller-named directory would put the repo's
+                    // reactor entries into (for example) a data corpus.
+                    it.agentToolManager.rebindWorkspace(taskWorkspace, explicit = workspace != null)
                     logger.info(
-                        "Agent task {} (session={}): workspace at {} (resume={}, shared={}, isolation={})",
+                        "Agent task {} (session={}): workspace at {} (resume={}, shared={}, explicit={}, isolation={})",
                         status.id, session.uuid, taskWorkspace, resume != null, sharedWorkspace == true,
-                        startedIsolation?.let { "worktree" } ?: "none"
+                        workspace != null, startedIsolation?.let { "worktree" } ?: "none"
                     )
                 } else {
+                    // `--shared-workspace` keeps the agent's initial/restored root. Every finished
+                    // task already rebinds back to `<baseDir>/workspace` in the finally below (with
+                    // `explicit=false`), so no rebind is needed here.
+                    status.workspace = it.agentToolManager.workspaceRoot.toString()
                     logger.info(
                         "Agent task {} (session={}): shared workspace at {} (--shared-workspace)",
                         status.id, session.uuid, it.agentToolManager.workspaceRoot
@@ -2118,6 +2156,17 @@ open class StatefulAgentRunner(
     }
 
     fun getStatus(id: String) = statusCache.getIfPresent(id)
+
+    /**
+     * Every task status this runner currently holds (running and restored terminal rows).
+     *
+     * Used by operator surfaces that group tasks by session (`agent list`, the web
+     * console's session sidebar): the live cache is authoritative for a task that is
+     * still running, while the shared JSONL row is the only thing left after a restart.
+     * Returned as an immutable copy so a caller iterating it cannot see the cache mutate
+     * under it.
+     */
+    fun statuses(): List<AgentTaskStatus> = statusCache.asMap().values.toList()
 
     /**
      * Returns the latest agent state for the given task ID, or null if the task

@@ -32,8 +32,25 @@ class DefaultController(
         // @RestController: a String return value is the response body, NOT a view name, and the
         // "redirect:" prefix is never interpreted. Return a real HTTP redirect here so the browser
         // actually follows it to the static status panel.
+        return redirectTo("/status.html")
+    }
+
+    /**
+     * `/agent` → the agent console page.
+     *
+     * The console is a single static page (`agent.html`) that drives the same
+     * `agent run -i` session over the REST API: submit, live steps, steering,
+     * cancel, result. The short route exists so a terminal user who only saw the
+     * `agent` prefix does not have to remember the `.html` suffix.
+     */
+    @GetMapping("agent")
+    fun agentConsole(): ResponseEntity<Unit> {
+        return redirectTo("/agent.html")
+    }
+
+    private fun redirectTo(location: String): ResponseEntity<Unit> {
         return ResponseEntity.status(HttpStatus.FOUND)
-            .location(URI.create("/status.html"))
+            .location(URI.create(location))
             .build()
     }
 }

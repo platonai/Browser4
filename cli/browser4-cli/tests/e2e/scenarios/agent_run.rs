@@ -1702,6 +1702,140 @@ pub(super) fn test_agent_run_omits_add_dir_when_absent(ctx: &mut E2ECtx) {
     );
 }
 
+/// `--workspace <dir>` names the task's directory and must reach `command_run` as an
+/// **absolute** path: the backend runs in the runtime bundle, so a path relative to the
+/// user's shell directory would name a different place there. The CLI also says out loud
+/// that the task works in place, because nothing is isolated or merged in that mode.
+pub(super) fn test_agent_run_forwards_workspace(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task = "Summarize every file in the corpus";
+    mock_server.set_command_status_response(
+        "agent-task-1",
+        completed_status("agent-task-1", task, "done"),
+    );
+
+    let corpus = ctx.workspace_dir.join("in-place-corpus");
+    std::fs::create_dir_all(&corpus).expect("create the workspace folder");
+    let corpus_arg = corpus.to_string_lossy().to_string();
+
+    let run_result = run_command(
+        ctx,
+        &["agent", "run", task, "--coding", "--workspace", corpus_arg.as_str()],
+    );
+    assert!(
+        run_result.stdout.contains("Task submitted: agent-task-1"),
+        "expected task submission in:\n{}",
+        run_result.stdout
+    );
+    assert!(
+        run_result.stdout.contains(&format!("Workspace: {corpus_arg} (in place;")),
+        "a coding task in an explicit workspace must say the change is not merged:\n{}",
+        run_result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    let command_call = snapshot
+        .tool_calls
+        .iter()
+        .find(|call| call.tool == "command_run")
+        .expect("expected command_run MCP tool call");
+    assert_eq!(
+        command_call.arguments["workspace"],
+        serde_json::json!(corpus_arg),
+        "command_run payload should forward --workspace as an absolute path: {:?}",
+        command_call.arguments
+    );
+}
+
+/// Without `--workspace` the payload carries no `workspace` key at all, so the task keeps
+/// its per-task workspace (an empty string would be a directory nobody named).
+pub(super) fn test_agent_run_omits_workspace_when_absent(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let task = "Read the changelog";
+    mock_server.set_command_status_response(
+        "agent-task-1",
+        completed_status("agent-task-1", task, "done"),
+    );
+
+    let run_result = run_command(ctx, &["agent", "run", task, "--coding"]);
+    assert!(
+        run_result.stdout.contains("Task submitted: agent-task-1"),
+        "expected task submission in:\n{}",
+        run_result.stdout
+    );
+    assert!(
+        !run_result.stdout.contains("Workspace: "),
+        "an omitted --workspace must not be announced:\n{}",
+        run_result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    let command_call = snapshot
+        .tool_calls
+        .iter()
+        .find(|call| call.tool == "command_run")
+        .expect("expected command_run MCP tool call");
+    assert!(
+        command_call.arguments.get("workspace").is_none(),
+        "an omitted --workspace must not appear in the payload: {:?}",
+        command_call.arguments
+    );
+}
+
+/// `--workspace` and `--resume` both name the workspace, so the CLI refuses the pair
+/// **before** submitting: accepting it and then running somewhere the caller did not name
+/// (or dropping the checkpoint) are both worse than an actionable error.
+pub(super) fn test_agent_run_rejects_workspace_with_resume(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let corpus = ctx.workspace_dir.join("conflicting-corpus");
+    std::fs::create_dir_all(&corpus).expect("create the workspace folder");
+    let corpus_arg = corpus.to_string_lossy().to_string();
+
+    let failure = run_command_expecting_failure(
+        ctx,
+        &[
+            "agent",
+            "run",
+            "--workspace",
+            corpus_arg.as_str(),
+            "--resume",
+            "agent-task-1",
+        ],
+        "--workspace cannot be combined with --resume",
+    );
+    let combined = format!("{}\n{}", failure.stdout, failure.stderr);
+    assert!(
+        combined.contains("--workspace cannot be combined with --resume"),
+        "expected the conflicting flags to be named in:\n{combined}"
+    );
+    assert!(
+        !combined.contains("Task submitted:"),
+        "a refused submission must not create a task:\n{combined}"
+    );
+
+    let snapshot = mock_server.snapshot();
+    assert!(
+        snapshot.tool_calls.iter().all(|call| call.tool != "command_run"),
+        "the refused payload must never reach the backend: {:?}",
+        snapshot.tool_calls
+    );
+}
+
 /// In an interactive session the preset applies to the tasks typed later, not
 /// just to the invocation — the same grant, one payload each.
 pub(super) fn test_agent_run_interactive_forwards_access_preset(ctx: &mut E2ECtx) {
