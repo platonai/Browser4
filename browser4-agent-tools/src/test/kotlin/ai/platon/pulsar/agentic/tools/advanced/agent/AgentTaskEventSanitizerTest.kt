@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.assertTimeout
 import org.junit.jupiter.api.function.ThrowingSupplier
 import java.time.Duration
-import java.util.Locale
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -107,23 +106,18 @@ class AgentTaskEventSanitizerTest {
     }
 
     @Test
-    @DisplayName("upper-case credential keys are redacted regardless of the default locale")
-    fun redactsUpperCaseKeysUnderTurkishLocale() {
-        // `String.lowercase()` follows the default locale and lowercases `I` to a dotless `ı`
-        // under tr/az, which would miss the markers that contain `i`. The comparison must stay
-        // locale-independent, like the `(?i)` regex it replaced.
-        val previous = Locale.getDefault()
-        try {
-            Locale.setDefault(Locale.forLanguageTag("tr-TR"))
-            for (key in listOf("APIKEY", "API_KEY", "AUTHORIZATION", "COOKIE")) {
-                val redacted = AgentTaskEventSanitizer.arguments(
-                    "coding.shell",
-                    "not json {\"$key\":\"super-secret-value\"}",
-                )!!
-                assertFalse(redacted.contains("super-secret-value"), "$key was not redacted: $redacted")
-            }
-        } finally {
-            Locale.setDefault(previous)
+    @DisplayName("upper-case credential keys in a non-JSON blob are redacted")
+    fun redactsUpperCaseKeysInNonJsonBlobs() {
+        for (key in listOf("APIKEY", "API_KEY", "AUTHORIZATION", "COOKIE")) {
+            val redacted = AgentTaskEventSanitizer.arguments(
+                "coding.shell",
+                "not json {\"$key\":\"super-secret-value\"}",
+            )!!
+            assertFalse(redacted.contains("super-secret-value"), "$key was not redacted: $redacted")
+            assertTrue(
+                redacted.contains("\"$key\":\"***\""),
+                "$key was not replaced by the marker: $redacted",
+            )
         }
     }
 
@@ -137,6 +131,22 @@ class AgentTaskEventSanitizerTest {
             """not json \"password": "hunter2"""",
         )!!
         assertFalse(redacted.contains("hunter2"), redacted)
+        assertTrue(redacted.contains("\"***\""), "the value was not replaced by the marker: $redacted")
+    }
+
+    @Test
+    @DisplayName("an escape-heavy unterminated blob stays linear")
+    fun unterminatedEscapedBlobStaysLinear() {
+        // Regression: advancing one character when no closing quote exists rescanned the whole tail
+        // per quote, making this shape quadratic — ~210 ms at 32k repeats, ~8 s at 200k. The size
+        // below is chosen so a quadratic scan exceeds the timeout while a linear one takes ~10 ms.
+        val payload = "not json " + "\"\\".repeat(200_000)
+
+        val redacted = assertTimeout(Duration.ofSeconds(5), ThrowingSupplier {
+            AgentTaskEventSanitizer.arguments("coding.shell", payload)!!
+        })
+
+        assertTrue(redacted.isNotEmpty())
     }
 
     @Test

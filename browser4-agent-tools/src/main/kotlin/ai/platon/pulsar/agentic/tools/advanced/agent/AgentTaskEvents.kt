@@ -728,8 +728,11 @@ object AgentTaskEventSanitizer {
             }
             val keyEnd = findQuotedEnd(raw, index, '"')
             if (keyEnd < 0) {
-                index++
-                continue
+                // No unescaped quote anywhere after `index`, so no later position could close a pair
+                // either: escapedness depends only on the parity of the preceding backslash run, not
+                // on where the scan starts. Stop rather than advance by one and rescan the whole tail
+                // per quote — a truncated, escape-heavy blob made that quadratic.
+                break
             }
             val colon = skipRegexSpaces(raw, keyEnd + 1)
             if (colon >= length || raw[colon] != ':') {
@@ -762,10 +765,9 @@ object AgentTaskEventSanitizer {
     }
 
     private fun containsCredentialMarker(text: String, start: Int, endExclusive: Int): Boolean {
-        // Compare with `ignoreCase`, not `lowercase()`: `String.lowercase()` follows the default
-        // locale, which lowercases `I` to a dotless `ı` under tr/az and would miss the markers that
-        // contain `i` (`apikey`, `api_key`, `authorization`, `cookie`) on upper-case keys. The old
-        // `(?i)` regex folded ASCII case locale-independently, so `ignoreCase` keeps that behaviour.
+        // `ignoreCase` states the intent and avoids the extra lower-cased copy. This is not a
+        // behavioural difference: Kotlin's no-argument `lowercase()` maps with `Locale.ROOT` (not
+        // the default locale), so it is already locale-independent.
         val key = text.substring(start, endExclusive)
         return INLINE_SENSITIVE_MARKERS.any { key.contains(it, ignoreCase = true) }
     }
