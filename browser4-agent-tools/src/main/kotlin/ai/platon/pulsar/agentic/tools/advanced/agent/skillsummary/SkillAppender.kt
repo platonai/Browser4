@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agentic.tools.advanced.agent.skillsummary
 
 import ai.platon.pulsar.agentic.common.AgentPaths
+import ai.platon.pulsar.agentic.common.SecretRedactor
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
@@ -25,6 +26,7 @@ import kotlin.io.path.writeText
 class SkillAppender(
     private val draftsDir: Path,
     private val skillsDir: Path = AgentPaths.SKILLS_DIR,
+    private val redactor: (String) -> String = { SecretRedactor.redactText(it) },
 ) {
     private val logger = LoggerFactory.getLogger(SkillAppender::class.java)
 
@@ -56,12 +58,9 @@ class SkillAppender(
 
     private fun locateSkillFile(targetSkillId: String): Path? {
         if (Files.isDirectory(draftsDir)) {
-            val freshest = Files.list(draftsDir).use { stream ->
-                stream
-                    .filter { Files.isDirectory(it) && it.fileName.toString().startsWith("$targetSkillId-") }
-                    .max(Comparator.comparingLong { Files.getLastModifiedTime(it).toMillis() })
-                    .orElse(null)
-            }
+            // 草稿目录名就是 skillId（与 frontmatter name 一致）；带时间戳的旧命名仅作回退。
+            val exact = draftsDir.resolve(targetSkillId)
+            val freshest = if (Files.isDirectory(exact)) exact else freshestLegacyDraft(targetSkillId)
             if (freshest != null) {
                 val f = freshest.resolve("SKILL.md")
                 if (f.exists()) return f
@@ -71,9 +70,19 @@ class SkillAppender(
         return deployed.takeIf { it.isRegularFile() }
     }
 
+    private fun freshestLegacyDraft(targetSkillId: String): Path? = Files.list(draftsDir).use { stream ->
+        stream
+            .filter { Files.isDirectory(it) && it.fileName.toString().startsWith("$targetSkillId-") }
+            .max(Comparator.comparingLong { Files.getLastModifiedTime(it).toMillis() })
+            .orElse(null)
+    }
+
     private fun appendExample(content: String, marker: String, context: TaskSummaryContext): String {
-        val tools = context.toolCounts.entries.joinToString(", ") { (k, v) -> "$k($v)" }.ifBlank { "n/a" }
-        val prompt = (context.prompt ?: "").take(80).replace("\n", " ")
+        // 任何写进 SKILL.md 的文本都要脱敏——这条路径产出的草稿同样可以被 promote/auto 注册。
+        val tools = redactor(
+            context.toolCounts.entries.joinToString(", ") { (k, v) -> "$k($v)" }.ifBlank { "n/a" },
+        )
+        val prompt = redactor((context.prompt ?: "").take(80).replace("\n", " "))
         val entry = "- $prompt — tools: $tools $marker\n"
         val header = "## Examples"
         val idx = content.indexOf(header)

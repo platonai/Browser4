@@ -121,10 +121,10 @@ class SkillSummaryDeciderTest {
     }
 
     @Test
-    @DisplayName("TR-3.2 requireMutation=false with 0 mutations → passes to generate")
-    fun noMutationAllowedWhenDisabled(@TempDir dir: Path) {
+    @DisplayName("TR-3.2 browseScoreGate=false lets any no-mutation run through")
+    fun noMutationAllowedWhenGateDisabled(@TempDir dir: Path) {
         val idx = SkillFingerprintIndex(dir.resolve("index.json"))
-        val decision = decider(idx, SkillSummaryConfig(enabled = true, requireMutation = false))
+        val decision = decider(idx, SkillSummaryConfig(enabled = true, browseScoreGate = false))
             .decide(ctx(mutations = 0))
         assertEquals(SummaryDecision.Action.GENERATE, decision.action)
     }

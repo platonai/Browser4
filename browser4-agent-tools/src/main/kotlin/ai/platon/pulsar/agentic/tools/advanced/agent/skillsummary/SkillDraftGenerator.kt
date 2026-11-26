@@ -84,17 +84,25 @@ class SkillDraftGenerator(
         val redacted = redactor(raw)
         // 防幻觉：allowed-tools 只保留采集到的真实工具名（TR-4.2）
         val sanitized = ensureAllowedTools(redacted, context.toolCounts.keys)
-        // 解析/修补 name：保证 frontmatter name 合法且 == 目录名
+        // 解析/修补 name：frontmatter name 必须合法，且与草稿目录名一致——
+        // SkillInstaller 用目录名做 `name == dir` 校验，不一致会让 promote / auto
+        // 安装静默失败（TR-4.1）。
         val name = resolveSkillName(sanitized, context)
         val finalContent = ensureProvenance(ensureName(sanitized, name), context)
-        val skillDir = draftsDir.resolve("$name-${clock()}")
+        val skillDir = draftsDir.resolve(name)
         val fileName = "$name/SKILL.md"
         val validation = validator(finalContent, fileName)
 
         runCatching {
             Files.createDirectories(skillDir)
-            Files.writeString(skillDir.resolve("SKILL.md"), finalContent)
             Files.writeString(skillDir.resolve("context.json"), redactor(pulsarObjectMapper().writeValueAsString(context.toJsonable())))
+            // 只有校验通过的草稿才写 SKILL.md：下游（REST 列表、promote、auto 安装）
+            // 把「存在 SKILL.md」当作「已验证」，无效内容不能落成这个文件（TR-4.5）。
+            if (validation.valid) {
+                Files.writeString(skillDir.resolve("SKILL.md"), finalContent)
+            } else {
+                Files.deleteIfExists(skillDir.resolve("SKILL.md"))
+            }
         }.onFailure { logger.warn("writing draft files failed for {}: {}", name, it.message) }
 
         return DraftResult(

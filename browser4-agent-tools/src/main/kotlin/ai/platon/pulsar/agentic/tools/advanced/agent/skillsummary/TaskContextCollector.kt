@@ -71,25 +71,41 @@ object TaskContextCollector {
             .associate { it.key to it.value }
 
         val sequence = callsById.values.toList()
-        var strategySwitches = 0
+
+        // 读回类工具（快照/摘要/读文件/校验/收尾）不参与"失败→换做法"配对：
+        // 浏览任务是"动作后必读回"的模式，失败的 click 紧跟成功的 snapshot 会被
+        // 误判成一次策略切换，真值应来自同一目标换了做法且最终成功。
+        val actionSequence = sequence.filterNot { isReadBackTool(it.tool) }
+
         var verbatimRetries = 0
-        for (i in 1 until sequence.size) {
-            val prev = sequence[i - 1]
-            val cur = sequence[i]
-            when {
-                // 原样重试：同工具同参数连续调用——卡住了，不是学到了
-                prev.tool == cur.tool && prev.argumentsPreview == cur.argumentsPreview -> verbatimRetries++
-                // 策略切换：上一次失败、这次成功，且做法变了
-                prev.ok == false && cur.ok == true -> strategySwitches++
+        for (i in 1 until actionSequence.size) {
+            val prev = actionSequence[i - 1]
+            val cur = actionSequence[i]
+            // 原样重试：同工具同参数连续调用——卡住了，不是学到了
+            if (prev.tool == cur.tool && prev.argumentsPreview == cur.argumentsPreview) verbatimRetries++
+        }
+
+        // 策略切换：同一工具第一次失败之后，用不同参数（或不同做法）成功。每个工具最多记一次。
+        var strategySwitches = 0
+        actionSequence.groupBy { it.tool }.forEach { (_, calls) ->
+            val firstFail = calls.indexOfFirst { it.ok == false }
+            if (firstFail >= 0) {
+                val failedArgs = calls[firstFail].argumentsPreview
+                val laterSuccess = calls.drop(firstFail + 1).firstOrNull { it.ok == true }
+                if (laterSuccess != null && laterSuccess.argumentsPreview != failedArgs) strategySwitches++
             }
         }
+
+        // 事件流可能被截断（store 只保留尾部），此时 round.start 会整段丢失。
+        // 有工具调用就说明至少跑过一轮，用下限兜底，避免长任务被判成 0 轮而误跳过。
+        val effectiveRounds = maxOf(rounds, if (callsById.isNotEmpty()) 1L else 0L)
 
         return TaskSummaryContext(
             taskId = status.id,
             prompt = status.submittedTask,
             result = status.message,
             workspace = status.workspace,
-            rounds = rounds,
+            rounds = effectiveRounds,
             toolCalls = callsById.size,
             mutations = mutations,
             strategySwitches = strategySwitches,
@@ -105,6 +121,14 @@ object TaskContextCollector {
     }
 
     private fun preview(value: String?): String? = AgentTaskEventSanitizer.preview(value, 500)
+
+    /** 读回类工具：只观察状态，不含"换做法"的语义。 */
+    private fun isReadBackTool(tool: String): Boolean =
+        READ_BACK_KEYWORDS.any { tool.contains(it, ignoreCase = true) }
+
+    private val READ_BACK_KEYWORDS = listOf(
+        "snapshot", "summary", "scrape", "extract", "read", "verify", "taskcomplete", "diff",
+    )
 
     @Suppress("UNCHECKED_CAST")
     private fun extractFilesChanged(detail: Map<String, Any?>?): List<String>? {

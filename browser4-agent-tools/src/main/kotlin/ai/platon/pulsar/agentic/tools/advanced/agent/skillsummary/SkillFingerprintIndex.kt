@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.ObjectMapper
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 
 /**
@@ -87,13 +88,16 @@ class SkillFingerprintIndex(private val indexFile: Path) {
     private fun save() {
         runCatching {
             indexFile.parent?.let { Files.createDirectories(it) }
+            // 原子替换：并发写同一份索引时不会留下半截文件，读者也永远看到完整内容。
+            val tmp = indexFile.resolveSibling("${indexFile.fileName}.tmp")
             Files.write(
-                indexFile,
+                tmp,
                 mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(IndexFile(entries)),
                 StandardOpenOption.CREATE,
                 StandardOpenOption.TRUNCATE_EXISTING,
                 StandardOpenOption.WRITE,
             )
+            Files.move(tmp, indexFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
         }
     }
 }

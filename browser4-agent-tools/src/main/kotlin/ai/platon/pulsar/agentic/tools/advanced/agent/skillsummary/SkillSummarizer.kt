@@ -55,7 +55,7 @@ object SkillSummarizer {
     ) {
         if (!shouldRun(config)) return
         val start = System.currentTimeMillis()
-        runCatching {
+        try {
             val context = TaskContextCollector.collect(status, events)
             emit(
                 AgentTaskEvent.TYPE_SKILL_SUMMARIZE,
@@ -71,17 +71,19 @@ object SkillSummarizer {
                     "(${context.prompt?.length ?: 0} chars prompt)",
             )
             summarizePipeline(status, context, config, emit, llmCall)
-        }.onFailure {
-            logger.warn("auto skill summary failed for task {}: {}", status.id, it.message)
+        } catch (e: java.util.concurrent.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("auto skill summary failed for task {}: {}", status.id, e.message)
             runCatching {
                 emit(
                     AgentTaskEvent.TYPE_SKILL_SUMMARIZE,
                     mapOf(
                         "action" to "fail",
-                        "reason" to (it.message ?: "exception"),
+                        "reason" to (e.message ?: "exception"),
                         "durationMs" to (System.currentTimeMillis() - start),
                     ),
-                    "auto skill summary failed: ${it.message}",
+                    "auto skill summary failed: ${e.message}",
                 )
             }
         }
@@ -205,9 +207,18 @@ object SkillSummarizer {
         return dir
     }
 
+    /**
+     * 同一个 `index.json` 只保留一个实例。
+     *
+     * 每个任务都 new 一个索引会让并发会话各自持有旧快照、再整份覆盖写盘，
+     * 后写者丢掉前者的条目。缓存后由索引内部的 synchronized 保证进程内互斥。
+     */
+    private val indexCache = java.util.concurrent.ConcurrentHashMap<Path, SkillFingerprintIndex>()
+
     /** 指纹索引工厂，可替换以便测试注入临时索引。 */
     internal var indexFactory: (SkillSummaryConfig) -> SkillFingerprintIndex = { cfg ->
-        SkillFingerprintIndex(draftsDirOf(cfg).resolve("index.json"))
+        val path = draftsDirOf(cfg).resolve("index.json")
+        indexCache.computeIfAbsent(path) { SkillFingerprintIndex(it) }
     }
 
     /**

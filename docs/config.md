@@ -1040,7 +1040,8 @@ are reviewed and promoted manually through `GET /api/skills/drafts` and
 existing skill and bump its patch version instead of creating duplicates.
 
 All are JVM system properties (set with `BROWSER4_SERVER_OPTS` or `-D…` when you
-start the backend):
+start the backend). They are **not** read from `application.properties` — the
+entries there are documentation comments only.
 
 * **`browser4.agent.skill.summary.enabled`** *(default: `false`)* — master switch.
   `false` (the default) makes every downstream step a no-op, so there is zero
@@ -1056,16 +1057,19 @@ start the backend):
   (plan → act → verify) runs exclusively.
 * **`browser4.agent.skill.summary.minToolCalls`** *(default: `5`)* — minimum tool
   calls a task must make before a summary is considered.
-* **`browser4.agent.skill.summary.requireMutation`** *(default: `true`)* — when
-  `true`, a task must mutate at least one file to qualify, so pure query and
-  read-only runs are skipped. Browse tasks write deliverables into an isolated
-  workspace and record no mutation; set this to `false` to let those runs qualify.
+* **`browser4.agent.skill.summary.browseScoreGate`** *(default: `true`)* — whether
+  a run **without** file mutations (browse/research) must pass the reuse score
+  below. On by default; runs that did change files skip this bar. Set it to `false`
+  to let every no-mutation successful run generate a draft (debug only — the only
+  quality bar for those runs then disappears).
 * **`browser4.agent.skill.summary.browseMinScore`** *(default: `6`)* — reuse-score
   bar for runs without file mutations (browse/research). The score is
   `toolKinds + 3 × strategySwitches − 2 × verbatimRetries`, where a strategy switch
-  is a failed call followed by a successful different approach (same tool with
-  different arguments, or a different tool), and a verbatim retry is the same tool
-  called again with identical arguments. A single-pass simple run scores low and is
+  is a failed call followed **later** by a successful different approach for the
+  same tool, and a verbatim retry is the same tool called again with identical
+  arguments. Read-back tools (snapshot/summary/scrape/extract/read/verify/diff/
+  taskComplete) are excluded from the pairing, so the "act then read back" pattern
+  does not count as a correction. A single-pass simple run scores low and is
   skipped; a multi-round run that corrected itself scores high.
 * **`browser4.agent.skill.summary.dedupSimilarity`** *(default: `0.85`)* — Jaccard
   similarity threshold (`0.0`–`1.0`) over prompt tokens; a hit at or above this

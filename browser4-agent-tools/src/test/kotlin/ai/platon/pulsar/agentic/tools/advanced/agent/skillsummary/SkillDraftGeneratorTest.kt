@@ -1,6 +1,9 @@
 package ai.platon.pulsar.agentic.tools.advanced.agent.skillsummary
 
 import ai.platon.pulsar.coding.ArtifactValidator
+import ai.platon.pulsar.coding.Severity
+import ai.platon.pulsar.coding.ValidationIssue
+import ai.platon.pulsar.coding.ValidationResult
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
@@ -152,5 +155,32 @@ class SkillDraftGeneratorTest {
         assertTrue(content.contains("generated-at:"), "missing generated-at marker")
         // injection must not break validation
         assertTrue(result.validation.valid, "provenance injection broke validation: ${result.validation.issues}")
+    }
+
+    @Test
+    @DisplayName("TR-4.1 the draft directory name equals the skill id, so promote/install can parse it")
+    fun draftDirectoryNameEqualsSkillId() = runBlocking {
+        val gen = generator { _, _ -> validSkillMd }
+        val result = gen.generate(ctx())
+        assertEquals(result.skillId, result.dir.fileName.toString())
+    }
+
+    @Test
+    @DisplayName("TR-4.5 a draft that fails validation does not expose SKILL.md")
+    fun invalidDraftDoesNotExposeSkillMd() = runBlocking {
+        val gen = SkillDraftGenerator(
+            tempDir,
+            llm = { _, _ -> validSkillMd },
+            validator = { _, _ ->
+                ValidationResult.of(listOf(ValidationIssue(Severity.ERROR, "rejected by test validator")))
+            },
+        )
+        val result = gen.generate(ctx())
+        assertFalse(result.validation.valid)
+        assertFalse(
+            Files.exists(result.dir.resolve("SKILL.md")),
+            "an invalid draft must not be listed or promotable as a skill",
+        )
+        assertTrue(Files.exists(result.dir.resolve("context.json")), "context.json is still useful for triage")
     }
 }

@@ -4,11 +4,12 @@ package ai.platon.pulsar.agentic.tools.advanced.agent.skillsummary
  * 判定一次成功运行是否值得生成 SKILL，以及是新建还是追加。
  *
  * 两条判定轨：
- * - **有文件改动**（coding 类）：`requireMutation=true` 时要求 `mutations ≥ 1`。
+ * - **有文件改动**（coding 类）：只要通过 rounds / toolCalls 门槛即可生成。
  * - **无文件改动**（浏览/研究类）：没有 mutation 可判，改用可复用性评分
  *   `工具种类数 + 3 × 策略切换次数 − 2 × 原样重试次数`，低于
  *   [SkillSummaryConfig.browseMinScore] 不生成。一次跑通的简单运行分数低，
- *   多轮纠错后确认的运行因策略切换而得分高。
+ *   多轮纠错后确认的运行因策略切换而得分高。该评分由
+ *   [SkillSummaryConfig.browseScoreGate] 控制，关掉它等于放行所有无改动运行。
  *
  * 之后才是指纹去重。不满足则 skip 并给出原因。
  */
@@ -23,7 +24,7 @@ class SkillSummaryDecider(
         if (context.toolCalls < config.minToolCalls) {
             return SummaryDecision.skip("toolCalls ${context.toolCalls} < minToolCalls ${config.minToolCalls}")
         }
-        if (config.requireMutation && context.mutations < 1) {
+        if (config.browseScoreGate && context.mutations < 1) {
             val kinds = context.toolCounts.size
             val score = kinds + 3 * context.strategySwitches - 2 * context.verbatimRetries
             if (score < config.browseMinScore) {

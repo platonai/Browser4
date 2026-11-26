@@ -27,13 +27,13 @@ data class SkillSummaryConfig(
     /** 触发总结的最小工具调用数。 */
     val minToolCalls: Int = intProp("browser4.agent.skill.summary.minToolCalls", 5).coerceAtLeast(0),
     /**
-     * true 时要求本次运行至少有一次文件改动才会生成。
+     * 无文件改动的运行（浏览、研究）是否必须通过 [browseMinScore] 评分。
      *
-     * 默认 true：只有真正产出文件改动的运行才被视为"有可复用资产"，纯查询 / 只读
-     * 运行不生成草稿。注意浏览类任务的交付物写在隔离 workspace，不记录 mutation，
-     * 因此开启后这类任务不会生成；需要覆盖时显式设 `-D...requireMutation=false`。
+     * 默认 true：这类运行没有 mutation 可判，改用可复用性评分作为门槛。
+     * false 时整段评分被跳过——任何无文件改动的成功运行都会生成草稿，只适合调试。
+     * 有文件改动的运行不受本开关影响。
      */
-    val requireMutation: Boolean = boolProp("browser4.agent.skill.summary.requireMutation", true),
+    val browseScoreGate: Boolean = boolProp("browser4.agent.skill.summary.browseScoreGate", true),
     /**
      * 无文件改动任务（浏览、研究）的可复用性评分门槛。
      *

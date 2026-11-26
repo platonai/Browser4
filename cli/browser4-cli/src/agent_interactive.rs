@@ -3031,6 +3031,10 @@ struct Repl {
     /// and stop rendering it. The switch is sent with every submitted task, because
     /// turning it off is also what removes the instruction (and its token cost).
     show_intent: bool,
+    /// The explicit `/intent on|off` the user asked for, sent verbatim so that `on`
+    /// also overrides a backend default of off; `None` means "never touched it, keep
+    /// the server default".
+    intent_override: Option<bool>,
     /// `/tools off`: hide the tool call/result lines, keeping only the intent (or
     /// model) lines and the events that are always printed.
     show_tool_calls: bool,
@@ -3134,6 +3138,7 @@ impl Repl {
             quiet: quiet_enabled(),
             verbose: false,
             show_intent: true,
+            intent_override: None,
             show_tool_calls: true,
             current: None,
             last_task: None,
@@ -3739,12 +3744,14 @@ impl Repl {
         // `--unrestricted` is a session-wide grant, exactly like `--add-dir`: every
         // task this REPL submits carries it until `-i` exits.
         crate::apply_unrestricted(&mut extra, self.unrestricted);
-        // `/intent off` reaches the backend, not just the renderer: the line is only
-        // produced because the system prompt asks for it, so hiding it without saying
-        // so would keep paying the tokens. Only the off state is sent — the backend
-        // default (`browser4.agent.intent.enabled`) stays the one definition of "on".
-        if !self.show_intent {
-            extra["intent"] = json!(false);
+        // `/intent on|off` reaches the backend, not just the renderer: the line is only
+        // produced because the system prompt asks for it, so toggling it locally without
+        // telling the backend would either keep paying tokens for a hidden line or render
+        // nothing. An explicit toggle is sent verbatim (`on` must override a server
+        // default of off); an untouched switch sends nothing and leaves the server
+        // default (`browser4.agent.intent.enabled`) as the single source of truth.
+        if let Some(value) = self.intent_override {
+            extra["intent"] = json!(value);
         }
         extra
     }
@@ -4770,6 +4777,7 @@ impl Repl {
             return;
         };
         self.show_intent = value.unwrap_or(!self.show_intent);
+        self.intent_override = Some(self.show_intent);
         if let Some(follower) = self.current.as_mut() {
             follower.renderer.show_intent = self.show_intent;
         }

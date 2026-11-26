@@ -19,7 +19,7 @@ class SkillSummaryConfigTest {
         "browser4.agent.skill.summary.registerMode",
         "browser4.agent.skill.summary.minRounds",
         "browser4.agent.skill.summary.minToolCalls",
-        "browser4.agent.skill.summary.requireMutation",
+        "browser4.agent.skill.summary.browseScoreGate",
         "browser4.agent.skill.summary.browseMinScore",
         "browser4.agent.skill.summary.dedupSimilarity",
         "browser4.agent.skill.summary.cooldownHours",
@@ -39,7 +39,7 @@ class SkillSummaryConfigTest {
         assertEquals(SkillSummaryConfig.RegisterMode.DRAFT, cfg.registerMode)
         assertEquals(1, cfg.minRounds)
         assertEquals(5, cfg.minToolCalls)
-        assertTrue(cfg.requireMutation)
+        assertTrue(cfg.browseScoreGate)
         assertEquals(6, cfg.browseMinScore)
         assertEquals(0.85, cfg.dedupSimilarity)
         assertEquals(6L, cfg.cooldownHours)

@@ -473,8 +473,14 @@ open class StatefulAgentRunner(
         val config = SkillSummaryConfig.load()
         if (!SkillSummarizer.shouldRun(config)) return
         taskScope.launch {
-            runCatching {
-                val events = eventStore.load(status.id, 1000)
+            try {
+                // Prefer the in-memory log: it is authoritative. The on-disk shard keeps only
+                // its tail and drops rows under back pressure, so a truncated head loses
+                // `round.start` and makes a long run look like it had zero rounds.
+                val events = runCatching { eventLog(status.id).eventsAfter(0, Int.MAX_VALUE) }
+                    .getOrNull()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?: eventStore.load(status.id, 1000)
                 // Reuse the session's companion agent for the LLM call (same provider / config as
                 // the task just run). If the agent is not a BasicBrowserAgent or the call fails,
                 // the generator degrades to writing context.json only — never blocks the main
@@ -482,7 +488,14 @@ open class StatefulAgentRunner(
                 val agent = session.companionAgent as? BasicBrowserAgent
                 val llmCall: (suspend (instruction: String, contextText: String) -> String?)? =
                     if (agent == null) null else { instruction, context ->
-                        runCatching { InferenceEngine(agent).summarize(instruction, context) }.getOrNull()
+                        try {
+                            InferenceEngine(agent).summarize(instruction, context)
+                        } catch (e: java.util.concurrent.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            logger.debug("skill summary LLM call failed: {}", e.message)
+                            null
+                        }
                     }
                 SkillSummarizer.maybeSummarize(
                     status,
@@ -491,7 +504,12 @@ open class StatefulAgentRunner(
                     config,
                     llmCall,
                 )
-            }.onFailure { logger.warn("auto skill summary trigger failed for {}: {}", status.id, it.message) }
+            } catch (e: java.util.concurrent.CancellationException) {
+                // Cancellation must keep propagating: swallowing it here would break close().
+                throw e
+            } catch (e: Exception) {
+                logger.warn("auto skill summary trigger failed for {}: {}", status.id, e.message)
+            }
         }
     }
 

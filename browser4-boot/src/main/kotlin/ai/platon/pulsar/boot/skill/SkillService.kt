@@ -23,7 +23,15 @@ class SkillService(
     private val skillsDir: Path = AgentPaths.SKILLS_DIR,
     private val registry: SkillRegistry = SkillRegistry.instance,
     private val definitionLoader: SkillDefinitionLoader = SkillDefinitionLoader(),
-    private val draftsDir: Path = AgentPaths.AGENT_BASE_DIR.resolve("skills-drafts"),
+    /**
+     * 草稿区目录，必须与生成侧一致：两者读同一个 `-D` 键
+     * （`browser4.agent.skill.summary.draftsDir`），否则草稿写在一处、REST 从另一处读，
+     * 表现为"列表恒空 / promote 找不到草稿"。
+     */
+    private val draftsDir: Path = System.getProperty("browser4.agent.skill.summary.draftsDir")
+        ?.takeIf { it.isNotBlank() }
+        ?.let { Path.of(it) }
+        ?: AgentPaths.AGENT_BASE_DIR.resolve("skills-drafts"),
 ) {
     private val logger = getLogger(SkillService::class)
     private val installer: SkillInstaller = SkillInstaller(registry, definitionLoader)
@@ -209,7 +217,18 @@ class SkillService(
         check(dir.startsWith(draftsDir)) { "Invalid draft id: $draftId" }
         require(Files.isDirectory(dir)) { "Draft not found: $draftId" }
         require(Files.exists(dir.resolve("SKILL.md"))) { "SKILL.md not found in draft: $draftId" }
-        return installSkill(dir, overwrite)
+        val result = installSkill(dir, overwrite)
+        if (result.success) return result
+        // Older drafts were named `<skillId>-<epochMillis>`, which SkillInstaller rejects
+        // because it requires `name == directoryName`. Retry from a staging directory named
+        // after the skill so existing drafts stay promotable.
+        val skillId = parseSkillIdFromDirName(draftId) ?: return result
+        val staging = Files.createTempDirectory("browser4-promote-").resolve(skillId)
+        val retried = runCatching {
+            dir.toFile().copyRecursively(staging.toFile(), overwrite = true)
+            installSkill(staging, overwrite)
+        }.getOrElse { return result }
+        return retried
     }
 
     // ---- Install ----

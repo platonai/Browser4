@@ -6,14 +6,14 @@
 - **Priority**: high
 - **Depends On**: None
 - **Description**:
-  - 新增配置属性（`@ConfigurationProperties` 或等价机制）：`browser4.agent.skill.summary.*`（enabled / registerMode / minRounds / minToolCalls / requireMutation / dedupSimilarity / cooldownHours / draftsDir），默认 `enabled=false`、`registerMode=draft`。
+  - 新增配置属性（`@ConfigurationProperties` 或等价机制）：`browser4.agent.skill.summary.*`（enabled / registerMode / minRounds / minToolCalls / browseScoreGate / dedupSimilarity / cooldownHours / draftsDir），默认 `enabled=false`、`registerMode=draft`。
   - 在 `application.properties` 登记默认值；在 `AgentTaskEvent` 伴生对象新增 `TYPE_SKILL_SUMMARIZE = "skill.summarize"` 常量与 KDoc（未知类型被消费者安全忽略，不 bump schemaVersion）。
   - 提供 `SkillSummaryConfig` 访问入口，`enabled=false` 时所有下游短路。
 - **Acceptance Criteria Addressed**: AC-1, AC-10
 - **Test Requirements**:
   - `rule` TR-1.1: `browser4.agent.skill.summary.enabled=false`（默认）时，`SkillSummarizer.maybeSummarize` 立即返回且不发射任何事件、不写文件；证据：单元测试断言短路。
   - `rule` TR-1.2: `AgentTaskEvent.TYPE_SKILL_SUMMARIZE` 常量值为 `"skill.summarize"` 且非空；证据：单元测试。
-  - `rule` TR-1.3: 配置默认值与 spec 一致（enabled=false, registerMode=draft, minRounds=3, minToolCalls=5, requireMutation=true, dedupSimilarity=0.85, cooldownHours=6）；证据：配置绑定测试。
+  - `rule` TR-1.3: 配置默认值与实现一致（enabled=false, registerMode=draft, minRounds=1, minToolCalls=5, browseScoreGate=true, browseMinScore=6, dedupSimilarity=0.85, cooldownHours=6）；证据：配置绑定测试。
 - **Notes**: 不新增高噪声日志；受保护文件不写入。
 
 ## Task 2: 成功钩子接入 + 上下文采集器 + 事件发射
@@ -42,14 +42,14 @@
 - **Depends On**: Task 2
 - **Description**:
   - 实现 `SkillSummaryDecider`：基于 `TaskSummaryContext` 与配置判定是否值得生成。
-    - 阈值过滤：rounds ≥ minRounds 且 toolCalls ≥ minToolCalls；requireMutation=true 时需 mutations ≥ 1。
+    - 阈值过滤：rounds ≥ minRounds 且 toolCalls ≥ minToolCalls；browseScoreGate=true 时，无 mutation 的运行还需通过复用评分（工具种类 + 3×策略切换 − 2×原样重试 ≥ browseMinScore）。
     - 不满足 → 发射 `skill.summarize` action=`skip`，detail 含 `reason`。
   - 实现 `SkillFingerprintIndex`：草稿区 `index.json`，记录 `{fingerprint → skillId, lastGeneratedAt, exampleCount}`；提供 `lookup(fingerprint, similarityThreshold)` 与 `record()`/`bump()`。
   - 指纹用关键词 hash 降级方案（prompt 归一化 + 停用词 + hash），embedding 留开放问题。
 - **Acceptance Criteria Addressed**: AC-8（去重骨架）, FR-5, FR-6
 - **Test Requirements**:
   - `rule` TR-3.1: rounds/toolCalls 低于阈值 → action=`skip`，不进入生成；证据：单元测试。
-  - `rule` TR-3.2: requireMutation=true 且 mutations=0 → skip；requireMutation=false 时 0 mutation 可通过；证据：单元测试。
+  - `rule` TR-3.2: browseScoreGate=true 且无 mutation 的运行评分不足 → skip；browseScoreGate=false 时 0 mutation 可通过；证据：单元测试。
   - `rule` TR-3.3: 指纹索引持久化到 index.json，重启后可恢复 lookup；证据：单元测试写后读。
   - `rule` TR-3.4: 相同 prompt 两次 → 第二次命中已有指纹（相似度≥阈值）；证据：单元测试。
 

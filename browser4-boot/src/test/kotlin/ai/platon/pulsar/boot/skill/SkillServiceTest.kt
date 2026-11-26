@@ -207,8 +207,17 @@ class SkillServiceTest {
 
     // ---- listDrafts() / promoteDraft() (auto-generated drafts) ----
 
-    private fun createDraft(parent: Path, skillId: String, ts: Long, taskId: String): Path {
-        val dir = parent.resolve("$skillId-$ts")
+    /** Older drafts were named `<skillId>-<epochMillis>`; promote must still install them. */
+    private fun createLegacyDraft(parent: Path, skillId: String, ts: Long, taskId: String): Path {
+        val legacy = parent.resolve("$skillId-$ts")
+        Files.move(createDraft(parent, skillId, taskId), legacy)
+        return legacy
+    }
+
+    private fun createDraft(parent: Path, skillId: String, taskId: String): Path {
+        // Production naming: the draft directory name equals the skill id, because
+        // SkillInstaller parses a draft with `require(name == directoryName)`.
+        val dir = parent.resolve(skillId)
         Files.createDirectories(dir)
         val md = """
             ---
@@ -233,7 +242,7 @@ class SkillServiceTest {
     fun testListDraftsReturnsParsedDrafts() {
         val registry = SkillRegistry.instance
         val draftsDir = Files.createTempDirectory("browser4-test-drafts-")
-        createDraft(draftsDir, "refactor-auth", 1732456789012L, "task-abc")
+        createDraft(draftsDir, "refactor-auth", "task-abc")
         val service = SkillService(
             mockAppContext(), createTempSkillsDir(), registry = registry, draftsDir = draftsDir,
         )
@@ -241,9 +250,9 @@ class SkillServiceTest {
         val drafts = service.listDrafts()
         assertEquals(1, drafts.size, "Expected 1 draft but got ${drafts.size}")
         val d = drafts[0]
-        assertEquals("refactor-auth-1732456789012", d.id)
+        assertEquals("refactor-auth", d.id)
         assertEquals("refactor-auth", d.skillId)
-        assertEquals(1732456789012L, d.generatedAt)
+        assertTrue(d.generatedAt != null, "generatedAt should fall back to the directory mtime")
         assertEquals("task-abc", d.sourceTaskId)
         assertEquals("1.0.0", d.version)
         assertTrue(d.description?.contains("task-abc") == true, "description=${d.description}")
@@ -262,28 +271,50 @@ class SkillServiceTest {
 
     @Test
     @DisplayName("promoteDraft installs a draft and flags it registered")
-    fun testPromoteDraftInstallsDraft() = runBlocking {
-        val registry = SkillRegistry.instance
-        val skillsDir = createTempSkillsDir()
-        val draftsDir = Files.createTempDirectory("browser4-test-drafts-")
-        createDraft(draftsDir, "promote-me", 1732456789000L, "task-xyz")
-        val service = SkillService(
-            mockAppContext(), skillsDir, registry = registry, draftsDir = draftsDir,
-        )
+    fun testPromoteDraftInstallsDraft() {
+        runBlocking {
+            val registry = SkillRegistry.instance
+            val skillsDir = createTempSkillsDir()
+            val draftsDir = Files.createTempDirectory("browser4-test-drafts-")
+            createDraft(draftsDir, "promote-me", "task-xyz")
+            val service = SkillService(
+                mockAppContext(), skillsDir, registry = registry, draftsDir = draftsDir,
+            )
 
-        val before = service.listDrafts()
-        assertFalse(before[0].registered)
+            val before = service.listDrafts()
+            assertFalse(before[0].registered)
 
-        val result = service.promoteDraft("promote-me-1732456789000")
-        assertTrue(result.success, "promote failed: ${result.message}")
-        assertEquals("promote-me", result.skillId)
-        assertTrue(registry.contains("promote-me"), "skill should be registered after promote")
+            val result = service.promoteDraft("promote-me")
+            assertTrue(result.success, "promote failed: ${result.message}")
+            assertEquals("promote-me", result.skillId)
+            assertTrue(registry.contains("promote-me"), "skill should be registered after promote")
 
-        val after = service.listDrafts()
-        assertEquals(1, after.size)
-        assertTrue(after[0].registered, "draft should be registered after promote")
+            val after = service.listDrafts()
+            assertEquals(1, after.size)
+            assertTrue(after[0].registered, "draft should be registered after promote")
 
-        runCatching { service.uninstallSkill("promote-me") }
+            runCatching { service.uninstallSkill("promote-me") }
+        }
+    }
+
+    @Test
+    @DisplayName("promoteDraft also installs a legacy `<skillId>-<epochMillis>` draft")
+    fun testPromoteDraftInstallsLegacyNamedDraft() {
+        runBlocking {
+            val registry = SkillRegistry.instance
+            val skillsDir = createTempSkillsDir()
+            val draftsDir = Files.createTempDirectory("browser4-test-drafts-legacy-")
+            createLegacyDraft(draftsDir, "legacy-skill", 1732456789000L, "task-legacy")
+            val service = SkillService(
+                mockAppContext(), skillsDir, registry = registry, draftsDir = draftsDir,
+            )
+
+            val result = service.promoteDraft("legacy-skill-1732456789000")
+            assertTrue(result.success, "legacy promote failed: ${result.message}")
+            assertTrue(registry.contains("legacy-skill"), "legacy draft should register as its skill id")
+
+            runCatching { service.uninstallSkill("legacy-skill") }
+        }
     }
 
     @Test
