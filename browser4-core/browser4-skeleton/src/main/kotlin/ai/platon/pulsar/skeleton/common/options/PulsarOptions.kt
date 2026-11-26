@@ -7,7 +7,6 @@ import com.beust.jcommander.ParameterException
 import org.apache.commons.lang3.StringUtils
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import java.util.regex.Pattern
 import kotlin.system.exitProcess
 
 /**
@@ -137,7 +136,6 @@ open class PulsarOptions(
 
     companion object {
         const val DEFAULT_DELIMETER = " "
-        val CMD_SPLIT_PATTERN = Pattern.compile("\"[^\"\\\\]*(?:\\\\.[^\"\\\\]*)*\"|\\S+")
 
         /**
          * Normalize the raw arguments, convert old version args to current version
@@ -165,16 +163,77 @@ open class PulsarOptions(
 
         /**
          * Split a command line into argument vector (argv).
-         * @see {https://stackoverflow.com/questions/36292591/splitting-a-nested-string-keeping-quotation-marks/36292778}
+         *
+         * A double-quoted segment (with `\`-escapes) stays one token including its
+         * quotes; anything else splits on whitespace — the same contract as the
+         * regex `"[^"\\]*(?:\\.[^"\\]*)*"|\S+` this replaces.
+         *
+         * The regex had to go: Java compiles a quantified group `(?:X)*` to a
+         * recursive matcher, one stack frame per iteration, so a quoted argument
+         * holding ~2000 escape sequences overflowed a 1 MB thread stack. Long
+         * plain text was unaffected because a character-class quantifier such as
+         * `[^"\\]*` iterates instead. This scan is O(n) time and O(1) stack and
+         * keeps the regex semantics, including the `\S+` fallback when a quote
+         * never closes.
          */
         fun split(args: String): Array<String> {
-            val matcher = CMD_SPLIT_PATTERN.matcher(normalize(args))
-            matcher.reset()
+            val s = normalize(args)
             val result = ArrayList<String>()
-            while (matcher.find()) {
-                result.add(matcher.group(0))
+            val n = s.length
+            var i = 0
+            while (i < n) {
+                if (isRegexSpace(s[i])) {
+                    i++
+                    continue
+                }
+                val start = i
+                if (s[i] == '"') {
+                    val end = quotedEnd(s, i)
+                    if (end > 0) {
+                        result.add(s.substring(start, end))
+                        i = end
+                        continue
+                    }
+                }
+                // \S+ — also the fallback for an unterminated quote, which the
+                // regex would match as a plain run of non-whitespace.
+                var k = i
+                while (k < n && !isRegexSpace(s[k])) k++
+                result.add(s.substring(start, k))
+                i = k
             }
             return result.toTypedArray()
         }
+
+        /**
+         * Index just past the closing quote of the segment starting at [start]
+         * (`s[start] == '"'`), or -1 if it never closes. Mirrors the regex: a `\`
+         * is only consumable as an escape when followed by a non-line-terminator
+         * (`.` excludes line terminators), and any char other than `"` and `\` —
+         * line terminators included — is ordinary content for `[^"\\]`.
+         */
+        private fun quotedEnd(s: String, start: Int): Int {
+            var j = start + 1
+            while (j < s.length) {
+                val c = s[j]
+                when {
+                    c == '"' -> return j + 1
+                    c == '\\' -> {
+                        if (j + 1 >= s.length || isLineTerminator(s[j + 1])) return -1
+                        j += 2
+                    }
+                    else -> j++
+                }
+            }
+            return -1
+        }
+
+        /** Java regex `\s` without UNICODE_CHARACTER_CLASS: ASCII whitespace only. */
+        private fun isRegexSpace(c: Char): Boolean =
+            c == ' ' || c == '\t' || c == '\n' || c == '\u000B' || c == '\u000C' || c == '\r'
+
+        /** What regex `.` refuses to match by default (no DOTALL). */
+        private fun isLineTerminator(c: Char): Boolean =
+            c == '\n' || c == '\r' || c == '\u0085' || c == '\u2028' || c == '\u2029'
     }
 }
