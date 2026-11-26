@@ -35,6 +35,12 @@
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-agentic</artifactId>
         </dependency>
+        <!-- SkillDraftGenerator validates generated SKILL.md via ArtifactValidator; declared
+             directly because browser4-coding is an optional/transitive dependency of agentic. -->
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-coding</artifactId>
+        </dependency>
 
 
         <dependency>

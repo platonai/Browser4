@@ -23,6 +23,7 @@ class SkillService(
     private val skillsDir: Path = AgentPaths.SKILLS_DIR,
     private val registry: SkillRegistry = SkillRegistry.instance,
     private val definitionLoader: SkillDefinitionLoader = SkillDefinitionLoader(),
+    private val draftsDir: Path = AgentPaths.AGENT_BASE_DIR.resolve("skills-drafts"),
 ) {
     private val logger = getLogger(SkillService::class)
     private val installer: SkillInstaller = SkillInstaller(registry, definitionLoader)
@@ -44,6 +45,26 @@ class SkillService(
         val referencesPath: String?,
         val assetsPath: String?,
         val origin: String?,
+    )
+
+    /**
+     * Lightweight summary of an auto-generated skill draft sitting in the drafts directory.
+     */
+    data class DraftSummary(
+        /** Draft directory name, e.g. `refactor-auth-1732456789012` — the stable handle for promote. */
+        val id: String,
+        /** Skill id parsed from the directory name (the part before the timestamp suffix). */
+        val skillId: String,
+        /** Generation time (epoch millis), parsed from the directory name suffix or file mtime. */
+        val generatedAt: Long?,
+        /** Source task id, read from the draft's `context.json`. */
+        val sourceTaskId: String?,
+        /** Version declared in the SKILL.md frontmatter. */
+        val version: String?,
+        /** Description declared in the SKILL.md frontmatter. */
+        val description: String?,
+        /** Whether a skill with the same id is currently registered in the runtime registry. */
+        val registered: Boolean,
     )
 
     // ---- Query ----
@@ -95,6 +116,100 @@ class SkillService(
             assetsPath = activation?.assetsPath,
             origin = origin,
         )
+    }
+
+    // ---- Drafts (auto-generated) ----
+
+    private val frontmatterBlock = Regex("""^---\s*\n(.*?)\n---\s*\n""", RegexOption.DOT_MATCHES_ALL)
+    private val frontmatterEntry = Regex("""^([a-zA-Z0-9_-]+):\s*(.*)$""", RegexOption.MULTILINE)
+    private val jsonMapper = com.fasterxml.jackson.databind.ObjectMapper()
+
+    /**
+     * List all auto-generated skill drafts in the drafts directory.
+     *
+     * A draft is a sub-directory of [draftsDir] containing a `SKILL.md` (and optionally
+     * a `context.json`). Never throws: an inaccessible or malformed drafts dir yields an empty list.
+     */
+    fun listDrafts(): List<DraftSummary> {
+        if (!Files.isDirectory(draftsDir)) return emptyList()
+        return runCatching {
+            Files.list(draftsDir).use { stream ->
+                stream
+                    .filter { Files.isDirectory(it) && Files.exists(it.resolve("SKILL.md")) }
+                    .map { parseDraft(it) }
+                    .toList()
+                    .sortedByDescending { it.generatedAt ?: 0L }
+            }
+        }.getOrElse {
+            logger.warn("Failed to list skill drafts in {}: {}", draftsDir, it.message)
+            emptyList()
+        }
+    }
+
+    private fun parseDraft(dir: Path): DraftSummary {
+        val id = dir.fileName.toString()
+        val skillId = parseSkillIdFromDirName(id) ?: id
+        val generatedAt = parseTimestampFromDirName(id)
+            ?: runCatching { Files.getLastModifiedTime(dir).toMillis() }.getOrNull()
+        val ctx = runCatching { readContextJson(dir.resolve("context.json")) }.getOrNull()
+        val md = runCatching { dir.resolve("SKILL.md").readText() }.getOrDefault("")
+        val fm = parseFrontmatter(md)
+        val registered = runCatching { registry.contains(skillId) }.getOrDefault(false)
+        return DraftSummary(
+            id = id,
+            skillId = skillId,
+            generatedAt = generatedAt,
+            sourceTaskId = ctx?.get("taskId") as? String,
+            version = fm["version"] ?: "1.0.0",
+            description = fm["description"],
+            registered = registered,
+        )
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun readContextJson(file: Path): Map<String, Any?>? {
+        if (!Files.isRegularFile(file)) return null
+        return runCatching {
+            jsonMapper.readValue(file.toFile(), Map::class.java) as Map<String, Any?>
+        }.getOrNull()
+    }
+
+    private fun parseFrontmatter(md: String): Map<String, String> {
+        val block = frontmatterBlock.find(md)?.groupValues?.get(1) ?: return emptyMap()
+        return frontmatterEntry.findAll(block)
+            .associate { it.groupValues[1] to it.groupValues[2].trim().trim('"', '\'') }
+    }
+
+    private fun parseSkillIdFromDirName(dirName: String): String? {
+        val idx = dirName.lastIndexOf('-')
+        if (idx <= 0) return null
+        return if (dirName.substring(idx + 1).toLongOrNull() != null) dirName.substring(0, idx) else null
+    }
+
+    private fun parseTimestampFromDirName(dirName: String): Long? {
+        val idx = dirName.lastIndexOf('-')
+        if (idx < 0) return null
+        return dirName.substring(idx + 1).toLongOrNull()
+    }
+
+    /**
+     * Promote an auto-generated draft into the runtime registry by installing it.
+     *
+     * @param draftId    the draft directory name ([DraftSummary.id])
+     * @param overwrite  if true, overwrite an existing registered skill with the same id
+     * @return [SkillInstaller.InstallResult] describing the outcome
+     * @throws IllegalArgumentException if the draft does not exist or lacks SKILL.md
+     * @throws IllegalStateException if the draft id escapes the drafts directory
+     */
+    suspend fun promoteDraft(
+        draftId: String,
+        overwrite: Boolean = false,
+    ): SkillInstaller.InstallResult {
+        val dir = draftsDir.resolve(draftId).normalize()
+        check(dir.startsWith(draftsDir)) { "Invalid draft id: $draftId" }
+        require(Files.isDirectory(dir)) { "Draft not found: $draftId" }
+        require(Files.exists(dir.resolve("SKILL.md"))) { "SKILL.md not found in draft: $draftId" }
+        return installSkill(dir, overwrite)
     }
 
     // ---- Install ----

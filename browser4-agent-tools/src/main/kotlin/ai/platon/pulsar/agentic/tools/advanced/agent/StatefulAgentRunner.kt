@@ -13,7 +13,10 @@ import ai.platon.pulsar.agentic.agents.RunPhaseClock
 import ai.platon.pulsar.agentic.common.AgentPaths
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.detail.DefaultServerSideAgentEventHandlers
+import ai.platon.pulsar.agentic.inference.InferenceEngine
 import ai.platon.pulsar.agentic.model.AgentHistory
+import ai.platon.pulsar.agentic.tools.advanced.agent.skillsummary.SkillSummarizer
+import ai.platon.pulsar.agentic.tools.advanced.agent.skillsummary.SkillSummaryConfig
 import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
 import ai.platon.pulsar.api.AbstractWebDriver
 import ai.platon.pulsar.api.Browser
@@ -456,6 +459,40 @@ open class StatefulAgentRunner(
     /** Append one of the runner's own lifecycle steps for [status]. */
     private fun recordLifecycle(status: AgentTaskStatus, type: String, text: String? = null) {
         eventLog(status.id).append(type, text = AgentTaskEventSanitizer.preview(text))
+    }
+
+    /**
+     * Post-success side effect: asynchronously trigger the auto skill summary.
+     *
+     * Only called from the success branch (failed/cancelled runs go through
+     * [recordFailure] and never reach here). Fully async + best-effort: any
+     * exception is logged and swallowed, never touching the task's success state
+     * or verdict (AC-3/AC-4, NFR-1). Disabled by default via [SkillSummaryConfig].
+     */
+    private fun triggerAutoSkillSummary(status: AgentTaskStatus) {
+        val config = SkillSummaryConfig.load()
+        if (!SkillSummarizer.shouldRun(config)) return
+        taskScope.launch {
+            runCatching {
+                val events = eventStore.load(status.id, 1000)
+                // Reuse the session's companion agent for the LLM call (same provider / config as
+                // the task just run). If the agent is not a BasicBrowserAgent or the call fails,
+                // the generator degrades to writing context.json only — never blocks the main
+                // flow or affects the task's success (NFR-1).
+                val agent = session.companionAgent as? BasicBrowserAgent
+                val llmCall: (suspend (instruction: String, contextText: String) -> String?)? =
+                    if (agent == null) null else { instruction, context ->
+                        runCatching { InferenceEngine(agent).summarize(instruction, context) }.getOrNull()
+                    }
+                SkillSummarizer.maybeSummarize(
+                    status,
+                    events,
+                    { type, detail, text -> recordStructuredEvent(status, type, detail, text) },
+                    config,
+                    llmCall,
+                )
+            }.onFailure { logger.warn("auto skill summary trigger failed for {}: {}", status.id, it.message) }
+        }
     }
 
     /**
@@ -2015,6 +2052,9 @@ open class StatefulAgentRunner(
                 recordFailure(status)
             } else {
                 recordLifecycle(status, AgentTaskEvent.TYPE_DONE, status.message)
+                // Post-success side effect: summarize the run into a reusable SKILL.
+                // Async + best-effort — never changes this task's success/verdict (AC-3/4, NFR-1).
+                triggerAutoSkillSummary(status)
             }
             // Close the task in the session's conversation: the next instruction
             // inherits its transcript (see [SessionConversation]), so a multi-task

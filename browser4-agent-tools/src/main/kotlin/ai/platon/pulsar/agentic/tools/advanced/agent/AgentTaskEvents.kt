@@ -270,6 +270,12 @@ data class AgentTaskEvent(
         // `durationMs`. Unknown type is ignored by existing consumers by
         // construction, so no schema bump is needed.
 
+        /**
+         * One auto-skill-summary decision after a successful task (`detail`:
+         * `action`, `reason`, optional `skillId`, `durationMs`).
+         */
+        const val TYPE_SKILL_SUMMARIZE = "skill.summarize"
+
         // ── Goal steps (docs-dev/copilot/agent-goal-mode.md) ─────────────────
         //
         // The goal is engine state pinned into every request, so these steps are the

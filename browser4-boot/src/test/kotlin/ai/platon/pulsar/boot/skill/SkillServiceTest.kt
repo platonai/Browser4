@@ -204,4 +204,113 @@ class SkillServiceTest {
             assertTrue(e.message!!.contains("not registered"))
         }
     }
+
+    // ---- listDrafts() / promoteDraft() (auto-generated drafts) ----
+
+    private fun createDraft(parent: Path, skillId: String, ts: Long, taskId: String): Path {
+        val dir = parent.resolve("$skillId-$ts")
+        Files.createDirectories(dir)
+        val md = """
+            ---
+            name: $skillId
+            description: Drafted from task $taskId
+            version: "1.0.0"
+            ---
+            # $skillId
+            ## Overview
+            Auto-generated draft.
+        """.trimIndent()
+        Files.writeString(dir.resolve("SKILL.md"), md)
+        Files.writeString(
+            dir.resolve("context.json"),
+            "{\"taskId\":\"$taskId\",\"prompt\":\"do something\",\"rounds\":3}",
+        )
+        return dir
+    }
+
+    @Test
+    @DisplayName("listDrafts returns auto-generated drafts with parsed metadata")
+    fun testListDraftsReturnsParsedDrafts() {
+        val registry = SkillRegistry.instance
+        val draftsDir = Files.createTempDirectory("browser4-test-drafts-")
+        createDraft(draftsDir, "refactor-auth", 1732456789012L, "task-abc")
+        val service = SkillService(
+            mockAppContext(), createTempSkillsDir(), registry = registry, draftsDir = draftsDir,
+        )
+
+        val drafts = service.listDrafts()
+        assertEquals(1, drafts.size, "Expected 1 draft but got ${drafts.size}")
+        val d = drafts[0]
+        assertEquals("refactor-auth-1732456789012", d.id)
+        assertEquals("refactor-auth", d.skillId)
+        assertEquals(1732456789012L, d.generatedAt)
+        assertEquals("task-abc", d.sourceTaskId)
+        assertEquals("1.0.0", d.version)
+        assertTrue(d.description?.contains("task-abc") == true, "description=${d.description}")
+        assertFalse(d.registered, "draft should not be registered before promote")
+    }
+
+    @Test
+    @DisplayName("listDrafts returns empty list when drafts dir absent")
+    fun testListDraftsReturnsEmptyWhenDirAbsent() {
+        val service = SkillService(
+            mockAppContext(), createTempSkillsDir(),
+            draftsDir = createTempSkillsDir().resolve("does-not-exist"),
+        )
+        assertTrue(service.listDrafts().isEmpty())
+    }
+
+    @Test
+    @DisplayName("promoteDraft installs a draft and flags it registered")
+    fun testPromoteDraftInstallsDraft() = runBlocking {
+        val registry = SkillRegistry.instance
+        val skillsDir = createTempSkillsDir()
+        val draftsDir = Files.createTempDirectory("browser4-test-drafts-")
+        createDraft(draftsDir, "promote-me", 1732456789000L, "task-xyz")
+        val service = SkillService(
+            mockAppContext(), skillsDir, registry = registry, draftsDir = draftsDir,
+        )
+
+        val before = service.listDrafts()
+        assertFalse(before[0].registered)
+
+        val result = service.promoteDraft("promote-me-1732456789000")
+        assertTrue(result.success, "promote failed: ${result.message}")
+        assertEquals("promote-me", result.skillId)
+        assertTrue(registry.contains("promote-me"), "skill should be registered after promote")
+
+        val after = service.listDrafts()
+        assertEquals(1, after.size)
+        assertTrue(after[0].registered, "draft should be registered after promote")
+
+        runCatching { service.uninstallSkill("promote-me") }
+    }
+
+    @Test
+    @DisplayName("promoteDraft throws IllegalArgumentException for missing draft")
+    fun testPromoteDraftThrowsForMissingDraft() = runBlocking {
+        val service = SkillService(
+            mockAppContext(), createTempSkillsDir(),
+            draftsDir = Files.createTempDirectory("empty-drafts-"),
+        )
+        try {
+            service.promoteDraft("nope-123")
+            fail("Expected IllegalArgumentException")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message!!.contains("not found"), "message=${e.message}")
+        }
+    }
+
+    @Test
+    @DisplayName("promoteDraft rejects path-traversal draft ids")
+    fun testPromoteDraftRejectsPathTraversal() = runBlocking {
+        val draftsDir = Files.createTempDirectory("drafts-")
+        val service = SkillService(mockAppContext(), createTempSkillsDir(), draftsDir = draftsDir)
+        try {
+            service.promoteDraft("../etc-passwd")
+            fail("Expected IllegalStateException")
+        } catch (e: IllegalStateException) {
+            // expected: draft id escapes the drafts directory
+        }
+    }
 }
