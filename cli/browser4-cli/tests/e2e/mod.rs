@@ -670,6 +670,11 @@ struct FixtureDownloadServer {
     /// Artificial latency applied before serving each request (for speed-test
     /// scenarios that need one mirror to appear slower than another).
     latency: Duration,
+    /// When set, the bundle download body is delayed by this much before it is
+    /// written (after [`Self::latency`]). The manifest lookup is unaffected, so the
+    /// resolve timeout stays safe while a prefetch agent downloading the fake bundle
+    /// lives long enough for the e2e harness to observe its process tree (#638).
+    download_throttle: Option<Duration>,
 }
 
 impl FixtureDownloadServer {
@@ -685,11 +690,25 @@ impl FixtureDownloadServer {
             tag,
             Duration::ZERO,
             Some(rc_tag.to_string()),
+            None,
         )
     }
 
     fn start_with_latency(bundle_bytes: Vec<u8>, tag: &str, latency: Duration) -> Self {
-        Self::start_with_latency_and_rc(bundle_bytes, tag, latency, None)
+        Self::start_with_latency_and_rc(bundle_bytes, tag, latency, None, None)
+    }
+
+    /// Like [`Self::start_with_latency`], but additionally delays the bundle
+    /// download body by `download_throttle` (after `latency`). The manifest
+    /// lookup is unaffected, so the resolve timeout stays safe while a prefetch
+    /// agent downloading the fake bundle lives long enough to be observed (#638).
+    fn start_with_latency_and_throttle(
+        bundle_bytes: Vec<u8>,
+        tag: &str,
+        latency: Duration,
+        download_throttle: Duration,
+    ) -> Self {
+        Self::start_with_latency_and_rc(bundle_bytes, tag, latency, None, Some(download_throttle))
     }
 
     fn start_with_latency_and_rc(
@@ -697,6 +716,7 @@ impl FixtureDownloadServer {
         tag: &str,
         latency: Duration,
         latest_rc: Option<String>,
+        download_throttle: Option<Duration>,
     ) -> Self {
         let listener =
             TcpListener::bind("127.0.0.1:0").expect("fixture download server bind failed");
@@ -725,7 +745,7 @@ impl FixtureDownloadServer {
                         let t = tag_for_thread.clone();
                         let rc = rc_owned.clone();
                         thread::spawn(move || {
-                            serve_download_request(stream, b, r, t, rc, latency)
+                            serve_download_request(stream, b, r, t, rc, latency, download_throttle)
                         });
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -746,6 +766,7 @@ impl FixtureDownloadServer {
             tag: tag_owned,
             latest_rc,
             latency,
+            download_throttle,
         }
     }
 
@@ -774,6 +795,7 @@ fn serve_download_request(
     tag: String,
     latest_rc: Option<String>,
     latency: Duration,
+    download_throttle: Option<Duration>,
 ) {
     if !latency.is_zero() {
         thread::sleep(latency);
@@ -844,6 +866,9 @@ fn serve_download_request(
             body_len
         );
         let _ = stream.write_all(response.as_bytes());
+        if let Some(delay) = download_throttle {
+            thread::sleep(delay);
+        }
         let _ = stream.write_all(&bundle_bytes);
     } else {
         write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");

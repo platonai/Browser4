@@ -23078,35 +23078,42 @@ async fn run_browser4_cli(tokens: &[String]) -> Result<String, String> {
 
 /// Spawn a detached background process that survives parent exit.
 ///
-/// On Windows, uses `CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS` so the
-/// child is not tied to the parent console / process tree, and clears the
-/// inherit flag on this process's own std handles for the duration of the
-/// spawn: `Command::spawn` passes `bInheritHandles = TRUE`, so every
-/// *inheritable* handle of the parent — including the write end of a caller's
-/// pipe — is duplicated into the worker.  The worker never writes to it, but
-/// keeping it open meant a piped `loop --resume | cat` never saw EOF and
-/// appeared to hang (issue 122234#2).  On Unix `Command::spawn` only dups the
+/// "Detached" is delegated to [`daemon::spawn_outside_host_tree`], because
+/// `CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS` only detaches the console: a
+/// host that kills descendants by walking `ParentProcessId` (AI-agent shells,
+/// #632) still takes the child with it, which is what killed the `loop` workers
+/// and the auto-update agent (#638). The creation flags stay for the plain path
+/// (console detach, no Ctrl+C propagation) and are ignored by the WMI path.
+///
+/// The child runs with `log_path` as its stdout/stderr on the plain path; on
+/// the WMI path the same file is used as a `cmd /c ... >> log 2>&1` redirect,
+/// since `Win32_Process.Create` inherits no handles.
+///
+/// On Windows the inherit flag of this process's own std handles is cleared for
+/// the duration of the spawn: `Command::spawn` passes `bInheritHandles = TRUE`,
+/// so every *inheritable* handle of the parent — including the write end of a
+/// caller's pipe — is duplicated into the worker. The worker never writes to it,
+/// but keeping it open meant a piped `loop --resume | cat` never saw EOF and
+/// appeared to hang (issue 122234#2). On Unix `Command::spawn` only dups the
 /// explicitly configured descriptors and sets `CLOEXEC` on the rest, so no
 /// handle leaks and no equivalent step is needed.
-fn spawn_detached(exe: &std::path::Path, args: &[String], log_path: Option<&std::path::Path>) -> Result<u32, String> {
+fn spawn_detached(
+    exe: &std::path::Path,
+    args: &[String],
+    log_path: Option<&std::path::Path>,
+) -> Result<u32, String> {
+    // Default to null stdio. `spawn_outside_host_tree` attaches `log_path` as
+    // the log in the plain path and rebuilds it as a `>> log` redirect in the
+    // WMI path — so the log is never opened here. Opening it ourselves would
+    // hold a handle open that conflicts with the share mode the WMI child's
+    // `cmd /c` redirection requests, making the child exit immediately with an
+    // empty log and stranding `loop --resume` workers on tree-killing hosts
+    // (#638 family).
     let mut cmd = std::process::Command::new(exe);
     cmd.args(args)
-        .stdin(std::process::Stdio::null());
-    match log_path {
-        Some(path) => {
-            let file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .map_err(|e| format!("Cannot open loop log file {}: {}", path.display(), e))?;
-            cmd.stdout(file.try_clone().map_err(|e| format!("Cannot clone stdout handle: {}", e))?);
-            cmd.stderr(file);
-        }
-        None => {
-            cmd.stdout(std::process::Stdio::null());
-            cmd.stderr(std::process::Stdio::null());
-        }
-    }
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
 
     #[cfg(windows)]
     {
@@ -23119,14 +23126,52 @@ fn spawn_detached(exe: &std::path::Path, args: &[String], log_path: Option<&std:
     #[cfg(windows)]
     let restore_inherit = win_std_handles_disable_inherit();
 
-    let spawn_result = cmd
-        .spawn()
+    let spawn_result = daemon::spawn_outside_host_tree(&mut cmd, &spawn_working_dir(exe), log_path)
         .map_err(|e| format!("Failed to spawn background process: {}", e));
 
     #[cfg(windows)]
     win_std_handles_restore(restore_inherit);
 
-    Ok(spawn_result?.id())
+    spawn_result
+}
+
+/// The directory a child process is created in.
+///
+/// `Win32_Process.Create` requires one, so the current directory is used and the
+/// executable's own folder is the fallback when it is unavailable (a deleted
+/// working directory, a detached service host).
+fn spawn_working_dir(exe: &std::path::Path) -> std::path::PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| {
+        exe.parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+    })
+}
+
+/// How long the control command waits for a freshly spawned worker to record
+/// its own pid. The worker persists it before its first iteration, so this is
+/// normally a few tens of milliseconds.
+const LOOP_WORKER_PID_WAIT: std::time::Duration = std::time::Duration::from_millis(1000);
+
+/// The pid the background loop process records for itself, once it starts.
+///
+/// [`spawn_detached`] returns the pid of the process it created, which on a
+/// tree-killing Windows host is the `cmd.exe` wrapper of the WMI-created child
+/// (#638) — not the worker. Every control command (`--status`, `--resume`,
+/// `--stop`) keys on the worker's own pid, which the worker persists
+/// (`state::LoopState::worker_pid`), so the spawn message reports that pid
+/// instead of a number the user cannot match anywhere.
+fn wait_for_loop_worker_pid(name: Option<&str>, timeout: std::time::Duration) -> Option<u32> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if let Some(pid) = state::live_loop_worker_pid(None, name) {
+            return Some(pid);
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 /// Clear `HANDLE_FLAG_INHERIT` on stdin/stdout/stderr for the next spawn.
@@ -23845,12 +23890,22 @@ async fn handle_loop(
                             .map_err(|e| format!("Cannot determine CLI path: {}", e))?;
 
                         match spawn_detached(&exe, &cmd_args, Some(&log_path)) {
-                            Ok(child_id) => {
-                                cli_println!(
-                                    "   Spawned background process (PID: {}). Use --list to monitor, \
-                                     --pause to pause, --stop to clear.",
-                                    child_id,
-                                );
+                            Ok(launcher_pid) => {
+                                // On a tree-killing Windows host this pid is the
+                                // `cmd.exe` wrapper, so report the worker's own pid.
+                                match wait_for_loop_worker_pid(loop_name, LOOP_WORKER_PID_WAIT) {
+                                    Some(pid) => cli_println!(
+                                        "   Spawned background process (PID: {}). Use --list to monitor, \
+                                         --pause to pause, --stop to clear.",
+                                        pid,
+                                    ),
+                                    None => cli_println!(
+                                        "   Spawned background process (launcher PID: {}; the worker \
+                                         records its own PID in --status when it starts). Use --list to \
+                                         monitor, --pause to pause, --stop to clear.",
+                                        launcher_pid,
+                                    ),
+                                }
                                 cli_println!(
                                     "   Iteration output: {}",
                                     log_path.display(),
@@ -23974,8 +24029,17 @@ async fn handle_loop(
 
                 let log_path = state::loop_state_path(None, name).with_extension("log");
                 match spawn_detached(&exe, &cmd_args, Some(&log_path)) {
-                    Ok(child_id) => {
-                        cli_println!("   - {} (PID: {})", entry.name, child_id);
+                    Ok(launcher_pid) => {
+                        // Same reason as `--resume`: the created pid can be the
+                        // WMI-created `cmd.exe` wrapper, not the worker.
+                        match wait_for_loop_worker_pid(name, LOOP_WORKER_PID_WAIT) {
+                            Some(pid) => cli_println!("   - {} (PID: {})", entry.name, pid),
+                            None => cli_println!(
+                                "   - {} (launcher PID: {}; worker PID appears in --status)",
+                                entry.name,
+                                launcher_pid
+                            ),
+                        }
                     }
                     Err(e) => {
                         cli_println!("   - {} (failed to spawn: {})", entry.name, e);
@@ -27702,8 +27766,8 @@ fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
             return false;
         }
 
-        match std::process::Command::new("powershell")
-            .args([
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.args([
                 "-WindowStyle",
                 "Hidden",
                 "-NoProfile",
@@ -27712,9 +27776,17 @@ fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
             ])
             .arg(&script_path)
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
+            .stderr(std::process::Stdio::null());
+        // The cleanup script runs *after* this process exits — it waits up to
+        // 30 s for the running binary to release its file handle, then removes
+        // it and the companions. On a host that kills by process tree it must
+        // be created outside the caller's tree, or it dies with the uninstall
+        // command and the binary is never removed (#632 / #638 family).
+        match daemon::spawn_outside_host_tree(
+            &mut cmd,
+            &spawn_working_dir(std::path::Path::new("powershell")),
+            None,
+        ) {
             Ok(_) => {
                 cli_println!("  Binary and companion links scheduled for removal after exit.");
                 true
@@ -28912,7 +28984,8 @@ fn spawn_update_agent(plan: &update_check::PrefetchPlan) -> bool {
     let Ok(exe) = std::env::current_exe() else {
         return false;
     };
-    let mut cmd = std::process::Command::new(exe);
+    let working_dir = spawn_working_dir(&exe);
+    let mut cmd = std::process::Command::new(&exe);
     cmd.arg("__update-agent").arg("--tag").arg(&plan.tag);
     if plan.self_upgrade {
         cmd.arg("--self-upgrade");
@@ -28927,7 +29000,42 @@ fn spawn_update_agent(plan: &update_check::PrefetchPlan) -> bool {
         const DETACHED_PROCESS: u32 = 0x00000008;
         cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
     }
-    cmd.spawn().is_ok()
+    daemon::spawn_outside_host_tree(&mut cmd, &working_dir, None).is_ok()
+}
+
+/// Environment variables that change what the auto-update agent does.
+///
+/// The agent downloads a runtime bundle and records the result, so proxy,
+/// mirror and directory overrides are behavioural, not cosmetic: losing them
+/// turns a successful prefetch into a failure that looks like a network error.
+const UPDATE_AGENT_ENV_KEYS: &[&str] = &[
+    "BROWSER4_CLI_PROXY",
+    "https_proxy",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "HTTP_PROXY",
+    "all_proxy",
+    "ALL_PROXY",
+    "no_proxy",
+    "NO_PROXY",
+    "BROWSER4_MIRRORS_CONFIG",
+    "BROWSER4_RELEASES_BASE_URL",
+    "BROWSER4_RUNTIME_DIR",
+    "BROWSER4_CLI_STATE_DIR",
+    "BROWSER4_CLI_FORCE_REMOTE_BUNDLE",
+];
+
+/// The [`UPDATE_AGENT_ENV_KEYS`] that are set in this process, as `KEY=VALUE`.
+fn forwarded_update_agent_env() -> Vec<(String, String)> {
+    UPDATE_AGENT_ENV_KEYS
+        .iter()
+        .filter_map(|key| {
+            std::env::var(key)
+                .ok()
+                .filter(|value| !value.is_empty())
+                .map(|value| ((*key).to_string(), value))
+        })
+        .collect()
 }
 
 /// Entry point of the hidden `__update-agent` command.
@@ -37048,6 +37156,160 @@ mod tests {
             std::env::remove_var(key);
         }
         EnvGuard { key, prev, _lock: lock }
+    }
+
+    /// The update agent may inherit WmiPrvSE's environment (#638), so the
+    /// spawning CLI has to carry the behavioural settings on its command line.
+    #[test]
+    fn update_agent_env_is_forwarded_as_key_value_pairs() {
+        let _proxy = set_env("BROWSER4_CLI_PROXY", "http://127.0.0.1:7890");
+
+        let forwarded = forwarded_update_agent_env();
+
+        assert!(
+            forwarded.contains(&(
+                "BROWSER4_CLI_PROXY".to_string(),
+                "http://127.0.0.1:7890".to_string()
+            )),
+            "the proxy must travel with the spawn: {forwarded:?}"
+        );
+    }
+
+    #[test]
+    fn update_agent_env_assignments_round_trip() {
+        assert_eq!(
+            parse_env_assignment("HTTPS_PROXY=http://proxy:8080"),
+            Some(("HTTPS_PROXY".to_string(), "http://proxy:8080".to_string()))
+        );
+        // Values may contain '=' (a proxy query string does).
+        assert_eq!(
+            parse_env_assignment("A=a=b"),
+            Some(("A".to_string(), "a=b".to_string()))
+        );
+        assert_eq!(parse_env_assignment("=missing-key"), None);
+        assert_eq!(parse_env_assignment("NO_SEPARATOR"), None);
+    }
+
+    /// The `loop` workers use `spawn_detached`, whose console-detach flags do
+    /// not leave a tree-killing host's process tree (#638). On those hosts the
+    /// spawn goes through the WMI escape, which reopens the worker log via
+    /// `cmd /c >> log`; this test asserts the wiring is correct end-to-end:
+    ///   1. the child is observable to WMI and not parented by this process, and
+    ///   2. it actually writes to the log — a parent-held log handle would make
+    ///      `cmd`'s redirection open fail and the child exit immediately with an
+    ///      empty log, which is the #638-family regression this guards.
+    #[cfg(windows)]
+    #[test]
+    fn spawn_detached_creates_the_child_outside_the_caller_tree() {
+        let _override = set_env("BROWSER4_WINDOWS_BACKEND_SPAWN", "wmi");
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let log = temp.path().join("loop.log");
+
+        // A batch file that (1) writes a marker, proving the `>> log` redirect
+        // actually carries output to the file, and (2) spins in a pure-builtin
+        // loop so the process stays alive long enough for WMI to observe its
+        // tree. No external executable is used: under some test sandboxes a
+        // WMI-spawned `cmd` cannot start an external grandchild (e.g. `ping`)
+        // under a redirected handle, but builtins always run inside `cmd`
+        // itself.
+        const MARKER: &str = "b4-spawn-detached-marker-7e21a4";
+        let bat = temp.path().join("worker.bat");
+        std::fs::write(
+            &bat,
+            format!("@echo off\r\necho {MARKER}\r\nfor /l %%i in (1,1,30000000) do @rem\r\n"),
+        )
+        .expect("write worker.bat");
+
+        let pid = spawn_detached(
+            std::path::Path::new("cmd"),
+            &["/c".to_string(), bat.to_string_lossy().into_owned()],
+            Some(&log),
+        )
+        .expect("the loop worker must start");
+
+        // A parent-held log handle (the #638-family regression) makes `cmd`'s
+        // open for `>> log` fail, so the child exits immediately and the marker
+        // never lands. Poll the log content rather than its mere existence —
+        // both the bug and the fix create the file.
+        let log_deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            let content = std::fs::read_to_string(&log).unwrap_or_default();
+            if content.contains(MARKER) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < log_deadline,
+                "the detached child never wrote its marker to the log \
+                 (redirection failed — held-open log handle?)"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        // `Win32_Process.Create` returns the pid before the CIM view catches up;
+        // poll briefly until WMI can see the process, then assert it is not
+        // parented by this process — i.e. it escaped a tree-killing host's tree.
+        let tree_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let parent = loop {
+            let p = daemon::windows_parent_process_id(pid);
+            if p != 0 {
+                break p;
+            }
+            assert!(
+                std::time::Instant::now() < tree_deadline,
+                "pid {pid} never became visible to WMI (child exited immediately)"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        assert_ne!(
+            parent,
+            std::process::id(),
+            "the detached worker must not stay parented by the CLI (pid {pid}, parent {parent})"
+        );
+
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .output();
+    }
+
+    /// The spawn message must report the pid `--status`/`--stop` use, i.e. the
+    /// one the worker records — not the launcher's (a `cmd.exe` wrapper on WMI
+    /// hosts, #638).
+    #[test]
+    fn loop_spawn_reports_the_worker_pid_not_the_launcher_pid() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let _state_dir = set_env(
+            "BROWSER4_CLI_STATE_DIR",
+            temp.path().to_str().expect("utf-8 temp path"),
+        );
+        let worker_pid = std::process::id();
+        state::write_loop_state(
+            &state::LoopState {
+                task_tokens: vec!["demo".to_string()],
+                mode: "plain".to_string(),
+                interval_secs: 60,
+                count: None,
+                timeout_secs: None,
+                iterations_completed: 0,
+                started_at: "2026-11-26T00:00:00Z".to_string(),
+                updated_at: "2026-11-26T00:00:00Z".to_string(),
+                status: "running".to_string(),
+                worker_pid: Some(worker_pid),
+            },
+            None,
+            Some("polled"),
+        )
+        .expect("write the loop state");
+
+        assert_eq!(
+            wait_for_loop_worker_pid(Some("polled"), std::time::Duration::from_millis(200)),
+            Some(worker_pid),
+            "the recorded worker pid must be what the spawn message prints"
+        );
+        assert_eq!(
+            wait_for_loop_worker_pid(Some("absent"), std::time::Duration::from_millis(60)),
+            None,
+            "an unrecorded pid must fall back instead of blocking"
+        );
     }
 
     /// Ordinary, long-enough page text: keeps the block signatures and the

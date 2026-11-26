@@ -6078,6 +6078,181 @@ pub(super) fn test_install_speed_test_selects_fastest_mirror(ctx: &mut E2ECtx) {
     );
 }
 
+// ---------------------------------------------------------------------------
+// auto-upgrade: background prefetch must escape the host process tree (#638)
+// ---------------------------------------------------------------------------
+
+/// A running `__update-agent` process discovered via WMI, with its parent.
+#[derive(Debug)]
+struct UpdateAgentProcess {
+    pid: u32,
+    parent_pid: u32,
+    parent_name: String,
+}
+
+/// On Windows, find a running `__update-agent` process for `tag` and read its
+/// parent through WMI. Returns `None` when no matching process is visible —
+/// WMI's CIM view can lag a freshly created process by a few hundred ms — or on
+/// non-Windows.
+#[cfg(windows)]
+fn find_update_agent_via_wmi(tag: &str) -> Option<UpdateAgentProcess> {
+    use std::process::Command;
+    // Build the filter inside PowerShell using doubled single quotes (PS's
+    // way to embed a literal `'` inside a single-quoted string). The agent's
+    // command line is `<cli> __update-agent --tag <tag> ...`; exclude
+    // powershell because this query's own command line also contains the
+    // marker strings. The result is emitted through `ConvertTo-Json` so Rust
+    // never parses hand-escaped quotes — backslash-quote is NOT a PowerShell
+    // escape, and a literal single-quoted `'{\"x\":false}'` keeps the
+    // backslashes; both produced invalid JSON and silently returned `None`.
+    let script = format!(
+        "$flt = 'CommandLine like ''%__update-agent%'' and CommandLine like ''%{tag}%'' and not Name like ''%powershell%'''; \
+         $p = Get-CimInstance Win32_Process -Filter $flt | Select-Object -First 1; \
+         if ($p) {{ \
+           $pp = [int]$p.ParentProcessId; \
+           $pn = (Get-CimInstance Win32_Process -Filter \"ProcessId=$pp\").Name; \
+           if (-not $pn) {{ $pn = '' }}; \
+           [pscustomobject]@{{ alive = $true; pid = $p.ProcessId; parent_pid = $pp; parent_name = $pn }} | ConvertTo-Json -Compress \
+         }} else {{ \
+           '{{\"alive\":false}}' \
+         }}"
+    );
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let value: serde_json::Value = serde_json::from_str(text.trim()).ok()?;
+    if value.get("alive")?.as_bool()? {
+        Some(UpdateAgentProcess {
+            pid: value.get("pid")?.as_u64()? as u32,
+            parent_pid: value.get("parent_pid")?.as_u64()? as u32,
+            parent_name: value
+                .get("parent_name")?
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+        })
+    } else {
+        None
+    }
+}
+
+#[cfg(not(windows))]
+fn find_update_agent_via_wmi(_tag: &str) -> Option<UpdateAgentProcess> {
+    None
+}
+
+/// #638: with `BROWSER4_AUTO_UPGRADE=runtime`, running an ordinary command
+/// spawns a detached `__update-agent` background process that prefetches the
+/// newer runtime bundle. On a host that reaps descendants by `ParentProcessId`
+/// (e.g. TRAE), a plain `spawn` kills that agent within milliseconds — before
+/// it can download anything — so the prefetch silently never completes. The
+/// agent must therefore be created outside the caller's tree
+/// (`daemon::spawn_outside_host_tree`, WMI on Windows).
+///
+/// This scenario forces the WMI path with `BROWSER4_WINDOWS_BACKEND_SPAWN=wmi`
+/// and asserts the spawned agent is alive and parented by `WmiPrvSE` rather
+/// than by the CLI — proving it escaped the tree.
+pub(super) fn test_auto_upgrade_runtime_prefetch_escapes_host_tree(ctx: &mut E2ECtx) {
+    // Tree-kill / WMI escape is a Windows-only concern. On other platforms the
+    // plain-spawn path is covered cross-platform by the daemon.rs unit tests,
+    // so this scenario is a no-op there.
+    if !cfg!(windows) {
+        return;
+    }
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let _runtime_dir = isolate_runtime_dir(ctx, "auto-upgrade-638");
+    ctx.set_env("BROWSER4_CLI_SKIP_SELF_UPGRADE", "1");
+    // `maybe_auto_update` skips dev builds; force the released-runtime mode so
+    // the check actually runs against the local source tree.
+    ctx.set_env("BROWSER4_CLI_FORCE_REMOTE_BUNDLE", "1");
+    ctx.set_env("BROWSER4_AUTO_UPGRADE", "runtime");
+    // Force the WMI escape path even though this host does not tree-kill, so
+    // the assertion can prove the agent is parented outside the CLI tree.
+    ctx.set_env("BROWSER4_WINDOWS_BACKEND_SPAWN", "wmi");
+
+    // Install an older runtime so `read_current_tag()` reports v4.9.0.
+    let (old_bundle, _) = build_fake_runtime_bundle("v4.9.0");
+    let old_server = FixtureDownloadServer::start(old_bundle, "v4.9.0");
+    ctx.set_env("BROWSER4_RELEASES_BASE_URL", &old_server.base_url());
+    let install = run_command(ctx, &["install", "--tag=v4.9.0"]);
+    assert_eq!(
+        install.exit_code, 0,
+        "install v4.9.0 must succeed:\n{}",
+        install.stderr
+    );
+    drop(old_server);
+
+    // Serve a newer release. `latency` applies to every request (including the
+    // manifest lookup), so it stays well under RESOLVE_TIMEOUT_SECS (3); the
+    // bundle-only `download_throttle` keeps the agent download alive long
+    // enough to observe its process tree without endangering the manifest resolve.
+    let (new_bundle, _) = build_fake_runtime_bundle("v4.10.0");
+    let new_server = FixtureDownloadServer::start_with_latency_and_throttle(
+        new_bundle,
+        "v4.10.0",
+        std::time::Duration::from_millis(1500),
+        std::time::Duration::from_millis(4500),
+    );
+    ctx.set_env("BROWSER4_RELEASES_BASE_URL", &new_server.base_url());
+
+    // `list` is not an update-check-suppressed command and exits 0 against the
+    // mock backend; running it triggers `maybe_auto_update`, which notifies
+    // about v4.10.0 and spawns the detached prefetch agent.
+    let list = run_command(ctx, &["list"]);
+    assert_eq!(list.exit_code, 0, "list must succeed:\n{}", list.stderr);
+    assert!(
+        list.stderr.contains("A new Browser4 release is available")
+            && list.stderr.contains("v4.10.0"),
+        "expected the auto-update notify hint in stderr:\n{}",
+        list.stderr
+    );
+
+    // The agent must appear and be parented outside the CLI tree.
+    let observe_deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let observed = loop {
+        if let Some(info) = find_update_agent_via_wmi("v4.10.0") {
+            break info;
+        }
+        assert!(
+            std::time::Instant::now() < observe_deadline,
+            "__update-agent for v4.10.0 never appeared (maybe_auto_update did not spawn it)\n\
+             list stdout:\n{}\nlist stderr:\n{}",
+            list.stdout,
+            list.stderr
+        );
+        std::thread::sleep(std::time::Duration::from_millis(40));
+    };
+
+    assert_ne!(
+        observed.parent_pid,
+        std::process::id(),
+        "agent parent must not be the test harness (must escape the tree): {observed:?}"
+    );
+    assert_ne!(
+        observed.parent_pid, 0,
+        "agent parent must be resolvable via WMI: {observed:?}"
+    );
+    assert!(
+        observed.parent_name.contains("WmiPrvSE"),
+        "with BROWSER4_WINDOWS_BACKEND_SPAWN=wmi the agent must be parented by WmiPrvSE \
+         (proving the WMI escape path); got parent_name='{}': {observed:?}",
+        observed.parent_name
+    );
+
+    // Clean up so the agent does not outlive the scenario and perturb later
+    // tests. It downloads into the isolated runtime dir, but a lingering
+    // process could still race the dir cleanup.
+    let _ = Command::new("taskkill")
+        .args(["/F", "/T", "/PID", &observed.pid.to_string()])
+        .output();
+}
+
 /// Verify that after a successful speed-test the mirror preference is cached and
 /// the next forced install skips speed testing (even though the download cache is
 /// also bypassed).
