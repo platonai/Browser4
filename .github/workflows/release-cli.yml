@@ -356,34 +356,23 @@ jobs:
           path: artifacts/${{ matrix.binary }}
           retention-days: 1
 
-      - name: Upload macOS artifacts
+      # See release.yml: no REST endpoint exists for artifact upload, so the
+      # combined macOS job uses one upload-artifact step per binary.
+      - name: Upload macOS artifact (first target)
         if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          binaries=( ${{ join(matrix.binaries, ' ') }} )
-          for bin in "${binaries[@]}"; do
-            echo "::group::Uploading $bin"
-            UPLOAD_URL="${{ github.api_url }}/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts"
-            FILE_SIZE=$(stat -f%z "artifacts/$bin" 2>/dev/null || stat -c%s "artifacts/$bin")
-            CONTENT_TYPE=$(file -b --mime-type "artifacts/$bin" 2>/dev/null || echo "application/octet-stream")
-            RESULT=$(curl -s -X POST \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer $GITHUB_TOKEN" \
-              "$UPLOAD_URL" \
-              -H "Content-Type: application/json" \
-              -d "{\"name\":\"$bin\",\"path\":\"artifacts/$bin\"}")
-            UPLOAD_BASE=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['upload_url'])")
-            curl -sS -X PUT \
-              -H "Content-Type: $CONTENT_TYPE" \
-              -H "Content-Length: $FILE_SIZE" \
-              -H "Authorization: Bearer $GITHUB_TOKEN" \
-              --data-binary @"artifacts/$bin" \
-              "${UPLOAD_BASE}?name=$bin&url_type=actions_download" > /dev/null
-            echo "::endgroup::"
-          done
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.binaries[0] }}
+          path: artifacts/${{ matrix.binaries[0] }}
+          retention-days: 1
+
+      - name: Upload macOS artifact (second target)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.binaries[1] }}
+          path: artifacts/${{ matrix.binaries[1] }}
+          retention-days: 1
 
   publish:
     name: Publish to npm
