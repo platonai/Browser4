@@ -7,6 +7,10 @@ import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
+/**
+ * Progressive disclosure over the bundled skill: `skill.list` returns summaries only and
+ * `skill.activate` loads the full SKILL.md. `browser4-cli` is the only bundled skill.
+ */
 class SkillProgressiveDisclosureTest {
 
     @Test
@@ -28,7 +32,7 @@ class SkillProgressiveDisclosureTest {
         val summaries = result as List<SkillRegistry.SkillSummary>
 
         assertTrue(summaries.isNotEmpty())
-        assertTrue(summaries.any { it.id == "web-scraping" })
+        assertTrue(summaries.any { it.id == "browser4-cli" })
 
         // Heuristic check: description is truncated, not full SKILL.md body.
         summaries.forEach {
@@ -46,14 +50,14 @@ class SkillProgressiveDisclosureTest {
         val result = executor.callFunctionOn(
             domain = "skill",
             functionName = "activate",
-            args = mapOf("id" to "web-scraping"),
+            args = mapOf("id" to "browser4-cli"),
             receiver = target
         )
 
         val activation = result as SkillRegistry.SkillActivation
-        assertTrue(activation.id == "web-scraping")
+        assertTrue(activation.id == "browser4-cli")
         assertNotNull(activation.skillMd)
-        assertTrue(activation.skillMd.contains("# Web Scraping Skill"))
+        assertTrue(activation.skillMd.contains("# Browser Automation with browser4-cli"))
         assertTrue(activation.skillMd.contains("---"))
     }
 }

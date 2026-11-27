@@ -18,7 +18,7 @@ import kotlinx.coroutines.async
  * val context = SkillContext(sessionId = "session-123")
  *
  * // Load a single skill
- * loader.load(WebScrapingSkill(), context)
+ * loader.load(ExampleSkill(), context)
  *
  * // Load multiple skills with dependency resolution
  * loader.loadAll(listOf(skill1, skill2, skill3), context)
@@ -159,7 +159,7 @@ class SkillLoader(
  * // Create a composite skill that runs skills in sequence
  * val composite = composer.sequential(
  *     "data-collection",
- *     listOf("web-scraping", "data-cleaning", "data-export")
+ *     listOf("data-extraction", "data-cleaning", "data-export")
  * )
  * ```
  */

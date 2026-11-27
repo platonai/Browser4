@@ -2712,7 +2712,10 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                         // (the default) evaluates against the page's own world; `isolated`
                         // stays available for reading the driver runtime.
                         val world = resolveJsWorld(normalizedArgs["world"]?.toString())
-                        driver.evaluateValueDetail(expression, awaitPromise, world)
+                        // A script copied from a function body (`return {...}`) is what
+                        // users write; the driver evaluates expressions and drops a
+                        // leading `return`, which silently lost the value (#658).
+                        driver.evaluateValueDetail(wrapTopLevelReturn(expression), awaitPromise, world)
                     }
 
                     else -> throw IllegalArgumentException(evaluationValueUsage(functionName))
@@ -2740,9 +2743,10 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
                     args.containsKey("expression") -> {
                         validateArgs(args, allowed("expression", "world"), setOf("expression"), functionName)
-                        // Same world contract as the "eval"/"evaluateValue" branch above.
+                        // Same world contract as the "eval"/"evaluateValue" branch above,
+                        // and the same top-level `return` handling (#658).
                         driver.evaluateValueDetail(
-                            paramString(args, "expression", functionName)!!,
+                            wrapTopLevelReturn(paramString(args, "expression", functionName)!!),
                             awaitPromise = false,
                             world = resolveJsWorld(args["world"]?.toString())
                         )

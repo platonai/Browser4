@@ -237,16 +237,11 @@ jobs:
             target: x86_64-pc-windows-gnu
             binary: browser4-cli-win32-x64.exe
             use_zigbuild: false
-          - name: macOS x64
+          # macOS x64 + ARM64 combined: one macos-latest runner, both targets.
+          - name: macOS
             os: macos-latest
-            target: x86_64-apple-darwin
-            binary: browser4-cli-darwin-x64
-            use_zigbuild: false
-          - name: macOS ARM64
-            os: macos-latest
-            target: aarch64-apple-darwin
-            binary: browser4-cli-darwin-arm64
-            use_zigbuild: false
+            targets: ["x86_64-apple-darwin", "aarch64-apple-darwin"]
+            binaries: ["browser4-cli-darwin-x64", "browser4-cli-darwin-arm64"]
 
     steps:
       - name: Checkout repository
@@ -265,7 +260,7 @@ jobs:
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
         with:
           toolchain: stable
-          targets: ${{ matrix.target }}
+          targets: ${{ runner.os == 'macOS' && join(matrix.targets, ',') || matrix.target }}
 
       - name: Install cross-compilation tools (Linux)
         if: runner.os == 'Linux'
@@ -311,20 +306,23 @@ jobs:
         with:
           workspaces: cli/browser4-cli
 
-      - name: Build with zigbuild
+      - name: Build binaries (zigbuild)
         if: matrix.use_zigbuild
         shell: bash
-        run: cargo zigbuild --release --manifest-path ${{ env.CLI_MANIFEST_PATH }} --target ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cargo zigbuild --release --manifest-path ${{ env.CLI_MANIFEST_PATH }} --target ${{ matrix.target }}
+          cp cli/browser4-cli/target/${{ matrix.target }}/release/browser4-cli artifacts/${{ matrix.binary }}
+          chmod +x artifacts/${{ matrix.binary }}
 
-      - name: Build with cargo
-        if: ${{ !matrix.use_zigbuild }}
-        shell: bash
-        run: cargo build --release --manifest-path ${{ env.CLI_MANIFEST_PATH }} --target ${{ matrix.target }}
-
-      - name: Copy binary artifact
+      - name: Build binaries (cargo, single target)
+        if: ${{ !matrix.use_zigbuild && runner.os != 'macOS' }}
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p artifacts
+          cargo build --release --manifest-path ${{ env.CLI_MANIFEST_PATH }} --target ${{ matrix.target }}
           if [[ "${{ matrix.target }}" == *"windows"* ]]; then
             cp cli/browser4-cli/target/${{ matrix.target }}/release/browser4-cli.exe artifacts/${{ matrix.binary }}
           else
@@ -332,11 +330,48 @@ jobs:
             chmod +x artifacts/${{ matrix.binary }}
           fi
 
-      - name: Upload artifact
+      - name: Build binaries (macOS combined)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          targets=( ${{ join(matrix.targets, ' ') }} )
+          binaries=( ${{ join(matrix.binaries, ' ') }} )
+          for i in "${!targets[@]}"; do
+            tgt="${targets[$i]}"
+            bin="${binaries[$i]}"
+            echo "::group::Building $tgt -> $bin"
+            cargo build --release --manifest-path ${{ env.CLI_MANIFEST_PATH }} --target "$tgt"
+            cp "cli/browser4-cli/target/$tgt/release/browser4-cli" "artifacts/$bin"
+            chmod +x "artifacts/$bin"
+            echo "::endgroup::"
+          done
+
+      - name: Upload single artifact
+        if: runner.os != 'macOS'
         uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.binary }}
           path: artifacts/${{ matrix.binary }}
+          retention-days: 1
+
+      # See release.yml: no REST endpoint exists for artifact upload, so the
+      # combined macOS job uses one upload-artifact step per binary.
+      - name: Upload macOS artifact (first target)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.binaries[0] }}
+          path: artifacts/${{ matrix.binaries[0] }}
+          retention-days: 1
+
+      - name: Upload macOS artifact (second target)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.binaries[1] }}
+          path: artifacts/${{ matrix.binaries[1] }}
           retention-days: 1
 
   publish:

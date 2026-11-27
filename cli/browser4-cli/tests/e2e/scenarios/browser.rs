@@ -1838,22 +1838,30 @@ pub(super) fn test_network_requests_and_har(ctx: &mut E2ECtx) {
     let request_id = ok_entry["requestId"]
         .as_str()
         .unwrap_or_else(|| panic!("expected requestId in entry:\n{ok_entry}"));
-    let detail = run_command(ctx, &["network", "request", request_id]);
+    // The response body is attached when the Network domain finalizes the request, which can
+    // land just after the list snapshot that named it: poll instead of reading once, so a slow
+    // CI machine is not reported as a missing body.
+    let detail_deadline = Instant::now() + Duration::from_secs(10);
+    let (detail_stdout, detail_json) = loop {
+        let detail = run_command(ctx, &["network", "request", request_id]);
+        let detail_stdout = detail.stdout;
+        // The tool result is JSON with the body as an (escaped) string field;
+        // parse it instead of string-matching, which would trip on escaping.
+        let detail_json: serde_json::Value = serde_json::from_str(&strip_snapshot_output(&detail_stdout))
+            .unwrap_or_else(|e| panic!("network request output should be JSON: {e}\n{detail_stdout}"));
+        if detail_json["responseBody"].as_str().is_some() || Instant::now() >= detail_deadline {
+            break (detail_stdout, detail_json);
+        }
+        thread::sleep(Duration::from_millis(300));
+    };
     assert!(
-        detail.stdout.contains("responseBody"),
-        "request detail should include the response body, got:\n{}",
-        detail.stdout
+        detail_stdout.contains("responseBody"),
+        "request detail should include the response body, got:\n{detail_stdout}"
     );
-    // The tool result is JSON with the body as an (escaped) string field;
-    // parse it instead of string-matching, which would trip on escaping.
-    let detail_json: serde_json::Value =
-        serde_json::from_str(&strip_snapshot_output(&detail.stdout))
-            .unwrap_or_else(|e| panic!("network request output should be JSON: {e}\n{}", detail.stdout));
     assert_eq!(
         detail_json["responseBody"].as_str(),
         Some(r#"{"status":"ok","source":"fixture"}"#),
-        "response body should contain the fixture payload, got:\n{}",
-        detail.stdout
+        "response body should contain the fixture payload, got:\n{detail_stdout}"
     );
 
     // 6. HAR recording — traffic generated while recording is captured.

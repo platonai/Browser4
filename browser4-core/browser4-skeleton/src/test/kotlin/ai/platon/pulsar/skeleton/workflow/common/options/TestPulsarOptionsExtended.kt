@@ -118,6 +118,59 @@ class TestPulsarOptionsExtended {
         assertTrue(result.isEmpty())
     }
 
+    @Test
+    @DisplayName("split: quoted argument keeps quotes and inner spaces")
+    fun testSplitQuotedArgumentExact() {
+        val result = PulsarOptions.split("-ol \".products a\"")
+        assertEquals(listOf("-ol", "\".products a\""), result.toList())
+    }
+
+    @Test
+    @DisplayName("split: escaped quote does not terminate the quoted argument")
+    fun testSplitEscapedQuote() {
+        val result = PulsarOptions.split("\"a\\\"b\"")
+        assertEquals(listOf("\"a\\\"b\""), result.toList())
+    }
+
+    @Test
+    @DisplayName("split: unterminated quote falls back to whitespace splitting")
+    fun testSplitUnterminatedQuoteFallback() {
+        // Without a closing quote the quoted segment cannot match, so the
+        // opening quote is just a non-space character of an ordinary token.
+        val result = PulsarOptions.split("\"abc def")
+        assertEquals(listOf("\"abc", "def"), result.toList())
+    }
+
+    @Test
+    @DisplayName("split: escape-heavy quoted argument does not overflow the stack")
+    fun testSplitEscapeHeavyQuotedArgument() {
+        // ~2000 escape sequences overflowed a 1 MB thread stack with the old
+        // quantified-group regex (one stack frame per group iteration); the
+        // linear scan must handle far more, on the main thread's small stack.
+        val quoted = "\"" + "\\\"".repeat(5000) + "\""
+        val result = PulsarOptions.split(quoted)
+        assertEquals(1, result.size)
+        assertEquals(quoted, result[0])
+    }
+
+    @Test
+    @DisplayName("split: unterminated escape-heavy quote does not overflow the stack")
+    fun testSplitUnterminatedEscapeHeavyQuote() {
+        val unterminated = "\"" + "\\\"".repeat(5000)
+        val result = PulsarOptions.split(unterminated)
+        assertEquals(1, result.size)
+        assertEquals(unterminated, result[0])
+    }
+
+    @Test
+    @DisplayName("split: very long plain quoted argument stays linear")
+    fun testSplitVeryLongPlainQuotedArgument() {
+        val quoted = "\"" + "a".repeat(500_000) + "\""
+        val result = PulsarOptions.split(quoted)
+        assertEquals(1, result.size)
+        assertEquals(500_002, result[0].length)
+    }
+
     // ---------------------------------------------------------------------------
     // doParse() — acceptUnknownOptions / allowParameterOverwriting
     // ---------------------------------------------------------------------------

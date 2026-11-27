@@ -178,6 +178,13 @@ browser4-cli loop --resume --name demo
 #    State file: <state-dir>\loops\demo.json
 ```
 
+The `PID` is the **worker's** pid — the one the worker records in the state file and
+the one `--status`/`--resume`/`--stop` use. On a Windows host that reaps a command's
+descendant tree (AI-agent shells), the process is created through the WMI provider and
+runs under a `cmd.exe` wrapper; the message still reports the worker's own pid, since
+that is the process the control commands act on. If the worker has not recorded it
+within a second, the message says `launcher PID: …` instead and points at `--status`.
+
 ### Normal completion
 
 When a loop finishes normally (count reached or timeout expired), the

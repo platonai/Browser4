@@ -1,7 +1,6 @@
 package ai.platon.pulsar.agentic.skills
 
 import ai.platon.pulsar.agentic.common.AgentPaths
-import ai.platon.pulsar.agentic.skills.examples.WebScrapingSkill
 import ai.platon.pulsar.common.getLogger
 import jakarta.annotation.PostConstruct
 import kotlinx.coroutines.runBlocking
@@ -12,8 +11,8 @@ import org.springframework.stereotype.Component
  *
  * This component is responsible for:
  * 1. Loading built-in skills from classpath resources under `skills/ * /SKILL.md`
- * 2. Loading example programmatic skills (e.g., WebScrapingSkill with skill.debug.scraping domain)
- * 3. Optionally loading additional/override skills from `AgentPaths.SKILLS_DIR`
+ *    (`browser4-cli` is the only bundled one; the demo skills were removed)
+ * 2. Optionally loading additional/override skills from `AgentPaths.SKILLS_DIR`
  *
  * The component is automatically initialized by Spring on application startup
  * using the @PostConstruct annotation.
@@ -40,9 +39,6 @@ class SkillBootstrap(val name: String = "SkillBootstrap") {
 
         // Load skills from classpath resources first (built-in skills)
         loadSkillsFromResources(context)
-
-        // Load example programmatic skills (e.g., WebScrapingSkill with skill.debug.scraping domain)
-        loadExampleSkills(context)
 
         // Optionally load skills from directory (user-provided/overrides)
         loadSkillsFromDirectory(context)
@@ -81,40 +77,6 @@ class SkillBootstrap(val name: String = "SkillBootstrap") {
         if (failureCount > 0) {
             val failed = results.filterValues { !it }.keys
             logger.warn("Failed to load resource skills: {}", failed.joinToString())
-        }
-    }
-
-    /**
-     * Load example programmatic skills.
-     *
-     * This registers the WebScrapingSkill which provides the skill.debug.scraping domain.
-     * These skills are registered only if not already present (to allow resource-backed skills to take precedence).
-     */
-    private suspend fun loadExampleSkills(context: SkillContext) {
-        logger.info("Loading example programmatic skills...")
-
-        val exampleSkills = listOf(
-            WebScrapingSkill()
-        )
-
-        var loaded = 0
-        for (skill in exampleSkills) {
-            // Skip if a skill with the same ID is already registered (resource-backed takes precedence)
-            if (registry.contains(skill.metadata.id)) {
-                logger.debug("Skipping example skill '{}' - already registered", skill.metadata.id)
-                continue
-            }
-
-            try {
-                registry.register(skill, context)
-                loaded++
-            } catch (e: Exception) {
-                logger.warn("Failed to register example skill '{}': {}", skill.metadata.id, e.message)
-            }
-        }
-
-        if (loaded > 0) {
-            logger.info("✓ Loaded {} example programmatic skills", loaded)
         }
     }
 

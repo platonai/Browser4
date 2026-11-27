@@ -4265,6 +4265,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "follow", description: "Stream the task's steps (tool calls, model text, failures) while waiting, then print the result. Implies waiting; a slow tool or failure is always reported, successful fast tools are not", is_bool: true, short: None },
                 OptionDef { name: "ndjson", description: "With --follow: emit one JSON object per step (NDJSON) for machine consumption instead of human-readable lines", is_bool: true, short: None },
                 OptionDef { name: "interactive", description: "Open an interactive session: run tasks one after another, steer a running task by typing, and use /status, /stats, /cancel, /result, /new, /help. Pass an initial task to run it immediately", is_bool: true, short: Some("i") },
+                OptionDef { name: "continue", description: "With -i: resume the session the last interactive run recorded, so its conversation continues (the backend keeps it for browser4.agent.session.contextTtlMinutes, 12h by default). Cannot be combined with -s; the banner prints the session id to pass as -s instead", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "command_run".to_string(),
@@ -4355,6 +4356,11 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if get_bool(args, "interactive").unwrap_or(false) {
                     p["interactive"] = json!(true);
+                }
+                // `--continue` reuses the last interactive session id instead of
+                // starting a new one; forwarded only when set (the key is the opt-in).
+                if get_bool(args, "continue").unwrap_or(false) {
+                    p["continueSession"] = json!(true);
                 }
                 p["engine"] = json!(get_opt_str(args, "engine").unwrap_or("cli"));
                 p
@@ -7551,6 +7557,29 @@ mod tests {
         args.insert("coding".to_string(), json!(true));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["coding"], true);
+    }
+
+    #[test]
+    fn test_agent_run_forwards_continue_only_when_set() {
+        // `--continue` is the opt-in for resuming the recorded interactive
+        // session: a payload without the key keeps starting a new one.
+        let map = commands_map();
+        let cmd = map.get("agent-run").unwrap();
+
+        let mut args = HashMap::new();
+        args.insert("interactive".to_string(), json!(true));
+        args.insert("continue".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["continueSession"], true);
+        assert_eq!(params["interactive"], true);
+
+        let mut args = HashMap::new();
+        args.insert("interactive".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(
+            params.get("continueSession").is_none(),
+            "a plain -i must not ask to resume"
+        );
     }
 
     #[test]

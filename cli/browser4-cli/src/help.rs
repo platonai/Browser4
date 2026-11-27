@@ -1481,12 +1481,12 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push("    batch the page steps that trigger the downloads.".to_string());
         lines.push(
-            "  - Every step is compiled before the first one runs: unbuildable steps are all".to_string(),
+            "  - Every step is compiled before the first one runs: unbuildable steps are".to_string(),
         );
         lines.push(
-            "    reported up front and skipped, the steps that do compile still run (stop at".to_string(),
+            "    reported and skipped, the steps that do compile still run; with --bail the".to_string(),
         );
-        lines.push("    the first failure of either kind with --bail).".to_string());
+        lines.push("    batch stops at the first failure of either kind, in command order.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli batch \"goto https://browser4.io\" \"snapshot\"".to_string());
@@ -2312,6 +2312,37 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(
             "    while a task runs steers it at the next model round (/help lists the commands)."
                 .to_string(),
+        );
+        lines.push(
+            "    The prompt says what the next line does: agent> a task, steer> steering,"
+                .to_string(),
+        );
+        lines.push(
+            "    steer[N]> N messages the agent has not seen yet, steer!> an access request waiting"
+                .to_string(),
+        );
+        lines.push(
+            "    for /approve (a pending request is announced as it appears, and /status reports"
+                .to_string(),
+        );
+        lines.push(
+            "    steps, elapsed time and the step in flight; /tasks lists the session's task ids)."
+                .to_string(),
+        );
+        lines.push(
+            "    agent run -i --continue resumes the session the last interactive run recorded"
+                .to_string(),
+        );
+        lines.push(
+            "    (the backend keeps its conversation for 12h by default; -s <id> is the explicit"
+                .to_string(),
+        );
+        lines.push("    form, and the banner prints the id).".to_string());
+        lines.push(
+            "    On Windows the console keeps its own line editing (no persisted history, Tab".to_string(),
+        );
+        lines.push(
+            "    completion or bracketed paste): everything else behaves the same.".to_string(),
         );
         lines.push(
             "    Inside the session, /add-dir <dir> grants the following tasks an extra folder and"

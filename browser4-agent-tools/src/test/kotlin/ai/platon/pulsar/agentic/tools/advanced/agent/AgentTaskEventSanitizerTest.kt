@@ -3,6 +3,9 @@ package ai.platon.pulsar.agentic.tools.advanced.agent
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Assertions.assertTimeout
+import org.junit.jupiter.api.function.ThrowingSupplier
+import java.time.Duration
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -100,6 +103,99 @@ class AgentTaskEventSanitizerTest {
 
         assertFalse(redacted.contains("hunter2"), redacted)
         assertFalse(redacted.contains("xyz"), redacted)
+    }
+
+    @Test
+    @DisplayName("upper-case credential keys in a non-JSON blob are redacted")
+    fun redactsUpperCaseKeysInNonJsonBlobs() {
+        for (key in listOf("APIKEY", "API_KEY", "AUTHORIZATION", "COOKIE")) {
+            val redacted = AgentTaskEventSanitizer.arguments(
+                "coding.shell",
+                "not json {\"$key\":\"super-secret-value\"}",
+            )!!
+            assertFalse(redacted.contains("super-secret-value"), "$key was not redacted: $redacted")
+            assertTrue(
+                redacted.contains("\"$key\":\"***\""),
+                "$key was not replaced by the marker: $redacted",
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("a half-escaped credential pair is still redacted")
+    fun redactsHalfEscapedCredentialPair() {
+        // The old regex attempted a match at every `"`, so a credential pair whose key opening
+        // quote is escaped was still redacted. Skipping escaped opening quotes would leak it.
+        val redacted = AgentTaskEventSanitizer.arguments(
+            "coding.shell",
+            """not json \"password": "hunter2"""",
+        )!!
+        assertFalse(redacted.contains("hunter2"), redacted)
+        assertTrue(redacted.contains("\"***\""), "the value was not replaced by the marker: $redacted")
+    }
+
+    @Test
+    @DisplayName("an escape-heavy unterminated blob stays linear")
+    fun unterminatedEscapedBlobStaysLinear() {
+        // Regression: advancing one character when no closing quote exists rescanned the whole tail
+        // per quote, making this shape quadratic — ~210 ms at 32k repeats, ~8 s at 200k. The size
+        // below is chosen so a quadratic scan exceeds the timeout while a linear one takes ~10 ms.
+        val payload = "not json " + "\"\\".repeat(200_000)
+
+        val redacted = assertTimeout(Duration.ofSeconds(5), ThrowingSupplier {
+            AgentTaskEventSanitizer.arguments("coding.shell", payload)!!
+        })
+
+        assertTrue(redacted.isNotEmpty())
+    }
+
+    @Test
+    @DisplayName("a multi-kilobyte credential value must not overflow the sanitizer")
+    fun longCredentialValuesDoNotOverflow() {
+        // Regression: the old inline rule's value body `(?:[^"\\]|\\.)*` makes Java's
+        // regex engine recurse once per character. A credential with a ~2 KB quoted
+        // value was enough to throw StackOverflowError on the default 1 MB stack
+        // while sanitizing a non-JSON argument blob.
+        val longValue = "a".repeat(100_000)
+        val payload = "not json " + """{"password":"$longValue","user":"ada"}"""
+
+        val redacted = assertTimeout(Duration.ofSeconds(5), ThrowingSupplier {
+            AgentTaskEventSanitizer.arguments("coding.shell", payload)!!
+        })
+
+        assertFalse(redacted.contains(longValue), "the long value is gone")
+        assertTrue(redacted.contains("\"password\":\"***\""), redacted)
+        assertTrue(redacted.contains("\"user\":\"ada\""), "the rest of the blob survives: $redacted")
+    }
+
+    @Test
+    @DisplayName("a long escaped credential value is redacted without overflowing")
+    fun longEscapedCredentialValuesDoNotOverflow() {
+        val longValue = "a\\\"b" + "c".repeat(100_000) // the raw text contains `\"`
+        val payload = "not json {\"password\":\"$longValue\"}"
+
+        val redacted = assertTimeout(Duration.ofSeconds(5), ThrowingSupplier {
+            AgentTaskEventSanitizer.arguments("coding.shell", payload)!!
+        })
+
+        assertFalse(redacted.contains(longValue), "the escaped value is gone")
+        assertTrue(redacted.contains("\"password\":\"***\""), redacted)
+    }
+
+    @Test
+    @DisplayName("a marker-heavy long value stays linear")
+    fun adversarialLongValuesStayLinear() {
+        // A greedy, non-recursive regex would avoid the overflow but backtrack
+        // catastrophically here; the scan must stay linear.
+        val noisy = "\"" + "token data ".repeat(20_000) + "\""
+        val payload = """not json {"password":"hunter2"} """ + noisy
+
+        val redacted = assertTimeout(Duration.ofSeconds(5), ThrowingSupplier {
+            AgentTaskEventSanitizer.arguments("coding.shell", payload)!!
+        })
+
+        assertFalse(redacted.contains("hunter2"), "the credential before the noise is redacted")
+        assertTrue(redacted.contains("\"password\":\"***\""), redacted)
     }
 
     @Test

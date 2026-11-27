@@ -324,7 +324,7 @@ const TIPS_AGENT: &[Tip] = &[
         text: "A run without a TTY cannot be watched, so it starts from `full` (network on) instead of the server-wide preset — `browser4.agent.access.unattended` (`deny`/`read`/`read-build`/`write`/`full`) overrides that; a watched `-i` session on a TTY keeps `browser4.agent.access`",
     },
     Tip {
-        text: "`agent run -i` keeps a session open — type a line while a task runs to steer it, /status and /cancel to inspect or stop it, /stats for the run's LLM rounds, token usage and tool calls, /result [--json] [--full] to re-print the finished task's payload as sections (--json: pretty envelope, --full: nothing folded)",
+        text: "`agent run -i` keeps a session open — type a line while a task runs to steer it, /status and /cancel to inspect or stop it, /stats for the run's LLM rounds, token usage and tool calls, /tasks to list the session's task ids and /result <task-id> [--json] [--full] to re-print one as sections (--json: pretty envelope, --full: nothing folded); the prompt itself says what the next line does (`agent>` task, `steer>` steering, `steer[N]>` queued, `steer!>` an access request waiting for /approve)",
     },
     Tip {
         text: "After every task `-i` predicts 2-3 next steps as numbered TASKS — the model's own `nextSuggestions` first, then the files/problems it left behind — so type the number instead of reconstructing the next task",
@@ -333,7 +333,7 @@ const TIPS_AGENT: &[Tip] = &[
         text: "Tasks of one `-i` session are not independent: each new task inherits the ACTUAL conversation of the earlier ones (model messages, tool calls and results, your steering lines, each task's outcome with its files and workspace) as a `## Session context` block — over `browser4.agent.session.contextTokens` (24000 by default) the model compacts it with a compression instruction that keeps the goal, corrections, files and open problems, and the conversation is persisted per session so a backend restart keeps it; `/new` starts a deliberately fresh context",
     },
     Tip {
-        text: "`agent run -i` without `-s` gets its own `interactive-<hash>` session (printed in the banner, reusable as `-s`), so two interactive sessions never share the backend DEFAULT pool — their context and their queued tasks stay separate",
+        text: "`agent run -i` without `-s` gets its own `interactive-<hash>` session (printed in the banner, reusable as `-s`), so two interactive sessions never share the backend DEFAULT pool — their context and their queued tasks stay separate. A later process resumes it with `agent run -i --continue` (the id is recorded in the CLI state dir, and the backend keeps the conversation for 12h by default)",
     },
     Tip {
         text: "A steering line typed just before a task ends can no longer reach the model: `-i` prints `⚠ steering not delivered — the task ended first` and appends the line to the next task's inherited context",

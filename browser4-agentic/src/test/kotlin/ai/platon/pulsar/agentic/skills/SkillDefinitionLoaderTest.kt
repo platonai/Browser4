@@ -8,11 +8,21 @@ import java.nio.file.Path
 
 /**
  * Tests for SkillDefinitionLoader.
+ *
+ * `browser4-cli` is the only skill bundled in `src/main/resources/skills`; the former demo
+ * skills (`web-scraping`, `form-filling`, `data-validation`, `pdf`, `mcp-builder`, `weather`)
+ * were removed. Tests that need a full SKILL.md shape (parameters, dependencies, optional
+ * folders) build one in a temp directory instead of relying on a bundled skill, so the loader
+ * contract keeps its coverage without shipping demo content.
  */
 class SkillDefinitionLoaderTest {
 
+    private val removedDemoSkillIds = listOf(
+        "web-scraping", "form-filling", "data-validation", "mcp-builder", "pdf", "weather"
+    )
+
     @Test
-    fun shouldLoadSkillDefinitionsFromResources() {
+    fun shouldLoadBundledSkillFromResources() {
         val loader = SkillDefinitionLoader()
 
         val definitions = loader.loadFromResources("skills")
@@ -20,179 +30,51 @@ class SkillDefinitionLoaderTest {
         assertNotNull(definitions)
         assertTrue(definitions.isNotEmpty(), "Should load at least one skill definition")
 
-        // Verify expected skills are loaded
         val skillIds = definitions.map { it.skillId }.toSet()
-        assertTrue(skillIds.contains("web-scraping"), "Should load web-scraping skill")
-        assertTrue(skillIds.contains("form-filling"), "Should load form-filling skill")
-        assertTrue(skillIds.contains("data-validation"), "Should load data-validation skill")
-        assertTrue(skillIds.contains("weather"), "Should load weather skill")
+        assertTrue(skillIds.contains("browser4-cli"), "Should load the bundled browser4-cli skill")
+        removedDemoSkillIds.forEach { removed ->
+            assertFalse(skillIds.contains(removed), "Demo skill '$removed' must not be bundled any more")
+        }
     }
 
     @Test
-    fun shouldParseWebScrapingSkillMetadataCorrectly() {
+    fun shouldParseBundledCliSkillMetadataCorrectly() {
         val loader = SkillDefinitionLoader()
 
         val definitions = loader.loadFromResources("skills")
-        val webScrapingSkill = definitions.find { it.skillId == "web-scraping" }
+        val cliSkill = definitions.find { it.skillId == "browser4-cli" }
 
-        assertNotNull(webScrapingSkill, "Web scraping skill should be found")
-        webScrapingSkill?.let {
-            assertEquals("web-scraping", it.skillId)
-            assertEquals("web-scraping", it.name)
+        assertNotNull(cliSkill, "browser4-cli skill should be found")
+        cliSkill?.let {
+            assertEquals("browser4-cli", it.skillId)
+            assertEquals("browser4-cli", it.name)
             assertEquals("1.0.0", it.version)
-            assertEquals("Browser4", it.author)
             assertTrue(it.description.isNotBlank())
-            assertTrue(it.tags.contains("scraping"))
-            assertTrue(it.tags.contains("extraction"))
-            assertTrue(it.tags.contains("web"))
+            assertTrue(it.tags.contains("browser"))
+            assertTrue(it.tags.contains("automation"))
             assertTrue(it.dependencies.isEmpty())
         }
     }
 
     @Test
-    fun shouldParseFormFillingSkillWithDependencies() {
+    fun shouldDetectBundledCliReferencesDirectory() {
         val loader = SkillDefinitionLoader()
 
         val definitions = loader.loadFromResources("skills")
-        val formFillingSkill = definitions.find { it.skillId == "form-filling" }
+        val cliSkill = definitions.find { it.skillId == "browser4-cli" }
 
-        assertNotNull(formFillingSkill, "Form filling skill should be found")
-        formFillingSkill?.let {
-            assertEquals("form-filling", it.skillId)
-            assertEquals("form-filling", it.name)
-            assertTrue(it.dependencies.contains("web-scraping"), "Should have web-scraping dependency")
-        }
-    }
+        assertNotNull(cliSkill)
+        cliSkill?.let {
+            assertNotNull(it.referencesPath, "browser4-cli ships a references/ directory")
 
-    @Test
-    fun shouldParseWeatherSkillMetadataCorrectly() {
-        val loader = SkillDefinitionLoader()
-
-        val definitions = loader.loadFromResources("skills")
-        val weatherSkill = definitions.find { it.skillId == "weather" }
-
-        assertNotNull(weatherSkill, "Weather skill should be found")
-        weatherSkill?.let {
-            assertEquals("weather", it.skillId)
-            assertEquals("weather", it.name)
-            assertEquals("1.0.0", it.version)
-            assertEquals("Browser4", it.author)
-            assertTrue(it.description.contains("7-day forecast"))
-            assertTrue(it.tags.contains("weather"))
-            assertTrue(it.tags.contains("forecast"))
-            assertTrue(it.allowedTools.contains("python"))
-            assertTrue(it.dependencies.isEmpty())
-
-            val locationParam = it.parameters["location"]
-            assertNotNull(locationParam, "Should have location parameter")
-            assertEquals("String", locationParam?.type)
-            assertTrue(locationParam?.required == true)
-
-            val unitsParam = it.parameters["units"]
-            assertNotNull(unitsParam, "Should have units parameter")
-            assertEquals("metric", unitsParam?.defaultValue)
-            assertFalse(unitsParam?.required == true)
-        }
-    }
-
-    @Test
-    fun shouldParseSkillParametersCorrectly() {
-        val loader = SkillDefinitionLoader()
-
-        val definitions = loader.loadFromResources("skills")
-        val webScrapingSkill = definitions.find { it.skillId == "web-scraping" }
-
-        assertNotNull(webScrapingSkill)
-        webScrapingSkill?.let {
-            assertTrue(it.parameters.isNotEmpty(), "Should have parameters defined")
-
-            val urlParam = it.parameters["url"]
-            assertNotNull(urlParam, "Should have url parameter")
-            urlParam?.let { param ->
-                assertEquals("String", param.type)
-                assertTrue(param.required)
-                assertEquals("-", param.defaultValue)
-            }
-
-            val selectorParam = it.parameters["selector"]
-            assertNotNull(selectorParam, "Should have selector parameter")
-            selectorParam?.let { param ->
-                assertEquals("String", param.type)
-                assertTrue(param.required)
-            }
-
-            val attributesParam = it.parameters["attributes"]
-            assertNotNull(attributesParam, "Should have attributes parameter")
-            attributesParam?.let { param ->
-                assertEquals("List<String>", param.type)
-                assertFalse(param.required)
-            }
-        }
-    }
-
-    @Test
-    fun shouldDetectOptionalDirectories() {
-        val loader = SkillDefinitionLoader()
-
-        val definitions = loader.loadFromResources("skills")
-        val webScrapingSkill = definitions.find { it.skillId == "web-scraping" }
-
-        assertNotNull(webScrapingSkill)
-        webScrapingSkill?.let {
-            assertNotNull(it.scriptsPath, "Should have scripts directory")
-            assertNotNull(it.referencesPath, "Should have references directory")
-            assertNotNull(it.assetsPath, "Should have assets directory")
-        }
-    }
-
-    @Test
-    fun shouldGetSkillScripts() {
-        val loader = SkillDefinitionLoader()
-
-        val definitions = loader.loadFromResources("skills")
-        val webScrapingSkill = definitions.find { it.skillId == "web-scraping" }
-
-        assertNotNull(webScrapingSkill)
-        webScrapingSkill?.let {
-            val scripts = loader.getSkillScripts(it)
-            assertTrue(scripts.isNotEmpty(), "Should have at least one script")
-            assertTrue(scripts.any { it.fileName.toString().contains("example-usage") })
-        }
-    }
-
-    @Test
-    fun shouldGetSkillReferences() {
-        val loader = SkillDefinitionLoader()
-
-        val definitions = loader.loadFromResources("skills")
-        val webScrapingSkill = definitions.find { it.skillId == "web-scraping" }
-
-        assertNotNull(webScrapingSkill)
-        webScrapingSkill?.let {
             val references = loader.getSkillReferences(it)
             assertTrue(references.isNotEmpty(), "Should have at least one reference document")
-            assertTrue(references.any { it.fileName.toString().contains("developer-guide") })
+            assertTrue(references.any { ref -> ref.fileName.toString() == "quickstart.md" })
         }
     }
 
     @Test
-    fun shouldGetSkillAssets() {
-        val loader = SkillDefinitionLoader()
-
-        val definitions = loader.loadFromResources("skills")
-        val webScrapingSkill = definitions.find { it.skillId == "web-scraping" }
-
-        assertNotNull(webScrapingSkill)
-        webScrapingSkill?.let {
-            val assets = loader.getSkillAssets(it)
-            assertTrue(assets.isNotEmpty(), "Should have at least one asset")
-            assertTrue(assets.any { it.fileName.toString().contains("config.json") })
-        }
-    }
-
-    @Test
-    fun shouldLoadFromCustomDirectory(@TempDir tempDir: Path) {
-        // Create a test skill directory
+    fun shouldParseSkillDefinitionFromDirectory(@TempDir tempDir: Path) {
         val skillDir = tempDir.resolve("test-skill")
         Files.createDirectories(skillDir)
 
@@ -209,9 +91,9 @@ class SkillDefinitionLoaderTest {
               - test
               - example
             dependencies:
-              - web-scraping
-              - data-validation
-            allowed-tools: Bash(git:*) Read
+              - base-skill
+              - util-skill
+            allowed-tools: python
             ---
 
             # Test Skill
@@ -232,12 +114,14 @@ class SkillDefinitionLoaderTest {
 
         Files.writeString(skillDir.resolve("SKILL.md"), skillMd)
 
-        // Create optional directories
-        Files.createDirectories(skillDir.resolve("scripts"))
-        Files.createDirectories(skillDir.resolve("references"))
-        Files.createDirectories(skillDir.resolve("assets"))
+        // Create optional directories with one file each
+        val scripts = Files.createDirectories(skillDir.resolve("scripts"))
+        Files.writeString(scripts.resolve("run.py"), "print('hello')\n")
+        val references = Files.createDirectories(skillDir.resolve("references"))
+        Files.writeString(references.resolve("developer-guide.md"), "# Guide\n")
+        val assets = Files.createDirectories(skillDir.resolve("assets"))
+        Files.writeString(assets.resolve("config.json"), "{}\n")
 
-        // Load from custom directory
         val loader = SkillDefinitionLoader()
         val definitions = loader.loadFromDirectory(tempDir)
 
@@ -251,18 +135,40 @@ class SkillDefinitionLoaderTest {
         assertTrue(testSkill.tags.contains("test"))
         assertTrue(testSkill.tags.contains("example"))
         assertEquals(2, testSkill.dependencies.size)
-        assertTrue(testSkill.dependencies.contains("web-scraping"))
-        assertTrue(testSkill.dependencies.contains("data-validation"))
+        assertTrue(testSkill.dependencies.contains("base-skill"))
+        assertTrue(testSkill.dependencies.contains("util-skill"))
         assertEquals("Apache-2.0", testSkill.license)
         assertEquals("Designed for unit tests", testSkill.compatibility)
         assertEquals("Test Author", testSkill.metadata["author"])
         assertEquals("2.0.0", testSkill.metadata["version"])
-        assertTrue(testSkill.allowedTools.contains("Bash(git:*)"))
-        assertTrue(testSkill.allowedTools.contains("Read"))
+        assertTrue(testSkill.allowedTools.contains("python"))
 
         assertEquals(2, testSkill.parameters.size)
-        assertTrue(testSkill.parameters.containsKey("testParam"))
-        assertTrue(testSkill.parameters.containsKey("optionalParam"))
+        val testParam = testSkill.parameters["testParam"]
+        assertNotNull(testParam, "Should have testParam parameter")
+        assertEquals("String", testParam?.type)
+        assertTrue(testParam?.required == true)
+        assertEquals("-", testParam?.defaultValue)
+
+        val optionalParam = testSkill.parameters["optionalParam"]
+        assertNotNull(optionalParam, "Should have optionalParam parameter")
+        assertEquals("Boolean", optionalParam?.type)
+        assertFalse(optionalParam?.required == true)
+        assertEquals("false", optionalParam?.defaultValue)
+
+        // Optional directory detection
+        assertNotNull(testSkill.scriptsPath, "Should have scripts directory")
+        assertNotNull(testSkill.referencesPath, "Should have references directory")
+        assertNotNull(testSkill.assetsPath, "Should have assets directory")
+
+        val scriptFiles = loader.getSkillScripts(testSkill)
+        assertTrue(scriptFiles.any { it.fileName.toString() == "run.py" })
+
+        val referenceFiles = loader.getSkillReferences(testSkill)
+        assertTrue(referenceFiles.any { it.fileName.toString() == "developer-guide.md" })
+
+        val assetFiles = loader.getSkillAssets(testSkill)
+        assertTrue(assetFiles.any { it.fileName.toString() == "config.json" })
     }
 
     @Test
@@ -321,11 +227,11 @@ class SkillDefinitionLoaderTest {
         val loader = SkillDefinitionLoader()
 
         val definitions = loader.loadFromResources("skills")
-        val webScrapingSkill = definitions.find { it.skillId == "web-scraping" }
+        val cliSkill = definitions.find { it.skillId == "browser4-cli" }
 
-        assertNotNull(webScrapingSkill)
-        webScrapingSkill?.let {
-            assertTrue(it.dependencies.isEmpty(), "Web scraping skill should have no dependencies")
+        assertNotNull(cliSkill)
+        cliSkill?.let {
+            assertTrue(it.dependencies.isEmpty(), "browser4-cli should have no dependencies")
         }
     }
 

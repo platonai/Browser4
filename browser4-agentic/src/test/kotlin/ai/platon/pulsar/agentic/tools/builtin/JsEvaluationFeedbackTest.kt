@@ -3,6 +3,7 @@ package ai.platon.pulsar.agentic.tools.builtin
 import ai.platon.pulsar.agentic.model.TcEvaluate
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.api.model.JsEvaluation
+import ai.platon.pulsar.api.model.JsException
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -31,11 +32,49 @@ class JsEvaluationFeedbackTest {
         ): Any = evaluation
     }
 
-    private fun evaluate(evaluation: JsEvaluation): TcEvaluate = runBlocking {
+    private fun evaluate(evaluation: JsEvaluation, expression: String = "x"): TcEvaluate = runBlocking {
         EvalExecutor(evaluation).callFunctionOn(
-            ToolCall(domain = "tab", method = "eval", arguments = mutableMapOf("expression" to "x")),
+            ToolCall(domain = "tab", method = "eval", arguments = mutableMapOf("expression" to expression)),
             Any(),
         )
+    }
+
+    @Test
+    @DisplayName("a page-side exception fails instead of becoming null")
+    fun jsExceptionIsAFailure() {
+        val evaluated = evaluate(
+            JsEvaluation(exception = JsException(text = "Uncaught ReferenceError: nope is not defined"))
+        )
+
+        assertFalse(evaluated.success, "an exception is not a value")
+        val text = evaluated.value?.toString().orEmpty()
+        assertTrue(text.contains("ReferenceError"), text)
+        assertNotNull(evaluated.exception)
+    }
+
+    @Test
+    @DisplayName("a top-level return syntax error names the actual cause")
+    fun topLevelReturnSyntaxErrorNamesTheCause() {
+        val evaluated = evaluate(
+            JsEvaluation(exception = JsException(text = "Uncaught SyntaxError: Unexpected token ':'")),
+            expression = "return { ok: 1, mode: \"top-level return\" }",
+        )
+
+        assertFalse(evaluated.success)
+        val text = evaluated.value?.toString().orEmpty()
+        assertTrue(text.contains("SyntaxError"), text)
+        assertTrue(text.contains("top-level `return`"), "the real cause must be named: $text")
+        assertTrue(text.contains("wrap the body in a function"), "the fix must be named: $text")
+    }
+
+    @Test
+    @DisplayName("a top-level return is wrapped so it keeps its value")
+    fun topLevelReturnIsWrapped() {
+        assertEquals("(function() {\nreturn 1\n})()", wrapTopLevelReturn("return 1"))
+        assertEquals("(function() {\n  return { ok: 1 }\n})()", wrapTopLevelReturn("  return { ok: 1 }"))
+        assertEquals("document.title", wrapTopLevelReturn("document.title"))
+        assertEquals("returnValue()", wrapTopLevelReturn("returnValue()"), "a longer identifier is not a return")
+        assertFalse(startsWithTopLevelReturn("// note\nreturn 1"), "a leading comment is out of scope")
     }
 
     @Test
