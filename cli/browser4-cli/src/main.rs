@@ -29038,6 +29038,19 @@ fn forwarded_update_agent_env() -> Vec<(String, String)> {
         .collect()
 }
 
+/// Parse a `KEY=VALUE` assignment into its key and value halves.
+///
+/// Splits on the first `=` only, so values containing `=` (a proxy URL with
+/// query parameters, for example) stay intact. Returns `None` when the string
+/// has no separator or an empty key.
+fn parse_env_assignment(s: &str) -> Option<(String, String)> {
+    let (key, value) = s.split_once('=')?;
+    if key.is_empty() {
+        return None;
+    }
+    Some((key.to_string(), value.to_string()))
+}
+
 /// Entry point of the hidden `__update-agent` command.
 async fn handle_update_agent(global: &GlobalFlags) -> Result<(), CliError> {
     let mut tag: Option<String> = None;

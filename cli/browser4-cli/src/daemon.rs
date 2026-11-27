@@ -9690,7 +9690,7 @@ fn spawn_outside_windows_job(
 
     let hidden_script = windows_wmi_create_script(&command_line, launch_working_dir, true);
     let plain_script = windows_wmi_create_script(&command_line, launch_working_dir, false);
-    let pid = run_wmi_create_with_fallback(&hidden_script, &plain_script, startup_log_path)?;
+    let pid = run_wmi_create_with_fallback(&hidden_script, &plain_script, Some(startup_log_path))?;
     append_startup_log_message(
         startup_log_path,
         format!("Win32_Process.Create created the backend with pid {pid}."),
@@ -9815,7 +9815,7 @@ pub fn windows_parent_process_id(pid: u32) -> u32 {
 fn run_wmi_create_with_fallback(
     hidden_script: &str,
     plain_script: &str,
-    startup_log_path: &Path,
+    startup_log_path: Option<&Path>,
 ) -> io::Result<u32> {
     match run_wmi_create_script(hidden_script) {
         Ok(pid) => Ok(pid),
@@ -9825,7 +9825,9 @@ fn run_wmi_create_with_fallback(
                  without Win32_ProcessStartup — a terminal window may stay visible while \
                  the backend runs."
             );
-            append_startup_log_message(startup_log_path, warning.clone());
+            if let Some(path) = startup_log_path {
+                append_startup_log_message(path, warning.clone());
+            }
             eprintln!("{warning}");
             run_wmi_create_script(plain_script).map_err(|fallback_error| {
                 io::Error::new(
@@ -11324,7 +11326,7 @@ mod tests {
             temp.path(),
             false,
         );
-        let pid = run_wmi_create_with_fallback(failing_script, &plain_script, &startup_log_path)
+        let pid = run_wmi_create_with_fallback(failing_script, &plain_script, Some(&startup_log_path))
             .expect("the plain attempt must create the backend after the hidden one fails");
 
         assert!(
@@ -11355,7 +11357,7 @@ mod tests {
             "$ErrorActionPreference = 'Stop'; [Console]::Error.Write('hidden rejected'); exit 1";
         let plain_script =
             "$ErrorActionPreference = 'Stop'; [Console]::Error.Write('plain rejected'); exit 1";
-        let error = run_wmi_create_with_fallback(hidden_script, plain_script, &startup_log_path)
+        let error = run_wmi_create_with_fallback(hidden_script, plain_script, Some(&startup_log_path))
             .expect_err("both attempts failing must be an error");
         let message = error.to_string();
         assert!(
