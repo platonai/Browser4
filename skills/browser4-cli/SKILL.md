@@ -135,9 +135,7 @@ Refs are **ephemeral** — treat them as single-use handles:
 
 **Rule for AI agents: always use `--headless` by default.** Use `--headed` for exactly three reasons: (1) the user **explicitly** asks for a visible browser ("show me the browser", "I want to see", "open visibly", "headed", "watch what happens"); (2) a human must act on the page (login, CAPTCHA, QR code, 2FA) and needs to see it; (3) **anti-bot escalation** (below).
 
-> **Choosing the whole setup** (session × display × browser source — including
-> when to attach to your own browser instead of launching one): see
-> [browser-modes.md](references/browser-modes.md).
+> **Choosing the whole setup** (session × display × browser source — including when to attach to your own browser instead of launching one): see the next section, [Browser Source & Connection](#browser-source--connection).
 
 **Anti-bot escalation — retry once:** when a page looks blocked (CAPTCHA/verification widget, Cloudflare/DataDome/Akamai/PerimeterX challenge, Google `/sorry/`, "unusual traffic" / "access denied"), `close` then `open --headed` **with the same `-s <name>`** so profile and cookies survive, retry the same step **once**, and **tell the user the mode was switched**. If the headed retry is blocked too, stop — the block is fingerprint/IP-level: prefer `attach --cdp` / `attach --extension` (a real logged-in profile), raise `--interact-level`, or report the site as unreachable. GUI-less environments (CI, Docker) degrade `--headed` to headless — say the retry ran headless instead of claiming a visible window. `goto`/`open` run a one-call probe after a successful navigation and print this escalation as an **advisory stderr warning** (naming the signature that fired) when the landed page matches a challenge URL or body marker; the command still succeeds, so act on the warning yourself rather than waiting for a failure (`--json` reports it as `challenge_detected` / `challenge_signature`). The weaker "implausibly empty body" signal (few visible chars and **no iframes** — widget/demo pages are exempt, as are content paths like `/wiki/…`) only advises a retry and a `snapshot` inspection, **not** a mode switch — do not pay a session teardown for that signal alone.
 
@@ -154,8 +152,41 @@ browser4-cli goto https://other-page.com             # stays headless (or headed
 > **Notes:** When `goto` is the very first command (no prior `open`), it auto-opens a new session using the CLI's default display mode, which is headless. `--headless`/`--headed` only take effect when **creating** a new session — when `open` reconnects to a running session they are ignored (the CLI warns on stderr). To change the mode, `close` first, then `open --headless`. Use `open --fresh` to discard a stale session's tabs/cookies/location entirely and start clean.
 >
 > `--display-mode GUI|HEADLESS|SUPERVISED` is the backend's own display capability (the one `swarm create --display-mode` also sets). It carries the display choice **by itself** — combining it with `--headed`/`--headless` is a usage error, and the mode is still fixed at session creation. `--max-open-tabs <n>` (positive integer) caps the tabs of the session's browser context.
->
-> `--channel chrome|ego-lite` picks which browser the backend launches and manages — Chrome by default, or an installed ego lite. The channel is fixed at session creation (like the display mode): reconnecting ignores it, `close` or `open --fresh` to switch. Other browsers (Edge, Canary, Electron, cloud) stay attach-only — see [browser-modes.md](references/browser-modes.md).
+
+### Browser Source & Connection
+
+Three ways to get a browser — this decides what browser you drive and how you connect:
+
+| Source | Command | Browser | Connection |
+|---|---|---|---|
+| **Backend-launched** | `open` | Default Chrome, or `open --channel ego-lite` | Browser4 starts it itself with a random `--remote-debugging-port`, controlled over CDP |
+| **CDP attach** | `attach --cdp <channel\|url\|port>` | Any running CDP endpoint: Chrome / Edge / Electron / cloud / ego-lite | Direct CDP over HTTP (`/json`) or WebSocket |
+| **Extension attach** | `attach --extension [channel]` | Running Chrome / Edge (Browser4 extension installed) | Extension relays CDP over WebSocket |
+
+**Quick decision tree:**
+
+```text
+Need to drive a browser
+├─ Need the login/state of an already-running browser (your daily Chrome, a cloud browser, Electron)?
+│   ├─ No debugging-port setup wanted → attach --extension [channel]
+│   └─ Happy with a port → attach --cdp <channel|url|port>
+├─ Bulk, non-interactive, throughput → swarm create → swarm query → swarm close
+├─ Several tasks in parallel → one -s <name> per task (isolated profile + login)
+└─ Otherwise → open --headless <url>
+    ├─ Human must act (login/CAPTCHA/QR) → open --headed
+    ├─ Headless blocked as bot → close → same -s open --headed → retry ONCE
+    └─ One-shot clean scrape → open --profile-mode TEMPORARY
+```
+
+**Key rules:**
+- Only `open` and `open --channel ego-lite` are managed launches. Any other channel name (`msedge`, `chrome-canary`, Electron, cloud) is attach-only — `open` rejects it with a hint to `attach --cdp`.
+- **ego-lite** (Citro Labs fingerprint browser) owns its anti-detection behaviour — Browser4 never injects its stealth layer (no UA rewrite, no stealth.js), but human-like input (trusted CDP clicks, segmented mouse moves, typing jitter) still applies. **CDP only, no extension transport.**
+- **`attach` never launches a browser.** An unattached session with `browser.launch.policy=attached` fails loudly instead of silently starting a second Chrome next to yours.
+- **`close` semantics differ:** `open` sessions **terminate the browser process**; attach sessions **only disconnect and close the tab they drove** — the browser keeps running.
+- **Two hard constraints:** SWARM always launches its own browsers (no attach allowed); display mode is fixed at session creation (`close` + re-`open` to change it).
+- Chrome ≥ 143 no longer supports `SYSTEM_DEFAULT` profile mode. To reuse your logged-in profile, use an attach path; to move auth into a managed session, use `state save` / `state load`.
+
+See [browser-modes.md](references/browser-modes.md) for the full three-axis comparison (session × display × browser source) and profile modes; [attach.md](references/attach.md) for attach transport details — the four-tier CDP endpoint resolution, endpoint verification & failure codes, extension transport constraints, and close/disconnect semantics.
 
 ### Sessions
 
@@ -268,7 +299,7 @@ the geolocation caveat: **[emulation.md](references/emulation.md)**.
 | `loop` | Repeated task execution with persistence | Monitoring, scheduled checks | [loop.md](references/loop.md) |
 | `webminer install`, `webminer all`, `webminer views` | Structure pages you already have (local ML clustering, no LLM) | Corpus > 1,000 pages → WebMiner Commercial; `webminer all` truncates at `--max-files` (default 40) and still prints `PIPELINE COMPLETE`, so raise the cap | [browser4-web-miner](../browser4-web-miner/SKILL.md) |
 | `state save`, `state load`, `cookie-*`, `*-storage-*` | Browser storage management | Auth state reuse, cookie manipulation | [storage-state.md](references/storage-state.md) |
-| `attach`, `attach --list` | Connect to existing Chrome/Edge via CDP (`--list` first enumerates local browsers started with `--remote-debugging-port` — port, family, profile — client-side, no session) | Debug live browser, reuse auth — after attaching, check the printed actual browser; a ⚠ warning flags a channel mismatch | [attach.md](references/attach.md) |
+| `attach`, `attach --list` | Connect to an existing browser via **CDP** (`--cdp`) or **Browser4 Extension** (`--extension`); `--list` enumerates local browsers with `--remote-debugging-port` (port, family, profile) client-side, no session | Debug live browser, reuse auth — after attaching, check the printed actual browser; a ⚠ warning flags a channel mismatch | [attach.md](references/attach.md) |
 | `star` | Star the Browser4 repository as the user: with the GitHub CLI (`gh`) signed in the star is written through the REST API after one confirmation (`--gh` skips the prompt, `--no-gh` never uses the CLI); otherwise it opens the repository in the browser the user is **already logged into** and waits for their click (`--check` reads the state from the API or a repo tab, `--wait <seconds>`, `--no-open`, `--dismiss`) | Only when the **user** asks to star/support the project. Never pass `--gh` on the user's behalf: an interactive run asks the user once, and a piped/agent run only writes with `--gh` — choosing that flag *for* them is exactly the inauthentic star it exists to prevent. Agents must not run `star` (with or without `--gh`) unless the user asked for it | — |
 | `webdb export`, `webdb normalize` | Export cached pages, normalize URLs to database keys | Post-crawl content extraction, URL key lookup | [webdb.md](references/webdb.md) |
 | `skills`, `skills get`, `skills path`, `skills unpack` | Bundled AI agent skill files | Refresh agent instructions, unpack skill files | [skills.md](references/skills.md) |
@@ -406,7 +437,7 @@ Organized by task — follow the link that matches what you're trying to do:
 [storage-state.md](references/storage-state.md) — cookies, localStorage, sessionStorage, state save/load
 [browser-state-import.md](references/browser-state-import.md) — copy system browser state into Browser4-managed sessions
 [webdb.md](references/webdb.md) — export cached pages, normalize URLs for database lookups
-[attach.md](references/attach.md) — connect to existing Chrome/Edge via CDP
+[attach.md](references/attach.md) — connect to an existing browser via CDP (`--cdp`) or the Browser4 Extension (`--extension`); endpoint resolution tiers, verification & failure codes, extension transport constraints, close/disconnect semantics
 [tab-management.md](references/tab-management.md) — multi-tab workflows: quick start, recipes (GUID targeting, cross-session, windows), flags, error recovery
 
 **Choose how the browser runs:**
