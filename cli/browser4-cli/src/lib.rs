@@ -8,6 +8,7 @@ pub mod managed_processes;
 pub mod skills;
 pub mod state;
 pub mod timing;
+pub mod terminal;
 pub mod update_check;
 
 // Test-only: `commands.rs` is compiled into both this library and the CLI binary.

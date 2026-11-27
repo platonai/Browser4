@@ -683,7 +683,7 @@ fn section(lines: &mut Vec<String>, title: &str, body: Vec<String>, options: &Re
     if !lines.is_empty() {
         lines.push(String::new());
     }
-    lines.push(paint(title, options.color));
+    lines.push(crate::terminal::paint_if(title, crate::terminal::BOLD, options.color));
     lines.extend(body);
 }
 
@@ -707,13 +707,6 @@ fn missing_payload(task_id: &str) -> Vec<String> {
         "(no result payload)".to_string(),
         format!("  run `agent status {task_id}` to see the task envelope"),
     ]
-}
-
-fn paint(text: &str, color: bool) -> String {
-    if !color {
-        return text.to_string();
-    }
-    format!("\x1b[1m{text}\x1b[0m")
 }
 
 fn string_of(value: Option<&Value>) -> Option<String> {

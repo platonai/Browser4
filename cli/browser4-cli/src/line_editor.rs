@@ -687,6 +687,103 @@ fn write_history(path: &Path, entries: &[String]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Legacy editor kept for callers that use the simple key-decoding path. Prefer
+/// [Console] for new code — it owns the prompt line and the human writer together,
+/// so streamed output and typed input cannot tear each other apart.
+pub struct Editor {
+    prompt: String,
+    state: Mutex<EditorState>,
+    enabled: bool,
+    out: Mutex<io::Stdout>,
+}
+
+impl Editor {
+    pub fn new(prompt: &str, enabled: bool) -> Arc<Self> {
+        Arc::new(Self {
+            prompt: prompt.to_string(),
+            state: Mutex::new(EditorState::new()),
+            enabled,
+            out: Mutex::new(io::stdout()),
+        })
+    }
+
+    /// Whether this editor owns the terminal (TTY stdin).
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Redraw the current line. Called after the caller printed output, so the
+    /// prompt is not left buried under a task event.
+    pub fn redraw(&self) {
+        if !self.enabled {
+            return;
+        }
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut out = self
+            .out
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let rendered = render(&self.prompt, &state, DEFAULT_TERMINAL_WIDTH, 0);
+        let _ = out.write_all(rendered.bytes.as_bytes());
+        let _ = out.flush();
+    }
+
+    /// Feed raw bytes read from the terminal. Returns the submitted lines.
+    pub fn feed(&self, bytes: &[u8]) -> Vec<String> {
+        let mut submitted = Vec::new();
+        let mut remaining = bytes;
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        loop {
+            let (key, used) = decode_key(remaining);
+            let Some(key) = key else { break };
+            remaining = &remaining[used..];
+            match state.apply(key) {
+                Outcome::Pending => {}
+                Outcome::Submit(line) => {
+                    if self.enabled {
+                        let mut out = self.out.lock().unwrap_or_else(|p| p.into_inner());
+                        let _ = write!(out, "\r\n");
+                        let _ = out.flush();
+                    }
+                    submitted.push(line);
+                }
+                Outcome::Interrupt => {
+                    // Under `-icanon` with ISIG on, Ctrl+C is a signal and never
+                    // reaches this decoder; a piped 0x03 (if this path is ever
+                    // wired for pipes) just clears the line.
+                    if self.enabled {
+                        let mut out = self.out.lock().unwrap_or_else(|p| p.into_inner());
+                        let _ = write!(out, "^C\r\n{}", self.prompt);
+                        let _ = out.flush();
+                    }
+                }
+                Outcome::Eof => {
+                    submitted.push(String::new());
+                    break;
+                }
+                Outcome::Complete { .. } => {}
+            }
+            if self.enabled {
+                let mut out = self.out.lock().unwrap_or_else(|p| p.into_inner());
+                if !submitted.is_empty() {
+                    let _ = write!(out, "{}", self.prompt);
+                } else {
+                    let rendered = render(&self.prompt, &state, DEFAULT_TERMINAL_WIDTH, 0);
+                    let _ = out.write_all(rendered.bytes.as_bytes());
+                }
+                let _ = out.flush();
+            }
+        }
+        submitted
+    }
+}
+
 /// The prompt line, the draft being typed on it, and the one writer every human
 /// line of an interactive session goes through.
 ///

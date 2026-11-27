@@ -863,15 +863,14 @@ impl Renderer {
     /// only add noise (`round.start`, successful fast tools, terminal events —
     /// the follower prints its own completion line).
     fn format(&mut self, event: &TaskEvent) -> Option<String> {
+        let c = self.color;
         match event.kind.as_str() {
             "task.started" => {
                 let text = event.text.as_deref().unwrap_or("task started");
-                Some(format!("{} ▶ {}", self.time_prefix(), truncate(text, 120)))
+                let icon = crate::terminal::paint_if("▶", crate::terminal::BOLD_CYAN, c);
+                Some(format!("{} {} {}", self.time_prefix(), icon, truncate(text, 120)))
             }
             "round.start" => {
-                // Quiet by default: a long run has hundreds of rounds, and the
-                // tool lines already show the work. `/verbose on` asks for them
-                // (format plan P2-2).
                 if !self.verbose {
                     return None;
                 }
@@ -879,19 +878,15 @@ impl Renderer {
                     .turn
                     .map(|turn| format!("round {turn}"))
                     .unwrap_or_else(|| "round".to_string());
-                Some(format!("{}   · {round}", self.time_prefix()))
+                let dot = crate::terminal::paint_if("·", crate::terminal::DIM, c);
+                let round = crate::terminal::paint_if(&round, crate::terminal::DIM, c);
+                Some(format!("{}   {} {}", self.time_prefix(), dot, round))
             }
             "tool.call" => {
                 self.tool_index += 1;
                 let tool = event.tool.as_deref().unwrap_or("tool");
                 let index = self.tool_index;
-                // Keep the call until its result arrives: the result line names
-                // the same `#n`, which is the only way to tell two calls of the
-                // same tool apart.
                 self.pending_calls.push((tool.to_string(), index));
-                // `/tools off` hides the tool lines but must not disturb the
-                // bookkeeping above: the queue is drained by the result, and the
-                // numbering has to stay aligned with a view that turns them back on.
                 if !self.show_tool_calls {
                     return None;
                 }
@@ -900,26 +895,19 @@ impl Renderer {
                     .as_deref()
                     .map(format_tool_arguments)
                     .unwrap_or_default();
-                Some(format!(
-                    "{} {} {}{}",
-                    self.time_prefix(),
-                    self.paint(&format!("#{index}"), Style::Dim),
-                    self.paint(tool, Style::Tool),
-                    args
-                ))
+                let index_str = crate::terminal::paint_if(&format!("#{index}"), crate::terminal::DIM, c);
+                let tool_style = crate::terminal::Style::new().fg(crate::terminal::Color::Cyan);
+                let tool_str = crate::terminal::paint_if(tool, tool_style, c);
+                Some(format!("{} {} {}{}", self.time_prefix(), index_str, tool_str, args))
             }
             "tool.result" => {
                 let tool = event.tool.as_deref().unwrap_or("tool");
-                // Drains even when the line below is skipped: a fast success
-                // renders nothing, but it still frees its call.
                 let call = self.take_pending_call(tool);
                 if !self.show_tool_calls {
                     return None;
                 }
                 let failed = event.ok == Some(false);
                 let slow = event.duration_ms.unwrap_or(0) >= SLOW_TOOL_MS;
-                // `/verbose` also shows the fast successes — the ones that are
-                // normally silent because a line each would bury the steps.
                 if !failed && !slow && !self.verbose {
                     return None;
                 }
@@ -928,30 +916,45 @@ impl Renderer {
                     .map(format_duration_ms)
                     .unwrap_or_else(|| "?".to_string());
                 let call = match call {
-                    Some(index) => format!("{} ", self.paint(&format!("#{index}"), Style::Dim)),
+                    Some(index) => format!(
+                        "{} ",
+                        crate::terminal::paint_if(&format!("#{index}"), crate::terminal::DIM, c)
+                    ),
                     None => String::new(),
                 };
+                let arrow = crate::terminal::paint_if("↳", crate::terminal::DIM, c);
                 if failed {
                     let detail = event
                         .text
                         .as_deref()
                         .map(|text| truncate(text, RESULT_PREVIEW))
                         .unwrap_or_default();
+                    let failed_label = crate::terminal::paint_if("failed", crate::terminal::BOLD_RED, c);
+                    let detail_style = crate::terminal::Style::new()
+                        .fg(crate::terminal::Color::Red)
+                        .italic();
+                    let detail_str = crate::terminal::paint_if(&detail, detail_style, c);
                     Some(format!(
-                        "{}   ↳ {}{} failed after {}: {}",
+                        "{}   {} {}{} {} after {}: {}",
                         self.time_prefix(),
+                        arrow,
                         call,
                         tool,
+                        failed_label,
                         duration,
-                        self.paint(&detail, Style::Error)
+                        detail_str
                     ))
                 } else {
+                    let ok_label = crate::terminal::paint_if("ok", crate::terminal::BOLD_GREEN, c);
+                    let dur_style = crate::terminal::paint_if(&duration, crate::terminal::DIM, c);
                     Some(format!(
-                        "{}   ↳ {}{} ok in {}",
+                        "{}   {} {}{} {} in {}",
                         self.time_prefix(),
+                        arrow,
                         call,
                         tool,
-                        duration
+                        ok_label,
+                        dur_style
                     ))
                 }
             }
@@ -960,12 +963,10 @@ impl Renderer {
                 if text.is_empty() || !self.show_intent {
                     return None;
                 }
-                // `»` marks "the model's stated purpose for the next step". Wrapped
-                // like the model's own text: one step's intent is a sentence, not a
-                // single short line.
-                let gutter = format!("{}   » ", self.time_prefix());
+                let gutter_icon = crate::terminal::paint_if("»", crate::terminal::BOLD_MAGENTA, c);
+                let gutter_prefix = format!("{}   {gutter_icon} ", self.time_prefix());
                 Some(
-                    wrap_with_gutter(&truncate(text, MODEL_TEXT_PREVIEW), &gutter, self.width)
+                    wrap_with_gutter(&truncate(text, MODEL_TEXT_PREVIEW), &gutter_prefix, self.width)
                         .join("\n"),
                 )
             }
@@ -974,31 +975,27 @@ impl Renderer {
                 if text.is_empty() {
                     return None;
                 }
-                // `⋯` rather than `💭`: the emoji is a tofu box on conhost and in
-                // any terminal without a colour-emoji font, and its width is not 1
-                // (format plan P1-1).
-                let gutter = format!("{}   ⋯ ", self.time_prefix());
+                let gutter_icon = crate::terminal::paint_if("⋯", crate::terminal::DIM, c);
+                let gutter_prefix = format!("{}   {gutter_icon} ", self.time_prefix());
                 Some(
-                    wrap_with_gutter(&truncate(text, MODEL_TEXT_PREVIEW), &gutter, self.width)
+                    wrap_with_gutter(&truncate(text, MODEL_TEXT_PREVIEW), &gutter_prefix, self.width)
                         .join("\n"),
                 )
             }
             "steer" => {
                 let text = event.text.as_deref().unwrap_or_default();
-                let gutter = format!("{}   ↪ steering delivered: ", self.time_prefix());
+                let icon = crate::terminal::paint_if("↪", crate::terminal::BOLD_YELLOW, c);
+                let gutter = format!("{}   {icon} steering delivered: ", self.time_prefix());
                 Some(
                     wrap_with_gutter(&truncate(text, MODEL_TEXT_PREVIEW), &gutter, self.width)
                         .join("\n"),
                 )
             }
             "steering.undelivered" => {
-                // The backend drains whatever was typed after the last model round:
-                // it can never be injected, but it is kept as a session correction for
-                // the next task. The prompt already answered "steering queued", so
-                // saying nothing here would report success for an unread instruction.
                 let text = event.text.as_deref().unwrap_or_default();
+                let warn_icon = crate::terminal::paint_if("⚠", crate::terminal::BOLD_YELLOW, c);
                 let gutter = format!(
-                    "{}   ⚠ steering not delivered — the task ended first: ",
+                    "{}   {warn_icon} steering not delivered — the task ended first: ",
                     self.time_prefix()
                 );
                 Some(
@@ -1007,10 +1004,9 @@ impl Renderer {
                 )
             }
             "follow_up" => {
-                // Delivered at the stop point: the task did not end, it continues with
-                // this message in the same conversation.
                 let text = event.text.as_deref().unwrap_or_default();
-                let gutter = format!("{}   ↪ follow-up delivered: ", self.time_prefix());
+                let icon = crate::terminal::paint_if("↪", crate::terminal::BOLD_YELLOW, c);
+                let gutter = format!("{}   {icon} follow-up delivered: ", self.time_prefix());
                 Some(
                     wrap_with_gutter(&truncate(text, MODEL_TEXT_PREVIEW), &gutter, self.width)
                         .join("\n"),
@@ -1018,8 +1014,9 @@ impl Renderer {
             }
             "follow_up.undelivered" => {
                 let text = event.text.as_deref().unwrap_or_default();
+                let warn_icon = crate::terminal::paint_if("⚠", crate::terminal::BOLD_YELLOW, c);
                 let gutter = format!(
-                    "{}   ⚠ follow-up not delivered — the task ended first: ",
+                    "{}   {warn_icon} follow-up not delivered — the task ended first: ",
                     self.time_prefix()
                 );
                 Some(
@@ -1028,11 +1025,6 @@ impl Renderer {
                 )
             }
             "run.usage" => self.format_usage(event),
-            // Decision steps (issue #652): the engine's own verdicts were log-only
-            // before, so a human watching `--follow` saw the tool lines but not why
-            // the run was about to be judged failed. Three lines, not one per gate:
-            // a pass stays silent (the completion line reports success), a rejection
-            // is the thing worth interrupting the scroll for.
             "gate.evaluated" => {
                 let detail = event.detail.as_ref()?;
                 if detail.get("passed").and_then(|v| v.as_bool()) != Some(false) {
@@ -1049,9 +1041,12 @@ impl Renderer {
                     .and_then(|items| items.first())
                     .and_then(|v| v.as_str())
                     .unwrap_or("the completion report did not hold");
+                let icon = crate::terminal::paint_if("⏱", crate::terminal::BOLD_RED, c);
+                let label = crate::terminal::paint_if("gate rejected", crate::terminal::BOLD_RED, c);
                 Some(format!(
-                    "{}   ⏱ gate rejected: {} violation(s) — {}",
+                    "{}   {} {label}: {} violation(s) — {}",
                     self.time_prefix(),
+                    icon,
                     violations,
                     truncate(first, 160)
                 ))
@@ -1064,9 +1059,17 @@ impl Renderer {
                     .get("reason")
                     .and_then(|v| v.as_str())
                     .unwrap_or("verification did not pass");
+                let icon = crate::terminal::paint_if("🔁", crate::terminal::BOLD_YELLOW, c);
+                let round_str = crate::terminal::paint_if(
+                    &format!("repair round {round}/{max}"),
+                    crate::terminal::Style::new().fg(crate::terminal::Color::Yellow).bold(),
+                    c,
+                );
                 Some(format!(
-                    "{}   🔁 repair round {round}/{max} — {}",
+                    "{}   {} {} — {}",
                     self.time_prefix(),
+                    icon,
+                    round_str,
                     truncate(reason, 160)
                 ))
             }
@@ -1078,15 +1081,13 @@ impl Renderer {
                     .and_then(|v| v.as_array())
                     .map(Vec::len)
                     .unwrap_or(0);
+                let icon = crate::terminal::paint_if("✔", crate::terminal::BOLD_GREEN, c);
                 Some(format!(
-                    "{}   ✔ finish report amended from the mutation trace: +{added} file(s)",
-                    self.time_prefix()
+                    "{}   {} finish report amended from the mutation trace: +{added} file(s)",
+                    self.time_prefix(),
+                    icon
                 ))
             }
-            // Permission queue (issue #652, P1-6): a run parked on an approval looks exactly
-            // like a slow tool, so the live view says it is WAITING — and says what the
-            // operator's answer was, instead of only changing on the next poll of
-            // `GET /api/agent/{taskId}/access`.
             "access.requested" => {
                 let detail = event.detail.as_ref()?;
                 let target = detail
@@ -1101,10 +1102,22 @@ impl Renderer {
                     .get("requestId")
                     .and_then(|v| v.as_str())
                     .unwrap_or("?");
+                let icon = crate::terminal::paint_if("⏸", crate::terminal::BOLD_YELLOW, c);
+                let target_style = crate::terminal::paint_if(
+                    target,
+                    crate::terminal::Style::new()
+                        .fg(crate::terminal::Color::Magenta)
+                        .underline(),
+                    c,
+                );
+                let id_style = crate::terminal::paint_if(request_id, crate::terminal::DIM, c);
                 Some(format!(
-                    "{}   ⏸ waiting for approval: {effect} {target} ({request_id}) — \
+                    "{}   {} waiting for approval: {} {} ({id_style}) — \
                      /approve {request_id} in `agent run -i`, or POST /api/agent/{{taskId}}/access/{request_id}/approve",
-                    self.time_prefix()
+                    self.time_prefix(),
+                    icon,
+                    effect,
+                    target_style,
                 ))
             }
             "access.resolved" => {
@@ -1121,10 +1134,36 @@ impl Renderer {
                     .get("reason")
                     .and_then(|v| v.as_str())
                     .filter(|reason| !reason.is_empty());
-                let icon = if decision == "approved" { "✔" } else { "✖" };
-                let tail = reason.map(|r| format!(" — {}", truncate(r, 140))).unwrap_or_default();
+                let (icon, verdict_style) = if decision == "approved" {
+                    (
+                        crate::terminal::paint_if("✔", crate::terminal::BOLD_GREEN, c),
+                        crate::terminal::paint_if(
+                            "approved",
+                            crate::terminal::Style::new()
+                                .fg(crate::terminal::Color::Green)
+                                .bold(),
+                            c,
+                        ),
+                    )
+                } else {
+                    (
+                        crate::terminal::paint_if("✖", crate::terminal::BOLD_RED, c),
+                        crate::terminal::paint_if(
+                            decision,
+                            crate::terminal::Style::new()
+                                .fg(crate::terminal::Color::Red)
+                                .bold(),
+                            c,
+                        ),
+                    )
+                };
+                let tail = reason
+                    .map(|r| format!(" — {}", truncate(r, 140)))
+                    .unwrap_or_default();
+                let id_style = crate::terminal::paint_if(request_id, crate::terminal::DIM, c);
+                let access_label = crate::terminal::paint_if("access", crate::terminal::DIM, c);
                 Some(format!(
-                    "{}   {icon} access {decision}: {request_id}{tail}",
+                    "{}   {icon} {access_label} {verdict_style}: {id_style}{tail}",
                     self.time_prefix()
                 ))
             }
@@ -1183,12 +1222,20 @@ impl Renderer {
             0.0
         };
 
+        let c = self.color;
         if budget > 0 && fraction >= 1.0 && !self.exhausted_printed {
             self.exhausted_printed = true;
+            let icon = crate::terminal::paint_if("✖", crate::terminal::BOLD_RED, c);
+            let label = crate::terminal::paint_if(
+                "cache-miss token budget exhausted",
+                crate::terminal::BOLD_RED,
+                c,
+            );
             return Some(format!(
-                "{} {} cache-miss token budget exhausted: {} / {} — the run is being aborted",
+                "{} {} {}: {} / {} — the run is being aborted",
                 self.time_prefix(),
-                self.paint("✖", Style::Error),
+                icon,
+                label,
                 format_token_amount(cumulative),
                 format_token_amount(budget),
             ));
@@ -1211,8 +1258,9 @@ impl Renderer {
             String::new()
         };
         let mut line = format!(
-            "{} budget {}{}{} · {} requests",
+            "{} {} {}{}{} · {} requests",
             self.time_prefix(),
+            crate::terminal::paint_if("budget", crate::terminal::DIM, c),
             format_token_amount(cumulative),
             ratio,
             self.format_usage_cache(),
@@ -1220,11 +1268,13 @@ impl Renderer {
         );
         if warn_now {
             self.warned_80 = true;
-            line = format!(
-                "{} {} 80% of the cache-miss budget used",
-                line,
-                self.paint("⚠", Style::Error)
+            let warn_icon = crate::terminal::paint_if("⚠", crate::terminal::BOLD_YELLOW, c);
+            let warn_label = crate::terminal::paint_if(
+                "80% of the cache-miss budget used",
+                crate::terminal::BOLD_YELLOW,
+                c,
             );
+            line = format!("{line}  {warn_icon} {warn_label}");
         }
         Some(line)
     }
@@ -1256,31 +1306,7 @@ impl Renderer {
     }
 
     fn time_prefix(&self) -> String {
-        self.paint(&format!("[{}]", self.elapsed()), Style::Dim)
-    }
-
-    fn paint(&self, text: &str, style: Style) -> String {
-        if !self.color {
-            return text.to_string();
-        }
-        format!("\x1b[{}m{}\x1b[0m", style.code(), text)
-    }
-}
-
-#[derive(Clone, Copy)]
-enum Style {
-    Dim,
-    Tool,
-    Error,
-}
-
-impl Style {
-    fn code(self) -> &'static str {
-        match self {
-            Style::Dim => "2",
-            Style::Tool => "36",
-            Style::Error => "31",
-        }
+        crate::terminal::paint_if(&format!("[{}]", self.elapsed()), crate::terminal::DIM, self.color)
     }
 }
 
@@ -1413,20 +1439,62 @@ pub(crate) fn terminal_status_line(
     task_id: &str,
     suffix: &str,
     reason: Option<&str>,
+    color: bool,
 ) -> String {
     let duration = format_run_duration(elapsed.as_millis() as u64);
+    let (icon, verdict_style) = match status {
+        TerminalStatus::Completed => (
+            crate::terminal::paint_if("✔", crate::terminal::BOLD_GREEN, color),
+            crate::terminal::paint_if(
+                "Agent completed",
+                crate::terminal::Style::new().fg(crate::terminal::Color::Green).bold(),
+                color,
+            ),
+        ),
+        TerminalStatus::Failed => (
+            crate::terminal::paint_if("✖", crate::terminal::BOLD_RED, color),
+            crate::terminal::paint_if(
+                "failed",
+                crate::terminal::Style::new().fg(crate::terminal::Color::Red).bold(),
+                color,
+            ),
+        ),
+        TerminalStatus::Cancelled => (
+            crate::terminal::paint_if("⏹", crate::terminal::BOLD_YELLOW, color),
+            crate::terminal::paint_if(
+                "cancelled",
+                crate::terminal::Style::new().fg(crate::terminal::Color::Yellow).bold(),
+                color,
+            ),
+        ),
+    };
+    let task_id_style = crate::terminal::paint_if(task_id, crate::terminal::DIM, color);
+    let dur_style = crate::terminal::paint_if(&duration, crate::terminal::DIM, color);
     let mut line = match status {
-        TerminalStatus::Completed => format!("✔ Agent completed in {duration} · {task_id}"),
-        TerminalStatus::Failed => format!("✖ failed · {task_id} · {duration}"),
-        TerminalStatus::Cancelled => format!("⏹ cancelled · {task_id} · {duration}"),
+        TerminalStatus::Completed => {
+            format!("{icon} {verdict_style} in {dur_style} · {task_id_style}")
+        }
+        TerminalStatus::Failed => {
+            format!("{icon} {verdict_style} · {task_id_style} · {dur_style}")
+        }
+        TerminalStatus::Cancelled => {
+            format!("{icon} {verdict_style} · {task_id_style} · {dur_style}")
+        }
     };
     if !suffix.is_empty() {
         line.push_str(" · ");
         line.push_str(suffix);
     }
     if let Some(reason) = reason.map(str::trim).filter(|reason| !reason.is_empty()) {
+        let reason_style = crate::terminal::paint_if(
+            reason,
+            crate::terminal::Style::new()
+                .fg(crate::terminal::Color::Red)
+                .italic(),
+            color,
+        );
         line.push_str(" — ");
-        line.push_str(reason);
+        line.push_str(&reason_style);
     }
     line
 }
@@ -2642,7 +2710,7 @@ pub async fn follow_task(
     task_id: &str,
     options: FollowOptions,
 ) -> Result<(), String> {
-    let mut follower = TaskFollower::new(task_id, options.ndjson, color_enabled(), quiet_enabled());
+    let mut follower = TaskFollower::new(task_id, options.ndjson, crate::color_enabled(), quiet_enabled());
     let timeout = options.wait_timeout.map(Duration::from_secs);
     let mut ctrl_c = Box::pin(tokio::signal::ctrl_c());
 
@@ -2754,6 +2822,7 @@ async fn print_completion(
                     &follower.task_id,
                     &cost,
                     None,
+                    follower.renderer.color,
                 ));
                 // The payload is an envelope with a `result` object: print its
                 // sections, not the raw JSON (see `agent_result`).
@@ -2792,6 +2861,7 @@ async fn print_completion(
                     &follower.task_id,
                     &suffix,
                     None,
+                    follower.renderer.color,
                 ));
             }
             Err(format!(
@@ -2820,6 +2890,7 @@ async fn print_completion(
                     &follower.task_id,
                     "",
                     Some(&truncate(&detail, RESULT_PREVIEW)),
+                    follower.renderer.color,
                 ));
                 if let Some(hint) = resume_hint_line(&follower.task_id, progress.as_ref()) {
                     follower.renderer.print(&hint);
@@ -2898,33 +2969,11 @@ pub(crate) async fn cancel_task(client: &Client, base_url: &str, task_id: &str) 
     }
 }
 
-/// Whether human output may carry ANSI: a terminal, and neither `--quiet` nor
-/// `--json`, and `NO_COLOR` unset. Shared with `main.rs`'s `agent result` /
-/// `agent run --wait` payload rendering so the entry points colour identically.
-pub(crate) fn color_enabled() -> bool {
-    color_enabled_for(
-        io::stdout().is_terminal(),
-        crate::quiet_active(),
-        crate::json_active(),
-        no_color_requested(),
-    )
-}
-
-/// The predicate behind [`color_enabled`], pure so it needs no terminal and no
-/// environment to test (format plan P1-10).
-///
-/// `NO_COLOR` is the cross-tool convention (<https://no-color.org>): any
-/// non-empty value disables ANSI even on a terminal, because "I can see colour"
-/// and "I want colour" are different questions.
-fn color_enabled_for(is_tty: bool, quiet: bool, json: bool, no_color: bool) -> bool {
-    is_tty && !quiet && !json && !no_color
-}
-
-/// Whether the environment asks for no ANSI at all.
+/// Whether the environment asks for no ANSI at all. Kept here for backward
+/// compatibility; the canonical version lives in `crate::terminal::no_color_requested`.
+#[allow(dead_code)]
 fn no_color_requested() -> bool {
-    std::env::var_os("NO_COLOR")
-        .map(|value| !value.is_empty())
-        .unwrap_or(false)
+    crate::terminal::no_color_requested()
 }
 
 fn quiet_enabled() -> bool {
@@ -3023,6 +3072,7 @@ struct Repl {
     /// OS user's own permissions. Opt-in per session, never defaulted.
     unrestricted: bool,
     tty: bool,
+    color: bool,
     quiet: bool,
     /// `/verbose on`: the step renderer also shows round markers and fast
     /// successful tools.
@@ -3135,6 +3185,7 @@ impl Repl {
             add_dirs,
             unrestricted,
             tty: io::stdin().is_terminal(),
+            color: crate::color_enabled(),
             quiet: quiet_enabled(),
             verbose: false,
             show_intent: true,
@@ -3203,48 +3254,103 @@ impl Repl {
 
     /// The banner's two lines, pure so the knobs can be tested without a terminal.
     fn banner_lines(&self) -> Vec<String> {
+        let c = self.color;
         let session = self.session_id().unwrap_or_else(|| "default".to_string());
-        // No engine field: the CLI tool loop is the only engine left, so naming it
-        // on every banner would be noise.
-        let mut line = format!("Browser4 agent · session={session}");
+        let header = crate::terminal::paint_if("Browser4 agent", crate::terminal::BOLD_CYAN, c);
+        let sep = crate::terminal::paint_if("·", crate::terminal::DIM, c);
+        let sess_label = crate::terminal::paint_if("session=", crate::terminal::DIM, c);
+        let sess_value = crate::terminal::paint_if(
+            &session,
+            crate::terminal::Style::new().fg(crate::terminal::Color::Cyan).underline(),
+            c,
+        );
+
+        let mut parts = vec![format!("{header} {sep} {sess_label}{sess_value}")];
         if self.coding {
-            line.push_str(" · coding=on");
+            parts.push(crate::terminal::paint_if(
+                "coding=on",
+                crate::terminal::BOLD_GREEN,
+                c,
+            ));
         }
         if let Some(access) = self.access.as_deref().filter(|access| !access.is_empty()) {
-            line.push_str(&format!(" · access={access}"));
+            let label = crate::terminal::paint_if("access=", crate::terminal::DIM, c);
+            let val = crate::terminal::paint_if(
+                access,
+                crate::terminal::Style::new().fg(crate::terminal::Color::Magenta).bold(),
+                c,
+            );
+            parts.push(format!("{label}{val}"));
         }
         if !self.add_dirs.is_empty() {
-            // The folders are long absolute paths, so the banner says how many and
-            // names them after the other knobs instead of hiding the grant.
-            line.push_str(&format!(" · add-dir={}", self.add_dirs.join(",")));
+            let label = crate::terminal::paint_if("add-dir=", crate::terminal::DIM, c);
+            let val = crate::terminal::paint_if(
+                &self.add_dirs.join(","),
+                crate::terminal::Style::new().fg(crate::terminal::Color::Yellow).underline(),
+                c,
+            );
+            parts.push(format!("{label}{val}"));
         }
         if let Some(workspace) = self.workspace.as_deref() {
-            // Every task of the session writes there in place: the one knob a long session must
-            // not have to remember from the command line it started with.
-            line.push_str(&format!(" · workspace={workspace}"));
+            let label = crate::terminal::paint_if("workspace=", crate::terminal::DIM, c);
+            let val = crate::terminal::paint_if(
+                workspace,
+                crate::terminal::Style::new().fg(crate::terminal::Color::Magenta).underline(),
+                c,
+            );
+            parts.push(format!("{label}{val}"));
         }
         if self.unrestricted {
-            // A session-wide power grant must never be silent.
-            line.push_str(" · unrestricted");
+            parts.push(crate::terminal::paint_if(
+                "unrestricted",
+                crate::terminal::BOLD_YELLOW,
+                c,
+            ));
         }
         if let Some(budget) = self.token_budget.filter(|budget| *budget > 0) {
-            line.push_str(&format!(" · budget={}", format_token_amount(budget as u64)));
+            let label = crate::terminal::paint_if("budget=", crate::terminal::DIM, c);
+            let val = crate::terminal::paint_if(
+                &format_token_amount(budget as u64),
+                crate::terminal::CYAN,
+                c,
+            );
+            parts.push(format!("{label}{val}"));
         }
         if self.quiet {
-            line.push_str(" · quiet");
+            parts.push(crate::terminal::paint_if("quiet", crate::terminal::YELLOW, c));
         }
-        // The web console is the same session over the REST API: the banner is the one
-        // place a terminal user can discover it without reading docs, and the session
-        // in the query string is what makes "open the page and keep going" work.
+        let mut line = parts.join(&format!(" {} ", sep));
+        if !self.coding
+            && self.access.as_deref().filter(|a| !a.is_empty()).is_none()
+            && self.add_dirs.is_empty()
+            && self.workspace.is_none()
+            && !self.unrestricted
+            && self.token_budget.filter(|b| *b > 0).is_none()
+            && !self.quiet
+        {
+            // 只有 session：不要渲染两次 Browser4 agent 前缀
+            line = format!("{header} {sep} {sess_label}{sess_value}");
+        }
         let console_url = format!(
             "{}/agent.html?session={}",
             self.base_url.trim_end_matches('/'),
             urlencoding::encode(&session)
         );
+        let hint = crate::terminal::paint_if(
+            "type a task · /help for commands · Ctrl+C cancels the running task",
+            crate::terminal::DIM,
+            c,
+        );
+        let console_label = crate::terminal::paint_if("web console:", crate::terminal::DIM, c);
+        let console_url_styled = crate::terminal::paint_if(
+            &console_url,
+            crate::terminal::Style::new().fg(crate::terminal::Color::Cyan).underline(),
+            c,
+        );
         vec![
             line,
-            "  type a task · /help for commands · Ctrl+C cancels the running task".to_string(),
-            format!("  web console: {console_url}  ·  same session"),
+            format!("  {hint}"),
+            format!("  {console_label} {console_url_styled}"),
         ]
     }
 
@@ -3541,7 +3647,7 @@ impl Repl {
             task_id,
             after,
             false,
-            color_enabled(),
+            crate::color_enabled(),
             self.quiet,
         ));
         self.sync_view_flags();
@@ -3682,7 +3788,7 @@ impl Repl {
         self.current = Some(TaskFollower::new(
             &task_id,
             false,
-            color_enabled(),
+            crate::color_enabled(),
             self.quiet,
         ));
         // A follower created after `/verbose on` starts verbose; `/quiet on`
@@ -3838,7 +3944,7 @@ impl Repl {
                 self.current = Some(TaskFollower::new(
                     &task_id,
                     false,
-                    color_enabled(),
+                    crate::color_enabled(),
                     self.quiet,
                 ));
                 self.sync_view_flags();
@@ -3994,6 +4100,7 @@ impl Repl {
                     &task_id,
                     &cost,
                     None,
+                    self.color,
                 ));
                 self.print_payload(&task_id, &result, crate::pretty_active());
                 crate::json_field("raw", crate::json_text_or_value(&result));
@@ -4015,6 +4122,7 @@ impl Repl {
                     &task_id,
                     &suffix,
                     None,
+                    self.color,
                 ));
                 let _ = crate::state::update_async_task_status(&task_id, "cancelled", None);
                 // The envelope still knows the budget and the resume flag; ask it
@@ -4034,6 +4142,7 @@ impl Repl {
                     &task_id,
                     "",
                     Some(&detail),
+                    self.color,
                 ));
                 if let Some(hint) = resume_hint_line(&task_id, progress.as_ref()) {
                     self.out(&hint);
@@ -4596,7 +4705,7 @@ impl Repl {
             task_id,
             body,
             &crate::agent_result::RenderOptions::default()
-                .with_color(color_enabled())
+                .with_color(crate::color_enabled())
                 .with_full(full)
                 .with_suggestions(false),
         );
@@ -5009,6 +5118,13 @@ fn skip_string_escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, bel_
 fn sanitize_stdin_bytes(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
     sanitize_stdin_line(text.trim_end_matches(['\n', '\r']))
+}
+
+/// Write a human-readable line to the terminal, respecting the console's prompt
+/// line (if one owns it). Returns `true` when the console handled it, `false` when
+/// it fell through to the caller's default stdout path.
+pub(crate) fn write_human_line(line: &str) -> bool {
+    line_editor::write_human_line(line)
 }
 
 /// Read stdin lines on a dedicated thread and forward them to the async loop.
@@ -5834,11 +5950,11 @@ mod tests {
         let elapsed = Duration::from_millis(18_400);
 
         assert_eq!(
-            terminal_status_line(TerminalStatus::Completed, elapsed, "task-1", "", None),
+            terminal_status_line(TerminalStatus::Completed, elapsed, "task-1", "", None, false),
             "✔ Agent completed in 18.4s · task-1"
         );
         assert_eq!(
-            terminal_status_line(TerminalStatus::Failed, elapsed, "task-1", "", Some("boom")),
+            terminal_status_line(TerminalStatus::Failed, elapsed, "task-1", "", Some("boom"), false),
             "✖ failed · task-1 · 18.4s — boom"
         );
         assert_eq!(
@@ -5847,7 +5963,8 @@ mod tests {
                 elapsed,
                 "task-1",
                 "39 tool(s)",
-                None
+                None,
+                false
             ),
             "⏹ cancelled · task-1 · 18.4s · 39 tool(s)"
         );
@@ -5865,7 +5982,8 @@ mod tests {
                 Duration::from_millis(192_000),
                 "task-1",
                 &cost,
-                None
+                None,
+                false
             ),
             "✔ Agent completed in 3m12s · task-1 · 3 round(s) · 39 tool(s) · 54.4k tokens · cache 80%"
         );
@@ -5914,6 +6032,7 @@ mod tests {
             "t",
             "",
             None,
+            false,
         );
         assert_eq!(bare, "✔ Agent completed in 0.8s · t");
         assert!(!bare.ends_with('·'), "no dangling separator: {bare}");
@@ -5927,6 +6046,7 @@ mod tests {
             "task-1",
             "",
             Some("   "),
+            false,
         );
         assert_eq!(line, "✖ failed · task-1 · 3.2s");
         assert!(!line.contains('—'), "{line}");
@@ -6649,18 +6769,6 @@ mod tests {
         let long = "x".repeat(120);
         assert_eq!(task_label(&long).chars().count(), 61, "60 chars + ellipsis");
         assert!(task_label(&long).ends_with('…'));
-    }
-
-    #[test]
-    fn color_enabled_for_follows_the_four_inputs() {
-        assert!(color_enabled_for(true, false, false, false));
-        assert!(
-            !color_enabled_for(false, false, false, false),
-            "a pipe is not a terminal"
-        );
-        assert!(!color_enabled_for(true, true, false, false), "--quiet");
-        assert!(!color_enabled_for(true, false, true, false), "--json");
-        assert!(!color_enabled_for(true, false, false, true), "NO_COLOR");
     }
 
     /// P0-5: the scalars keep describing the last task, but the array keeps every

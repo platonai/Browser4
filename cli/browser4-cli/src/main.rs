@@ -40,6 +40,7 @@ mod agent_result;
 mod agent_supervise;
 mod agent_trace;
 mod timing;
+mod terminal;
 
 use std::collections::{HashMap, HashSet};
 use std::io::{IsTerminal, Read};
@@ -182,6 +183,22 @@ fn quiet_init(quiet: bool) {
 
 fn quiet_active() -> bool {
     QUIET.with(|cell| *cell.borrow())
+}
+
+/// Whether human output may carry ANSI: stdout is a terminal, neither
+/// `--quiet` nor `--json`, and `NO_COLOR` unset. Assembled from
+/// `crate::terminal::color_enabled_for` and `crate::terminal::no_color_requested`.
+///
+/// The gate lives here (main.rs) rather than in `terminal.rs` because only the
+/// binary knows about the CLI flag machinery; `terminal.rs` is compiled as a
+/// library module too where `quiet_active()` / `json_active()` don't exist.
+fn color_enabled() -> bool {
+    crate::terminal::color_enabled_for(
+        std::io::stdout().is_terminal(),
+        quiet_active(),
+        json_active(),
+        crate::terminal::no_color_requested(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -16483,6 +16500,7 @@ async fn handle_agent_run(
                             &task_id,
                             &cost,
                             None,
+                            crate::color_enabled(),
                         )
                     );
                     // Same renderer as `agent run -i` / `--follow`: the payload is
@@ -16492,7 +16510,7 @@ async fn handle_agent_run(
                         &task_id,
                         &result_text,
                         &crate::agent_result::RenderOptions::default()
-                            .with_color(crate::agent_interactive::color_enabled())
+                            .with_color(crate::color_enabled())
                             .with_full(pretty_active())
                             .with_json_hint(format!("agent result {task_id} --pretty")),
                     );
@@ -17172,7 +17190,7 @@ async fn handle_agent_result(
             id,
             &result,
             &crate::agent_result::RenderOptions::default()
-                .with_color(crate::agent_interactive::color_enabled())
+                .with_color(crate::color_enabled())
                 .with_full(pretty_active())
                 .with_json_hint(format!("agent result {id} --pretty")),
         );
