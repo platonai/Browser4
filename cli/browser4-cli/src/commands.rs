@@ -4392,7 +4392,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "json", description: "Emit the same facts as one JSON object (stats, window, gate, verdict, repair, access) instead of the panel", is_bool: true, short: None },
             ],
-            e2e_coverage: E2eCoverage::Tested,
+            // Agent console endpoints removed in main refactor; command kept for back-compat.
+            e2e_coverage: E2eCoverage::Excluded,
             // A read-only aggregation over command_status + /stats + /events + /access:
             // no single MCP tool answers "is it converging, and will it be judged done".
             tool_name_fn: |_| String::new(),
@@ -4413,7 +4414,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "limit", description: "Lines per page (default 200, server cap 2000)", is_bool: false, short: None },
                 OptionDef { name: "json", description: "Print the served envelope (listing or page) instead of the panel", is_bool: true, short: None },
             ],
-            e2e_coverage: E2eCoverage::Tested,
+            // Trace endpoints removed in main refactor; command kept for back-compat.
+            e2e_coverage: E2eCoverage::Excluded,
             // A read-only projection of GET /api/commands/{id}/trace[/file]: the step log is the
             // summary, the trace is the audit trail behind it (issue #652, gap 5).
             tool_name_fn: |_| String::new(),
