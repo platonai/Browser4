@@ -608,8 +608,12 @@
              token statistics in this repository (`AgentRunEvent` →
              `AgentTaskEvent` → `AgentTaskRunStats` → `GET /api/commands/{id}/stats`
              → CLI `/stats`) read those fields; 4.11.31 and older do not carry them.
-             Its pulsar-bom carries no dependency changes beyond the version element. -->
-        <browser4-base.version>4.11.32</browser4-base.version>
+             Its pulsar-bom carries no dependency changes beyond the version element.
+
+             4.11.33 and 4.11.34 (published 2026-11-27) carry incremental fixes and
+             improvements on top of 4.11.32; their pulsar-boms carry no dependency
+             changes beyond the version element. -->
+        <browser4-base.version>4.11.34</browser4-base.version>
         <cdt-kotlin-client.version>4.8.0</cdt-kotlin-client.version>
 
         <!-- Agent memory system: SQLite FTS derived index (design: docs-dev/copilot/robust-browser-agent-memory-system-design.md) -->
