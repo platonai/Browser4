@@ -9334,6 +9334,16 @@ fn local_bundle_plugin_warning(root: &Path, work_dir: &Path) -> Option<String> {
 /// before the script runs.  Without this, PowerShell writes stderr in the
 /// system's OEM code page (e.g. GBK on Chinese Windows) and Rust's
 /// `String::from_utf8_lossy` produces garbled diagnostics.
+///
+/// Windows PowerShell 5.1 reads a BOM-less `.ps1` with the *ANSI* code page,
+/// so `build-runtime-bundle.ps1` (and any script this function runs) must stay
+/// ASCII-only, or be saved as UTF-8 *with* a BOM.  Non-ASCII text there is not
+/// a cosmetic problem: a UTF-8 em dash decodes to `â€”`, whose `”` the 5.1
+/// tokenizer accepts as a string delimiter, and the script stops parsing
+/// ("Missing ')' in method call").  `pwsh` decodes UTF-8 correctly, which is
+/// why pwsh-only runs never see it.
+/// `browser4-apps/browser4-bundle/build-runtime-bundle.tests.ps1` guards the
+/// encoding contract; see AGENTS.md "Common Issues".
 async fn run_bundle_build_script(
     shell: &str,
     script: &Path,

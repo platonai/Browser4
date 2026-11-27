@@ -1470,6 +1470,75 @@ Assert-True -Label 'cli-stale: unknown source time never forces a rebuild' `
 Write-Host ''
 
 # ═══════════════════════════════════════════════════════════════════
+# Windows PowerShell 5.1 file-encoding contract
+#
+# The CLI runs this script with `powershell.exe`, not `pwsh`
+# (`run_bundle_build_script()` in cli/browser4-cli/src/daemon.rs), and
+# Windows PowerShell 5.1 decodes a BOM-less .ps1 with the system ANSI code
+# page.  On an en-US runner that is cp1252, which splits the three UTF-8 bytes
+# of an em dash (E2 80 94) into three characters whose last one is U+201D, a
+# right double quotation mark - one of the typographic quotes the 5.1 tokenizer
+# accepts as a string delimiter.  Every string literal holding an em dash
+# ended there, so the whole file failed to parse:
+#
+#     At .../build-runtime-bundle.ps1:1411 char:52
+#     +   $dropped.Add("$($jar.Name): dropped <mangled> this build bundle ...
+#     Missing ')' in method call.
+#
+# The bundle then never assembled on the permission-e2e Windows runner and the
+# backend never started (run 45415301541).  PowerShell 7 reads BOM-less files
+# as UTF-8, which is why every pwsh-only gate stayed green: the failure only
+# exists on the 5.1 read path, so it needs its own assertion here.
+#
+# Contract: keep the script ASCII-only (any ANSI code page then decodes it
+# byte-for-byte) or save it as UTF-8 *with* BOM (5.1 honours the BOM).
+# ═══════════════════════════════════════════════════════════════════
+Write-Host 'Testing the Windows PowerShell 5.1 encoding contract...' -ForegroundColor Cyan
+
+$scriptBytes = [System.IO.File]::ReadAllBytes($SourceScript)
+$hasUtf8Bom = $scriptBytes.Length -ge 3 -and
+    $scriptBytes[0] -eq 0xEF -and $scriptBytes[1] -eq 0xBB -and $scriptBytes[2] -eq 0xBF
+$nonAsciiCount = 0
+$firstNonAsciiOffset = -1
+for ($i = 0; $i -lt $scriptBytes.Length; $i++) {
+    if ($scriptBytes[$i] -gt 0x7F) {
+        $nonAsciiCount++
+        if ($firstNonAsciiOffset -lt 0) { $firstNonAsciiOffset = $i }
+    }
+}
+
+$encodingAdvice = ''
+if ($nonAsciiCount -gt 0 -and -not $hasUtf8Bom) {
+    # Name the culprit and its line so the fix is one edit, not an investigation.
+    $firstLineNumber = 1
+    for ($i = 0; $i -lt $firstNonAsciiOffset; $i++) {
+        if ($scriptBytes[$i] -eq 0x0A) { $firstLineNumber++ }
+    }
+    $decodedForAdvice = [System.Text.Encoding]::UTF8.GetString($scriptBytes)
+    $offenders = @(
+        [regex]::Matches($decodedForAdvice, '[^\x00-\x7F]') |
+            Select-Object -First 5 |
+            ForEach-Object { 'U+{0:X4} {1}' -f [int][char]$_.Value, $_.Value }
+    )
+    $encodingAdvice = @(
+        "$nonAsciiCount non-ASCII byte(s) in a BOM-less script; first at line $firstLineNumber."
+        'powershell.exe 5.1 decodes those bytes with the ANSI code page (cp1252 on an en-US'
+        'runner), where every UTF-8 em dash (E2 80 94) turns into three characters whose last'
+        'one is U+201D - a right double quotation mark, and a string delimiter for its parser.'
+        "That yields `"Missing ')' in method call`" and no runtime bundle."
+        "Offenders: $($offenders -join ', ')"
+        'Fix: replace the non-ASCII characters with ASCII ("-" for an em dash, "->" for an'
+        'arrow), or re-save the file as UTF-8 with BOM.'
+    ) -join ' '
+}
+
+Assert-True -Label 'winps51: script is ASCII-only or carries a UTF-8 BOM' `
+    -Condition ($nonAsciiCount -eq 0 -or $hasUtf8Bom) `
+    -Description $encodingAdvice
+
+Write-Host ''
+
+# ═══════════════════════════════════════════════════════════════════
 # Cleanup
 # ═══════════════════════════════════════════════════════════════════
 try {

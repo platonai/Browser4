@@ -21,7 +21,7 @@ The output is a .zip (Windows) or .tar.gz (Linux/macOS) archive containing:
   plugins/           - plugin JARs (auto-discovered via classpath wildcard): the
                        first-party plugins this checkout builds (see
                        $defaultBundledPlugins) plus every JAR a previous bundle
-                       build or `browser4-cli plugin install` left behind — a
+                       build or `browser4-cli plugin install` left behind - a
                        rebuild preserves those instead of deleting them.
   bin/               - launch scripts (start.sh, start.bat)
   runtime-bundle.json - metadata
@@ -143,7 +143,7 @@ if ($Help) {
 }
 
 # --------------------------------------------------------------------------
-# Runtime compatibility shim — allows the script to run under both
+# Runtime compatibility shim - allows the script to run under both
 # powershell.exe (Windows PowerShell 5.1, .NET Framework) and
 # pwsh (PowerShell 7+, .NET).  On .NET Framework the
 # System.Runtime.InteropServices.RuntimeInformation type may not be
@@ -166,7 +166,7 @@ function Get-IsWindows {
         return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
             [System.Runtime.InteropServices.OSPlatform]::Windows)
     }
-    # powershell.exe runs only on Windows — this fallback is correct.
+    # powershell.exe runs only on Windows - this fallback is correct.
     return $true
 }
 
@@ -190,14 +190,14 @@ function Get-OSArchitecture {
     if ($script:_runtimeInfoAvailable) {
         return [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
     }
-    # Fallback for .NET Framework 2.0+ — powershell.exe is Windows-only
+    # Fallback for .NET Framework 2.0+ - powershell.exe is Windows-only
     if ([Environment]::Is64BitOperatingSystem) { return 'X64' }
     return 'X86'
 }
 
 function Get-AssetNameForCurrentPlatform {
     # Fast path when RuntimeInformation is unavailable (powershell.exe on
-    # older .NET Framework) — the script is Windows-only, so skip the
+    # older .NET Framework) - the script is Windows-only, so skip the
     # platform/architecture type lookups entirely.
     if (-not $script:_runtimeInfoAvailable) {
         if (-not [Environment]::Is64BitOperatingSystem) {
@@ -266,12 +266,12 @@ function Resolve-InputPath([string]$path, [string]$baseDirectory) {
 }
 
 # --------------------------------------------------------------------------
-# JDK auto-detection — scan known install directories for jpackage (JDK 16+),
+# JDK auto-detection - scan known install directories for jpackage (JDK 16+),
 # pick the highest version, and set JAVA_HOME accordingly before any tool use.
 # --------------------------------------------------------------------------
 
 function Get-JDKVersion([string]$jdkHome) {
-    # Fast path: parse <jdk>/release — no process spawn, I/O only.
+    # Fast path: parse <jdk>/release - no process spawn, I/O only.
     $releaseFile = Join-Path $jdkHome 'release'
     if (-not (Test-Path $releaseFile)) { return $null }
 
@@ -304,7 +304,7 @@ function Find-BestJDK {
     $preferredVersion = [version]'0.0'
     $script:AllFoundJDKs = @()
 
-    # Collect search roots — one filesystem scan per root, shallow.
+    # Collect search roots - one filesystem scan per root, shallow.
     $searchRoots = [System.Collections.Generic.List[string]]::new()
     if (Get-IsWindows) {
         foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, "$env:SystemDrive\Java")) {
@@ -553,7 +553,7 @@ function Ensure-CleanDirectory([string]$path) {
 function Reset-CleanDirectory([string]$path, [string]$label = $path, [bool]$Recreate = $true) {
     # Rename-then-delete reset.  On Windows, renaming a directory that holds
     # open/locked files (e.g. a backend daemon auto-started from this bundle)
-    # fails atomically — nothing is deleted, so a failed reset never corrupts
+    # fails atomically - nothing is deleted, so a failed reset never corrupts
     # a previously working bundle.  A plain Remove-Item -Recurse can delete
     # half the tree before hitting a locked file (e.g. deleting jvm.cfg while
     # java.exe stays locked), which is exactly how a re-run used to leave a
@@ -568,8 +568,8 @@ function Reset-CleanDirectory([string]$path, [string]$label = $path, [bool]$Recr
         Remove-Item -LiteralPath $trash -Recurse -Force -ErrorAction SilentlyContinue
     }
     # Most callers need the directory back (empty) for the next phase, but
-    # jlink refuses to write into an output directory that exists at all —
-    # even an empty one — so the jlink pre-reset passes -Recreate:$false.
+    # jlink refuses to write into an output directory that exists at all -
+    # even an empty one - so the jlink pre-reset passes -Recreate:$false.
     if ($Recreate) {
         New-Item -ItemType Directory -Force -Path $path | Out-Null
     }
@@ -612,7 +612,7 @@ function Test-ValidJar([string]$jarPath) {
     2026-10-28: lib/ held a sibling's browser4-agentic jar and a smoke run exercised
     pre-fix behavior, with nothing in the output saying so).
 
-    Pure comparison — no scanning, no logging. Returns one record per bundle JAR
+    Pure comparison - no scanning, no logging. Returns one record per bundle JAR
     with Status = match | mismatch | not-built-here.
 
 .PARAMETER BundleJarPaths
@@ -696,7 +696,7 @@ function Get-BundleMetadataJson(
         modules = $modules
         # Bundled plugin JARs and any reason the plugin could not be bundled.
         # Recorded here because the CLI prints a successful build's stdout only
-        # on failure — the manifest is what makes a plugin-less bundle auditable
+        # on failure - the manifest is what makes a plugin-less bundle auditable
         # instead of silent (every /api/swarm/** call would answer 503).
         plugins = $plugins
         pluginVersion = $pluginVersion
@@ -893,7 +893,7 @@ function Get-Browser4CliSourceTimestamp {
 
 .DESCRIPTION
     A bundle that only rebuilt when the binary was MISSING copied whatever stale
-    release build sat in `target/release` — observed as a 4.14.0-rc.6 CLI shipped
+    release build sat in `target/release` - observed as a 4.14.0-rc.6 CLI shipped
     inside a 4.14.4 bundle, which then panicked on `attach --extension msedge`
     and sent a bare `--extension` to Chrome.  Comparing timestamps keeps the
     bundled CLI aligned with the sources it was built from.
@@ -927,9 +927,9 @@ Bundle the browser4-cli binary into the runtime bundle's bin/ directory.
 .DESCRIPTION
 Uses a prebuilt release binary when it is NEWER than the CLI sources, otherwise
 builds one with cargo (best effort).  When neither is possible the bundle is
-still produced — the CliBinaryResolver falls back to PATH / auto-install.  This
+still produced - the CliBinaryResolver falls back to PATH / auto-install.  This
 guarantees the SKILL.md tool surface is available on a fresh machine that only
-has the bundle (design §4.2/§4.3).
+has the bundle (design section 4.2/4.3).
 #>
 function Install-Browser4Cli([string]$bundleDirectory) {
     $binDirectory = Join-Path $bundleDirectory 'bin'
@@ -984,7 +984,7 @@ if (-not [string]::IsNullOrWhiteSpace($JdkHome)) {
     $JdkHome = Resolve-InputPath -path $JdkHome -baseDirectory $invocationDirectory
 }
 
-# Resolve Maven command and repo root early — dependency:copy-dependencies needs them.
+# Resolve Maven command and repo root early - dependency:copy-dependencies needs them.
 $repoRoot = Resolve-RepositoryRoot
 Set-Location $repoRoot
 
@@ -1004,7 +1004,7 @@ if (-not $SkipMavenInstall) {
     # the output jar against the *classes directory* mtime, which does not move
     # when only the contents of existing class files change.  Without this, an
     # incremental `mvn install` can leave a module jar older than the sources it
-    # was compiled from — exactly the staleness dev mode refuses to serve.
+    # was compiled from - exactly the staleness dev mode refuses to serve.
     $installArgs = @(
         'install', '-Pall-main-modules,asset-bundle', '-DskipTests',
         '-Dmaven.jar.forceCreation=true'
@@ -1019,8 +1019,8 @@ if (-not $SkipMavenInstall) {
     # Clean the code modules first: `install` alone keeps orphaned .class files
     # in target/classes, so a class deleted or moved between builds is still
     # packaged and can shadow a plugin bean at startup.  The clean runs without
-    # the bundle profiles so the bundle's own work directory — and the jlink
-    # image inside it — is preserved.
+    # the bundle profiles so the bundle's own work directory - and the jlink
+    # image inside it - is preserved.
     & $mvnCmd clean -q -DskipTests
     if ($LASTEXITCODE -ne 0) { throw "Core modules clean failed with exit code $LASTEXITCODE" }
     & $mvnCmd @installArgs
@@ -1059,7 +1059,7 @@ if ((Test-Path $assetPath) -and (-not $Force)) {
 New-Item -ItemType Directory -Force -Path $resolvedOutputDirectory | Out-Null
 # Preserve the plugin JARs a previous `browser4-cli plugin install` (or an
 # earlier build) put into the bundle's plugins/ directory.  The resets below
-# delete that directory as part of the build tree — which used to make an
+# delete that directory as part of the build tree - which used to make an
 # installed plugin disappear silently on the next rebuild, with nothing in the
 # output tying the loss to the build.  The snapshot lives outside the reset
 # scope and is restored after this build's own plugins are in place.
@@ -1077,7 +1077,7 @@ if ($preservedPluginJars.Count -gt 0) {
 }
 
 # Reset (not just ensure) the working directories so a re-run over an existing
-# build always starts from a clean slate — jlink refuses to write into a
+# build always starts from a clean slate - jlink refuses to write into a
 # non-empty output directory.  Reset-CleanDirectory renames before deleting so
 # a bundle that is locked by a running daemon fails fast instead of being
 # half-deleted (see Reset-CleanDirectory).
@@ -1167,10 +1167,10 @@ Write-Host "Collected $libJarCount jars in lib/" -ForegroundColor Green
 # in-repo plugins matter just as much for a source checkout: their tools are
 # documented as part of the CLI surface, yet a bundle that ships none of them
 # makes `plugin <domain> <method>` fail with an unknown-tool error while the
-# built JAR sits in the Maven local repository — with nothing in the output
+# built JAR sits in the Maven local repository - with nothing in the output
 # naming the plugin or the install command.
 #
-# Membership rules for $defaultBundledPlugins — keep them explicit, a wrong
+# Membership rules for $defaultBundledPlugins - keep them explicit, a wrong
 # entry is a bundle that shadows host classes or fails to boot:
 #   * the module builds a thin JAR (host classes come from lib/*), and
 #   * every non-`browser4-*` dependency in the module POM exists in lib/*, and
@@ -1183,7 +1183,7 @@ Write-Host "Collected $libJarCount jars in lib/" -ForegroundColor Green
 #   1. the local repository was assumed to be ~/.m2/repository although a
 #      settings.xml that declares <localRepository> moves every artifact
 #      Maven installs (common on Windows, where a redirected D: repository
-#      keeps C: free) — the scan then found nothing and copied nothing;
+#      keeps C: free) - the scan then found nothing and copied nothing;
 #   2. the newest JAR by mtime won, so a plugin from another release train
 #      could be bundled into this backend.
 # The plugin outcome is therefore recorded in the bundle metadata and reported
@@ -1299,7 +1299,7 @@ function Get-PluginJarIdentity([string]$jarName) {
         'browser4-images-4.14.1-SNAPSHOT.jar' yields Plugin 'browser4-images',
         Version '4.14.1-SNAPSHOT'.  A name without a parseable version returns
         $null, and so does the 'original-<artifact>-<version>.jar' intermediate
-        maven-shade-plugin leaves next to a shaded artifact — that file is not a
+        maven-shade-plugin leaves next to a shaded artifact - that file is not a
         deployable plugin.
     .OUTPUTS
         PSCustomObject with Plugin/Version, or $null when the name does not
@@ -1317,7 +1317,7 @@ function Get-PluginVersionFromJarName([string]$jarName) {
     .SYNOPSIS
         Extract the version from '<plugin>-<version>[-shaded].jar'.
     .OUTPUTS
-        String — the parsed version, or '' when the name does not match.
+        String - the parsed version, or '' when the name does not match.
     #>
     $identity = Get-PluginJarIdentity -jarName $jarName
     if ($identity) { return $identity.Version }
@@ -1329,7 +1329,7 @@ function Get-PluginBaseNameFromJarName([string]$jarName) {
     .SYNOPSIS
         Extract the plugin (artifact) name from '<plugin>-<version>.jar'.
     .OUTPUTS
-        String — the parsed plugin name, or '' when the name does not match.
+        String - the parsed plugin name, or '' when the name does not match.
     #>
     $identity = Get-PluginJarIdentity -jarName $jarName
     if ($identity) { return $identity.Plugin }
@@ -1381,7 +1381,7 @@ function Select-PreservedPluginJars {
     .SYNOPSIS
         Decide which JARs from a pre-build plugins/ snapshot survive a rebuild.
     .DESCRIPTION
-        A rebuild resets the bundle directory, which deletes plugins/ — the very
+        A rebuild resets the bundle directory, which deletes plugins/ - the very
         directory `browser4-cli plugin install` writes to.  Every JAR found there
         before the reset is a candidate for restoration, with two rules:
 
@@ -1408,7 +1408,7 @@ function Select-PreservedPluginJars {
             if ($jar.Name -like "$pluginName-*") { $bundlingPlugin = $pluginName; break }
         }
         if ($bundlingPlugin) {
-            $dropped.Add("$($jar.Name): dropped — this build bundles $bundlingPlugin itself, and the bundled JAR wins")
+            $dropped.Add("$($jar.Name): dropped - this build bundles $bundlingPlugin itself, and the bundled JAR wins")
             continue
         }
 
@@ -1425,7 +1425,7 @@ function Select-PreservedPluginJars {
         $group = @($byPlugin[$key] | Sort-Object { $_.LastWriteTime } -Descending)
         $restore.Add($group[0])
         for ($i = 1; $i -lt $group.Count; $i++) {
-            $dropped.Add("$($group[$i].Name): dropped — $key is installed more than once; the newest JAR ($($group[0].Name)) is kept")
+            $dropped.Add("$($group[$i].Name): dropped - $key is installed more than once; the newest JAR ($($group[0].Name)) is kept")
         }
     }
 
@@ -1444,7 +1444,7 @@ function Resolve-SourceTreePluginJar {
         falls back to the newest non-source JAR of that module, so the reported
         `plugin install` command works without the caller guessing a version.
     .OUTPUTS
-        String — the absolute JAR path, or '' when the module has not been built.
+        String - the absolute JAR path, or '' when the module has not been built.
     #>
     param(
         [string]$RepositoryRoot,
@@ -1487,7 +1487,7 @@ $defaultBundledPlugins = @(
 # In-repo plugins deliberately NOT bundled: each needs something the bundle does
 # not provide (an external service, a shaded dependency tree, a missing library)
 # or is a demo.  They stay installable with `browser4-cli plugin install <jar>`,
-# and the build names them — with the exact command — so their absence is
+# and the build names them - with the exact command - so their absence is
 # discoverable instead of looking like a capability that never existed.
 $optionalPlugins = @(
     @{ Module = 'browser4-captcha'; Reason = 'needs an external CAPTCHA-solving service' },
@@ -1546,7 +1546,7 @@ foreach ($pluginModule in $defaultBundledPlugins) {
     $pluginBundleWarnings.Add(
         "Found $pluginModule JAR(s) in $pluginGroupDir, but none for the checked-out project version " +
         "'$projectVersion' (found: $foundVersions). Refusing to bundle a plugin from another release " +
-        "train — a version-skewed plugin looks installed while behaving unpredictably.`n" +
+        "train - a version-skewed plugin looks installed while behaving unpredictably.`n" +
         $pluginInstallHint)
 }
 
@@ -1554,7 +1554,7 @@ foreach ($pluginModule in $defaultBundledPlugins) {
 # that makes each one available.
 foreach ($optional in $optionalPlugins) {
     $optionalJar = Resolve-SourceTreePluginJar -RepositoryRoot $repoRoot -ModuleName $optional.Module -ProjectVersion $projectVersion
-    $entry = "$($optional.Module) — $($optional.Reason); "
+    $entry = "$($optional.Module) - $($optional.Reason); "
     if ($optionalJar) {
         $entry += "install: browser4-cli plugin install `"$optionalJar`""
     } else {
@@ -1752,7 +1752,7 @@ if (-not $SkipMavenInstall) {
 # Record that the jars under lib/ were assembled from the checked-out sources at
 # this moment.  The dev-mode launcher compares source timestamps against the jar
 # timestamps, but this project builds reproducibly, so Maven leaves a jar whose
-# recompiled content is byte-identical with its original timestamp — a jar mtime
+# recompiled content is byte-identical with its original timestamp - a jar mtime
 # alone can never prove the bundle is current.  Only written when Maven ran (see
 # -SkipMavenInstall), because otherwise lib/ may hold jars installed by an
 # earlier build.
@@ -2112,7 +2112,7 @@ $recommendedModules = @(
 )
 # On Linux and macOS the per-JAR jdeps fallback can miss modules that are
 # only reachable through reflective class-initialisation chains (e.g.
-# javax.naming.NamingException via logback → slf4j → commons-logging →
+# javax.naming.NamingException via logback -> slf4j -> commons-logging ->
 # SpringApplication.<clinit>).  Add them explicitly so a jlink image built
 # from the fallback path can still boot.
 if (-not (Get-IsWindows)) {
@@ -2148,8 +2148,8 @@ if ($modules.Count -eq 0) {
 $phaseIndex = 4
 Write-BuildProgress -Status $buildPhases[$phaseIndex - 1].Label
 
-# jlink refuses to write into an output directory that exists — even an
-# empty one — so remove the runtime directory entirely (rename-then-delete
+# jlink refuses to write into an output directory that exists - even an
+# empty one - so remove the runtime directory entirely (rename-then-delete
 # for lock safety) WITHOUT recreating it; jlink creates it itself.  This
 # makes the script idempotent over an existing build: a plain re-run after
 # a source change must not fail with 'directory already exists' or leave a
@@ -2244,7 +2244,7 @@ $assetSize = [math]::Round(((Get-Item $assetPath).Length / 1MB), 2)
 Write-Host "Browser4 runtime bundle created: $assetPath ($assetSize MB)" -ForegroundColor Green
 
 # --------------------------------------------------------------------------
-# Plugin report — repeated here, at the very end, because this is the part of
+# Plugin report - repeated here, at the very end, because this is the part of
 # the output a human actually reads; a Write-Warning in the middle of a long
 # build scrolls away, and the CLI only echoes a *failing* build's output.
 # --------------------------------------------------------------------------
