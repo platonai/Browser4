@@ -9334,6 +9334,16 @@ fn local_bundle_plugin_warning(root: &Path, work_dir: &Path) -> Option<String> {
 /// before the script runs.  Without this, PowerShell writes stderr in the
 /// system's OEM code page (e.g. GBK on Chinese Windows) and Rust's
 /// `String::from_utf8_lossy` produces garbled diagnostics.
+///
+/// Windows PowerShell 5.1 reads a BOM-less `.ps1` with the *ANSI* code page,
+/// so `build-runtime-bundle.ps1` (and any script this function runs) must stay
+/// ASCII-only, or be saved as UTF-8 *with* a BOM.  Non-ASCII text there is not
+/// a cosmetic problem: a UTF-8 em dash decodes to `â€”`, whose `”` the 5.1
+/// tokenizer accepts as a string delimiter, and the script stops parsing
+/// ("Missing ')' in method call").  `pwsh` decodes UTF-8 correctly, which is
+/// why pwsh-only runs never see it.
+/// `browser4-apps/browser4-bundle/build-runtime-bundle.tests.ps1` guards the
+/// encoding contract; see AGENTS.md "Common Issues".
 async fn run_bundle_build_script(
     shell: &str,
     script: &Path,
@@ -9801,10 +9811,6 @@ pub fn windows_parent_process_id(pid: u32) -> u32 {
 /// backend at all. The fallback is safe to retry because a failed attempt never
 /// reports a pid: `ReturnValue != 0` means nothing was created, and a script
 /// error aborts before `Win32_Process.Create` runs.
-///
-/// `startup_log_path` is `None` for children that have no startup log (the
-/// background update agent, #638); the hidden-console warning still goes to
-/// stderr, which such children already redirect to null.
 #[cfg(windows)]
 fn run_wmi_create_with_fallback(
     hidden_script: &str,
@@ -9815,9 +9821,9 @@ fn run_wmi_create_with_fallback(
         Ok(pid) => Ok(pid),
         Err(error) => {
             let warning = format!(
-                "Creating the process with a hidden console failed ({error}); retrying \
+                "Creating the backend with a hidden console failed ({error}); retrying \
                  without Win32_ProcessStartup — a terminal window may stay visible while \
-                 it runs."
+                 the backend runs."
             );
             if let Some(path) = startup_log_path {
                 append_startup_log_message(path, warning.clone());
@@ -11320,9 +11326,8 @@ mod tests {
             temp.path(),
             false,
         );
-        let pid =
-            run_wmi_create_with_fallback(failing_script, &plain_script, Some(&startup_log_path))
-                .expect("the plain attempt must create the backend after the hidden one fails");
+        let pid = run_wmi_create_with_fallback(failing_script, &plain_script, Some(&startup_log_path))
+            .expect("the plain attempt must create the backend after the hidden one fails");
 
         assert!(
             windows_pid_is_alive(pid),
@@ -11352,9 +11357,8 @@ mod tests {
             "$ErrorActionPreference = 'Stop'; [Console]::Error.Write('hidden rejected'); exit 1";
         let plain_script =
             "$ErrorActionPreference = 'Stop'; [Console]::Error.Write('plain rejected'); exit 1";
-        let error =
-            run_wmi_create_with_fallback(hidden_script, plain_script, Some(&startup_log_path))
-                .expect_err("both attempts failing must be an error");
+        let error = run_wmi_create_with_fallback(hidden_script, plain_script, Some(&startup_log_path))
+            .expect_err("both attempts failing must be an error");
         let message = error.to_string();
         assert!(
             message.contains("plain rejected") && message.contains("hidden rejected"),

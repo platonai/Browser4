@@ -217,6 +217,118 @@ class PulsarSessionManagerTest {
     }
 
     @Test
+    @DisplayName("named session requesting PROTOTYPE is forced to SEQUENTIAL")
+    fun namedSessionWithPrototypeProfileModeIsForcedToSequential() {
+        // Named sessions only honor explicit TEMPORARY or SEQUENTIAL; anything
+        // else (DEFAULT, PROTOTYPE, SYSTEM_DEFAULT, null) falls through to the
+        // SEQUENTIAL else-branch. This guards against a caller passing
+        // PROTOTYPE and expecting it to take effect on a per-session basis —
+        // PROTOTYPE is a global config knob, not a per-session mode.
+        val session = sessionManager.getOrCreateSession(
+            mapOf("sessionId" to "team-proto", "profileMode" to "PROTOTYPE")
+        )
+
+        assertEquals("SEQUENTIAL", session.capabilities?.get("profileMode"),
+            "Named session requesting PROTOTYPE must be forced to SEQUENTIAL")
+        assertNotNull(session.capabilities?.get("contextDir"),
+            "Forced-SEQUENTIAL named sessions still need their dedicated context dir")
+        assertTrue(session.capabilities?.get("contextDir")!!.endsWith("cx.${session.sessionId}"))
+    }
+
+    @Test
+    @DisplayName("named session requesting SYSTEM_DEFAULT is forced to SEQUENTIAL")
+    fun namedSessionWithSystemDefaultProfileModeIsForcedToSequential() {
+        // SYSTEM_DEFAULT is deprecated (Chrome ≥ 143 refuses to debug the real
+        // default profile), and named sessions silently coerce it to SEQUENTIAL
+        // with a context dir — never expose the deprecated mode at per-session
+        // scope.
+        val session = sessionManager.getOrCreateSession(
+            mapOf("sessionId" to "team-sys", "profileMode" to "SYSTEM_DEFAULT")
+        )
+
+        assertEquals("SEQUENTIAL", session.capabilities?.get("profileMode"),
+            "Named session requesting SYSTEM_DEFAULT must be forced to SEQUENTIAL")
+        assertNotNull(session.capabilities?.get("contextDir"))
+    }
+
+    @Test
+    @DisplayName("DEFAULT session with explicit TEMPORARY is forced back to DEFAULT")
+    fun defaultSessionWithExplicitTemporaryModeIsForcedToDefault() {
+        // Line 1778 catches any DEFAULT session that is NOT the explicit
+        // DEFAULT+SEQUENTIAL combination — so TEMPORARY, PROTOTYPE, and
+        // SYSTEM_DEFAULT all land on DEFAULT. The caller must pass an
+        // explicit `sessionId=DEFAULT` to enter this branch; leaving
+        // sessionId unspecified creates a named session instead.
+        val session = sessionManager.getOrCreateSession(
+            mapOf("sessionId" to "DEFAULT", "profileMode" to "TEMPORARY")
+        )
+
+        assertEquals("DEFAULT", session.capabilities?.get("profileMode"),
+            "DEFAULT session must reject TEMPORARY override and stay DEFAULT")
+        assertNull(session.capabilities?.get("contextDir"),
+            "DEFAULT sessions must never pin a named context dir")
+    }
+
+    @Test
+    @DisplayName("DEFAULT session with explicit PROTOTYPE is forced back to DEFAULT")
+    fun defaultSessionWithExplicitPrototypeModeIsForcedToDefault() {
+        val session = sessionManager.getOrCreateSession(
+            mapOf("sessionId" to "DEFAULT", "profileMode" to "PROTOTYPE")
+        )
+
+        assertEquals("DEFAULT", session.capabilities?.get("profileMode"),
+            "DEFAULT session must reject PROTOTYPE override and stay DEFAULT")
+        assertNull(session.capabilities?.get("contextDir"))
+    }
+
+    @Test
+    @DisplayName("SWARM session requesting PROTOTYPE falls back to SEQUENTIAL")
+    fun swarmSessionWithPrototypeModeFallsBackToSequential() {
+        // SWARM shares its own decision tree (line 1762-1766): it only honors
+        // TEMPORARY; everything else → SEQUENTIAL. PROTOTYPE and SYSTEM_DEFAULT
+        // are silently downgraded.
+        val session = sessionManager.ensureSwarmSession(
+            mapOf("profileMode" to "PROTOTYPE")
+        )
+
+        assertEquals("SEQUENTIAL", session.capabilities?.get("profileMode"),
+            "SWARM session requesting PROTOTYPE must fall back to SEQUENTIAL")
+    }
+
+    @Test
+    @DisplayName("SWARM session requesting SYSTEM_DEFAULT falls back to SEQUENTIAL")
+    fun swarmSessionWithSystemDefaultModeFallsBackToSequential() {
+        val session = sessionManager.ensureSwarmSession(
+            mapOf("profileMode" to "SYSTEM_DEFAULT")
+        )
+
+        assertEquals("SEQUENTIAL", session.capabilities?.get("profileMode"),
+            "SWARM session requesting SYSTEM_DEFAULT must fall back to SEQUENTIAL")
+    }
+
+    @Test
+    @DisplayName("case-insensitive profileMode strings are normalized")
+    fun profileModeStringsAreCaseInsensitive() {
+        // The normalization pipeline must accept "temporary", "TempOrary", and
+        // "TEMPORARY" equally — callers may arrive from HTTP query params,
+        // CLI flag parsing, or hand-written JSON payloads with unpredictable
+        // casing.
+        val lowercase = sessionManager.getOrCreateSession(
+            mapOf("sessionId" to "team-case-lc", "profileMode" to "temporary")
+        )
+        val mixedCase = sessionManager.getOrCreateSession(
+            mapOf("sessionId" to "team-case-mx", "profileMode" to "TempOrary")
+        )
+        val uppercase = sessionManager.getOrCreateSession(
+            mapOf("sessionId" to "team-case-uc", "profileMode" to "TEMPORARY")
+        )
+
+        assertEquals("TEMPORARY", lowercase.capabilities?.get("profileMode"))
+        assertEquals("TEMPORARY", mixedCase.capabilities?.get("profileMode"))
+        assertEquals("TEMPORARY", uppercase.capabilities?.get("profileMode"))
+    }
+
+    @Test
     fun defaultAndSwarmSessionsDoNotGetNamedContextDir() {
         val defaultSession = sessionManager.getOrCreateSession(
             mapOf("sessionId" to "DEFAULT", "profileMode" to "SEQUENTIAL")

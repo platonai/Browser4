@@ -1758,6 +1758,20 @@ class PulsarSessionManager(
         }
 
         normalizedCapabilities[SESSION_ID_CAPABILITY] = sessionId
+        // Resolve "is this a DEFAULT session?" BEFORE the profileMode tree,
+        // because `sessionId` has already been rewritten from the literal
+        // "DEFAULT" to a stable UUID (line 1722-1731) — comparing `sessionId`
+        // against DEFAULT_SESSION_ID here would always be false, making the
+        // three DEFAULT branches below dead code. Checking both the explicit
+        // single-arg path and the capabilities-map path covers every caller.
+        val isDefaultSession = when {
+            hasExplicitSessionId && explicitSessionId.equals(
+                DEFAULT_SESSION_ID, ignoreCase = true
+            ) -> true
+            !requestedSessionId.isNullOrBlank() &&
+                requestedSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> true
+            else -> false
+        }
         val profileMode = when {
             sessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> when (requestedProfileMode) {
                 BrowserProfileMode.TEMPORARY -> BrowserProfileMode.TEMPORARY
@@ -1765,17 +1779,15 @@ class PulsarSessionManager(
                 else -> BrowserProfileMode.SEQUENTIAL
             }
 
-            hasExplicitSessionId && sessionId.equals(
-                DEFAULT_SESSION_ID,
-                ignoreCase = true
-            ) -> BrowserProfileMode.DEFAULT
+            // DEFAULT sessions honor an explicit SEQUENTIAL override (so the
+            // named-session-style pool can be used as a fallback), but any
+            // other mode (TEMPORARY, PROTOTYPE, SYSTEM_DEFAULT, null) reverts
+            // to DEFAULT — the caller must not silently turn a long-lived
+            // shared session into a disposable TEMPORARY or a deprecated
+            // SYSTEM_DEFAULT by passing a capability.
+            isDefaultSession && requestedProfileMode == BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
+            isDefaultSession -> BrowserProfileMode.DEFAULT
 
-            sessionId.equals(
-                DEFAULT_SESSION_ID,
-                ignoreCase = true
-            ) && requestedProfileMode == BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
-
-            sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> BrowserProfileMode.DEFAULT
             // Named sessions below: honor an explicit TEMPORARY request;
             // otherwise keep SEQUENTIAL as the mode marker while `contextDir`
             // pins the session's dedicated profile.

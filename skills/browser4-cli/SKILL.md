@@ -48,18 +48,11 @@ See [§8 Installation](#8-installation) for the Java 25+ prerequisite and the fi
 
 ## 1. Core Loop
 
-> **First-run latency:** From a source tree, the first launch builds the runtime bundle via Maven (~1–3 min, before the spinner appears) and then starts the Browser4 backend (Spring Boot + JVM, ~10s). Subsequent commands are instant — the server stays alive between invocations.
->
-> On JDK 24+ the first backend start of a **bundle** also trains a JVM AOT cache in the background (detached, below-normal priority, ~1–3 min, ~90 MB under the CLI state dir `aot-cache/<key>/`; it never blocks the command). The cache is keyed by runtime tag + jar list + JVM flags, so a new version or a rebuilt dev bundle trains once again, and it is picked up by the **next** backend start. Measured on the reference machine: Spring `Started in` 2.0 s → 1.1 s, CLI readiness (`/actuator/health` UP and `/mcp/tools` ready) 3.6 s → 2.3 s. `BROWSER4_CLI_DISABLE_AOT_CACHE=1` disables it; `browser4-cli status` prints an `AOT cache: …` line.
-
-> **When the backend does not stay alive:** a restricted session (sandbox, CI runner, or a terminal that is torn down after each command) can reap the backend even though an earlier run printed `Server ready in …s`. The symptom is misleading: the next command reports `Browser4 did not become MCP-ready` while its startup log ends with `Process exited early with status exit code: 0xffffffff`. Check `browser4-cli status` (health must be `UP`), then just re-run the command — every command, `open` included, brings the backend up on demand. There is no separate "start the server" step to run: no launcher script, no source checkout.
->
-> On Windows the launcher now handles the usual cause itself: when the CLI runs inside a **job object** (a shell tool that kills the whole process tree when the command ends), it asks for `CREATE_BREAKAWAY_FROM_JOB`, and — when the host job refuses that — creates the backend through `Win32_Process.Create`, which lives outside the job. So the backend survives the shell that started it. The startup log says which path ran; on the WMI path the backend's stdout is not captured there (use `browser4-cli doctor log`) and `BROWSER4_CLI_BIN` is not inherited.
-
-
-> **Headless mode is the default for AI agents:** Always open browsers with `--headless` unless the user **explicitly** asks to see the browser window ("show me the browser", "open visibly", "I want to watch", or "headed"), a human must act on the page, or the site blocked the headless browser — in that last case retry `--headed` **once** (§2 Display Mode).
-
-> **Dev mode never serves a stale backend.** From a source tree the backend must be the checked-out code. An already assembled runtime bundle is reused as-is while it matches the checkout. If it was built from a **different project version**, the command **fails with a non-zero exit** and names the reason, the bundled/checked-out versions, the bundle's build time and the rebuild command — nothing is started. If the checkout's sources merely look **newer than the bundle jars**, the command rebuilds from source and then starts (that signal cannot tell a real source change from a touched-but-unchanged tree, so refusing on it would block startup on a false positive). Rebuild with `powershell -ExecutionPolicy Bypass -File browser4-apps/browser4-bundle/build-runtime-bundle.ps1` (`pwsh -File …` on Linux/macOS) or re-run with `BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1`. To deliberately test the older backend, set the single opt-out `BROWSER4_CLI_ALLOW_STALE_BUNDLE=1` — the warning stays, and `status` / `doctor` keep reporting the skew (`local_bundle` in `--json`).
+> **Key runtime notes — keep these in mind:**
+> - **First-run latency (source tree):** Maven bundle build (~1-3 min) + backend start (~10s); subsequent commands reuse the running backend instantly. JDK 24+ also trains an AOT cache in the background (detached, ~90 MB) for faster later starts — `BROWSER4_CLI_DISABLE_AOT_CACHE=1` to disable. See AGENTS.md "Development Environment" for the wrapper scripts.
+> - **Backend keeps itself alive:** restricted hosts (sandbox, CI, job objects) can reap the backend; just re-run the command — every command brings it up on demand. On Windows the launcher uses `CREATE_BREAKAWAY_FROM_JOB` (or `Win32_Process.Create` as fallback) to survive tree-killing shells. `browser4-cli status` confirms health; `browser4-cli doctor log` reads the startup log when the WMI path silences stdout.
+> - **Headless is default for AI agents** — use `--headed` only when the user explicitly asks for a visible window, a human must act, or anti-bot blocking (retry **once**). See [§2 Display Mode](#display-mode-headless-vs-headed).
+> - **Dev mode never serves stale backends** — if the runtime bundle was built from a different project version, the command fails naming the reason, the bundled/checked-out versions, and the rebuild command. Touching sources newer than the bundle jars triggers an automatic rebuild; force it with `BROWSER4_CLI_FORCE_REBUILD_BUNDLE=1`.
 
 ```
 1. OPEN        browser4-cli open --headless <url>   # headless by default for AI agents
@@ -135,9 +128,7 @@ Refs are **ephemeral** — treat them as single-use handles:
 
 **Rule for AI agents: always use `--headless` by default.** Use `--headed` for exactly three reasons: (1) the user **explicitly** asks for a visible browser ("show me the browser", "I want to see", "open visibly", "headed", "watch what happens"); (2) a human must act on the page (login, CAPTCHA, QR code, 2FA) and needs to see it; (3) **anti-bot escalation** (below).
 
-> **Choosing the whole setup** (session × display × browser source — including
-> when to attach to your own browser instead of launching one): see
-> [browser-modes.md](references/browser-modes.md).
+> **Choosing the whole setup** (session × display × browser source — including when to attach to your own browser instead of launching one): see the next section, [Browser Source & Connection](#browser-source--connection).
 
 **Anti-bot escalation — retry once:** when a page looks blocked (CAPTCHA/verification widget, Cloudflare/DataDome/Akamai/PerimeterX challenge, Google `/sorry/`, "unusual traffic" / "access denied"), `close` then `open --headed` **with the same `-s <name>`** so profile and cookies survive, retry the same step **once**, and **tell the user the mode was switched**. If the headed retry is blocked too, stop — the block is fingerprint/IP-level: prefer `attach --cdp` / `attach --extension` (a real logged-in profile), raise `--interact-level`, or report the site as unreachable. GUI-less environments (CI, Docker) degrade `--headed` to headless — say the retry ran headless instead of claiming a visible window. `goto`/`open` run a one-call probe after a successful navigation and print this escalation as an **advisory stderr warning** (naming the signature that fired) when the landed page matches a challenge URL or body marker; the command still succeeds, so act on the warning yourself rather than waiting for a failure (`--json` reports it as `challenge_detected` / `challenge_signature`). The weaker "implausibly empty body" signal (few visible chars and **no iframes** — widget/demo pages are exempt, as are content paths like `/wiki/…`) only advises a retry and a `snapshot` inspection, **not** a mode switch — do not pay a session teardown for that signal alone.
 
@@ -154,8 +145,41 @@ browser4-cli goto https://other-page.com             # stays headless (or headed
 > **Notes:** When `goto` is the very first command (no prior `open`), it auto-opens a new session using the CLI's default display mode, which is headless. `--headless`/`--headed` only take effect when **creating** a new session — when `open` reconnects to a running session they are ignored (the CLI warns on stderr). To change the mode, `close` first, then `open --headless`. Use `open --fresh` to discard a stale session's tabs/cookies/location entirely and start clean.
 >
 > `--display-mode GUI|HEADLESS|SUPERVISED` is the backend's own display capability (the one `swarm create --display-mode` also sets). It carries the display choice **by itself** — combining it with `--headed`/`--headless` is a usage error, and the mode is still fixed at session creation. `--max-open-tabs <n>` (positive integer) caps the tabs of the session's browser context.
->
-> `--channel chrome|ego-lite` picks which browser the backend launches and manages — Chrome by default, or an installed ego lite. The channel is fixed at session creation (like the display mode): reconnecting ignores it, `close` or `open --fresh` to switch. Other browsers (Edge, Canary, Electron, cloud) stay attach-only — see [browser-modes.md](references/browser-modes.md).
+
+### Browser Source & Connection
+
+Three ways to get a browser — this decides what browser you drive and how you connect:
+
+| Source | Command | Browser | Connection |
+|---|---|---|---|
+| **Backend-launched** | `open` | Default Chrome, or `open --channel ego-lite` | Browser4 starts it itself with a random `--remote-debugging-port`, controlled over CDP |
+| **CDP attach** | `attach --cdp <channel\|url\|port>` | Any running CDP endpoint: Chrome / Edge / Electron / cloud / ego-lite | Direct CDP over HTTP (`/json`) or WebSocket |
+| **Extension attach** | `attach --extension [channel]` | Running Chrome / Edge (Browser4 extension installed) | Extension relays CDP over WebSocket |
+
+**Quick decision tree:**
+
+```text
+Need to drive a browser
+├─ Need the login/state of an already-running browser (your daily Chrome, a cloud browser, Electron)?
+│   ├─ No debugging-port setup wanted → attach --extension [channel]
+│   └─ Happy with a port → attach --cdp <channel|url|port>
+├─ Bulk, non-interactive, throughput → swarm create → swarm query → swarm close
+├─ Several tasks in parallel → one -s <name> per task (isolated profile + login)
+└─ Otherwise → open --headless <url>
+    ├─ Human must act (login/CAPTCHA/QR) → open --headed
+    ├─ Headless blocked as bot → close → same -s open --headed → retry ONCE
+    └─ One-shot clean scrape → open --profile-mode TEMPORARY
+```
+
+**Key rules:**
+- Only `open` and `open --channel ego-lite` are managed launches. Any other channel name (`msedge`, `chrome-canary`, Electron, cloud) is attach-only — `open` rejects it with a hint to `attach --cdp`.
+- **ego-lite** (Citro Labs fingerprint browser) owns its anti-detection behaviour — Browser4 never injects its stealth layer (no UA rewrite, no stealth.js), but human-like input (trusted CDP clicks, segmented mouse moves, typing jitter) still applies. **CDP only, no extension transport.**
+- **`attach` never launches a browser.** An unattached session with `browser.launch.policy=attached` fails loudly instead of silently starting a second Chrome next to yours.
+- **`close` semantics differ:** `open` sessions **terminate the browser process**; attach sessions **only disconnect and close the tab they drove** — the browser keeps running.
+- **Two hard constraints:** SWARM always launches its own browsers (no attach allowed); display mode is fixed at session creation (`close` + re-`open` to change it).
+- Chrome ≥ 143 no longer supports `SYSTEM_DEFAULT` profile mode. To reuse your logged-in profile, use an attach path; to move auth into a managed session, use `state save` / `state load`.
+
+See [browser-modes.md](references/browser-modes.md) for the full three-axis comparison (session × display × browser source) and profile modes; [attach.md](references/attach.md) for attach transport details — the four-tier CDP endpoint resolution, endpoint verification & failure codes, extension transport constraints, and close/disconnect semantics.
 
 ### Sessions
 
@@ -268,7 +292,7 @@ the geolocation caveat: **[emulation.md](references/emulation.md)**.
 | `loop` | Repeated task execution with persistence | Monitoring, scheduled checks | [loop.md](references/loop.md) |
 | `webminer install`, `webminer all`, `webminer views` | Structure pages you already have (local ML clustering, no LLM) | Corpus > 1,000 pages → WebMiner Commercial; `webminer all` truncates at `--max-files` (default 40) and still prints `PIPELINE COMPLETE`, so raise the cap | [browser4-web-miner](../browser4-web-miner/SKILL.md) |
 | `state save`, `state load`, `cookie-*`, `*-storage-*` | Browser storage management | Auth state reuse, cookie manipulation | [storage-state.md](references/storage-state.md) |
-| `attach`, `attach --list` | Connect to existing Chrome/Edge via CDP (`--list` first enumerates local browsers started with `--remote-debugging-port` — port, family, profile — client-side, no session) | Debug live browser, reuse auth — after attaching, check the printed actual browser; a ⚠ warning flags a channel mismatch | [attach.md](references/attach.md) |
+| `attach`, `attach --list` | Connect to an existing browser via **CDP** (`--cdp`) or **Browser4 Extension** (`--extension`); `--list` enumerates local browsers with `--remote-debugging-port` (port, family, profile) client-side, no session | Debug live browser, reuse auth — after attaching, check the printed actual browser; a ⚠ warning flags a channel mismatch | [attach.md](references/attach.md) |
 | `star` | Star the Browser4 repository as the user: with the GitHub CLI (`gh`) signed in the star is written through the REST API after one confirmation (`--gh` skips the prompt, `--no-gh` never uses the CLI); otherwise it opens the repository in the browser the user is **already logged into** and waits for their click (`--check` reads the state from the API or a repo tab, `--wait <seconds>`, `--no-open`, `--dismiss`) | Only when the **user** asks to star/support the project. Never pass `--gh` on the user's behalf: an interactive run asks the user once, and a piped/agent run only writes with `--gh` — choosing that flag *for* them is exactly the inauthentic star it exists to prevent. Agents must not run `star` (with or without `--gh`) unless the user asked for it | — |
 | `webdb export`, `webdb normalize` | Export cached pages, normalize URLs to database keys | Post-crawl content extraction, URL key lookup | [webdb.md](references/webdb.md) |
 | `skills`, `skills get`, `skills path`, `skills unpack` | Bundled AI agent skill files | Refresh agent instructions, unpack skill files | [skills.md](references/skills.md) |
@@ -366,16 +390,16 @@ Proven copy-paste recipes — full walkthroughs in **[quick-patterns.md](referen
 7. **Static Data Extraction** — `get text` / `get attr "<css>"` straight off the live page: every `htmlsnapshot` read captures the active tab itself, so nothing has to be captured first
 8. **Bulk Extraction (X-SQL)** — correlated fields via `--sql @query.sql` with `DOM_LOAD_AND_SELECT(@url, '.product-card')`
 9. **PowerCSS** — `:expr()` visual-feature selectors; full reference in [power-dom.md](references/power-dom.md)
-10. **Agent Task Lifecycle** — `agent run` (async) → `status` → `result`; or `--wait [--wait-timeout]`; `--follow` streams every step (add `--ndjson` for one JSON object per line); `-i` opens an interactive session where a line typed while a task runs steers it, and `/stats` reports what the run cost (LLM rounds/requests, tokens incl. the prompt-cache hit rate, tool calls). The `-i` prompt says what the next line does — `agent> ` a task, `steer> ` steering, `steer[N]> ` N accepted-but-unseen messages, `steer!> ` an access request waiting for `/approve` — and a pending request is announced (`⚠ access request …`) instead of only being visible through `/access`; `/tasks` lists the session's ids for `/result <task-id>`, `/resume <task-id>` and `/rewind <task-id>`, `/status` reports steps + elapsed time + the step in flight, `/help <command>` describes one command and a typo names the nearest one. `agent run -i --continue` resumes the session the last interactive run recorded (the backend keeps its conversation for 12h by default; the exit line prints the `-s <id>` alternative). The prompt line behaves like a shell prompt: readline keys (`Ctrl+A/E/U/K/W`, `Alt+←/→`), `Tab` completion of session commands, `on|off` values, task ids and `/add-dir` folders, `↑`/`↓` history persisted across sessions (`/history [n|clear]`, `<state dir>/agent-repl-history`, `BROWSER4_CLI_NO_HISTORY=1` turns it off), `Ctrl+L` to clear the screen, a pasted multi-line task submitted as ONE task, and a trailing `\` to continue an instruction; `Ctrl+C` cancels the running task, clears a typed line, and leaves on a second press at an empty prompt (`Ctrl+D` also leaves). On Windows the console keeps its own line editing — no persisted history, `Tab` completion or bracketed paste — while everything else (steering, `/` commands, the prompt state, `Ctrl+C`) behaves the same. Task type is browser by default; `--coding` explicitly marks a pure file/build task (never auto-detected) and runs it in an isolated git worktree whose patch merges into the checkout only when `coding.verify` passes. `--access full|write|read-build|read` narrows that task's coding tools (read-build = read + project build, no edits, no shell) and is reset when the task ends; `--unrestricted` is the opposite escape hatch — that one task runs with YOUR own OS permissions (full preset, no workspace/protected rails, no OS sandbox, and the shell's command allow-list off as well, so PowerShell cmdlets and unusual programs run verbatim (an inline script body — `powershell -Command …`, `bash -c …` — is not tier-checked in any mode, and shapes the checker cannot decompose, such as `for` loops, are handed to the platform shell in every mode)), it is audited and inherited by `--resume`, while OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) and the commands that would kill or rebuild the backend stay refused; `--add-dir <folder>` grants that task one extra existing folder (read/write/shell; the preset still bounds it; `-i` has `/add-dir` for mid-session grants); reading is wider than writing on purpose — Browser4's own data root (`~/.browser4`: logs, task data, per-task workspaces, its `tmp/`), `~/.browser4` itself even when a managed `--workspace` moved the data root, the CLI workspace owning `<app data>`, the source checkout and any `-Dbrowser4.agent.readPaths=<dirs>` folder are readable from every task and stay read-only except for the two writable roots named later in this item, while the checkout a task's workspace mirrors is also writable (that is how a self-development task edits its own code), and other tasks' workspaces are writable by default too — `<agent data>/agent/<yyyy>/<MM>/<dd>/<uuid>/workspace[.<task-id>]`, newest 7 days and at most 64 roots, so a deliverable can be handed to the next task or a previous run finished (`workspace.archive`, `agent/skills` and isolated worktrees stay out; the cost of the default is that a run can overwrite another task's deliverable, so `filesChanged` means "written by this run", not "produced by it", and `-Dbrowser4.agent.allowTaskWorkspaceWrites=false` restores the workspace-only write boundary together with the attribution guarantee), and OS credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`) stay refused (`coding.permissions` prints the roots in effect); a refused step is not a dead end — `coding.requestAccess` files a non-blocking pending request, an operator approves it through `POST /api/agent/<taskId>/access/<requestId>/approve`, and `denyTools`, protected paths and sensitive paths are never approved; a job with no TTY (scripts, CI, submitted tasks) derives `full` with outbound network instead of the server-wide preset (`browser4.agent.access.unattended` narrows it)
+10. **Agent Task Lifecycle** — `agent run` (async) → `agent status <id>` → `agent result <id>`; or `agent run --wait`, `--follow` (streaming, `--ndjson` for one JSON per line), `-i` interactive session (steering while running, `/result`, `/stats`, `/access`, `/tasks`, `/resume`, `/rewind`; shell-like prompt with readline + history). Task completion check: `status: "done"` (terminal: done/failed/cancelled). `--coding` marks pure file/build tasks (never auto-detected, isolated git worktree, patches merged on `coding.verify` pass). Access presets: `--access full|write|read-build|read` (read-build = read + project build, no edits/shell); `--unrestricted` runs with full OS permissions. `--add-dir <folder>` grants one extra folder; reading is wider than writing by design (Browser4 data root, source checkout readable from every task, writable only in task workspace and the checkout its workspace mirrors). OS credential stores stay refused — use `coding.requestAccess` for approved elevated steps. No-TTY jobs (scripts, CI) derive `full` with outbound network; unattended preset narrows it. Full detail: [agent.md](references/agent.md), [agent-access.md](references/agent-access.md), [agent-workspace.md](references/agent-workspace.md)
 11. **Agent Memory** — run-start `## Memory` recall, `memory_note`, `memory_search`/`read`/`forget`, auto-deposit
 12. **Typing text (`type`)** — `type "text" <ref>`; add `--method auto|chars|exec` (requires a target ref): `auto` (default) types short text per-character and switches to a one-shot `execCommand('insertText')` bulk insert for long (>150 chars) or multi-line text on textarea/contenteditable; `chars` forces per-character typing; `exec` forces the bulk insert. `--verify` keeps its strict read-back semantics for tool callers.
 13. **File Upload** — `upload <ref> <file> [file...]` uploads one or more local files to a page file input (`<input type="file">` only); the paths must be readable by the browser process (remote backend: resolved on the backend host). Multi-file, absolute paths, `--no-snapshot` supported; see [upload.md](references/upload.md).
 
 **Resilient selectors (PowerCSS):** `div:expr(width > 400 && height > 400)` filters by computed geometry/position/content density instead of class names, so it survives markup changes — usable in any CSS selector and in `htmlsnapshot get` / X-SQL selectors. Operators: [power-dom.md](references/power-dom.md); refs → selectors: [css-selector-bridge.md](references/css-selector-bridge.md).
 
-**AI-powered extraction:** `agent run "<task>"` submits an async task — poll `agent status <id>` and read `agent result <id>` (sections; `--json` for the raw envelope). Both answer the shared task envelope (`{taskId, status, statusCode, message, error, errorCode, resumable, elapsedMs, …}`, vocabulary `queued|running|done|failed|cancelled`), so **`status: "done"` is the completion check** (terminal: `done`/`failed`/`cancelled`), and the payload carries the agent's `keyFindings`, `filesChanged` and the `workspace` its deliverables live in — the files **this run** wrote, never an earlier task's. A failed task makes `agent result` exit non-zero (pass `--allow-failed` to read the payload with exit 0) and names the cause in `errorCode`; `resume: agent run --resume <id>` continues the same workspace when the work can continue. `elapsedMs` tells a long-running task from one that just started. `agent list` shows the same knowledge, refreshed from the backend on every call; `extract` / `summarize` are the synchronous variants. `--follow` prints the task's steps live (`[00:03] #1 b4.run(…)`, the model's own text, slow/failed tools) plus a throttled `budget <charged> / <limit> (<pct>) · cache <read> (<pct>)` line (cache-miss accounting; 80% warns once, 100% prints the abort line, and `-i` then offers to continue with a doubled budget) and, on a terminal only, a `⋯ still running · N step(s) · 30s since the last step` heartbeat after 30s without a step (at most every 30s) and ends with one completion line (`✔ Agent completed in 41.3s · <id> · 3 round(s) · 39 tool(s) · 54.4k tokens` — the same wording in `-i` and `--wait`, cost parts omitted when `stats` does not answer in 2s) followed by the result rendered as sections (`Summary`, `Key findings`, `Files written`, `Problems`, `Data`) instead of one line of raw JSON; `--ndjson` emits the same stream as one JSON object per line; `agent run -i` keeps a session open, a line typed while a task runs is injected into it (steering) instead of becoming a second task, `/stats` reports that run's LLM rounds/requests, token usage (cache hit rate included) and tool calls, `/result [--json] [--full]` re-prints the finished task's payload as sections (`--json`: pretty envelope, `--full`: nothing folded), after each task the session predicts 2-3 numbered next *tasks* (the model's own `nextSuggestions` first), and every task of a session inherits the ACTUAL conversation of the earlier ones as a `## Session context` block — instructions, model messages, tool calls and results, your steering lines — which the model compacts with a compression instruction once it crosses `browser4.agent.session.contextTokens` (24000 by default), keeping a factual record (instructions as worded, decisions, paths, files/workspace, numbers, outcomes) and adding no goals or priorities of its own (`/new` starts a fresh context; the conversation survives a backend restart; `browser4.agent.systemPrompt.*` supplies operator guidance) — with `-i --json` the scalar fields still name the last task and `tasks[]` lists every task of the session. Budgets: `--token-budget <n>` caps **this task** (0 = unlimited) without touching the backend default; `config set agent.token.budget.total` changes every later run. See [agent.md](references/agent.md).
+**AI-powered extraction:** `agent run "<task>"` submits an async task — poll `agent status <id>` and read `agent result <id>` (`--json` for the raw envelope, `--allow-failed` to read after failure). Completion check: `status: "done"`. `agent result` sections include `Summary`, `Key findings`, `Files written`, `Problems`, `Data`. `agent list` shows the session's knowledge refreshed from the backend; `extract` / `summarize` are the synchronous variants. `--follow` streams steps live with budget/cache accounting; `--ndjson` emits one JSON per line. `-i` keeps a session open for steering, `/stats` reports rounds/tokens/tool calls. `agent run --resume <id>` continues the same workspace; `--token-budget <n>` caps the task budget (0 = unlimited). Session context carries all prior conversation, auto-compacted after 24k tokens. Full detail: [agent.md](references/agent.md), [agent-access.md](references/agent-access.md)
 
-**Spreadsheet-backed tasks:** an `.xlsx` the task names is copied into `<workspace>/.b4inputs/` for the agent (it resolves the path itself — no repo-root hunting). `coding.read` refuses binary files, so the fields are extracted with a script (`python -c "import openpyxl…"`, or convert to CSV first). The **deliverable is CSV/JSONL**, not `.xlsx`: there is no spreadsheet writer, and the downgrade belongs in `problems` at `system.taskComplete`. **`b4.run` runs in that same workspace**: relative paths (`eval --file .b4scratch/x.js`) resolve there, `timeoutSeconds` above 30s is also passed to the CLI as its own `--timeout` (the CLI's HTTP deadline then outlives the MCP call — but this does **not** widen a single `eval`: the driver's page-evaluate deadline is fixed at 30s, so a longer page-side wait needs `wait --fn`/`wait <ms>` or short polls), and a failing command reports `b4.run [fail] …` instead of a successful-looking result. A **payload belongs on the tool's `stdin` argument** (`b4.run(args="eval --stdin --json", stdin="document.title")`): it never touches the command line, so nothing quotes it and the call skips the shell (~200 ms on Windows). A **fixed sequence belongs in `b4.batch`** (`b4.batch(commands="goto <url>\nsnapshot -v 0\nclick e12")`) — one process and one round trip for the whole list, at the cost of not being able to adapt between steps.
+**Spreadsheet-backed tasks:** an `.xlsx` the task names is copied into `<workspace>/.b4inputs/`; binary reading fails, so fields extract via script (or convert to CSV). Deliverable is CSV/JSONL (no spreadsheet writer — `.xlsx` downgrade belongs in `problems`). `b4.run` resolves relative paths there and forwards `timeoutSeconds` above 30s to the CLI's own `--timeout`. Payloads go on the tool's `stdin` argument to avoid shell quoting. Fixed sequences belong in `b4.batch` (one round trip, no per-step adaption). See [agent-workspace.md](references/agent-workspace.md) for the full context.
 
 ## 7. Reference Map
 
@@ -406,7 +430,7 @@ Organized by task — follow the link that matches what you're trying to do:
 [storage-state.md](references/storage-state.md) — cookies, localStorage, sessionStorage, state save/load
 [browser-state-import.md](references/browser-state-import.md) — copy system browser state into Browser4-managed sessions
 [webdb.md](references/webdb.md) — export cached pages, normalize URLs for database lookups
-[attach.md](references/attach.md) — connect to existing Chrome/Edge via CDP
+[attach.md](references/attach.md) — connect to an existing browser via CDP (`--cdp`) or the Browser4 Extension (`--extension`); endpoint resolution tiers, verification & failure codes, extension transport constraints, close/disconnect semantics
 [tab-management.md](references/tab-management.md) — multi-tab workflows: quick start, recipes (GUID targeting, cross-session, windows), flags, error recovery
 
 **Choose how the browser runs:**
@@ -435,66 +459,19 @@ Organized by task — follow the link that matches what you're trying to do:
 ## 8. Installation
 
 ```bash
-npm install -g browser4-cli && browser4-cli install     # Node.js available
+npm install -g browser4-cli && browser4-cli install          # Node.js available
 irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex   # Windows
 curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash  # Linux/macOS
 ```
 
-The bootstrap scripts also install the Browser4 backend (runtime bundle) automatically:
-`browser4-cli install` on a fresh machine, or `browser4-cli upgrade` when a backend already exists.
-Those two subcommands accept only `--tag` and `--force`; to install the CLI **only**, pass
-`--skip-backend` (`-SkipBackend` in PowerShell) to the install script — the CLI forwards that flag
-to the script internally.
+The bootstrap scripts install both the CLI and Browser4 backend. `install` / `upgrade` accept `--tag` and `--force` only; pass `--skip-backend` (`-SkipBackend` in PowerShell) for CLI-only install.
 
 ### Auto-update
 
-The CLI checks for newer releases in the background, controlled by `BROWSER4_AUTO_UPGRADE`:
+Controlled by `BROWSER4_AUTO_UPGRADE`: `full` (default, runtime + self-upgrade), `notify` (24 h one-line hint), `runtime` (pre-download bundle only), `off`.
 
-| Value | Behavior |
-|---|---|
-| `full` (default) | `runtime` plus a self-upgrade of the CLI binary in the same background pass. |
-| `notify` | Once per 24 h, print a one-line hint on stderr when a newer release exists (deduplicated per tag). |
-| `off` | Never check. |
-| `runtime` | Also pre-download the newer runtime bundle in a detached background process; the download is activated automatically on the next backend start. |
+**Safety rails:** checks only against packaged local runtimes (never dev checkouts or remote servers); tag resolved at most once per 24 h, offline failures count toward that window; major-version jumps are notified only, never downloaded; 3 failed downloads blacklist the tag for 7 days; one background download at a time, orphan updater counted as failed after 2 h (or adopted as pending if the bundle finished). Inspect state with `browser4-cli doctor`. Only three most recent runtime versions kept on disk; superseded versions locked by a running backend are removed on next launch.
 
-Safety rails: checks run only against the local backend with an installed
-packaged runtime (never in dev checkouts or against remote servers); the latest
-tag is resolved at most once per 24 h, and a *failed* attempt counts toward
-that window, so an offline machine never pays a network timeout on every
-command; a major-version jump is only ever notified, never downloaded; a tag
-that fails to download 3 times is blacklisted for 7 days.  Only one background
-download runs at a time, and an updater that dies without reporting back
-(killed with the parent process tree, crashed) is counted as a failed attempt
-after 2 h — or adopted as pending when the bundle did finish downloading — so a
-silently killed updater can never retry forever.  Inspect the current
-state any time with `browser4-cli doctor` (the `-- Auto-Update --` section).
-Only the three most recent runtime versions are kept on disk — the active
-`current.tag` and any pending pre-downloaded version are always retained, and
-superseded versions still locked by a running backend are removed on the next
-launch.
+### Prerequisites & dev mode
 
-### Prerequisites
-
-**Java 25 or newer** is required to build or run the backend server and
-MockSite — the root pom's Maven enforcer rejects older JDKs.  The `b4w`
-bundle rebuild auto-selects the newest installed JDK 25+ when `JAVA_HOME` is
-unset or points at an older JDK, so `./b4w.sh open` works even when `java` on
-`PATH` is older.  A manual `./mvnw` build still needs a 25+ JDK in `JAVA_HOME`
-(e.g. `export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64`).
-Running from a repository checkout also needs **Rust** (`cargo`) for the CLI
-and **Git**.
-
-### Developing from a repository checkout
-
-Use the wrapper instead of an installed binary — it builds the CLI from source
-and starts the locally built backend:
-
-```bash
-./b4w.sh <command>      # Bash / Git Bash / Linux / macOS
-./b4w.ps1 <command>     # PowerShell
-```
-
-The first command in a checkout can take several minutes (Maven bundle build
-plus server start); pass `-Rebuild` to force a backend bundle rebuild after
-changing Kotlin sources.  See [AGENTS.md](../../AGENTS.md) and
-[docs/build-from-source.md](../../docs/build-from-source.md).
+**Java 25+** and **Rust** (`cargo`) for source-tree builds; **Git**. From a checkout use the `b4w` wrapper (`./b4w.sh` / `./b4w.ps1`) — first run does the Maven bundle build + backend start; `-Rebuild` forces a rebuild after Kotlin changes. Full install + build docs: [AGENTS.md](../../AGENTS.md), [build-from-source.md](../../docs/build-from-source.md).

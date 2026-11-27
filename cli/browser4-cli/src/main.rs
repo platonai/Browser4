@@ -28978,13 +28978,6 @@ async fn maybe_auto_update(command: &str, base_url: &str, global: &GlobalFlags) 
 /// Launch the detached background updater process.  Fire-and-forget: stdio is
 /// nulled and the child is never waited on, so it outlives this invocation.
 ///
-/// On a Windows host that reaps the command's descendant tree (AI-agent shells,
-/// see #632) a plain `spawn()` child is killed within milliseconds of being
-/// created, so the prefetch never completed (#638).  The launch therefore goes
-/// through [`daemon::spawn_outside_host_tree`], which asks the WMI provider to
-/// create the process (parent = `WmiPrvSE.exe`) for exactly those hosts; every
-/// other host keeps the plain spawn.
-///
 /// Returns whether the child was started; the caller only records the
 /// prefetch attempt (and its retry window) on success.
 fn spawn_update_agent(plan: &update_check::PrefetchPlan) -> bool {
@@ -28996,13 +28989,6 @@ fn spawn_update_agent(plan: &update_check::PrefetchPlan) -> bool {
     cmd.arg("__update-agent").arg("--tag").arg(&plan.tag);
     if plan.self_upgrade {
         cmd.arg("--self-upgrade");
-    }
-    // A WMI-created agent inherits WmiPrvSE's environment instead of ours, so
-    // the settings that decide where it downloads from and where it records
-    // the outcome have to travel on the command line — otherwise a proxied or
-    // mirrored host silently loses every prefetch.
-    for (key, value) in forwarded_update_agent_env() {
-        cmd.arg("--env").arg(format!("{key}={value}"));
     }
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -29052,11 +29038,23 @@ fn forwarded_update_agent_env() -> Vec<(String, String)> {
         .collect()
 }
 
+/// Parse a `KEY=VALUE` assignment into its key and value halves.
+///
+/// Splits on the first `=` only, so values containing `=` (a proxy URL with
+/// query parameters, for example) stay intact. Returns `None` when the string
+/// has no separator or an empty key.
+fn parse_env_assignment(s: &str) -> Option<(String, String)> {
+    let (key, value) = s.split_once('=')?;
+    if key.is_empty() {
+        return None;
+    }
+    Some((key.to_string(), value.to_string()))
+}
+
 /// Entry point of the hidden `__update-agent` command.
 async fn handle_update_agent(global: &GlobalFlags) -> Result<(), CliError> {
     let mut tag: Option<String> = None;
     let mut self_upgrade = false;
-    let mut forwarded_env: Vec<(String, String)> = Vec::new();
     let args: Vec<&str> = global.args.iter().skip(1).map(String::as_str).collect();
     let mut i = 0;
     while i < args.len() {
@@ -29069,12 +29067,6 @@ async fn handle_update_agent(global: &GlobalFlags) -> Result<(), CliError> {
                 self_upgrade = true;
                 i += 1;
             }
-            "--env" => {
-                if let Some(pair) = args.get(i + 1).and_then(|raw| parse_env_assignment(raw)) {
-                    forwarded_env.push(pair);
-                }
-                i += 2;
-            }
             _ => i += 1,
         }
     }
@@ -29084,26 +29076,8 @@ async fn handle_update_agent(global: &GlobalFlags) -> Result<(), CliError> {
             "__update-agent requires --tag <tag>".to_string(),
         ));
     };
-    apply_forwarded_env(&forwarded_env);
     run_update_agent(&tag, self_upgrade).await;
     Ok(())
-}
-
-/// Split a `KEY=VALUE` argument; an empty key is not an assignment.
-fn parse_env_assignment(raw: &str) -> Option<(String, String)> {
-    let (key, value) = raw.split_once('=')?;
-    if key.trim().is_empty() {
-        return None;
-    }
-    Some((key.to_string(), value.to_string()))
-}
-
-/// Apply the environment the spawning CLI forwarded (see
-/// [`forwarded_update_agent_env`]).
-fn apply_forwarded_env(pairs: &[(String, String)]) {
-    for (key, value) in pairs {
-        std::env::set_var(key, value);
-    }
 }
 
 /// The background updater body: mirror `handle_upgrade`'s runtime steps for
