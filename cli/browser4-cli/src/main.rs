@@ -16500,7 +16500,6 @@ async fn handle_agent_run(
                             &task_id,
                             &cost,
                             None,
-                            crate::color_enabled(),
                         )
                     );
                     // Same renderer as `agent run -i` / `--follow`: the payload is

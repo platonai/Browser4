@@ -214,15 +214,54 @@ What the session's own chrome says:
 - **The console's sidebar lists every session this backend remembers, grouped by workspace** (`GET api/agent/sessions`). A session belongs to the directory its newest `agent run --workspace` task named; sessions whose tasks never named one are grouped under **临时工作区** (each task wrote into its own throw-away directory). The whole panel and each workspace fold independently (remembered in the browser), and clicking a session switches the page to it — URL, stored session and composer follow — and restores its context (`GET api/agent/sessions/{id}/context`): the conversation turns the next task would inherit plus the tasks it ran, with a button to follow the newest one while it is still running. Switching is refused while a task runs, because a run belongs to the session that started it. The page is a left-right shell: the session list is a fixed left column; the right column opens with the composer **centered** under a short headline and **docks it to the bottom** as soon as a task runs (or a session is opened), so the steps get the space.
 - **The console's composer can pick the workspace** for its next tasks: the dropdown beside the input lists the workspaces the session index knows and is remembered in the browser; choosing one submits `POST /api/commands/plain?…&workspace=<dir>`, which the backend validates before the task starts (a missing/invalid directory is a `400`, not a task that fails later). Opening a session adopts that session's workspace, so "continue this conversation" also means "write where it wrote".
 - **Each task starts on a blank line**, headed `▶ task 5b0c3f2a — Summarize the pricing page` (the task text is collapsed to one line and capped at 60 characters).
-- **`/status` is one line**: `task 5b0c3f2a · running · 12 step(s) — collecting product details` (no message → no tail, never a trailing space).
+- **The prompt says what the next line will do.** `agent> ` — a new task; `steer> ` — the line steers the running one; `steer[2]> ` — two steering lines are accepted but the agent has not seen them yet; `steer!> ` — an access request is waiting for you (`/approve`). The prompt used to be a fixed `agent> `: whether typing interrupted the run was something you had to remember.
+- **An access request is announced, not hidden.** While a coding task runs the session polls `GET /api/agent/<task>/access` (throttled, 1.5 s budget, only for tasks that can request) and prints `⚠ access request req-7 · fs.write src/generated — /approve req-7 · /deny req-7` once per request. A task that ends with requests still pending repeats the list with the same hint, and a session that is leaving names the REST call instead — before this only `/access` said anything, and the closing summary was printed for non-TTY sessions only, i.e. never for the person who could approve.
+- **`/status` names the work**: `task 5b0c3f2a · running · 12 step(s) · 1m23s — #7 b4.run(args="goto …") (12s ago)`. The step in flight beats the backend's generic message ("Agent is working"), because that is what "is it moving?" actually needs.
+- **`/tasks` lists the session**: `tasks (3, newest first):` with `agent-task-1  running  18.4s  collect the top 5 products` per row — the ids `/result`, `/resume` and `/rewind` take. `/result <task-id>` reads a named task instead of only the last one.
+- **A mistyped command names the nearest one**: `/stat` answers `unknown command /stat — did you mean /stats?`, and `/help <command>` describes one command instead of the whole list.
 - **A failure names its cause and the way out**: `✖ failed · 5b0c3f2a · 3.2s — page_blocked: the page was blocked` followed, when the backend says the run can continue, by `    resume: agent run --resume 5b0c3f2a · /status for the envelope`.
 - **Quitting does not silently orphan a run.** `/quit` (or stdin EOF) while a task is still running prints `⚠ task 5b0c3f2a keeps running — agent status 5b0c3f2a · agent cancel 5b0c3f2a`.
+- **The prompt line belongs to the CLI.** A step line printed while you are typing clears the prompt row first and draws the prompt and your half-typed text again below it, so a streamed step never lands on top of your input. The terminal is also handed back on the way out: `/quit`, Ctrl+D and SIGTERM restore the previous settings (before this, a Linux session could end in cbreak mode with the shell no longer echoing what you typed).
+- **A piped stdout is never touched.** `agent run -i | tee log` (or any redirected stdout) gets plain lines only — no prompt, no erase/redraw escape codes — because the session draws its prompt only when stdin *and* stdout are terminals. `--quiet` and `--json` behave the same way.
 - **ANSI follows `NO_COLOR`**: any non-empty value disables colour even on a terminal (`--quiet` and `--json` already do).
 
-`-i --json` keeps the scalars `task_id` / `raw` / `stats` describing the **last** task (unchanged, so existing readers keep working) and adds `tasks[]`, one entry per task of the session in order:
+#### Editing the prompt line
+
+The prompt is a real line editor (cbreak mode, keys decoded as they arrive), not a cooked-mode read:
+
+| Key | Effect |
+|---|---|
+| `←` / `→`, `Home` / `End`, `Ctrl+B` / `Ctrl+F`, `Ctrl+A` / `Ctrl+E` | move the caret |
+| `Alt+←` / `Alt+→` (`Ctrl+←/→` on terminals that send `ESC[1;3D/C`) | move by word |
+| `Ctrl+W`, `Ctrl+U`, `Ctrl+K` | delete the word before the caret / to the line start / to the line end |
+| `Backspace`, `Delete` | delete one character |
+| `↑` / `↓` (`Ctrl+P` / `Ctrl+N`) | walk the history — it is **persisted across sessions** |
+| `Tab` | complete a `/command`, an `on`/`off` value, a task id of this session, or a folder for `/add-dir`; several candidates extend to their common prefix, then list |
+| `Ctrl+L` | clear the screen and redraw the prompt with the draft |
+| `Enter` | submit the line (`Enter` inside a paste or after a trailing `\` continues it instead) |
+| `Ctrl+C` | cancel the running task; with nothing running, clear the typed line; on an empty line, warn once and leave on the second press |
+| `Ctrl+D` | leave (the shell's end-of-input) |
+
+History lives in `<state dir>/agent-repl-history` (mode `0600` on Unix, newest 200 lines, compacted on load). `BROWSER4_CLI_NO_HISTORY=1` turns it off — the file is then neither read nor written — and `/history [n]` shows what is remembered while `/history clear` forgets it. Tasks are what a person asked for, so the history is per user, not per session.
+
+#### Coming back after closing the terminal
+
+Every `-i` process uses its own session id (`interactive-<hash>`, printed in the banner) and records it in `<state dir>/agent-interactive-session.json`. `agent run -i --continue` reuses that id, so a later process continues the same conversation while the backend still holds it — `browser4.agent.session.contextTtlMinutes`, 12 h by default. The banner says `· resumed`; when the record is older than that window the session warns that the context may already be gone instead of pretending it was restored. On the way out it prints both ways back:
+
+```
+↻ resume this session: agent run -i --continue (or -s interactive-ab12cd)
+```
+
+`--continue` cannot be combined with `-s` (they name different sessions) and needs `-i` — `agent run --continue "task"` fails with `add -i`. With nothing recorded yet it says so and starts a fresh session that the next `/quit` records, and `/new` records its new generation, so `--continue` always resumes the newest one.
+
+A **pasted multi-line task is one task**: the terminal brackets a paste (`ESC[200~` … `ESC[201~`), the line breaks inside it become spaces, and the whole thing is submitted once. Before this, pasting three lines submitted the first as a task and steered the running one with the other two. The same applies to a typed instruction that ends in `\`: the backslash is consumed and the continuation joins with a space, so the instruction stays on one logical line.
+
+**Windows console**: there is no `stty` there, so the session keeps the console's own line editing — the terminal echoes and edits the line as you type, and `←`/`→`, `Home`/`End` and the console's current-line history work as usual. What it cannot do is the table above: no persisted `↑`/`↓` history, no `Tab` completion, no bracketed paste (a pasted multi-line task submits line by line), no `Ctrl+L`. Everything else is the same — steering, `/` commands, the prompt saying what the next line does, `Ctrl+C` cancelling the running task and a second press on an empty prompt leaving. A true raw-mode implementation on the Windows console is a known follow-up, not a behaviour regression: before this work the console was the only implementation there was.
+
+`-i --json` keeps the scalars `task_id` / `raw` / `stats` describing the **last** task (unchanged, so existing readers keep working) and adds `tasks[]`, one entry per task of the session in order (with the capped `task` text `/tasks` shows):
 
 ```json
-{"task_id":"…","raw":{…},"stats":{…},"tasks":[{"taskId":"5b0c3f2a","status":"done","isDone":true,"elapsedMs":18400,"steps":39},{"taskId":"7f21ab9c","status":"cancelled","isDone":true,"elapsedMs":2100,"steps":4}]}
+{"task_id":"…","raw":{…},"stats":{…},"tasks":[{"taskId":"5b0c3f2a","status":"done","isDone":true,"elapsedMs":18400,"steps":39,"task":"collect the top 5 products"},{"taskId":"7f21ab9c","status":"cancelled","isDone":true,"elapsedMs":2100,"steps":4,"task":"compare the plans"}]}
 ```
 
 A line typed while a task is running is **steering**, not a new task: it is sent to the running task and injected into the agent as a user message at its next model round-trip. `/followup <text>` is the other delivery point: it is queued and delivered when the agent would otherwise stop, as a real user message in the SAME conversation — the task keeps running with it (same task id, same workspace), so it is the right way to add "one more thing" without interrupting the step in flight. The live view labels it `↪ follow-up delivered`; a follow-up that arrives after the task really ended is reported (`⚠ follow-up not delivered`) and kept for the next task. A backend hiccup does not end the session either — the live view keeps following a task that is still running (see [When the step stream fails](#when-the-step-stream-fails)).
@@ -235,12 +274,13 @@ Session commands:
 
 | Command | Effect |
 |---|---|
-| `/help` | List the commands |
-| `/status` | Status of the running (or last) task |
+| `/help [command]` | List the commands, grouped (observe / task control / session), or one command's description |
+| `/status` | Status of the running (or last) task: step count, elapsed time, the step in flight |
+| `/tasks [n]` | The tasks this session ran, newest first — the ids `/result`, `/resume` and `/rewind` take |
 | `/stats [task-id]` | Run statistics: LLM rounds and requests, token usage (prompt-cache reads/writes and hit ratio included when the provider reports them), tool calls, and — for a coding task — `files  N changed` next to the tool count (`⚠ … not converging` when tools ran without a single file change) |
 | `/goal [--json] [--task <id>]` | The task's goal — the instruction the engine pins into every model request — with the plan the run committed to and the steps it still owes (`--json`: the same facts as one object) |
 | `/goal <text>` | Replace the running task's goal (the operator's only channel; the model cannot reach it) |
-| `/result [--json] [--full]` | Print the last finished task's result as sections (`--json`: the envelope as pretty JSON; `--full`: no fold, no per-section caps) |
+| `/result [<task-id>] [--json] [--full]` | Print a finished task's result as sections (`--json`: the envelope as pretty JSON; `--full`: no fold, no per-section caps) |
 | `/resume [--budget <n>] [task-id]` | Continue an interrupted/stalled task with its workspace and files. After a budget abort pass a larger `--budget` (the numbered continue choice does this with a doubled cap) |
 | `/cancel` | Cancel the running task (same as Ctrl+C) |
 | `/new` | Start a new session — the next task gets a fresh agent context |
@@ -253,6 +293,7 @@ Session commands:
 | `/tools [on\|off]` | Show the tool call/result lines (`#1 b4.run`, `↳ #1 b4.run ok in 40ms`); the steps stay recorded, so turning it back on shows the next ones |
 | `/noop-limit <n>` | Consecutive no-op abort threshold (blank resets) |
 | `/events [n]` | Raw JSON of the last n steps (default 20) |
+| `/history [n]` | Tasks typed in earlier sessions (default 20 entries); `/history clear` forgets them |
 | `/quit` | Leave the session |
 
 #### `/stats`: what the run cost
