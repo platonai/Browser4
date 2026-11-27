@@ -661,7 +661,7 @@ class SkillDefinitionLoader {
                 inDependenciesSection -> {
                     if (line.trim().startsWith("-") || line.trim().startsWith("*")) {
                         val depLine = line.trim().removePrefix("-").removePrefix("*").trim()
-                        // Extract skill ID from backticks (e.g., "`web-scraping` - description" -> "web-scraping")
+                        // Extract skill ID from backticks (e.g., "`my-skill` - description" -> "my-skill")
                         val dep = if (depLine.contains("`")) {
                             depLine.substringAfter("`").substringBefore("`")
                         } else {

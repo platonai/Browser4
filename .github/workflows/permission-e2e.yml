@@ -95,13 +95,29 @@ jobs:
           # probe (`JAR_SERVER_READY_TIMEOUT`) and kills it when that window closes, so one attempt can
           # lose a slow Spring Boot start even with the bundle already built. Later attempts are the
           # cheap ones (bundle built, JVM start only).
+          #
+          # A failed *build*, by contrast, is deterministic — retrying cannot fix it. Run 45415301541
+          # retried a PowerShell parse error 70 times for 14 minutes and then reported only "Backend
+          # never became reachable", burying the cause. Three in a row now fail the step and name the
+          # build error, which is what someone triaging the run actually needs to read.
           $deadline = (Get-Date).AddMinutes(50)
           $attempt = 0
           $status = ''
+          $buildFailures = 0
           while ((Get-Date) -lt $deadline) {
             $attempt++
             Write-Host "backend warm-up attempt ${attempt}:"
-            & $env:BROWSER4_E2E_CLI tool call coding_permissions --json '{}' 2>&1 | Out-String | Write-Host
+            $probeOutput = (& $env:BROWSER4_E2E_CLI tool call coding_permissions --json '{}' 2>&1 | Out-String)
+            Write-Host $probeOutput
+            if ($probeOutput -match 'runtime bundle build (script )?failed|Local runtime bundle build aborted|Local Browser4 runtime bundle is not available') {
+              $buildFailures++
+              if ($buildFailures -ge 3) {
+                Write-Host "::error::The runtime bundle build failed ${buildFailures} times in a row, so the backend cannot start. Read the build error above."
+                exit 1
+              }
+            } else {
+              $buildFailures = 0
+            }
             $status = (& $env:BROWSER4_E2E_CLI status 2>&1 | Out-String)
             if ($status -match 'Server health:\s*UP') {
               Write-Host $status
@@ -111,7 +127,7 @@ jobs:
             Start-Sleep -Seconds 10
           }
           Write-Host $status
-          Write-Host '::error::Backend never became reachable — the suite would fail its live-backend probe.'
+          Write-Host "::error::Backend never became reachable after ${attempt} warm-up attempt(s) — the suite would fail its live-backend probe."
           exit 1
 
       - name: Run permission-e2e (Tier A)

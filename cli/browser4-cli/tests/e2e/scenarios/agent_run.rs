@@ -942,6 +942,27 @@ pub(super) fn test_agent_run_interactive_slash_access_commands(ctx: &mut E2ECtx)
     let mock_server = MockBrowser4Server::start();
     ctx.record_step("mock Browser4 server start", started_at.elapsed());
     ctx.browser4_base_url = mock_server.base_url();
+    // The view has to be scripted: an unscripted task reports nothing pending, so
+    // the session's periodic access poll stays quiet unless a test asks for it.
+    mock_server.set_agent_access_view(
+        "task-1",
+        serde_json::json!({
+            "taskId": "task-1",
+            "state": "pending",
+            "pending": [
+                {
+                    "requestId": "req-1",
+                    "effect": "fs.write",
+                    "target": "src/generated",
+                    "reason": "need to write generated code",
+                }
+            ],
+            "grants": [
+                {"id": "op-req-9", "effects": ["fs.exec"], "expiresAt": "task-end"}
+            ],
+            "report": "1 pending request(s), 1 active grant(s)",
+        }),
+    );
 
     // The task id is passed explicitly so nothing depends on session state.
     let run_result = run_command_with_stdin(
@@ -993,6 +1014,189 @@ pub(super) fn test_agent_run_interactive_slash_access_commands(ctx: &mut E2ECtx)
             .contains(&"POST /api/agent/task-1/access/req-2/deny".to_string()),
         "/deny must hit the decision endpoint: {:?}",
         snapshot.agent_access_calls
+    );
+}
+
+/// A coding task's pending access request is announced while the task runs, and
+/// quitting says how to answer it once the prompt is gone.
+pub(super) fn test_agent_run_interactive_reports_pending_access(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+    mock_server.set_agent_access_view(
+        "agent-task-1",
+        serde_json::json!({
+            "taskId": "agent-task-1",
+            "state": "pending",
+            "pending": [
+                {
+                    "requestId": "req-7",
+                    "effect": "fs.write",
+                    "target": "src/generated",
+                    "reason": "generated code",
+                }
+            ],
+            "grants": [],
+            "report": "1 pending request(s), 0 active grant(s)",
+        }),
+    );
+
+    let run_result = run_command_with_stdin(
+        ctx,
+        &["agent", "run", "-i", "--coding"],
+        "generate the client\n/quit\n",
+    );
+
+    let stdout = &run_result.stdout;
+    let snapshot = mock_server.snapshot();
+    assert!(
+        snapshot
+            .agent_access_calls
+            .contains(&"GET /api/agent/agent-task-1/access".to_string()),
+        "the session must poll the access view while the task runs: {:?}",
+        snapshot.agent_access_calls
+    );
+    assert!(
+        stdout.contains(
+            "⚠ access request req-7 · fs.write src/generated — /approve req-7 · /deny req-7"
+        ),
+        "a coding run must name the request it is waiting on:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("POST /api/agent/agent-task-1/access/req-7/approve"),
+        "the closing summary must name the way to answer after the session leaves:\n{stdout}"
+    );
+}
+
+/// `/status` reports how far the run has got and what it is doing, not just a
+/// status word.
+pub(super) fn test_agent_run_interactive_status_reports_progress(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+    mock_server.set_command_status_response(
+        "agent-task-1",
+        serde_json::json!({
+            "id": "agent-task-1",
+            "status": "RUNNING",
+            "processed": 12,
+            "message": "collecting product details",
+        }),
+    );
+    // Keep the task running so `/status` reports a live one.
+    mock_server.await_command_input("agent-task-1");
+
+    let run_result = run_command_with_stdin(
+        ctx,
+        &["agent", "run", "-i"],
+        "summarize the page\n/status\n/quit\n",
+    );
+
+    let stdout = &run_result.stdout;
+    assert!(
+        stdout.contains("task agent-task-1 · running · 12 step(s) · "),
+        "/status must report the step count and how long it has been running:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("collecting product details"),
+        "/status must say what the run is doing:\n{stdout}"
+    );
+}
+
+/// A mistyped command names the nearest one, `/help <command>` describes that one,
+/// `/tasks` lists the session's work and `/result <task-id>` reads a named task.
+pub(super) fn test_agent_run_interactive_slash_help_tasks_and_result(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+    mock_server.await_command_input("agent-task-1");
+
+    let run_result = run_command_with_stdin(
+        ctx,
+        &["agent", "run", "-i"],
+        "summarize\n/stat\n/help tasks\n/tasks\n/result agent-task-1\n/quit\n",
+    );
+
+    let stdout = &run_result.stdout;
+    assert!(
+        stdout.contains("did you mean /stats?"),
+        "a mistyped command must name the nearest one:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("the tasks this session ran, newest first"),
+        "/help <command> must describe that one command:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("tasks (1, newest first):"),
+        "/tasks must list the session's work:\n{stdout}"
+    );
+
+    let snapshot = mock_server.snapshot();
+    assert!(
+        snapshot
+            .result_queries
+            .contains(&"agent-task-1".to_string()),
+        "/result <task-id> must read that task: {:?}",
+        snapshot.result_queries
+    );
+}
+
+/// `agent run -i --continue` resumes the session the previous interactive run
+/// recorded: the same id goes on the wire, so the backend continues that
+/// conversation instead of starting a new one.
+pub(super) fn test_agent_run_interactive_continue_reuses_the_session(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let first = run_command_with_stdin(ctx, &["agent", "run", "-i"], "collect the prices\n/quit\n");
+    assert_eq!(
+        first.exit_code, 0,
+        "the first session must end cleanly:\n{}\n{}",
+        first.stdout, first.stderr
+    );
+
+    let second = run_command_with_stdin(
+        ctx,
+        &["agent", "run", "-i", "--continue"],
+        "now compare them\n/quit\n",
+    );
+    assert_eq!(
+        second.exit_code, 0,
+        "the continued session must end cleanly:\n{}\n{}",
+        second.stdout, second.stderr
+    );
+    assert!(
+        second.stdout.contains("↻ resumed session interactive-"),
+        "--continue must say it resumed the recorded session:\n{}",
+        second.stdout
+    );
+
+    let sessions = mock_server.plain_command_sessions();
+    assert_eq!(sessions.len(), 2, "each run submits one task: {sessions:?}");
+    assert_eq!(
+        sessions[0], sessions[1],
+        "--continue must submit under the recorded session id: {sessions:?}"
+    );
+    assert!(
+        sessions[0].starts_with("interactive-"),
+        "an anonymous interactive session id is what travels: {sessions:?}"
+    );
+
+    // `--continue` without `-i` has no session to resume: say so instead of
+    // running a one-shot task that silently ignores the flag.
+    run_command_expecting_failure(
+        ctx,
+        &["agent", "run", "--continue", "do it"],
+        "add -i",
     );
 }
 

@@ -20,19 +20,19 @@ import java.util.concurrent.ConcurrentHashMap
  * ## Example Usage:
  * ```kotlin
  * val registry = SkillRegistry.instance
- * val skill = WebScrapingSkill()
+ * val skill = ExampleSkill()
  *
  * // Register a skill
  * registry.register(skill, context)
  *
  * // Get a skill
- * val registeredSkill = registry.get("web-scraping")
+ * val registeredSkill = registry.get("my-skill")
  *
  * // Execute a skill
- * val result = registry.execute("web-scraping", context, params)
+ * val result = registry.execute("my-skill", context, params)
  *
  * // Unregister a skill
- * registry.unregister("web-scraping", context)
+ * registry.unregister("my-skill", context)
  * ```
  */
 class SkillRegistry private constructor() {

@@ -44,6 +44,30 @@ The server-side batch endpoint (`MCPToolController.handleCommandBatch()` →
 - **Cursor positioning:** `DOM.focus()` + `Input.dispatchMouseEvent` (click) may leave cursor at 0. Fix: `setSelectionRange(99999, 99999)` after focus+click.
 - **`Input.insertText` racing:** 0ms delay between chars drops `input` events. Fix: use same inter-char delay as `type()` via `randomDelayMillis("type")` (90-240ms).
 
+### Windows background children: one entry point
+
+Any child process that must outlive the command (`__update-agent`, `loop`
+workers, the backend) goes through `daemon::spawn_outside_host_tree`
+(`cli/browser4-cli/src/daemon.rs`). It picks `Win32_Process.Create` on hosts
+that reap descendants by `ParentProcessId` (detected via `TOOLHOST_IPC_NAME` /
+`TOOLHOST_RUNTIME_MODE`, overridable with `BROWSER4_WINDOWS_BACKEND_SPAWN=wmi|spawn`),
+and a plain `spawn()` everywhere else.
+
+`DETACHED_PROCESS` / `CREATE_NO_WINDOW` / `CREATE_NEW_PROCESS_GROUP` only detach
+the **console** — the parent pointer still belongs to the CLI, so such a child is
+killed with the caller's tree. That misconception already produced two separate
+defects (#632 backend, #638 auto-update prefetch, plus the `loop` workers on the
+same path); do not add a third spawn site that re-implements it. Notes:
+
+- `Win32_Process.Create` inherits the provider's environment, so behavioural env
+  (proxy, mirrors, runtime dir) must be forwarded explicitly — see
+  `spawn_update_agent` and its `--env` arguments.
+- It also inherits no std handles: pass a log path to
+  `spawn_outside_host_tree` and the redirect is rebuilt as `cmd /c … >> log 2>&1`.
+- Regression coverage lives in `daemon.rs` / `main.rs` tests behind
+  `#[cfg(windows)]` (`wmi_spawned_*`, `spawn_detached_creates_*`); keep them
+  passing or the behaviour is untested.
+
 ### Direct CDP methods: mandatory review gates
 
 Any method that implements behavior by calling CDP directly (or by evaluating
@@ -396,6 +420,12 @@ cargo test --test e2e -- --nocapture --level EXTENDED --enable-all --scenario '*
 - Avoid Windows-only cmdlets; use `Join-Path` / `[System.IO.Path]::Combine()`
 - Prefer `$env:HOME` over `$env:USERPROFILE`
 - Shebang: `#!/usr/bin/env pwsh`
+- **Encoding:** any `.ps1` the CLI runs with `powershell.exe` (Windows PowerShell 5.1,
+  e.g. `build-runtime-bundle.ps1`) must be **ASCII-only or UTF-8 with BOM**. 5.1 decodes
+  a BOM-less file with the ANSI code page, where a UTF-8 em dash becomes `â€”` — and the
+  `”` in that mojibake is a *string delimiter* for its parser, so the file stops parsing.
+  `pwsh` reads UTF-8 correctly, which is why pwsh-only gates stay green. Guarded by
+  `browser4-apps/browser4-bundle/build-runtime-bundle.tests.ps1`
 - **When fixing one `.ps1`, check siblings for the same issue**
 
 ## Test Script Portability
@@ -442,6 +472,7 @@ File-queue system for task-driven AI workflows (`coworker/`). Task files (Markdo
 | Port 18182 in use | Override `server.port` in root `application.properties` |
 | JaCoCo reports empty / coverage floor never trips | The surefire `argLine` in the root `pom.xml` must use late binding `@{jacocoArgLine}`, never `${jacocoArgLine}`: the property is declared empty, so `${...}` is substituted to `""` while the effective model is built — before `prepare-agent` sets it — and the agent never attaches (`Skipping JaCoCo execution due to missing execution data file`). Verify with `mvn -X -Pquality-gate -pl :browser4-common test` and look for `-javaagent:` on the surefire fork command line |
 | BrowserProtocol retry log storms | Use existing retry utilities, lower log level |
+| Dev-mode start / `permission-e2e` fails with `Runtime bundle build script failed: build script exited with 1` and `Missing ')' in method call` in `build-runtime-bundle.ps1` | Windows PowerShell 5.1 (`powershell.exe`) decoded a BOM-less UTF-8 script with the ANSI code page: a UTF-8 em dash became `â€”`, whose `”` its parser accepts as a **string delimiter**, so every string literal holding one ended early. Keep that script ASCII-only (or UTF-8 **with BOM**) — `pwsh` reads UTF-8 either way, so pwsh-only runs never show it. Guard: `browser4-apps/browser4-bundle/build-runtime-bundle.tests.ps1` (`winps51:` label) |
 | `browser4-cli` (debug, Windows) aborts with `STATUS_STACK_OVERFLOW` / `exit -1073741571` on `click`/`dblclick` | Windows gives the main thread a 1 MB stack reserve (Linux/macOS ~8 MB) and the debug async chain is deep; `cli/browser4-cli/build.rs` links every Windows target with `/STACK:8388608`. Keep that flag and `test_windows_binary_reserves_a_linux_sized_main_thread_stack` (it reads the PE header back). If it recurs, localize with `docs-dev/fake-mcp-server.ps1` — no browser needed. Background: [docs-dev/cli-e2e-test-coverage-analysis.md](docs-dev/cli-e2e-test-coverage-analysis.md) and [the issue draft](coworker/tasks/issues/draft/2026/1001/20261001-224111-windows-click-stack-overflow.issues.md) |
 
 ## Documentation Update Rule

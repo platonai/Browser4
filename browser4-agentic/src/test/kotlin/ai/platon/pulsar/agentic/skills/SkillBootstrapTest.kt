@@ -3,10 +3,18 @@ package ai.platon.pulsar.agentic.skills
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.*
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 
 /**
  * Tests for SkillBootstrap component.
+ *
+ * `browser4-cli` is the only skill bundled on the classpath; the former demo skills
+ * (`web-scraping`, `form-filling`, `data-validation`, `pdf`, `mcp-builder`, `weather`) were
+ * removed, so bootstrap must no longer register them. The registry also loads
+ * `AgentPaths.SKILLS_DIR`, which is machine-specific — assertions below therefore check the
+ * bundled skill by id instead of pinning the total count.
  */
 class SkillBootstrapTest {
 
@@ -28,41 +36,30 @@ class SkillBootstrapTest {
     }
 
     @Test
-    @DisplayName("test bootstrap initializes example skills")
-    fun testBootstrapInitializesExampleSkills() {
+    @DisplayName("test bootstrap loads the bundled browser4-cli skill")
+    fun testBootstrapLoadsBundledCliSkill() {
         bootstrap.initialize()
 
-        // Verify that example skills are loaded
-        assertTrue(registry.contains("web-scraping"), "WebScrapingSkill should be loaded")
-        assertTrue(registry.contains("form-filling"), "FormFillingSkill should be loaded")
-        assertTrue(registry.contains("data-validation"), "DataValidationSkill should be loaded")
-
-        // Verify skill count
-        assertTrue(registry.size() >= 3, "At least 3 skills should be loaded")
+        assertTrue(registry.contains("browser4-cli"), "browser4-cli should be loaded from the classpath")
     }
 
     @Test
-    @DisplayName("test bootstrap loads skills in correct order")
-    fun testBootstrapLoadsSkillsInCorrectOrder() {
+    @DisplayName("test bootstrap no longer loads the removed demo skills")
+    fun testBootstrapDoesNotLoadRemovedDemoSkills() {
         bootstrap.initialize()
 
-        // form-filling depends on web-scraping, so both should be loaded
-        assertTrue(registry.contains("web-scraping"))
-        assertTrue(registry.contains("form-filling"))
-
-        // Verify dependency is satisfied
-        val formFilling = registry.get("form-filling")
-        Assertions.assertNotNull(formFilling)
-        assertTrue(formFilling!!.metadata.dependencies.contains("web-scraping"))
+        listOf("web-scraping", "form-filling", "data-validation", "mcp-builder", "pdf", "weather")
+            .forEach { removed ->
+                assertFalse(registry.contains(removed), "Removed demo skill '$removed' must not be registered")
+            }
     }
 
     @Test
     @DisplayName("test bootstrap can be called multiple times")
     fun testBootstrapCanBeCalledMultipleTimes() {
-        // First initialization
         bootstrap.initialize()
         val firstCount = registry.size()
-        assertTrue(firstCount >= 3)
+        assertTrue(registry.contains("browser4-cli"))
 
         // Second initialization should clear and reload
         bootstrap.initialize()
@@ -70,54 +67,38 @@ class SkillBootstrapTest {
 
         // Should have same number of skills
         assertEquals(firstCount, secondCount)
-
-        // Skills should still be accessible
-        assertTrue(registry.contains("web-scraping"))
-        assertTrue(registry.contains("form-filling"))
-        assertTrue(registry.contains("data-validation"))
+        assertTrue(registry.contains("browser4-cli"))
     }
 
     @Test
-    @DisplayName("test bootstrap loads all example skills successfully")
-    fun testBootstrapLoadsAllExampleSkillsSuccessfully() {
+    @DisplayName("test bundled skill has correct metadata")
+    fun testBundledSkillHasCorrectMetadata() {
         bootstrap.initialize()
 
-        // Get all loaded skills
+        val cliSkill = registry.get("browser4-cli")
+        assertNotNull(cliSkill)
+        assertEquals("browser4-cli", cliSkill!!.metadata.id)
+        assertEquals("browser4-cli", cliSkill.metadata.name)
+        assertEquals("1.0.0", cliSkill.metadata.version)
+        assertTrue(cliSkill.metadata.description.isNotBlank())
+        assertTrue(cliSkill.metadata.tags.contains("browser"))
+        assertTrue(cliSkill.metadata.dependencies.isEmpty())
+    }
+
+    @Test
+    @DisplayName("test loaded skills all expose non-blank metadata")
+    fun testLoadedSkillsExposeMetadata() {
+        bootstrap.initialize()
+
         val skills = registry.getAll()
-
-        // Should have at least the 3 example skills
-        assertTrue(skills.size >= 3)
-
-        // Verify each example skill can be executed
-        val exampleSkillIds = listOf("web-scraping", "form-filling", "data-validation")
-        exampleSkillIds.forEach { skillId ->
-            val skill = registry.get(skillId)
-            Assertions.assertNotNull(skill, "Skill $skillId should exist")
-            assertEquals(skillId, skill!!.metadata.id)
+        assertTrue(skills.isNotEmpty())
+        skills.forEach { skill ->
+            assertTrue(skill.metadata.id.isNotBlank())
+            assertTrue(skill.metadata.name.isNotBlank())
+            assertTrue(
+                skill.metadata.version.matches(Regex("""\d+\.\d+\.\d+""")),
+                "Version should be semver: ${skill.metadata.version}"
+            )
         }
-    }
-
-    @Test
-    @DisplayName("test example skills have correct metadata")
-    fun testExampleSkillsHaveCorrectMetadata() {
-        bootstrap.initialize()
-
-        // Verify web-scraping skill
-        val webScraping = registry.get("web-scraping")
-        Assertions.assertNotNull(webScraping)
-        assertEquals("Web Scraping", webScraping!!.metadata.name)
-        assertEquals("1.0.0", webScraping.metadata.version)
-        assertEquals("Browser4", webScraping.metadata.author)
-
-        // Verify form-filling skill
-        val formFilling = registry.get("form-filling")
-        Assertions.assertNotNull(formFilling)
-        assertEquals("Form Filling", formFilling!!.metadata.name)
-        assertTrue(formFilling.metadata.dependencies.isNotEmpty())
-
-        // Verify data-validation skill
-        val dataValidation = registry.get("data-validation")
-        Assertions.assertNotNull(dataValidation)
-        assertEquals("Data Validation", dataValidation!!.metadata.name)
     }
 }

@@ -263,6 +263,12 @@ fn maybe_pretty_print_json(text: &str) -> String {
 /// pipe as a normal "stop writing" signal so the CLI unwinds cleanly and its
 /// cleanup paths (managed-process registry, startup-log teardown) still run.
 fn print_stdout_line(line: &str) {
+    // An interactive session owns the prompt line: it clears it before the line
+    // and draws it again afterwards, so streamed steps never land on top of what
+    // the user is typing. Every other mode has no console and writes directly.
+    if crate::agent_interactive::write_human_line(line) {
+        return;
+    }
     use std::io::Write;
     let mut stdout = std::io::stdout().lock();
     let _ = writeln!(stdout, "{line}");
@@ -16200,6 +16206,20 @@ async fn handle_agent_run(
             .await;
     }
 
+    // `--continue` resumes the recorded interactive session; a one-shot run has no
+    // session to resume, and silently ignoring the flag would run a fresh task while
+    // the user believes it continues the last conversation.
+    if tool_params
+        .get("continueSession")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return Err(
+            "--continue resumes an interactive session: add -i (agent run -i --continue)"
+                .to_string(),
+        );
+    }
+
     // A pasted task line carries the same terminal escapes as an interactive
     // one. Sanitize before the emptiness check so the one-shot `agent run
     // --task "…"` form cannot smuggle CSI/OSC noise into the model prompt.
@@ -23289,35 +23309,42 @@ async fn run_browser4_cli(tokens: &[String]) -> Result<String, String> {
 
 /// Spawn a detached background process that survives parent exit.
 ///
-/// On Windows, uses `CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS` so the
-/// child is not tied to the parent console / process tree, and clears the
-/// inherit flag on this process's own std handles for the duration of the
-/// spawn: `Command::spawn` passes `bInheritHandles = TRUE`, so every
-/// *inheritable* handle of the parent — including the write end of a caller's
-/// pipe — is duplicated into the worker.  The worker never writes to it, but
-/// keeping it open meant a piped `loop --resume | cat` never saw EOF and
-/// appeared to hang (issue 122234#2).  On Unix `Command::spawn` only dups the
+/// "Detached" is delegated to [`daemon::spawn_outside_host_tree`], because
+/// `CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS` only detaches the console: a
+/// host that kills descendants by walking `ParentProcessId` (AI-agent shells,
+/// #632) still takes the child with it, which is what killed the `loop` workers
+/// and the auto-update agent (#638). The creation flags stay for the plain path
+/// (console detach, no Ctrl+C propagation) and are ignored by the WMI path.
+///
+/// The child runs with `log_path` as its stdout/stderr on the plain path; on
+/// the WMI path the same file is used as a `cmd /c ... >> log 2>&1` redirect,
+/// since `Win32_Process.Create` inherits no handles.
+///
+/// On Windows the inherit flag of this process's own std handles is cleared for
+/// the duration of the spawn: `Command::spawn` passes `bInheritHandles = TRUE`,
+/// so every *inheritable* handle of the parent — including the write end of a
+/// caller's pipe — is duplicated into the worker. The worker never writes to it,
+/// but keeping it open meant a piped `loop --resume | cat` never saw EOF and
+/// appeared to hang (issue 122234#2). On Unix `Command::spawn` only dups the
 /// explicitly configured descriptors and sets `CLOEXEC` on the rest, so no
 /// handle leaks and no equivalent step is needed.
-fn spawn_detached(exe: &std::path::Path, args: &[String], log_path: Option<&std::path::Path>) -> Result<u32, String> {
+fn spawn_detached(
+    exe: &std::path::Path,
+    args: &[String],
+    log_path: Option<&std::path::Path>,
+) -> Result<u32, String> {
+    // Default to null stdio. `spawn_outside_host_tree` attaches `log_path` as
+    // the log in the plain path and rebuilds it as a `>> log` redirect in the
+    // WMI path — so the log is never opened here. Opening it ourselves would
+    // hold a handle open that conflicts with the share mode the WMI child's
+    // `cmd /c` redirection requests, making the child exit immediately with an
+    // empty log and stranding `loop --resume` workers on tree-killing hosts
+    // (#638 family).
     let mut cmd = std::process::Command::new(exe);
     cmd.args(args)
-        .stdin(std::process::Stdio::null());
-    match log_path {
-        Some(path) => {
-            let file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .map_err(|e| format!("Cannot open loop log file {}: {}", path.display(), e))?;
-            cmd.stdout(file.try_clone().map_err(|e| format!("Cannot clone stdout handle: {}", e))?);
-            cmd.stderr(file);
-        }
-        None => {
-            cmd.stdout(std::process::Stdio::null());
-            cmd.stderr(std::process::Stdio::null());
-        }
-    }
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
 
     #[cfg(windows)]
     {
@@ -23330,14 +23357,52 @@ fn spawn_detached(exe: &std::path::Path, args: &[String], log_path: Option<&std:
     #[cfg(windows)]
     let restore_inherit = win_std_handles_disable_inherit();
 
-    let spawn_result = cmd
-        .spawn()
+    let spawn_result = daemon::spawn_outside_host_tree(&mut cmd, &spawn_working_dir(exe), log_path)
         .map_err(|e| format!("Failed to spawn background process: {}", e));
 
     #[cfg(windows)]
     win_std_handles_restore(restore_inherit);
 
-    Ok(spawn_result?.id())
+    spawn_result
+}
+
+/// The directory a child process is created in.
+///
+/// `Win32_Process.Create` requires one, so the current directory is used and the
+/// executable's own folder is the fallback when it is unavailable (a deleted
+/// working directory, a detached service host).
+fn spawn_working_dir(exe: &std::path::Path) -> std::path::PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| {
+        exe.parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+    })
+}
+
+/// How long the control command waits for a freshly spawned worker to record
+/// its own pid. The worker persists it before its first iteration, so this is
+/// normally a few tens of milliseconds.
+const LOOP_WORKER_PID_WAIT: std::time::Duration = std::time::Duration::from_millis(1000);
+
+/// The pid the background loop process records for itself, once it starts.
+///
+/// [`spawn_detached`] returns the pid of the process it created, which on a
+/// tree-killing Windows host is the `cmd.exe` wrapper of the WMI-created child
+/// (#638) — not the worker. Every control command (`--status`, `--resume`,
+/// `--stop`) keys on the worker's own pid, which the worker persists
+/// (`state::LoopState::worker_pid`), so the spawn message reports that pid
+/// instead of a number the user cannot match anywhere.
+fn wait_for_loop_worker_pid(name: Option<&str>, timeout: std::time::Duration) -> Option<u32> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if let Some(pid) = state::live_loop_worker_pid(None, name) {
+            return Some(pid);
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 /// Clear `HANDLE_FLAG_INHERIT` on stdin/stdout/stderr for the next spawn.
@@ -24056,12 +24121,22 @@ async fn handle_loop(
                             .map_err(|e| format!("Cannot determine CLI path: {}", e))?;
 
                         match spawn_detached(&exe, &cmd_args, Some(&log_path)) {
-                            Ok(child_id) => {
-                                cli_println!(
-                                    "   Spawned background process (PID: {}). Use --list to monitor, \
-                                     --pause to pause, --stop to clear.",
-                                    child_id,
-                                );
+                            Ok(launcher_pid) => {
+                                // On a tree-killing Windows host this pid is the
+                                // `cmd.exe` wrapper, so report the worker's own pid.
+                                match wait_for_loop_worker_pid(loop_name, LOOP_WORKER_PID_WAIT) {
+                                    Some(pid) => cli_println!(
+                                        "   Spawned background process (PID: {}). Use --list to monitor, \
+                                         --pause to pause, --stop to clear.",
+                                        pid,
+                                    ),
+                                    None => cli_println!(
+                                        "   Spawned background process (launcher PID: {}; the worker \
+                                         records its own PID in --status when it starts). Use --list to \
+                                         monitor, --pause to pause, --stop to clear.",
+                                        launcher_pid,
+                                    ),
+                                }
                                 cli_println!(
                                     "   Iteration output: {}",
                                     log_path.display(),
@@ -24185,8 +24260,17 @@ async fn handle_loop(
 
                 let log_path = state::loop_state_path(None, name).with_extension("log");
                 match spawn_detached(&exe, &cmd_args, Some(&log_path)) {
-                    Ok(child_id) => {
-                        cli_println!("   - {} (PID: {})", entry.name, child_id);
+                    Ok(launcher_pid) => {
+                        // Same reason as `--resume`: the created pid can be the
+                        // WMI-created `cmd.exe` wrapper, not the worker.
+                        match wait_for_loop_worker_pid(name, LOOP_WORKER_PID_WAIT) {
+                            Some(pid) => cli_println!("   - {} (PID: {})", entry.name, pid),
+                            None => cli_println!(
+                                "   - {} (launcher PID: {}; worker PID appears in --status)",
+                                entry.name,
+                                launcher_pid
+                            ),
+                        }
                     }
                     Err(e) => {
                         cli_println!("   - {} (failed to spawn: {})", entry.name, e);
@@ -27913,8 +27997,8 @@ fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
             return false;
         }
 
-        match std::process::Command::new("powershell")
-            .args([
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.args([
                 "-WindowStyle",
                 "Hidden",
                 "-NoProfile",
@@ -27923,9 +28007,17 @@ fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
             ])
             .arg(&script_path)
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
+            .stderr(std::process::Stdio::null());
+        // The cleanup script runs *after* this process exits — it waits up to
+        // 30 s for the running binary to release its file handle, then removes
+        // it and the companions. On a host that kills by process tree it must
+        // be created outside the caller's tree, or it dies with the uninstall
+        // command and the binary is never removed (#632 / #638 family).
+        match daemon::spawn_outside_host_tree(
+            &mut cmd,
+            &spawn_working_dir(std::path::Path::new("powershell")),
+            None,
+        ) {
             Ok(_) => {
                 cli_println!("  Binary and companion links scheduled for removal after exit.");
                 true
@@ -28377,6 +28469,37 @@ fn npm_global_has_browser4_cli(npm: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Latest `browser4-cli` version as published on the npm registry.
+///
+/// Fallback for `resolve_latest_cli_release_tag` when the release mirrors
+/// cannot be reached: `npm view` answers from the registry the CLI would be
+/// installed from.  `None` means "unknown" (offline, npm missing, ...).
+fn resolve_latest_cli_version_from_npm(npm: &str) -> Option<String> {
+    let output = std::process::Command::new(npm)
+        .args([
+            "view",
+            "browser4-cli",
+            "version",
+            // `upgrade` must not stall on a slow registry: bound npm's own
+            // network wait instead of blocking the upgrade for minutes.
+            "--fetch-timeout=15000",
+            "--fetch-retries=0",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if version.is_empty() {
+        None
+    } else {
+        Some(version)
+    }
+}
+
 /// Whether the CLI self-upgrade step should be skipped entirely.
 ///
 /// The e2e harness sets this so install/upgrade scenarios never touch npm or
@@ -28385,6 +28508,93 @@ fn self_upgrade_skip_requested() -> bool {
     std::env::var(CLI_SELF_UPGRADE_SKIP_ENV)
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
+}
+
+/// Compare two dotted version strings by their numeric components only.
+///
+/// A leading `v` and any suffix (`-SNAPSHOT`, `-rc1`, …) are ignored: the
+/// self-upgrade only needs to know whether a *newer* release exists, and a
+/// locally built `4.16.11-SNAPSHOT` must not be replaced by the older
+/// published `4.16.10`.
+fn compare_dotted_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    fn parts(raw: &str) -> Vec<u64> {
+        let core = raw.trim().trim_start_matches(['v', 'V']);
+        // Drop a pre-release / build suffix (`-SNAPSHOT`, `-rc1`, `+abc`).
+        let core = core.split(['-', '+']).next().unwrap_or(core);
+        core.split(|c: char| !c.is_ascii_digit())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse::<u64>().unwrap_or(0))
+            .collect()
+    }
+    let (mut pa, mut pb) = (parts(a), parts(b));
+    while pa.len() < pb.len() {
+        pa.push(0);
+    }
+    while pb.len() < pa.len() {
+        pb.push(0);
+    }
+    pa.cmp(&pb)
+}
+
+/// Whether `target` is a strictly newer release than the running `current`.
+///
+/// `upgrade_cli_binary` short-circuits on this: an installation that is already
+/// current must say so and touch neither npm nor the install script.
+fn cli_upgrade_needed(target: &str, current: &str) -> bool {
+    compare_dotted_versions(target, current) == std::cmp::Ordering::Greater
+}
+
+/// What `upgrade` says when the running CLI is already at (or above) the
+/// target release — the case that used to fall through into npm / the install
+/// script and ended in `npm error code EEXIST` or a hung re-install.
+///
+/// Returns the stdout line plus an optional stderr note.  An explicitly
+/// requested older `--tag` is reported as "newer than requested" instead of
+/// claiming the running version is the latest one.
+fn cli_upgrade_skip_message(
+    target: &str,
+    current: &str,
+    explicit_tag: bool,
+) -> (String, Option<String>) {
+    let ordering = compare_dotted_versions(target, current);
+    if ordering == std::cmp::Ordering::Less {
+        if explicit_tag {
+            return (
+                format!(
+                    "browser4-cli {current} is newer than the requested release {target}; nothing to do."
+                ),
+                None,
+            );
+        }
+        // A local build (4.16.11-SNAPSHOT) ahead of the newest published release.
+        return (
+            format!("browser4-cli is already at the latest version ({current})."),
+            Some(format!("   Newest published release: {target}.")),
+        );
+    }
+    (
+        format!("browser4-cli is already at the latest version ({current})."),
+        None,
+    )
+}
+
+/// The latest published `browser4-cli` release tag, resolved through the same
+/// mirror-aware metadata lookup the runtime upgrade uses.
+///
+/// Bounded by a short timeout: an unreachable mirror must not stall
+/// `browser4-cli upgrade` (`None` = "unknown", the caller then falls back to
+/// the install paths).
+async fn resolve_latest_cli_release_tag() -> Option<String> {
+    let mirrors = daemon::load_mirrors();
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        daemon::resolve_latest_tag(&mirrors),
+    )
+    .await
+    {
+        Ok(Some((tag, _info))) => Some(tag),
+        _ => None,
+    }
 }
 
 /// URL of the platform-specific install script used to self-upgrade the CLI.
@@ -28519,8 +28729,37 @@ async fn upgrade_cli_binary(tag: Option<&str>) {
         return;
     }
 
-    // ── 1. npm (preferred) ──
-    if let Some(npm) = resolve_npm() {
+    // ── 0. Already at (or above) the target version? ──
+    // Resolve what would be installed and compare it with the running binary
+    // first.  An up-to-date install must say so and stop: running the upgrade
+    // paths anyway produced `npm error code EEXIST` (a script-installed CLI
+    // collides with npm's shim) and then hung inside the install script.
+    let target_version = match tag {
+        Some(t) => Some(t.trim().trim_start_matches(['v', 'V']).to_string()),
+        None => match resolve_latest_cli_release_tag().await {
+            Some(t) => Some(t.trim().trim_start_matches(['v', 'V']).to_string()),
+            None => resolve_npm()
+                .and_then(resolve_latest_cli_version_from_npm)
+                .map(|v| v.trim().trim_start_matches(['v', 'V']).to_string()),
+        },
+    };
+    if let Some(target) = target_version.as_deref() {
+        if !cli_upgrade_needed(target, VERSION) {
+            let (message, note) = cli_upgrade_skip_message(target, VERSION, tag.is_some());
+            cli_println!("{message}");
+            if let Some(note) = note {
+                eprintln!("{note}");
+            }
+            return;
+        }
+        eprintln!("Upgrading browser4-cli {VERSION} -> {target}...");
+    }
+
+    // ── 1. npm (only when npm really owns this installation) ──
+    // `npm install -g` over a script-installed binary collides with the
+    // existing shim (`EEXIST`), so npm is the right route only when the
+    // package is registered as an npm global package.
+    if let Some(npm) = resolve_npm().filter(|npm| npm_global_has_browser4_cli(npm)) {
         eprintln!("Upgrading browser4-cli binary via npm...");
 
         let package_spec = match tag {
@@ -28560,6 +28799,8 @@ async fn upgrade_cli_binary(tag: Option<&str>) {
                 eprintln!("   Falling back to install script...");
             }
         }
+    } else if resolve_npm().is_some() {
+        eprintln!("browser4-cli is not an npm global package; using the install script instead.");
     }
 
     // ── 2. Platform-specific install script (fallback) ──
@@ -28666,12 +28907,16 @@ async fn upgrade_cli_binary(tag: Option<&str>) {
     }
     #[cfg(not(windows))]
     {
-        let result = tokio::task::spawn_blocking(|| {
+        // `--skip-backend`: `handle_upgrade` performs the runtime upgrade
+        // itself; without it the script runs `browser4-cli upgrade` again and
+        // the two nested upgrades block each other.  The env guard keeps a
+        // nested self-upgrade from starting even if the script changes.
+        let script_url = cli_install_script_url().to_string();
+        let result = tokio::task::spawn_blocking(move || {
+            let command = format!("curl -fsSL {script_url} | bash -s -- --skip-backend");
             std::process::Command::new("sh")
-                .args([
-                    "-c",
-                    "curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash",
-                ])
+                .args(["-c", &command])
+                .env(CLI_SELF_UPGRADE_SKIP_ENV, "1")
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
                 .output()
@@ -28970,7 +29215,8 @@ fn spawn_update_agent(plan: &update_check::PrefetchPlan) -> bool {
     let Ok(exe) = std::env::current_exe() else {
         return false;
     };
-    let mut cmd = std::process::Command::new(exe);
+    let working_dir = spawn_working_dir(&exe);
+    let mut cmd = std::process::Command::new(&exe);
     cmd.arg("__update-agent").arg("--tag").arg(&plan.tag);
     if plan.self_upgrade {
         cmd.arg("--self-upgrade");
@@ -28985,7 +29231,42 @@ fn spawn_update_agent(plan: &update_check::PrefetchPlan) -> bool {
         const DETACHED_PROCESS: u32 = 0x00000008;
         cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
     }
-    cmd.spawn().is_ok()
+    daemon::spawn_outside_host_tree(&mut cmd, &working_dir, None).is_ok()
+}
+
+/// Environment variables that change what the auto-update agent does.
+///
+/// The agent downloads a runtime bundle and records the result, so proxy,
+/// mirror and directory overrides are behavioural, not cosmetic: losing them
+/// turns a successful prefetch into a failure that looks like a network error.
+const UPDATE_AGENT_ENV_KEYS: &[&str] = &[
+    "BROWSER4_CLI_PROXY",
+    "https_proxy",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "HTTP_PROXY",
+    "all_proxy",
+    "ALL_PROXY",
+    "no_proxy",
+    "NO_PROXY",
+    "BROWSER4_MIRRORS_CONFIG",
+    "BROWSER4_RELEASES_BASE_URL",
+    "BROWSER4_RUNTIME_DIR",
+    "BROWSER4_CLI_STATE_DIR",
+    "BROWSER4_CLI_FORCE_REMOTE_BUNDLE",
+];
+
+/// The [`UPDATE_AGENT_ENV_KEYS`] that are set in this process, as `KEY=VALUE`.
+fn forwarded_update_agent_env() -> Vec<(String, String)> {
+    UPDATE_AGENT_ENV_KEYS
+        .iter()
+        .filter_map(|key| {
+            std::env::var(key)
+                .ok()
+                .filter(|value| !value.is_empty())
+                .map(|value| ((*key).to_string(), value))
+        })
+        .collect()
 }
 
 /// Entry point of the hidden `__update-agent` command.
@@ -33065,7 +33346,9 @@ fn resolve_batch_commands(
 /// - The compiled plan of a step is what the executor runs, so a step never compiles twice.
 ///
 /// A step that cannot be compiled is reported and skipped; the steps that do compile still run,
-/// and the batch still continues past a *runtime* failure unless `--bail` was given. That is the
+/// and the batch still continues past a *runtime* failure unless `--bail` was given. `--bail`
+/// keeps the documented order semantics: the batch stops at the first failure in execution order —
+/// compile or runtime — after the steps before it have run. That is the
 /// documented batch contract (`AGENTS.md`, `help batch`, and the e2e batch scenarios), so this
 /// function deliberately does not turn a compile error into "nothing runs".
 fn compile_batch_steps(
@@ -33113,25 +33396,31 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
     let compiled = compile_batch_steps(&commands, &command_map, stdin_available);
 
     let mut failures: Vec<String> = Vec::new();
-    for failure in compiled.iter().filter_map(|step| step.as_ref().err()) {
-        eprintln!("{failure}");
-        failures.push(failure.clone());
-    }
-    if bail && !failures.is_empty() {
-        // --bail stops before the first *runnable* step too: the caller asked to stop at the
-        // first failure, and every compile failure is already known.
-        return Err(CliError(
-            ExitCode::BatchPartial,
-            format!("{} batch command(s) failed.", failures.len()),
-        ));
+    if !bail {
+        for failure in compiled.iter().filter_map(|step| step.as_ref().err()) {
+            eprintln!("{failure}");
+            failures.push(failure.clone());
+        }
     }
 
     // The batch runs on the client, one compiled step at a time, through the same executor the
     // equivalent standalone command uses. A failing step is reported and — unless --bail was
     // given — the batch continues with the next command.
     for (index, step) in compiled.iter().enumerate() {
-        // An unbuildable step was reported above; nothing to execute.
-        let Ok(plan) = step else { continue };
+        let plan = match step {
+            Ok(plan) => plan,
+            // An unbuildable step: without --bail it was reported above and skipping it is
+            // enough. With --bail it is the first failure in execution order, so the steps
+            // before it have already run and the ones after it must not.
+            Err(failure) => {
+                if bail {
+                    eprintln!("{failure}");
+                    failures.push(failure.clone());
+                    break;
+                }
+                continue;
+            }
+        };
 
         if let Err(error) =
             execute_batch_step(&client, &base_url, plan, global.session_name.as_deref()).await
@@ -37147,6 +37436,160 @@ mod tests {
             std::env::remove_var(key);
         }
         EnvGuard { key, prev, _lock: lock }
+    }
+
+    /// The update agent may inherit WmiPrvSE's environment (#638), so the
+    /// spawning CLI has to carry the behavioural settings on its command line.
+    #[test]
+    fn update_agent_env_is_forwarded_as_key_value_pairs() {
+        let _proxy = set_env("BROWSER4_CLI_PROXY", "http://127.0.0.1:7890");
+
+        let forwarded = forwarded_update_agent_env();
+
+        assert!(
+            forwarded.contains(&(
+                "BROWSER4_CLI_PROXY".to_string(),
+                "http://127.0.0.1:7890".to_string()
+            )),
+            "the proxy must travel with the spawn: {forwarded:?}"
+        );
+    }
+
+    #[test]
+    fn update_agent_env_assignments_round_trip() {
+        assert_eq!(
+            parse_env_assignment("HTTPS_PROXY=http://proxy:8080"),
+            Some(("HTTPS_PROXY".to_string(), "http://proxy:8080".to_string()))
+        );
+        // Values may contain '=' (a proxy query string does).
+        assert_eq!(
+            parse_env_assignment("A=a=b"),
+            Some(("A".to_string(), "a=b".to_string()))
+        );
+        assert_eq!(parse_env_assignment("=missing-key"), None);
+        assert_eq!(parse_env_assignment("NO_SEPARATOR"), None);
+    }
+
+    /// The `loop` workers use `spawn_detached`, whose console-detach flags do
+    /// not leave a tree-killing host's process tree (#638). On those hosts the
+    /// spawn goes through the WMI escape, which reopens the worker log via
+    /// `cmd /c >> log`; this test asserts the wiring is correct end-to-end:
+    ///   1. the child is observable to WMI and not parented by this process, and
+    ///   2. it actually writes to the log — a parent-held log handle would make
+    ///      `cmd`'s redirection open fail and the child exit immediately with an
+    ///      empty log, which is the #638-family regression this guards.
+    #[cfg(windows)]
+    #[test]
+    fn spawn_detached_creates_the_child_outside_the_caller_tree() {
+        let _override = set_env("BROWSER4_WINDOWS_BACKEND_SPAWN", "wmi");
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let log = temp.path().join("loop.log");
+
+        // A batch file that (1) writes a marker, proving the `>> log` redirect
+        // actually carries output to the file, and (2) spins in a pure-builtin
+        // loop so the process stays alive long enough for WMI to observe its
+        // tree. No external executable is used: under some test sandboxes a
+        // WMI-spawned `cmd` cannot start an external grandchild (e.g. `ping`)
+        // under a redirected handle, but builtins always run inside `cmd`
+        // itself.
+        const MARKER: &str = "b4-spawn-detached-marker-7e21a4";
+        let bat = temp.path().join("worker.bat");
+        std::fs::write(
+            &bat,
+            format!("@echo off\r\necho {MARKER}\r\nfor /l %%i in (1,1,30000000) do @rem\r\n"),
+        )
+        .expect("write worker.bat");
+
+        let pid = spawn_detached(
+            std::path::Path::new("cmd"),
+            &["/c".to_string(), bat.to_string_lossy().into_owned()],
+            Some(&log),
+        )
+        .expect("the loop worker must start");
+
+        // A parent-held log handle (the #638-family regression) makes `cmd`'s
+        // open for `>> log` fail, so the child exits immediately and the marker
+        // never lands. Poll the log content rather than its mere existence —
+        // both the bug and the fix create the file.
+        let log_deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            let content = std::fs::read_to_string(&log).unwrap_or_default();
+            if content.contains(MARKER) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < log_deadline,
+                "the detached child never wrote its marker to the log \
+                 (redirection failed — held-open log handle?)"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        // `Win32_Process.Create` returns the pid before the CIM view catches up;
+        // poll briefly until WMI can see the process, then assert it is not
+        // parented by this process — i.e. it escaped a tree-killing host's tree.
+        let tree_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let parent = loop {
+            let p = daemon::windows_parent_process_id(pid);
+            if p != 0 {
+                break p;
+            }
+            assert!(
+                std::time::Instant::now() < tree_deadline,
+                "pid {pid} never became visible to WMI (child exited immediately)"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        assert_ne!(
+            parent,
+            std::process::id(),
+            "the detached worker must not stay parented by the CLI (pid {pid}, parent {parent})"
+        );
+
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .output();
+    }
+
+    /// The spawn message must report the pid `--status`/`--stop` use, i.e. the
+    /// one the worker records — not the launcher's (a `cmd.exe` wrapper on WMI
+    /// hosts, #638).
+    #[test]
+    fn loop_spawn_reports_the_worker_pid_not_the_launcher_pid() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let _state_dir = set_env(
+            "BROWSER4_CLI_STATE_DIR",
+            temp.path().to_str().expect("utf-8 temp path"),
+        );
+        let worker_pid = std::process::id();
+        state::write_loop_state(
+            &state::LoopState {
+                task_tokens: vec!["demo".to_string()],
+                mode: "plain".to_string(),
+                interval_secs: 60,
+                count: None,
+                timeout_secs: None,
+                iterations_completed: 0,
+                started_at: "2026-11-26T00:00:00Z".to_string(),
+                updated_at: "2026-11-26T00:00:00Z".to_string(),
+                status: "running".to_string(),
+                worker_pid: Some(worker_pid),
+            },
+            None,
+            Some("polled"),
+        )
+        .expect("write the loop state");
+
+        assert_eq!(
+            wait_for_loop_worker_pid(Some("polled"), std::time::Duration::from_millis(200)),
+            Some(worker_pid),
+            "the recorded worker pid must be what the spawn message prints"
+        );
+        assert_eq!(
+            wait_for_loop_worker_pid(Some("absent"), std::time::Duration::from_millis(60)),
+            None,
+            "an unrecorded pid must fall back instead of blocking"
+        );
     }
 
     /// Ordinary, long-enough page text: keeps the block signatures and the
@@ -51377,6 +51820,50 @@ linkGroups:
         assert!(self_upgrade_skip_requested(), "'true' must skip");
         let _guard3 = set_env(CLI_SELF_UPGRADE_SKIP_ENV, "0");
         assert!(!self_upgrade_skip_requested(), "'0' must not skip");
+    }
+
+    #[test]
+    fn compare_dotted_versions_ignores_prefix_and_suffix() {
+        use std::cmp::Ordering;
+        assert_eq!(compare_dotted_versions("4.16.10", "4.16.10"), Ordering::Equal);
+        assert_eq!(compare_dotted_versions("v4.16.10", "4.16.10"), Ordering::Equal);
+        assert_eq!(compare_dotted_versions("4.16", "4.16.0"), Ordering::Equal);
+        assert_eq!(compare_dotted_versions("4.16.10-rc1", "4.16.10"), Ordering::Equal);
+        assert_eq!(compare_dotted_versions("4.16.11-SNAPSHOT", "4.16.11"), Ordering::Equal);
+        assert_eq!(compare_dotted_versions("4.16.11", "4.16.10"), Ordering::Greater);
+        assert_eq!(compare_dotted_versions("4.17.0", "4.16.99"), Ordering::Greater);
+        assert_eq!(compare_dotted_versions("4.16.10", "4.16.11"), Ordering::Less);
+    }
+
+    #[test]
+    fn cli_upgrade_needed_only_for_a_strictly_newer_release() {
+        // Already current: `upgrade` must report "already at the latest version"
+        // and stop instead of running npm / the install script.
+        assert!(!cli_upgrade_needed("4.16.10", "4.16.10"));
+        // A local build ahead of the newest published release must not downgrade.
+        assert!(!cli_upgrade_needed("4.16.10", "4.16.11"));
+        assert!(!cli_upgrade_needed("v4.16.10", "4.16.11-SNAPSHOT"));
+        // A genuinely newer release still upgrades.
+        assert!(cli_upgrade_needed("4.16.11", "4.16.10"));
+        assert!(cli_upgrade_needed("v4.17.0", "4.16.11-SNAPSHOT"));
+    }
+
+    #[test]
+    fn cli_upgrade_skip_message_explains_why_nothing_happens() {
+        // Same release: one clean line, no npm / install-script noise.
+        let (line, note) = cli_upgrade_skip_message("4.16.10", "4.16.10", false);
+        assert!(line.contains("already at the latest version (4.16.10)"), "got: {line}");
+        assert!(note.is_none(), "got: {note:?}");
+
+        // Local build ahead of the newest release: say so, but do not downgrade.
+        let (line, note) = cli_upgrade_skip_message("4.16.10", "4.16.11-SNAPSHOT", false);
+        assert!(line.contains("already at the latest version"), "got: {line}");
+        assert_eq!(note.as_deref(), Some("   Newest published release: 4.16.10."));
+
+        // Explicit older `--tag` must not be described as "the latest version".
+        let (line, note) = cli_upgrade_skip_message("4.15.0", "4.16.11", true);
+        assert!(line.contains("newer than the requested release 4.15.0"), "got: {line}");
+        assert!(note.is_none(), "got: {note:?}");
     }
 
     #[test]

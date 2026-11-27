@@ -220,10 +220,10 @@ class SkillInstallerTest {
         // Initialize with built-in skills
         SkillBootstrap().initialize()
 
-        val doc = installer.readDocumentation("web-scraping")
+        val doc = installer.readDocumentation("browser4-cli")
 
         assertNotNull(doc)
-        assertTrue(doc.contains("Web Scraping"))
+        assertTrue(doc.contains("Browser Automation with browser4-cli"))
     }
 
     @Test
@@ -241,7 +241,7 @@ class SkillInstallerTest {
         val installed = installer.listInstalled()
 
         assertTrue(installed.isNotEmpty())
-        assertTrue(installed.any { it["id"] == "web-scraping" })
+        assertTrue(installed.any { it["id"] == "browser4-cli" })
     }
 
     @Test
@@ -276,12 +276,12 @@ class SkillInstallerTest {
         val result = executor.callFunctionOn(
             domain = "skill",
             functionName = "readDocumentation",
-            args = mapOf("id" to "web-scraping"),
+            args = mapOf("id" to "browser4-cli"),
             receiver = target
         )
 
         assertTrue(result is String)
-        assertTrue((result as String).contains("Web Scraping"))
+        assertTrue((result as String).contains("Browser Automation with browser4-cli"))
     }
 
     @Test

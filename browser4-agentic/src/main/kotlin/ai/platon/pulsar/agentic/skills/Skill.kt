@@ -7,7 +7,7 @@ import kotlin.reflect.KClass
 /**
  * Metadata describing a skill module.
  *
- * @property id Unique identifier for the skill (e.g., "web-scraping", "form-filling")
+ * @property id Unique identifier for the skill (e.g., "my-skill")
  * @property name Human-readable name of the skill
  * @property version Semantic version of the skill (e.g., "1.0.0")
  * @property description Brief description of what the skill does
@@ -126,10 +126,10 @@ data class SkillResult(
  *
  * ## Example:
  * ```kotlin
- * class WebScrapingSkill : Skill {
+ * class ExampleSkill : Skill {
  *     override val metadata = SkillMetadata(
- *         id = "web-scraping",
- *         name = "Web Scraping",
+ *         id = "my-skill",
+ *         name = "My Skill",
  *         description = "Extract data from web pages"
  *     )
  *
