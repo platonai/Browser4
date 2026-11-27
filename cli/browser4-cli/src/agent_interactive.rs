@@ -5802,7 +5802,10 @@ impl Repl {
             return;
         };
         self.show_intent = value.unwrap_or(!self.show_intent);
-        self.intent_override = Some(self.show_intent);
+        // `intent_override=None` means "never touched it, keep the server default"
+        // (see the `intent_override` field docs). `/intent on` restores that default;
+        // `/intent off` forces the backend to skip the intent-generation instructions.
+        self.intent_override = if self.show_intent { None } else { Some(false) };
         if let Some(follower) = self.current.as_mut() {
             follower.renderer.show_intent = self.show_intent;
         }
