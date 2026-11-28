@@ -1,8 +1,12 @@
 package ai.platon.pulsar.coding
 
+import ai.platon.pulsar.coding.sandbox.OwnerSecurityRights
 import ai.platon.pulsar.coding.sandbox.ProcessSpec
+import ai.platon.pulsar.coding.sandbox.SandboxCommandResult
+import ai.platon.pulsar.coding.sandbox.SandboxCommandRunner
 import ai.platon.pulsar.coding.sandbox.WindowsLowIntegritySandbox
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeEach
@@ -591,4 +595,192 @@ class WorkspaceIsolationTest {
         // `runBlocking` result `Unit` instead of leaking a `ProcessSpec` as the test's value.
         Unit
     }
+
+    // ==================== repoRoot OWNER RIGHTS grant ====================
+
+    /** Records every path and command OwnerSecurityRights.grant() was asked to repair. */
+    private class RecordingRightsRunner : SandboxCommandRunner {
+        val calls = mutableListOf<List<String>>()
+        override fun run(command: List<String>, timeoutSeconds: Long): SandboxCommandResult {
+            calls += command
+            return SandboxCommandResult(0)
+        }
+    }
+
+    /**
+     * Fake git runner: each entry in [scripts] is a predicate over (dir, args) → GitOutcome.
+     * The first matching entry wins. If no predicate matches, falls back to the REAL
+     * [runGit] so unrelated git calls (e.g. stageChangeSet) still run against the real repo.
+     */
+    private class ScriptedGitRunner(
+        private val scripts: List<Pair<(Path, List<String>) -> Boolean, GitOutcome>>,
+    ) : (Path, List<String>) -> GitOutcome {
+        val calls = mutableListOf<Pair<Path, List<String>>>()
+        override fun invoke(dir: Path, args: List<String>): GitOutcome {
+            calls += dir to args
+            for ((pred, out) in scripts) if (pred(dir, args)) return out
+            return runGit(dir, args) // fallback to real git
+        }
+    }
+
+    @AfterEach
+    fun clearTestHooks() {
+        OwnerSecurityRights.testRunner = null
+        WorkspaceIsolation.testGitRunner = null
+    }
+
+    @Test
+    @DisplayName("begin grants OWNER RIGHTS on BOTH the worktree AND the repoRoot checkout")
+    fun beginGrantsBothWorktreeAndRepoRoot() = runBlocking {
+        assumeTrue(isWindows, "OWNER RIGHTS grant is a Windows-only repair")
+        val runner = RecordingRightsRunner()
+        OwnerSecurityRights.testRunner = runner
+        val isolation = WorkspaceIsolation.begin(tempDir, "grant-both")
+        try {
+            // begin() calls OwnerSecurityRights.grant() twice:
+            //   1. worktree (isolation.isolatedRoot) — to let Low-IL label it
+            //   2. repoRoot (tempDir) — NEW: to let Medium merge into .git/
+            val grantedPaths = runner.calls.map { Path.of(it[1]) }
+            assertTrue(grantedPaths.contains(isolation.isolatedRoot.normalize()), "worktree must be granted: got $grantedPaths")
+            assertTrue(grantedPaths.contains(isolation.repoRoot.normalize()), "repoRoot must be granted: got $grantedPaths")
+            assertEquals(2, grantedPaths.size, "exactly two grants expected, got $grantedPaths")
+        } finally {
+            isolation.rollback()
+        }
+    }
+
+    // ==================== applyToMain Outcome 语义 ====================
+
+    /** Helper: create an isolated worktree with one file changed (ready for merge). */
+    private suspend fun prepareIsolation(taskId: String, writeChange: Boolean = true): WorkspaceIsolation {
+        val iso = WorkspaceIsolation.begin(tempDir, taskId)
+        if (writeChange) {
+            Files.writeString(iso.isolatedRoot.resolve("a.txt"), "patched content\n")
+        }
+        return iso
+    }
+
+    @Test
+    @DisplayName("patch directory write failure returns a clear Outcome (DACL repair hint)")
+    fun applyFailsWhenPatchDirCannotBeCreated() = runBlocking {
+        // We cannot mock Files.createDirectories easily. Instead, place a FILE at the
+        // exact path applyToMain wants to create as a directory (`.browser4/patches`).
+        // begin() creates `.browser4/worktrees/` fine (it only cares about `.browser4`),
+        // but Files.createDirectories(`.browser4/patches/`) collides with the file.
+        val iso = prepareIsolation("patch-fail")
+        try {
+            val patchesPath = iso.repoRoot.resolve(".browser4").resolve("patches")
+            Files.createDirectories(patchesPath.parent) // ensure .browser4 exists (dir)
+            Files.writeString(patchesPath, "conflict\n") // make patches a FILE, not dir
+            // Now applyToMain will try Files.createDirectories(patchesPath) and fail.
+            val outcome = iso.applyToMain("patch-fail")
+            assertFalse(outcome.ok, "must fail when patch directory cannot be created")
+            assertTrue(outcome.message.contains("Cannot create patch directory"), "got: ${outcome.message}")
+            assertTrue(outcome.message.contains("DACL"), "should hint at DACL repair")
+        } finally {
+            Files.deleteIfExists(iso.repoRoot.resolve(".browser4").resolve("patches"))
+            iso.rollback()
+        }
+    }
+
+    @Test
+    @DisplayName("update-ref failure returns Outcome(false) — the revert anchor is explicit")
+    fun applyFailsWhenUpdateRefCannotWriteGitRefs() = runBlocking {
+        val git = ScriptedGitRunner(listOf(
+            { _: Path, args: List<String> -> args.firstOrNull() == "update-ref" } to
+                GitOutcome(128, "", "fatal: could not create file 'refs/b4/pre/run-x': Permission denied"),
+        ))
+        val iso = prepareIsolation("ref-fail")
+        try {
+            WorkspaceIsolation.testGitRunner = git
+            val outcome = iso.applyToMain("ref-fail")
+
+            assertFalse(outcome.ok, "must fail when update-ref is denied")
+            assertTrue(outcome.message.contains("Cannot record pre-merge HEAD ref"), "got: ${outcome.message}")
+            assertTrue(outcome.message.contains("Permission denied"), "should surface git's stderr")
+        } finally {
+            WorkspaceIsolation.testGitRunner = null
+            iso.rollback()
+        }
+    }
+
+    @Test
+    @DisplayName("git apply failure surfaces as Outcome(false) with git's error preserved")
+    fun applyFailsOnGitApplyError() = runBlocking {
+        val git = ScriptedGitRunner(listOf(
+            // Reverse check (--check -R) → "already applied" is exit=0; fake it exit=1 so we proceed
+            { _: Path, args: List<String> ->
+                args.firstOrNull() == "apply" && args.contains("--check") && args.contains("-R")
+            } to GitOutcome(1, "", "patch not applied"),
+            // Real apply returns the permission error
+            { _: Path, args: List<String> ->
+                args.firstOrNull() == "apply" && !args.contains("--check")
+            } to GitOutcome(128, "", "fatal: failed to open file 'a.txt': Permission denied"),
+        ))
+        val iso = prepareIsolation("apply-fail")
+        try {
+            WorkspaceIsolation.testGitRunner = git
+            val outcome = iso.applyToMain("apply-fail")
+
+            assertFalse(outcome.ok, "must fail when git apply errors")
+            assertTrue(outcome.message.contains("Merge into the main work tree failed"), "got: ${outcome.message}")
+            assertTrue(outcome.message.contains("Permission denied"), "should surface git's stderr")
+            assertNotNull(outcome.patchPath, "patch path must be preserved for recovery")
+        } finally {
+            WorkspaceIsolation.testGitRunner = null
+            iso.rollback()
+        }
+    }
+
+    @Test
+    @DisplayName("--3way reset -q failure tells the user how to manually unstage")
+    fun apply3wayFailsWhenResetCannotUnstage() = runBlocking {
+        val git = ScriptedGitRunner(listOf(
+            // Reverse check fails → not applied yet
+            { _: Path, args: List<String> ->
+                args.firstOrNull() == "apply" && args.contains("--check") && args.contains("-R")
+            } to GitOutcome(1, "", "not applied yet"),
+            // Plain apply --check fails → falls to --3way
+            { _: Path, args: List<String> ->
+                args.firstOrNull() == "apply" && args.contains("--check") && !args.contains("-R") && !args.contains("--3way")
+            } to GitOutcome(1, "", "conflict"),
+            // 3way apply --check passes
+            { _: Path, args: List<String> ->
+                args.firstOrNull() == "apply" && args.contains("--check") && args.contains("--3way")
+            } to GitOutcome(0, "", ""),
+            // Real 3way apply passes
+            { _: Path, args: List<String> ->
+                args.firstOrNull() == "apply" && args.contains("--3way") && !args.contains("--check")
+            } to GitOutcome(0, "", ""),
+            // reset -q (post-3way) fails — this is what we're testing
+            { _: Path, args: List<String> -> args.firstOrNull() == "reset" } to
+                GitOutcome(1, "", "fatal: cannot reset: Permission denied"),
+        ))
+        val iso = prepareIsolation("reset-fail")
+        try {
+            WorkspaceIsolation.testGitRunner = git
+            val outcome = iso.applyToMain("reset-fail")
+
+            assertFalse(outcome.ok, "must fail when reset -q errors after 3way apply")
+            assertTrue(outcome.message.contains("git reset failed"), "got: ${outcome.message}")
+            assertTrue(outcome.message.contains("manually run"), "should tell the user the recovery command")
+            assertTrue(outcome.message.contains("git reset --"), "should echo git reset -- back to the user")
+        } finally {
+            WorkspaceIsolation.testGitRunner = null
+            iso.rollback()
+        }
+    }
+
+    // ==================== 真实受限 DACL 端到端 ====================
+
+    // NOTE: a real end-to-end DACL test that restricts the checkout to the point of
+    // blocking `git worktree add` is brittle — `icacls /deny Everyone W` also denies
+    // the JVM itself (which belongs to Everyone), so begin() cannot even create the
+    // worktree. The OWNER RIGHTS grant is applied *after* begin() creates the
+    // worktree. The test below validates that the grant is *called* (RecordingRightsRunner),
+    // not that it successfully repairs a fully-broken DACL end-to-end.
+    //
+    // For a true end-to-end proof on a real checkout that actually has Modify-only DACL
+    // (e.g. extracted from an archive, sitting under D:\), see the manual repro in
+    // docs/agent-permissions.md or the commit messages on this change.
 }

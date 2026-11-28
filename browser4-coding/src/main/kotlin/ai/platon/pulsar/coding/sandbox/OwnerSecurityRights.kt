@@ -36,6 +36,17 @@ internal object OwnerSecurityRights {
 
     private val logger = LoggerFactory.getLogger(OwnerSecurityRights::class.java)
 
+    /**
+     * Test-only hook: replaces the [SystemSandboxCommandRunner] used when [grant] is called
+     * without an explicit runner. Set to a fake before calling [grant] from production code
+     * paths (e.g. [ai.platon.pulsar.coding.WorkspaceIsolation.begin]), then clear after.
+     *
+     * Production code must **never** read this field. It is `internal` so only sibling
+     * modules (`browser4-coding`'s own tests) can touch it.
+     */
+    @Volatile
+    internal var testRunner: SandboxCommandRunner? = null
+
     /** Whether mandatory labels — and therefore this repair — exist on this OS. */
     fun isWindows(): Boolean = System.getProperty("os.name", "").lowercase().contains("win")
 
@@ -57,11 +68,13 @@ internal object OwnerSecurityRights {
      * Adds (or refreshes) the OWNER RIGHTS ACE on [path].
      *
      * @param path the object to repair, usually a workspace or worktree root
-     * @param runner the command seam; tests inject a fake, production runs `icacls`
+     * @param runner the command seam; tests inject a fake, production runs `icacls`.
+     *   When omitted, [testRunner] is picked up (if set) before falling back to the
+     *   real [SystemSandboxCommandRunner].
      * @return true when `icacls` accepted the grant; false off Windows, when [path] is gone,
      *   or when this account cannot write the object's security information
      */
-    fun grant(path: Path, runner: SandboxCommandRunner = SystemSandboxCommandRunner): Boolean {
+    fun grant(path: Path, runner: SandboxCommandRunner = testRunner ?: SystemSandboxCommandRunner): Boolean {
         if (!isWindows() || !Files.exists(path)) return false
         val result = runner.run(command(path, Files.isDirectory(path)), GRANT_TIMEOUT_SECONDS)
         if (result.ok) return true

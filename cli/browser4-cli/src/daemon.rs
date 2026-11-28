@@ -5776,15 +5776,26 @@ pub fn browser_family_of_process_line(line: &str) -> Option<&'static str> {
         if stem.starts_with("msedge") {
             return Some("edge");
         }
+        if stem.starts_with("ego") {
+            return Some("ego-lite");
+        }
         if stem.starts_with("chrome") || stem.starts_with("chromium") || stem.starts_with("google-chrome") {
             return Some("chrome");
         }
     }
 
+    // Fallback — the first token may be a quoted path with spaces, so do a
+    // substring search on the whole line.  Order matters: ego-lite and Edge
+    // command lines carry Chromium flags like `--top-chrome-webui` that would
+    // misclassify them as Chrome if we checked "chrome" first.  Check the
+    // non-Chrome families up front, then settle Chrome by the more specific
+    // "chrome.exe" / "chromium" / "chrome" substrings.
     let lower = line.to_ascii_lowercase();
     if lower.contains("msedge") || lower.contains("microsoft edge") || lower.contains("microsoft-edge") {
         Some("edge")
-    } else if lower.contains("chrome") || lower.contains("chromium") {
+    } else if lower.contains("ego.exe") || lower.contains("ego lite") || lower.contains("citro") {
+        Some("ego-lite")
+    } else if lower.contains("chrome.exe") || lower.contains("chromium") || lower.contains("chrome") {
         Some("chrome")
     } else {
         None
@@ -6253,6 +6264,198 @@ pub fn discover_debuggable_browsers() -> Vec<DiscoveredBrowser> {
 
     discovered.sort_by_key(|browser| browser.port);
     discovered
+}
+
+/// One row in the system browser inventory produced by
+/// [discover_system_browser_inventory].
+#[derive(Debug, Clone)]
+pub struct SystemBrowserRow {
+    /// Family label used everywhere in Browser4 — `chrome`, `edge`, `firefox`,
+    /// `ego-lite`.  The list is closed: browsers outside the inventory are
+    /// irrelevant to Browser4's launch / attach flows.
+    pub family: &'static str,
+    /// True when a usable binary was found on disk; `path` then carries the
+    /// location.
+    pub installed: bool,
+    /// Absolute path to the discovered binary, or `None` when the family is
+    /// not installed.
+    pub path: Option<String>,
+    /// Number of running processes for this family right now.  Zero means the
+    /// browser is installed but not open — common for Edge on Windows, where
+    /// it ships pre-installed but is rarely the user's default.
+    pub running_processes: usize,
+    /// Ports on which a `--remote-debugging-port` listener was found for this
+    /// family.  Empty when no running instance exposes CDP.
+    pub debug_ports: Vec<u16>,
+    /// `GET /json/version` answered on at least one of `debug_ports`.  `false`
+    /// when ports are listed but no HTTP probe succeeded — that happens when a
+    /// process outlives its debug listener (it crashed during startup or the
+    /// flag was stripped).
+    pub cdp_reachable: bool,
+    /// Identity the reachable CDP endpoint reports, e.g. `Chrome/158.0.8127.37`.
+    pub cdp_identity: Option<String>,
+    /// Page targets reported by the reachable endpoint.  `None` when no port
+    /// answered — could also be `Some(0)` when the browser has no open tabs.
+    pub page_targets: Option<usize>,
+}
+
+/// Enumerate every browser family Browser4 cares about and report its state:
+/// installed or not, running or not, debug port(s), reachability, CDP identity,
+/// and page target count.  This is the inventory that powers `list --browsers`.
+///
+/// The function is **blocking** — it spawns a PowerShell process on Windows
+/// (`Get-CimInstance Win32_Process`) and a `ps` on Unix to count running
+/// processes, plus an HTTP probe per candidate debug port.  Callers that sit
+/// on the async runtime should wrap it in `spawn_blocking`, just like
+/// `discover_debuggable_browsers` already is in `attach --list`.
+pub fn discover_system_browser_inventory() -> Vec<SystemBrowserRow> {
+    // Families Browser4 actually cares about.  `browser_processes_command_lines`
+    // keys off process names, which are consistent across Windows/Unix for the
+    // Chrome/Edge/Ego families.
+    struct FamilySpec {
+        label: &'static str,
+        process_names: &'static [&'static str],
+        find_installed: fn() -> Option<PathBuf>,
+    }
+    let families: &[FamilySpec] = &[
+        FamilySpec {
+            label: "chrome",
+            process_names: &["chrome", "chromium", "google-chrome", "google chrome"],
+            find_installed: find_chrome_executable,
+        },
+        FamilySpec {
+            label: "edge",
+            process_names: &["msedge", "Microsoft Edge", "microsoft-edge"],
+            find_installed: find_edge_executable,
+        },
+        FamilySpec {
+            label: "firefox",
+            process_names: &["firefox"],
+            find_installed: || -> Option<PathBuf> {
+                let candidates: &[&str] = if cfg!(target_os = "windows") {
+                    &[r"C:\Program Files\Mozilla Firefox\firefox.exe"]
+                } else if cfg!(target_os = "macos") {
+                    &["/Applications/Firefox.app/Contents/MacOS/firefox"]
+                } else {
+                    &["/usr/bin/firefox", "/snap/bin/firefox"]
+                };
+                for path in candidates {
+                    if std::path::Path::new(path).exists() {
+                        return Some(PathBuf::from(path));
+                    }
+                }
+                find_in_path("firefox")
+            },
+        },
+        FamilySpec {
+            label: "ego-lite",
+            process_names: &["ego"],
+            find_installed: || -> Option<PathBuf> {
+                let candidates: &[&str] = if cfg!(target_os = "windows") {
+                    &[
+                        r"C:\Program Files\Citro Labs\ego lite\Application\ego.exe",
+                        r"C:\Program Files\Ego Lite\ego.exe",
+                        r"C:\Program Files (x86)\Ego Lite\ego.exe",
+                        r"C:\Users\ego\AppData\Local\Ego Lite\ego.exe",
+                    ]
+                } else if cfg!(target_os = "macos") {
+                    &["/Applications/Ego Lite.app/Contents/MacOS/ego"]
+                } else {
+                    &["/opt/ego-lite/ego", "/usr/local/bin/ego"]
+                };
+                for path in candidates {
+                    if std::path::Path::new(path).exists() {
+                        return Some(PathBuf::from(path));
+                    }
+                }
+                find_in_path("ego")
+            },
+        },
+    ];
+
+    // One OS query for all browser process names combined — far cheaper than
+    // one spawn per family.
+    let all_process_names: Vec<&str> = families
+        .iter()
+        .flat_map(|f| f.process_names.iter().copied())
+        .collect();
+    let process_lines = browser_processes_command_lines(&all_process_names);
+
+    // The debuggable browsers discovered below are keyed by port, but we also
+    // want them grouped by family for the inventory.
+    let debuggable = discover_debuggable_browsers();
+
+    let mut rows: Vec<SystemBrowserRow> = families
+        .iter()
+        .map(|spec| {
+            let path = (spec.find_installed)();
+            let running = process_lines
+                .iter()
+                .filter(|line| {
+                    let lower = line.to_ascii_lowercase();
+                    spec.process_names
+                        .iter()
+                        .any(|name| lower.contains(&name.to_ascii_lowercase()))
+                })
+                .count();
+            // Only match debug browsers whose family is positively classified
+            // as this one — unknown families go to the `unknown` catch-all row
+            // at the end, not to every known family.
+            let mut matching_debug = debuggable
+                .iter()
+                .filter(|d| d.family == spec.label)
+                .peekable();
+            let first = matching_debug.next();
+            let mut ports: Vec<u16> = first.iter().map(|d| d.port).collect();
+            ports.extend(matching_debug.map(|d| d.port));
+            ports.sort();
+            ports.dedup();
+            let cdp_reachable = debuggable
+                .iter()
+                .any(|d| d.family == spec.label && d.reachable);
+            let first_reachable = debuggable.iter().find(|d| {
+                d.family == spec.label && d.reachable
+            });
+            SystemBrowserRow {
+                family: spec.label,
+                installed: path.is_some(),
+                path: path.map(|p| p.display().to_string()),
+                running_processes: running,
+                debug_ports: ports,
+                cdp_reachable,
+                cdp_identity: first_reachable.and_then(|d| d.browser.clone()),
+                page_targets: first_reachable.and_then(|d| d.page_targets),
+            }
+        })
+        .collect();
+
+    // Unknown browser on a debug port that did not match any known family —
+    // usually a fresh install we have not updated the inventory for.  Show it
+    // as "unknown" at the bottom so the user is aware.
+    let known_ports: std::collections::HashSet<u16> = rows
+        .iter()
+        .flat_map(|r| r.debug_ports.iter().copied())
+        .collect();
+    let unknown: Vec<&DiscoveredBrowser> = debuggable
+        .iter()
+        .filter(|d| d.family == "unknown" && !known_ports.contains(&d.port))
+        .collect();
+    if !unknown.is_empty() {
+        let ports: Vec<u16> = unknown.iter().map(|d| d.port).collect();
+        let first = unknown.first().unwrap();
+        rows.push(SystemBrowserRow {
+            family: "unknown",
+            installed: false,
+            path: None,
+            running_processes: 0,
+            debug_ports: ports,
+            cdp_reachable: first.reachable,
+            cdp_identity: first.browser.clone(),
+            page_targets: first.page_targets,
+        });
+    }
+
+    rows
 }
 
 /// Concurrent scan of `start..=end` for the first endpoint that lists a page
@@ -6858,6 +7061,23 @@ fn collect_jvm_opts_and_program_args() -> (Vec<String>, Vec<String>) {
     // with LLM API keys).
     jvm_opts.push("-Dapp.name=browser4".to_string());
 
+    // Unify the data root under one property so CrawlService, StatefulAgentRunner,
+    // SwarmService, SandboxDefaults and ProfileImportService (all of which used to
+    // resolve their path separately with subtlely different fallback chains) read
+    // the same root.  `DataDirResolver` honours this first, then falls back to
+    // app.data.dir, then the legacy browser4.data.dir scheme, then ~/.browser4.
+    // Placed before BROWSER4_SERVER_OPTS so an explicit -Dbrowser4.data.root from
+    // the user still wins and moves the *entire* data tree (WebDB, Chrome profiles,
+    // checkpoints, agent logs, knowledge store) onto another disk.
+    let workspace_app_data = workspace_app_data_dir();
+    let app_data_root = workspace_app_data
+        .clone()
+        .unwrap_or_else(production_app_data_dir);
+    jvm_opts.push(format!(
+        "-Dbrowser4.data.root={}",
+        normalize_jvm_windows_path_text(&app_data_root.to_string_lossy())
+    ));
+
     // Development mode: give this checkout's backend its own app data root
     // (`AppContext` checks `app.data.dir` before falling back to `app.name`),
     // so parallel workspaces stop sharing Chrome profiles, H2/WebDB files,
@@ -6866,7 +7086,6 @@ fn collect_jvm_opts_and_program_args() -> (Vec<String>, Vec<String>) {
     // fails it returns None and the shared root is used (pre-existing
     // behaviour).  Placed before BROWSER4_SERVER_OPTS so an explicit
     // -Dapp.data.dir from the user still wins.
-    let workspace_app_data = workspace_app_data_dir();
     if let Some(app_data) = &workspace_app_data {
         jvm_opts.push(format!(
             "-Dapp.data.dir={}",

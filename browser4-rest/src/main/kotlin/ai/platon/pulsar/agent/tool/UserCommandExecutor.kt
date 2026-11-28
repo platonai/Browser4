@@ -233,6 +233,9 @@ class UserCommandExecutor(
         rewindTaskId: String? = null,
         workspace: Path? = null,
         intent: Boolean? = null,
+        providerName: String? = null,
+        modelName: String? = null,
+        reasoningEffort: String? = null,
     ): CommandStatus {
         // A resume may omit the task text entirely: the instruction comes from the
         // interrupted task's checkpoint on the backend.
@@ -248,6 +251,7 @@ class UserCommandExecutor(
                 resumeTaskId = resumeTaskId, tokenBudget = tokenBudget, addDirs = addDirs,
                 unrestricted = unrestricted, rewindTaskId = rewindTaskId, workspace = workspace,
                 intent = intent,
+                providerName = providerName, modelName = modelName, reasoningEffort = reasoningEffort,
             )
             .toCommandStatus()
     }
@@ -279,6 +283,9 @@ class UserCommandExecutor(
         rewindTaskId: String? = null,
         workspace: Path? = null,
         intent: Boolean? = null,
+        providerName: String? = null,
+        modelName: String? = null,
+        reasoningEffort: String? = null,
     ): String {
         val command = plainCommand.trim()
 
@@ -294,6 +301,7 @@ class UserCommandExecutor(
         return submitAgentTask(
             sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId,
             tokenBudget, addDirs, unrestricted, rewindTaskId, workspace, intent,
+            providerName, modelName, reasoningEffort,
         )
     }
 
@@ -330,22 +338,29 @@ class UserCommandExecutor(
         rewindTaskId: String? = null,
         workspace: Path? = null,
         intent: Boolean? = null,
+        providerName: String? = null,
+        modelName: String? = null,
+        reasoningEffort: String? = null,
     ): String {
         val runner = ensureAgentRunner(sessionId)
         val status = runner.create()
         taskOwner[status.id] = "agent"
         logger.info(
-            "Submitting agent task {} (session={}, noopLimit={}, coding={}, freshWorkspace={}, access={}, unattended={}, resume={}, tokenBudget={}, addDirs={}, workspace={}, intent={})",
+            "Submitting agent task {} (session={}, noopLimit={}, coding={}, freshWorkspace={}, access={}, unattended={}, resume={}, tokenBudget={}, addDirs={}, workspace={}, intent={}, provider={}, model={}, reasoningEffort={})",
             status.id, sessionId, noopLimit, coding ?: false, freshWorkspace ?: false,
             access?.id ?: "default", unattended, resumeTaskId ?: "none",
             tokenBudget ?: "default",
             addDirs.map { it.toString() }.ifEmpty { listOf("none") }.joinToString(","),
             workspace?.toString() ?: "default",
             intent?.toString() ?: "default",
+            providerName ?: "default",
+            modelName ?: "default",
+            reasoningEffort ?: "default",
         )
         runner.submit(
             plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId,
             tokenBudget, addDirs, unrestricted, rewindTaskId, workspace, intent,
+            providerName, modelName, reasoningEffort,
         )
         return status.id
     }

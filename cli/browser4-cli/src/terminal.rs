@@ -31,6 +31,14 @@
 //! is active, and the `NO_COLOR` environment variable is unset. See
 //! [`color_enabled_for`].
 
+//! [`color_enabled_for`] / [`no_color_requested`] are actively used by the
+//! CLI entry point to decide whether ANSI is on. The rest of this module
+//! (`Color`, `Effects`, `Style`, `paint`, and the predefined constants) is a
+//! **reserved public API surface** for future CLI output enhancements —
+//! spinner states, progress bars, error/success badges, colourised diagnostics,
+//! etc. — and is intentionally dead-code for now.
+#![allow(dead_code)]
+
 use std::io::IsTerminal;
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 package ai.platon.pulsar.swarm.service
 
+import ai.platon.browser4.common.DataDirResolver
 import ai.platon.pulsar.agentic.GenericAgenticSession
 import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
 import ai.platon.pulsar.agentic.tools.advanced.crawl.QueryRequest
@@ -104,10 +105,7 @@ open class SwarmService(
 
     /** JSONL persistence for swarm task responses across restarts. */
     internal val persistence = JsonlPersistence(
-        file = Path.of(
-            System.getProperty("browser4.data.dir", System.getProperty("user.home")),
-            ".browser4", "data", "swarm", "swarm-tasks.jsonl"
-        ),
+        file = DataDirResolver.swarmDir().resolve("swarm-tasks.jsonl"),
         clazz = ScrapeResponse::class,
         objectMapper = pulsarObjectMapper()
     )

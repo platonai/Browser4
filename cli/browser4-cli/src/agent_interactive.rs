@@ -2099,6 +2099,26 @@ const SESSION_HELP: &[(&str, &str, &str)] = &[
         "consecutive no-op abort threshold (<n>; blank resets)",
     ),
     (
+        "provider",
+        "session",
+        "override the LLM provider for this session (<name> | off)",
+    ),
+    (
+        "model",
+        "session",
+        "override the LLM model name for this session (<name> | off)",
+    ),
+    (
+        "effort",
+        "session",
+        "reasoning effort for this session (low | medium | high | off)",
+    ),
+    (
+        "llm",
+        "session",
+        "print the current provider / model / effort overrides",
+    ),
+    (
         "history",
         "session",
         "tasks typed in earlier sessions ([n] | clear)",
@@ -3473,6 +3493,19 @@ struct Repl {
     resumed: bool,
     /// When that earlier session was last used (RFC 3339), for the age warning.
     resumed_at: Option<String>,
+    // --- LLM overrides (session-wide, every task inherits until changed) ---
+    /// `/provider <name>`: LLM provider override for all subsequent tasks of this
+    /// session (e.g. `deepseek`, `openrouter`, `openai`, `anthropic`, `moonshot`).
+    /// `None` means "use the backend default"; `Some("")` is never set (blank is
+    /// normalized to `None` on parse).
+    provider_override: Option<String>,
+    /// `/model <name>`: LLM model name override for all subsequent tasks.
+    /// `None` means "use the provider's defaultModel".
+    model_override: Option<String>,
+    /// `/effort <low|medium|high|off>`: reasoning effort / thinking intensity.
+    /// Only affects models that support it; unsupported values are ignored silently
+    /// by the backend. `None` means "use the model's default behaviour".
+    reasoning_effort_override: Option<String>,
 }
 
 impl Repl {
@@ -3558,6 +3591,26 @@ impl Repl {
             last_access_poll: None,
             resumed: false,
             resumed_at: None,
+            // LLM overrides — read from `agent run -i --provider/--model/--effort`.
+            // Blank strings are normalized to `None` (the backend default).
+            provider_override: params
+                .get("providerName")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+            model_override: params
+                .get("modelName")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+            reasoning_effort_override: params
+                .get("reasoningEffort")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
         }
     }
 
@@ -3660,6 +3713,18 @@ impl Repl {
         }
         if let Some(budget) = self.token_budget.filter(|budget| *budget > 0) {
             line.push_str(&format!(" · budget={}", format_token_amount(budget as u64)));
+        }
+        // LLM overrides only appear when the user actually set one — the banner
+        // stays minimal for default sessions (banner_lines has dedicated tests
+        // asserting these keys are absent when unset).
+        if let Some(provider) = self.provider_override.as_deref() {
+            line.push_str(&format!(" · provider={provider}"));
+        }
+        if let Some(model) = self.model_override.as_deref() {
+            line.push_str(&format!(" · model={model}"));
+        }
+        if let Some(effort) = self.reasoning_effort_override.as_deref() {
+            line.push_str(&format!(" · effort={effort}"));
         }
         if self.quiet {
             line.push_str(" · quiet");
@@ -4337,6 +4402,18 @@ impl Repl {
         if let Some(value) = self.intent_override {
             extra["intent"] = json!(value);
         }
+        // Session-wide LLM overrides (provider/model/reasoningEffort).
+        // Omitted values keep the backend's defaults — blank strings never reach here
+        // (new() and the setter normalize them to None).
+        if let Some(name) = self.provider_override.as_deref() {
+            extra["providerName"] = json!(name);
+        }
+        if let Some(name) = self.model_override.as_deref() {
+            extra["modelName"] = json!(name);
+        }
+        if let Some(effort) = self.reasoning_effort_override.as_deref() {
+            extra["reasoningEffort"] = json!(effort);
+        }
         extra
     }
 
@@ -4687,6 +4764,13 @@ impl Repl {
             "intent" => self.set_intent(argument),
             "tools" => self.set_tool_calls(argument),
             "noop-limit" => self.set_noop_limit(argument),
+            // LLM overrides — session-wide, every task inherits.
+            // `/provider <name>` sets; `/provider off` or blank resets to default.
+            "provider" => self.set_provider(argument),
+            "model" => self.set_model(argument),
+            "effort" => self.set_effort(argument),
+            // `/llm` (no args): show current provider/model/effort overrides.
+            "llm" => self.show_llm_overrides(),
             "session" => {
                 let session = self.session_id().unwrap_or_else(|| "default".to_string());
                 self.out(&format!("session: {session}"));
@@ -5856,6 +5940,300 @@ impl Repl {
                 "usage: /noop-limit <positive integer> (got '{argument}')"
             )),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Task-scoped LLM overrides (/provider, /model, /effort, /llm)
+    // -----------------------------------------------------------------------
+
+    /// The 12 most-used providers in providers.json, as canonical lower-case names.
+    /// `/provider` without arguments prints this list with numbers so the user can
+    /// pick `3` instead of typing the name.  Order matches the dropdown on the web UI.
+    ///
+    /// Selection rationale: 5 China domestic leaders (deepseek, moonshot, volcengine,
+    /// bailian, zhipu), 4 international leaders (openai, anthropic, gemini, mistral),
+    /// 2 routing/aggregators (openrouter, groq), 1 niche but distinct (xai).
+    /// The remaining 9 providers in providers.json (minimax, hunyuan, qianfan,
+    /// together, perplexity, fireworks, baichuan, yi, stepfun) are available via
+    /// free-text input — type them directly.
+    const TOP_PROVIDERS: &[&'static str] = &[
+        "deepseek", "openrouter", "openai", "anthropic", "moonshot",
+        "volcengine", "bailian", "zhipu", "gemini", "mistral", "xai", "groq",
+    ];
+
+    /// Aliases → canonical providerName (mirrors providers.json's
+    /// `canonicalAliases` field).  Users typing `/provider claude` expect
+    /// anthropic; `/provider google` expects gemini.
+    const ALIAS_TO_CANONICAL: &[(&'static str, &'static str)] = &[
+        ("claude", "anthropic"),
+        ("dashscope", "bailian"),
+        ("google", "gemini"),
+        ("qwen", "bailian"),       // people often say "qwen" instead of "bailian"
+    ];
+
+    /// Resolve a free-text provider name (or alias) to its canonical name.
+    /// Returns the input lowercased if no alias matches (free-text providers
+    /// not in TOP_PROVIDERS are fine — they're just not in the numbered list).
+    fn resolve_provider_name(input: &str) -> String {
+        let lower = input.trim().to_lowercase();
+        for (alias, canonical) in Self::ALIAS_TO_CANONICAL {
+            if alias == &lower {
+                return (*canonical).to_string();
+            }
+        }
+        lower
+    }
+
+    /// Each top-12 provider → curated list of well-known model names users can pick.
+    /// First entry is providers.json's defaultModel; the rest are popular alternatives.
+    /// `/model` (no args, provider set) lists them with numbers.
+    fn provider_models(provider: &str) -> &'static [&'static str] {
+        match provider {
+            "deepseek"    => &["deepseek-v4-flash", "deepseek-v3.2", "deepseek-v3", "deepseek-reasoner"],
+            "openrouter"  => &["bytedance-seed/seed-1.6", "deepseek/deepseek-v4-flash", "openai/gpt-5.6-sol", "anthropic/claude-sonnet-4-6"],
+            "openai"      => &["gpt-5.6-sol", "gpt-5.4", "gpt-4o.5", "gpt-4o-mini"],
+            "anthropic"   => &["claude-sonnet-4-6", "claude-haiku-4-6", "claude-opus-4-6"],
+            "moonshot"    => &["kimi-k2.6", "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+            "volcengine"  => &["doubao-seed-2-0-pro-260215", "doubao-seed-1-6-thinking", "doubao-1-5-pro-32k"],
+            "bailian"     => &["qwen3.6-plus", "qwen3.5-plus", "qwen-max", "qwen-turbo"],
+            "zhipu"       => &["glm-5.1", "glm-4.7", "glm-4-plus"],
+            "gemini"      => &["gemini-3.1-flash-lite", "gemini-3.1-pro", "gemini-3.0-flash"],
+            "mistral"     => &["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"],
+            "xai"         => &["grok-4.5", "grok-4-mini", "grok-3.1-fast"],
+            "groq"        => &["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "qwen-2.5-72b-instruct"],
+            _             => &[],
+        }
+    }
+
+    /// Valid `reasoningEffort` values — the backend/provider accepts anything, but
+    /// we warn on values outside this list so the user knows their model may not
+    /// honour it rather than silently pay for nothing.
+    const VALID_EFFORT_VALUES: &[&'static str] = &["low", "medium", "high", "off"];
+
+    /// Reset keyword list — any of these (or blank) clears the override.
+    const RESET_KEYWORDS: &[&'static str] = &["off", "default", "reset", "none", "clear"];
+
+    /// `/provider` (no args) → print numbered list of TOP_PROVIDERS.
+    /// `/provider 3` → set to TOP_PROVIDERS[2].
+    /// `/provider deepseek` → set free-text name.
+    /// `/provider off` → reset to server default (reset keywords only, blank = list).
+    fn set_provider(&mut self, argument: &str) {
+        let trimmed = argument.trim();
+        // 1) blank → numbered list (the whole point of a dropdown!)
+        if trimmed.is_empty() {
+            self.out(&format!(
+                "Top-{} providers — pick by number, alias, or type a name:",
+                Self::TOP_PROVIDERS.len()
+            ));
+            for (i, name) in Self::TOP_PROVIDERS.iter().enumerate() {
+                let marker = if Some(name.as_ref()) == self.provider_override.as_deref() { " ← current" } else { "" };
+                self.out(&format!("  {:>2}. {}{}", i + 1, name, marker));
+            }
+            self.out("  aliases: claude→anthropic, dashscope→bailian, google→gemini, qwen→bailian");
+            self.out("  use: /provider 3   or   /provider claude   or   /provider deepseek   or   /provider off");
+            return;
+        }
+        // 2) reset keywords
+        if Self::RESET_KEYWORDS.contains(&trimmed.to_lowercase().as_str()) {
+            if self.provider_override.take().is_some() {
+                self.out("provider reset to the server default");
+            } else {
+                self.out("provider is already at the server default");
+            }
+            // Provider reset → model must reset too (old model doesn't belong to default provider).
+            if self.model_override.take().is_some() {
+                self.out("  (model reset to provider default)");
+            }
+            return;
+        }
+        // 3) number → index into TOP_PROVIDERS
+        if let Ok(idx) = trimmed.parse::<usize>() {
+            let one_based = idx;
+            match Self::TOP_PROVIDERS.get(one_based.saturating_sub(1)) {
+                Some(name) => {
+                    let name_str = (*name).to_string();
+                    self.provider_override = Some(name_str.clone());
+                    if self.model_override.take().is_some() {
+                        self.out(&format!("provider set to '{name_str}' (model reset to provider default)"));
+                    } else {
+                        self.out(&format!("provider set to '{name_str}' (applies to every task of this session)"));
+                    }
+                }
+                None => self.out(&format!(
+                    "no provider numbered {one_based}; valid range: 1-{}",
+                    Self::TOP_PROVIDERS.len()
+                )),
+            }
+            return;
+        }
+        // 4) free-text name (resolve alias first — e.g. "claude" → "anthropic")
+        let resolved = Self::resolve_provider_name(trimmed);
+        let alias_applied = resolved != trimmed.to_lowercase();
+        let is_top = Self::TOP_PROVIDERS.contains(&resolved.as_str());
+        self.provider_override = Some(resolved.clone());
+        let alias_hint = if alias_applied {
+            format!(" (alias '{trimmed}' → '{resolved}')")
+        } else {
+            String::new()
+        };
+        if is_top {
+            self.out(&format!(
+                "provider set to '{resolved}'{alias_hint} (applies to every task of this session)"
+            ));
+        } else {
+            self.out(&format!(
+                "provider set to '{resolved}'{alias_hint} (not in the top-{} list — make sure it exists in providers.json)",
+                Self::TOP_PROVIDERS.len()
+            ));
+        }
+        if self.model_override.take().is_some() {
+            self.out("  (model reset to provider default)");
+        }
+    }
+
+    /// `/model` (no args) → numbered list of models for the current provider.
+    /// `/model 2` → pick by number.
+    /// `/model <name>` → free-text.
+    /// `/model off` → reset to provider default.
+    fn set_model(&mut self, argument: &str) {
+        let trimmed = argument.trim();
+        // 1) blank → list (but need a provider first!)
+        if trimmed.is_empty() {
+            match self.provider_override.as_deref() {
+                Some(provider) => {
+                    let list = Self::provider_models(provider);
+                    if list.is_empty() {
+                        self.out(&format!("provider '{provider}' has no curated model list — use free-text /model <name>"));
+                        return;
+                    }
+                    self.out(&format!("Models for '{provider}' — pick by number, or type a name:"));
+                    for (i, name) in list.iter().enumerate() {
+                        let marker = if Some(name.as_ref()) == self.model_override.as_deref() { " ← current" } else { "" };
+                        self.out(&format!("  {:>2}. {}{}", i + 1, name, marker));
+                    }
+                    self.out("  use: /model 2   or   /model deepseek-v4-flash   or   /model off");
+                }
+                None => {
+                    self.out("⚠ no provider set — use /provider first, or /model <name> for free-text");
+                }
+            }
+            return;
+        }
+        // 2) reset keywords
+        if Self::RESET_KEYWORDS.contains(&trimmed.to_lowercase().as_str()) {
+            if self.model_override.take().is_some() {
+                self.out("model reset to the provider's default");
+            } else {
+                self.out("model is already at the provider's default");
+            }
+            return;
+        }
+        let provider = match self.provider_override.as_deref() {
+            Some(p) => p,
+            None => {
+                // Numbers need a provider; free-text still allowed (advanced).
+                if trimmed.parse::<usize>().is_ok() {
+                    self.out("⚠ no provider set — can't pick model by number without one");
+                    return;
+                }
+                ""
+            }
+        };
+        // 3) number → index into provider's list
+        if let Ok(idx) = trimmed.parse::<usize>() {
+            let list = Self::provider_models(provider);
+            if list.is_empty() {
+                self.out(&format!("no curated model list for provider '{provider}' — use free-text /model <name>"));
+                return;
+            }
+            let one_based = idx;
+            match list.get(one_based.saturating_sub(1)) {
+                Some(name) => {
+                    let name_str = (*name).to_string();
+                    self.model_override = Some(name_str.clone());
+                    self.out(&format!(
+                        "model set to '{name_str}' (applies to every task of this session)"
+                    ));
+                }
+                None => self.out(&format!(
+                    "no model numbered {one_based} for '{provider}'; valid range: 1-{}",
+                    list.len()
+                )),
+            }
+            return;
+        }
+        // 4) free-text
+        let name = trimmed.to_string();
+        let list = Self::provider_models(provider);
+        if !list.is_empty() && !list.contains(&name.as_str()) {
+            self.out(&format!(
+                "⚠ '{name}' is not in '{provider}''s curated list — it will be passed through, but check providers.json has it."
+            ));
+        }
+        self.model_override = Some(name.clone());
+        self.out(&format!("model set to '{name}' (applies to every task of this session)"));
+    }
+
+    /// `/effort` (no args) → numbered list: 1=low 2=medium 3=high 4=off.
+    /// `/effort 2` → pick by number. `/effort off` → reset.
+    fn set_effort(&mut self, argument: &str) {
+        let trimmed = argument.trim();
+        // 1) blank → numbered list
+        if trimmed.is_empty() {
+            self.out("Reasoning effort (thinking intensity) — pick by number, or type a name:");
+            for (i, name) in Self::VALID_EFFORT_VALUES.iter().enumerate() {
+                let marker = if Some(name.as_ref()) == self.reasoning_effort_override.as_deref() { " ← current" } else { "" };
+                self.out(&format!("  {:>2}. {}{}", i + 1, name, marker));
+            }
+            self.out("  use: /effort 2   or   /effort high   or   /effort off");
+            return;
+        }
+        // 2) reset keywords
+        if Self::RESET_KEYWORDS.contains(&trimmed.to_lowercase().as_str()) {
+            if self.reasoning_effort_override.take().is_some() {
+                self.out("reasoning effort reset to the model's default");
+            } else {
+                self.out("reasoning effort is already at the model's default");
+            }
+            return;
+        }
+        // 3) number → VALID_EFFORT_VALUES
+        if let Ok(idx) = trimmed.parse::<usize>() {
+            let one_based = idx;
+            match Self::VALID_EFFORT_VALUES.get(one_based.saturating_sub(1)) {
+                Some(name) => {
+                    let name_str = (*name).to_string();
+                    self.reasoning_effort_override = Some(name_str.clone());
+                    self.out(&format!("reasoning effort set to '{name_str}' (applies to every task of this session)"));
+                }
+                None => self.out(&format!(
+                    "no effort numbered {one_based}; valid range: 1-{} (low, medium, high, off)",
+                    Self::VALID_EFFORT_VALUES.len()
+                )),
+            }
+            return;
+        }
+        // 4) free-text
+        let lower = trimmed.to_lowercase();
+        if !Self::VALID_EFFORT_VALUES.contains(&lower.as_str()) {
+            self.out(&format!(
+                "⚠ '{trimmed}' is not one of the standard values (low, medium, high, off). \
+                 The backend will pass it through, but the model may ignore it. Proceeding anyway."
+            ));
+        }
+        self.reasoning_effort_override = Some(lower.clone());
+        self.out(&format!("reasoning effort set to '{lower}' (applies to every task of this session)"));
+    }
+
+    /// `/llm`: print the current provider/model/effort overrides (or "using server default"
+    /// where no override is set).
+    fn show_llm_overrides(&self) {
+        let provider = self.provider_override.as_deref().unwrap_or("(server default)");
+        let model = self.model_override.as_deref().unwrap_or("(provider default)");
+        let effort = self.reasoning_effort_override.as_deref().unwrap_or("(model default)");
+        self.out(&format!("provider: {provider}"));
+        self.out(&format!("model:    {model}"));
+        self.out(&format!("effort:   {effort}"));
     }
 
     /// `/events [n]`: the newest [n] raw step events (default 20).

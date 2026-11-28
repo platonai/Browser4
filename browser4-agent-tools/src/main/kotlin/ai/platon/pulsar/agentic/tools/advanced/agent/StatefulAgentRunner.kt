@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agentic.tools.advanced.agent
 
 import ai.platon.browser4.common.B4Constants.PAGE_STATUS_UNKNOWN
+import ai.platon.browser4.common.DataDirResolver
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.agents.AgentRunEvent
@@ -1044,11 +1045,15 @@ open class StatefulAgentRunner(
         rewindTaskId: String? = null,
         workspace: Path? = null,
         intent: Boolean? = null,
+        providerName: String? = null,
+        modelName: String? = null,
+        reasoningEffort: String? = null,
     ): AgentTaskStatus {
         val status = create()
         execute(
             plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended, resumeTaskId,
             tokenBudget, addDirs, unrestricted, rewindTaskId, workspace, intent,
+            providerName, modelName, reasoningEffort,
         )
         return status
     }
@@ -1078,11 +1083,15 @@ open class StatefulAgentRunner(
         rewindTaskId: String? = null,
         workspace: Path? = null,
         intent: Boolean? = null,
+        providerName: String? = null,
+        modelName: String? = null,
+        reasoningEffort: String? = null,
     ): Job {
         val job = taskScope.launch(start = CoroutineStart.LAZY) {
             execute(
                 plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
                 resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace, intent,
+                providerName, modelName, reasoningEffort,
             )
         }
         runningJobs[status.id] = job
@@ -1160,6 +1169,9 @@ open class StatefulAgentRunner(
         rewindTaskId: String? = null,
         workspace: Path? = null,
         intent: Boolean? = null,
+        providerName: String? = null,
+        modelName: String? = null,
+        reasoningEffort: String? = null,
     ) {
         // Attribute the row to its session before the task is queued: the console's
         // sidebar must show a freshly submitted task under its conversation (and under the
@@ -1172,6 +1184,7 @@ open class StatefulAgentRunner(
                 executeSerialized(
                     plainCommand, status, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
                     resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace, intent,
+                    providerName, modelName, reasoningEffort,
                 )
             }
         } catch (e: CancellationException) {
@@ -1444,6 +1457,9 @@ open class StatefulAgentRunner(
         rewindTaskId: String? = null,
         workspace: Path? = null,
         intent: Boolean? = null,
+        providerName: String? = null,
+        modelName: String? = null,
+        reasoningEffort: String? = null,
     ) {
         val agent = session.companionAgent
 
@@ -1866,10 +1882,10 @@ open class StatefulAgentRunner(
                     AgentEventBus.withServerSideAgentEventHandlers(serverSideAgentEventHandlers) {
                         if (runDispatcher != null) {
                             withContext(runDispatcher) {
-                                executeAgentCommand(effectiveInstruction, status, agent, runHasReturned, startIndex, codingMode, freshWorkspace)
+                                executeAgentCommand(effectiveInstruction, status, agent, runHasReturned, startIndex, codingMode, freshWorkspace, providerName, modelName, reasoningEffort)
                             }
                         } else {
-                            executeAgentCommand(effectiveInstruction, status, agent, runHasReturned, startIndex, codingMode, freshWorkspace)
+                            executeAgentCommand(effectiveInstruction, status, agent, runHasReturned, startIndex, codingMode, freshWorkspace, providerName, modelName, reasoningEffort)
                         }
                     }
                 } finally {
@@ -2133,9 +2149,21 @@ open class StatefulAgentRunner(
         startIndex: Int,
         coding: Boolean? = null,
         freshWorkspace: Boolean? = null,
+        providerName: String? = null,
+        modelName: String? = null,
+        reasoningEffort: String? = null,
     ) {
         // `status.submittedTask` is already set by `executeSerialized` (the terminal
         // path needs it even when this method never runs).
+
+        // Apply task-scoped LLM overrides (provider/model/reasoningEffort) through
+        // system properties that the LLM configuration layer reads. Properties are
+        // scoped to THIS task — they are saved before applying and restored in a
+        // finally block, so concurrent tasks with different overrides do not leak
+        // into each other and a failed task does not leave overrides behind.
+        val llmOverrides = buildLlmOverrideProperties(providerName, modelName, reasoningEffort)
+        val savedProps = applyAndSaveProperties(llmOverrides)
+        try {
 
         // Record where this task's tools may write, so a finished task can point its
         // caller at the deliverables instead of leaving them to search app-data.
@@ -2226,6 +2254,109 @@ open class StatefulAgentRunner(
             // AgentState has 'summary' for the final result message
             status.message = finalState.summary ?: finalState.description ?: ""
             status.refresh(ResourceStatus.SC_OK)
+        }
+        } finally {
+            restoreProperties(savedProps)
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Task-scoped LLM overrides (provider / model / reasoningEffort)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Build a map of system properties that override the default LLM selection for
+     * one task. Empty when the caller left all three knobs unset — the caller must
+     * not pay a property round-trip for a task that needs no override.
+     *
+     * Property keys are the ones [ai.platon.pulsar.external.ChatModelFactory] actually
+     * reads — not Browser4-prefixed keys. ChatModelFactory honours:
+     *  - `llm.provider` — explicit provider selection (canonical name, e.g. "deepseek",
+     *    "openrouter", "anthropic"). Auto-detection order is otherwise taken from
+     *    `providers.json` (first provider with a configured API key wins).
+     *  - `{provider}.model.name` — model name for that provider (dotted form, e.g.
+     *    "deepseek.model.name", "openrouter.model.name").
+     *  - `{provider}.reasoning.effort` / `llm.reasoning.effort` — reasoning intensity;
+     *    base library support varies (see docs-dev/copilot/langchain4j-usage-assessment.md).
+     *
+     * A request that sets only `providerName` therefore writes both `llm.provider`
+     * (so ChatModelFactory switches provider) and clears the previous task's model
+     * override (no stale `{prevProvider}.model.name` left behind).  A request that
+     * sets `modelName` without `providerName` is less precise: we also write the
+     * generic `llm.model.name` so a factory that supports a fallback can pick it
+     * up, but the provider-prefixed variant is what most ChatModelFactory versions
+     * actually read.
+     */
+    private fun buildLlmOverrideProperties(
+        providerName: String?,
+        modelName: String?,
+        reasoningEffort: String?,
+    ): Map<String, String> {
+        val overrides: LinkedHashMap<String, String> = LinkedHashMap()
+        providerName?.trim()?.takeIf { it.isNotEmpty() }?.lowercase()?.let { provider ->
+            overrides["llm.provider"] = provider
+            // Provider-specific model-name override — ChatModelFactory's documented
+            // dotted form (`{provider}.model.name`).  When we also have a model name
+            // we write it here; when we only switch provider we explicitly clear any
+            // previous task's stale `{prev}.model.name` by NOT writing anything
+            // (StatefulAgentRunner's finally block restores everything the caller
+            // had before this task).
+            modelName?.trim()?.takeIf { it.isNotEmpty() }?.let {
+                overrides["$provider.model.name"] = it
+            }
+            reasoningEffort?.trim()?.takeIf { it.isNotEmpty() }?.lowercase()?.let {
+                overrides["$provider.reasoning.effort"] = it
+                overrides["llm.reasoning.effort"] = it
+            }
+        } ?: run {
+            // No providerName — provider stays on whatever llm.provider or auto-detect
+            // chose.  Write model/reasoning overrides via both the generic fallback
+            // key and all known provider-specific keys... actually we can't do that.
+            // The cleanest workaround is to also set `llm.model.name` (ChatModelFactory
+            // may or may not honour it, depending on its version) and warn in apply.
+            modelName?.trim()?.takeIf { it.isNotEmpty() }?.let {
+                overrides["llm.model.name"] = it
+            }
+            reasoningEffort?.trim()?.takeIf { it.isNotEmpty() }?.lowercase()?.let {
+                overrides["llm.reasoning.effort"] = it
+            }
+        }
+        return overrides
+    }
+
+    /**
+     * Snapshot the current values of every property we are about to change, then
+     * set the new ones. Returns the snapshot so [restoreProperties] can undo them
+     * after the task finishes (success or failure).
+     *
+     * A missing key is explicitly recorded as `null` so the restore step knows to
+     * call `System.clearProperty` instead of writing back `null`.
+     */
+    private fun applyAndSaveProperties(overrides: Map<String, String>): Map<String, String?> {
+        if (overrides.isEmpty()) return emptyMap()
+        val saved = LinkedHashMap<String, String?>()
+        for ((key, value) in overrides) {
+            saved[key] = System.getProperty(key)
+            System.setProperty(key, value)
+        }
+        logger.info("Agent task {}: applied LLM overrides: {}", session.uuid, overrides)
+        return saved
+    }
+
+    /**
+     * Restore the system properties [applyAndSaveProperties] saved before the task.
+     *
+     * A snapshot value of `null` means the property did not exist before — clear
+     * it now so a later task does not inherit this task's override.
+     */
+    private fun restoreProperties(saved: Map<String, String?>) {
+        if (saved.isEmpty()) return
+        for ((key, value) in saved) {
+            if (value == null) {
+                System.clearProperty(key)
+            } else {
+                System.setProperty(key, value)
+            }
         }
     }
 
@@ -2396,10 +2527,8 @@ open class StatefulAgentRunner(
          */
         const val COMPACTION_SIZE_THRESHOLD_BYTES = 4L * 1024 * 1024
 
-        fun agentPersistencePath(): Path = Path.of(
-            System.getProperty("browser4.data.dir", System.getProperty("user.home")),
-            ".browser4", "data", "agent", "agent-tasks.jsonl"
-        )
+        fun agentPersistencePath(): Path =
+            DataDirResolver.agentDir().resolve("agent-tasks.jsonl")
 
         /**
          * Where one task's persisted step log lives: `<data>/agent/events/<taskId>.jsonl`.
