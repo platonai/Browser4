@@ -32,18 +32,18 @@
 
 ## OpenRouter (default) — 300+ models behind a single key
 # openrouter.api.key=sk-or-v1-...
-# openrouter.model.name=bytedance-seed/seed-1.6
+# openrouter.model.name=openai/gpt-6.1-sol
 # openrouter.base.url=https://openrouter.ai/api/v1
 
 ## DeepSeek
 # deepseek.api.key=sk-...
-# deepseek.model.name=deepseek-v4-flash
+# deepseek.model.name=deepseek-flash
 # deepseek.base.url=https://api.deepseek.com/v1
 
 ## OpenAI-compatible — any OpenAI-compatible endpoint: DeepInfra, Groq, vLLM,
 ## LM Studio, a corporate gateway, ...
 # openai.api.key=sk-...
-# openai.model.name=gpt-5.6-sol
+# openai.model.name=gpt-6.1-sol
 # openai.base.url=https://api.openai.com/v1
 #
 # Example — DeepInfra:
@@ -58,7 +58,7 @@
 
 ## Volcengine (ByteDance / Doubao)
 # volcengine.api.key=...
-# volcengine.model.name=doubao-seed-2-0-pro-260215
+# volcengine.model.name=doubao-seed-2-1-pro-260915
 # volcengine.base.url=https://ark.cn-beijing.volces.com/api/v3
 
 ## Full provider list, precedence and troubleshooting: docs/config.md

@@ -47,6 +47,31 @@ perplexity → fireworks → baichuan → yi → stepfun → (alias keys, e.g. K
 > The file is a full provider catalog, not just an order: a provider added to the base
 > library must be added here too, and a unit test fails when the two catalogs diverge.
 
+### Model-level capabilities (reasoning, vision, protocol)
+
+In addition to provider order, `providers.json` also carries per-provider model capabilities
+that Browser4 can use when building LLM requests:
+
+| Field | Meaning | Values |
+|---|---|---|
+| `defaultModel` | Browser4 未显式指定时的默认模型名 | e.g. `gpt-6.1-sol`, `claude-sonnet-5.5` |
+| `defaultBaseUrl` | API 接入端点 | 完整 URL |
+| `apiProtocol` | 协议类型，决定请求体结构 | `OPENAI` / `ANTHROPIC` / `GEMINI` |
+| `supportVision` | 是否支持图片输入 | `true` / `false` |
+| `supportsReasoning` | 默认模型原生支持思考/推理模式 | `true` / `false`（省略 → 交给 API 默认） |
+| `defaultReasoningEffort` | 默认思考强度 | `off` / `low` / `medium` / `high`（省略 → API 默认） |
+| `reasoningParamName` | 协议层用于控制思考的参数名 | `reasoning_effort`（OpenAI 系）/ `thinking`（Anthropic）/ `thinking_level`（Gemini） |
+
+这些能力字段的真值源是
+[`cc-switch` 的 `src/config/piModelCatalog.ts`](https://github.com/platonai/cc-switch)，
+`bin/sync-llm-models.py` 每次同步会根据 catalog 的 `reasoning` / `reasoningEffort`
+元数据自动填充，无法匹配的 override 模型按命名规律启发式推断（flash/mini → off，
+opus/ultra/o-series → high，pro/sonnet/sol → medium）。
+
+> 注：当前 pulsar-common 4.11.35 的 `ProviderConfig` 只解析前 5 个字段，新增的
+> reasoning 字段会被宽松忽略（Jackson 默认 `@JsonIgnoreProperties(ignoreUnknown = true)`）。
+> 它们属于 Browser4 本地扩展，留给 base 库提供 provider-level 参数透传缝后消费。
+
 Consequences worth knowing:
 
 - `openai` sits at position 10: a leftover `OPENAI_API_KEY` **wins over** the keys of
@@ -71,7 +96,7 @@ Consequences worth knowing:
   Configured keys: DEEPSEEK_API_KEY (configuration file), OPENAI_API_KEY (environment variable)
   Config file: ~/.browser4/config/conf-enabled/application-private.properties
   Selected key: DEEPSEEK_API_KEY (first in the priority list)
-  Active model: deepseek-v4-flash (OpenAiChatModel)
+  Active model: deepseek-flash (OpenAiChatModel)
   Source: configuration file
   ⚠  Several LLM providers are configured: ...
 ```
@@ -94,29 +119,29 @@ same information (see `browser4-cli doctor --verbose`).
 
 ```properties
 openrouter.api.key=sk-or-v1-...
-openrouter.model.name=openai/gpt-5.4
+openrouter.model.name=openai/gpt-6.1-sol
 openrouter.base.url=https://openrouter.ai/api/v1/  # optional
 ```
 
 | Env var                 | Property                | Default |
 |-------------------------|-------------------------|---|
 | `OPENROUTER_API_KEY`    | `openrouter.api.key`    | — |
-| `OPENROUTER_MODEL_NAME` | `openrouter.model.name` | `bytedance-seed/seed-1.6` |
+| `OPENROUTER_MODEL_NAME` | `openrouter.model.name` | `openai/gpt-6.1-sol` |
 | `OPENROUTER_BASE_URL`   | `openrouter.base.url`   | `https://openrouter.ai/api/v1` |
 
-OpenRouter gives access to many models through one API. `model.name` defaults to a reasonable choice; override it to use any model available on OpenRouter (e.g. `bytedance-seed/seed-2.0-lite`).
+OpenRouter gives access to many models through one API. `model.name` defaults to a reasonable choice; override it to use any model available on OpenRouter (e.g. `anthropic/claude-sonnet-5.5`).
 
 ### DeepSeek
 
 ```properties
 deepseek.api.key=sk-...
-deepseek.model.name=deepseek-v4-flash
+deepseek.model.name=deepseek-flash
 ```
 
 | Env var               | Property              | Default |
 |-----------------------|-----------------------|---|
 | `DEEPSEEK_API_KEY`    | `deepseek.api.key`    | — |
-| `DEEPSEEK_MODEL_NAME` | `deepseek.model.name` | `deepseek-v4-flash` |
+| `DEEPSEEK_MODEL_NAME` | `deepseek.model.name` | `deepseek-flash` |
 | `DEEPSEEK_BASE_URL`   | `deepseek.base.url`   | `https://api.deepseek.com/v1` |
 
 
@@ -126,14 +151,14 @@ Uses DeepSeek's official API. Model defaults to DeepSeek's latest.
 
 ```properties
 openai.api.key=sk-...
-openai.model.name=gpt-5.4
+openai.model.name=gpt-6.1-sol
 openai.base.url=https://api.openai.com/v1       # optional
 ```
 
 | Env var | Property | Default |
 |---|---|---|
 | `OPENAI_API_KEY` | `openai.api.key` | — |
-| `OPENAI_MODEL_NAME` | `openai.model.name` | `gpt-5.6-sol` |
+| `OPENAI_MODEL_NAME` | `openai.model.name` | `gpt-6.1-sol` |
 | `OPENAI_BASE_URL` | `openai.base.url` | `https://api.openai.com/v1` |
 
 Works with any OpenAI-compatible API by changing `base.url`. For example, Aliyun Qwen (DashScope):
@@ -152,7 +177,7 @@ openai.base.url=https://dashscope.aliyuncs.com/compatible-mode/v1
 
 ```properties
 volcengine.api.key=...
-volcengine.model.name=doubao-seed-2-0-pro-260215
+volcengine.model.name=doubao-seed-2-1-pro-260915
 volcengine.base.url=https://ark.cn-beijing.volces.com/api/v3  # optional
 ```
 
@@ -185,10 +210,10 @@ $env:BROWSER_DISPLAY_MODE = "HEADLESS"
 
 ```properties
 anthropic.api.key=sk-ant-...
-anthropic.model.name=claude-sonnet-4-6
+anthropic.model.name=claude-sonnet-5.5
 ```
 
-Uses the native Anthropic Messages protocol (not OpenAI-compatible). Default model: `claude-sonnet-4-6`.
+Uses the native Anthropic Messages protocol (not OpenAI-compatible). Default model: `claude-sonnet-5.5`.
 
 ### Google Gemini
 
@@ -196,10 +221,10 @@ Uses the native Anthropic Messages protocol (not OpenAI-compatible). Default mod
 google.generative.ai.api.key=your-key   # primary key name
 # gemini.api.key=your-key               # alias
 # google.api.key=your-key               # alias
-gemini.model.name=gemini-3.1-flash-lite
+gemini.model.name=gemini-3.8-flash
 ```
 
-Uses the native Gemini protocol (not OpenAI-compatible). Default model: `gemini-3.1-flash-lite`.
+Uses the native Gemini protocol (not OpenAI-compatible). Default model: `gemini-3.8-flash`.
 
 ### xAI / Grok
 
@@ -213,7 +238,7 @@ xai.base.url=https://api.x.ai/v1        # optional
 
 ```properties
 groq.api.key=your-key
-groq.model.name=llama-3.3-70b-versatile
+groq.model.name=openai/gpt-oss-120b
 groq.base.url=https://api.groq.com/openai/v1   # optional
 ```
 
@@ -221,7 +246,7 @@ groq.base.url=https://api.groq.com/openai/v1   # optional
 
 ```properties
 together.api.key=your-key
-together.model.name=meta-llama/Llama-3.3-70B-Instruct-Turbo
+together.model.name=Qwen/Qwen3.7-Max
 together.base.url=https://api.together.xyz/v1  # optional
 ```
 
@@ -229,47 +254,23 @@ together.base.url=https://api.together.xyz/v1  # optional
 
 ```properties
 mistral.api.key=your-key
-mistral.model.name=mistral-large-latest
+mistral.model.name=mistral-large-4
 mistral.base.url=https://api.mistral.ai/v1     # optional
-```
-
-### Perplexity
-
-```properties
-perplexity.api.key=your-key
-perplexity.model.name=llama-3.1-sonar-large-128k-online
 ```
 
 ### Fireworks AI
 
 ```properties
 fireworks.api.key=your-key
-fireworks.model.name=accounts/fireworks/models/llama-v3p3-70b-instruct
+fireworks.model.name=accounts/fireworks/models/glm-5p3
 ```
 
-### Alibaba DashScope / Qwen (阿里云-百炼)
+### Perplexity
 
 ```properties
-dashscope.api.key=sk-...
-dashscope.model.name=qwen3.6-plus
-dashscope.base.url=https://dashscope.aliyuncs.com/compatible-mode/v1   # optional
-```
-
-### Zhipu AI / GLM (智谱AI)
-
-```properties
-zhipu.api.key=your-key
-zhipu.model.name=glm-5.1
-zhipu.base.url=https://open.bigmodel.cn/api/paas/v4/   # optional
-```
-
-### Moonshot / Kimi (月之暗面)
-
-```properties
-moonshot.api.key=your-key
-# kimi.api.key=your-key              # alias for moonshot
-moonshot.model.name=kimi-k2.6
-moonshot.base.url=https://api.moonshot.cn/v1   # optional
+perplexity.api.key=your-key
+perplexity.model.name=sonar
+perplexity.base.url=https://api.perplexity.ai   # optional
 ```
 
 ### Baichuan (百川智能)
@@ -283,17 +284,42 @@ baichuan.base.url=https://api.baichuan-ai.com/v1   # optional
 ### 01.AI / Yi (零一万物)
 
 ```properties
-yi.api.key=your-key
-# lingyi.api.key=your-key            # alias for yi
-yi.model.name=yi-large
-yi.base.url=https://api.lingyiwanwu.com/v1   # optional
+lingyi.api.key=your-key
+# yi.api.key=your-key               # alias for lingyi
+lingyi.model.name=yi-large
+lingyi.base.url=https://api.lingyiwanwu.com/v1   # optional
+```
+
+### Alibaba DashScope / Qwen (阿里云-百炼)
+
+```properties
+dashscope.api.key=sk-...
+dashscope.model.name=qwen3.8-max
+dashscope.base.url=https://dashscope.aliyuncs.com/compatible-mode/v1   # optional
+```
+
+### Zhipu AI / GLM (智谱AI)
+
+```properties
+zhipu.api.key=your-key
+zhipu.model.name=glm-5.3
+zhipu.base.url=https://open.bigmodel.cn/api/paas/v4/   # optional
+```
+
+### Moonshot / Kimi (月之暗面)
+
+```properties
+moonshot.api.key=your-key
+# kimi.api.key=your-key              # alias for moonshot
+moonshot.model.name=kimi-k3.1-pro
+moonshot.base.url=https://api.moonshot.cn/v1   # optional
 ```
 
 ### MiniMax / Hailuo (稀宇科技)
 
 ```properties
 minimax.api.key=your-key
-minimax.model.name=MiniMax-M3
+minimax.model.name=minimax-m3.1-flash
 ```
 
 Uses the Anthropic Messages protocol (not OpenAI-compatible).
@@ -302,7 +328,7 @@ Uses the Anthropic Messages protocol (not OpenAI-compatible).
 
 ```properties
 stepfun.api.key=your-key
-stepfun.model.name=step-3.5-flash
+stepfun.model.name=step-3.7-flash
 stepfun.base.url=https://api.stepfun.com/v1   # optional
 ```
 
@@ -311,7 +337,7 @@ stepfun.base.url=https://api.stepfun.com/v1   # optional
 ```properties
 hunyuan.api.key=your-key
 # tencent.api.key=your-key           # alias for hunyuan
-hunyuan.model.name=hunyuan-pro
+hunyuan.model.name=hy3
 hunyuan.base.url=https://api.lkeap.cloud.tencent.com/v1   # optional
 ```
 
@@ -320,7 +346,7 @@ hunyuan.base.url=https://api.lkeap.cloud.tencent.com/v1   # optional
 ```properties
 qianfan.api.key=your-key
 # baidu.api.key=your-key             # alias for qianfan
-qianfan.model.name=ernie-4.0-8k
+qianfan.model.name=deepseek-v4-flash
 qianfan.base.url=https://qianfan.baidubce.com/v2   # optional
 ```
 
