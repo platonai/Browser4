@@ -19,6 +19,11 @@
         <relativePath>../../browser4-pdk/pom.xml</relativePath>
     </parent>
 
+    <!-- Locked plugin version; does not follow repo version bumps.
+         Increment only when the plugin code itself changes.
+         Last actual release on Maven Central: 4.14.3 -->
+    <version>4.14.3</version>
+
     <artifactId>browser4-captcha</artifactId>
     <name>Browser4 Captcha</name>
     <description>CAPTCHA detection and automatic solving for Browser4</description>

@@ -1339,15 +1339,21 @@ function Get-PluginBaseNameFromJarName([string]$jarName) {
 function Select-BundlePluginJar {
     <#
     .SYNOPSIS
-        Pick the plugin JAR that matches the checked-out project version.
+        Pick the plugin JAR to bundle, preferring the checked-out project version.
     .DESCRIPTION
-        Version first: a JAR from another release train must never be bundled,
-        because it looks installed while behaving unpredictably.  Only
-        same-version candidates (e.g. several snapshot installs) are ranked by
-        mtime.
+        Selection order:
+          1. A JAR whose version exactly matches the checked-out project version
+             (developers building against the repo's own SNAPSHOT get the one
+             they just compiled).
+          2. The newest non-SNAPSHOT JAR in the directory (locked plugin
+             versions like 4.14.3 stay pinned even when the repo version
+             bumps to 4.17.x).
+          3. The newest SNAPSHOT JAR (development fallback).
+        JARs parsed from the candidates directory are always bundled — the
+        caller's job is to supply a directory specific to one plugin group.
     .OUTPUTS
-        PSCustomObject: Jar (the selected file, or $null) and FoundVersions
-        (every version parsed from the candidates, for the warning message).
+        PSCustomObject: Jar (the selected file) and FoundVersions (every
+        version parsed from the candidates, for informational output).
     #>
     param(
         [object[]]$Candidates = @(),
@@ -1355,19 +1361,30 @@ function Select-BundlePluginJar {
     )
 
     $foundVersions = [System.Collections.Generic.List[string]]::new()
-    $matching = [System.Collections.Generic.List[object]]::new()
+    $exactMatch = [System.Collections.Generic.List[object]]::new()
+    $release = [System.Collections.Generic.List[object]]::new()
+    $snapshot = [System.Collections.Generic.List[object]]::new()
 
     foreach ($candidate in $Candidates) {
         $version = Get-PluginVersionFromJarName -jarName $candidate.Name
-        if ($version) { $foundVersions.Add($version) }
-        if ($version -and $ProjectVersion -and $version.Equals($ProjectVersion, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $matching.Add($candidate)
+        if (-not $version) { continue }
+        $foundVersions.Add($version)
+        if ($ProjectVersion -and $version.Equals($ProjectVersion, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $exactMatch.Add($candidate)
+        } elseif ($version -match '-SNAPSHOT$') {
+            $snapshot.Add($candidate)
+        } else {
+            $release.Add($candidate)
         }
     }
 
     $selected = $null
-    if ($matching.Count -gt 0) {
-        $selected = $matching | Sort-Object { $_.LastWriteTime } -Descending | Select-Object -First 1
+    if ($exactMatch.Count -gt 0) {
+        $selected = $exactMatch | Sort-Object { $_.LastWriteTime } -Descending | Select-Object -First 1
+    } elseif ($release.Count -gt 0) {
+        $selected = $release | Sort-Object { $_.LastWriteTime } -Descending | Select-Object -First 1
+    } elseif ($snapshot.Count -gt 0) {
+        $selected = $snapshot | Sort-Object { $_.LastWriteTime } -Descending | Select-Object -First 1
     }
 
     return [pscustomobject]@{
@@ -1533,20 +1550,30 @@ foreach ($pluginModule in $defaultBundledPlugins) {
         Copy-Item -LiteralPath $selection.Jar.FullName -Destination (Join-Path $pluginsDirectory $selection.Jar.Name) -Force
         $bundledPluginNames.Add($selection.Jar.Name)
         $bundledPluginBaseNames.Add($pluginModule)
-        if (-not $bundledPluginVersion) { $bundledPluginVersion = $projectVersion }
-        Write-Host "  + Plugin: $($selection.Jar.Name)" -ForegroundColor Green
+        if (-not $bundledPluginVersion) {
+            # Use the version of the jar we actually selected — plugins may pin
+            # their versions independently of the repo (e.g. 4.14.3 while the
+            # repo is 4.17.x-SNAPSHOT).
+            $bundledPluginVersion = Get-PluginVersionFromJarName -jarName $selection.Jar.Name
+        }
+        $selectedVer = Get-PluginVersionFromJarName -jarName $selection.Jar.Name
+        if ($projectVersion -and $selectedVer -and -not $selectedVer.Equals($projectVersion, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-Host "  + Plugin: $($selection.Jar.Name) (plugin pinned to $selectedVer, host $projectVersion)" -ForegroundColor DarkCyan
+        } else {
+            Write-Host "  + Plugin: $($selection.Jar.Name)" -ForegroundColor Green
+        }
         continue
     }
 
+    # Could not pick any jar — every candidate failed to parse as a valid plugin jar.
     $foundVersions = if ($selection.FoundVersions.Count -gt 0) {
         $selection.FoundVersions -join ', '
     } else {
         '(unparseable JAR names)'
     }
     $pluginBundleWarnings.Add(
-        "Found $pluginModule JAR(s) in $pluginGroupDir, but none for the checked-out project version " +
-        "'$projectVersion' (found: $foundVersions). Refusing to bundle a plugin from another release " +
-        "train - a version-skewed plugin looks installed while behaving unpredictably.`n" +
+        "Found $pluginModule JAR(s) in $pluginGroupDir but could not select a valid one for bundling " +
+        "(versions seen: $foundVersions). Reinstall the plugin and rebuild:`n" +
         $pluginInstallHint)
 }
 

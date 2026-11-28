@@ -1241,19 +1241,39 @@ $imagesSnapshotA = New-PluginJarFile -Directory (New-TempDir 'plugin-select/a') 
 $imagesSnapshotB = New-PluginJarFile -Directory (New-TempDir 'plugin-select/b') -Name 'browser4-images-4.14.1-SNAPSHOT.jar' -LastWriteTime '2026-02-01T00:00:00'
 $imagesOldRelease = New-PluginJarFile -Directory $pluginSelectDir -Name 'browser4-images-4.13.0.jar'
 
-# A JAR from another release train never wins, even when it is the newest file.
+# With no exact match the newest non-SNAPSHOT release jar wins (plugin versions
+# can pin independently of the repo version).
+$otherTrain = Select-BundlePluginJar -Candidates @($imagesOldRelease) -ProjectVersion '4.14.1-SNAPSHOT'
+Assert-NotNull -Label 'SBP: no exact match → falls back to release jar' -Value $otherTrain.Jar
+Assert-Equal -Label 'SBP: release jar selected when repo version has no match' -Actual $otherTrain.Jar.Name -Expected 'browser4-images-4.13.0.jar'
+Assert-Equal -Label 'SBP: found versions listed for the warning' -Actual ($otherTrain.FoundVersions -join ',') -Expected '4.13.0'
+
+# Newest same-version snapshot wins when an exact project version match exists.
 $selection = Select-BundlePluginJar -Candidates @($imagesOldRelease, $imagesSnapshotA, $imagesSnapshotB) -ProjectVersion '4.14.1-SNAPSHOT'
 Assert-Equal -Label 'SBP: newest same-version snapshot wins' `
     -Actual $selection.Jar.FullName -Expected $imagesSnapshotB.FullName
-Assert-Equal -Label 'SBP: other-version candidate reported' `
+Assert-Equal -Label 'SBP: all candidate versions reported' `
     -Actual ($selection.FoundVersions -join ',') -Expected '4.13.0,4.14.1-SNAPSHOT'
 
-$otherTrain = Select-BundlePluginJar -Candidates @($imagesOldRelease) -ProjectVersion '4.14.1-SNAPSHOT'
-Assert-Null -Label 'SBP: no matching version → no JAR' -Value $otherTrain.Jar
-Assert-Equal -Label 'SBP: found versions listed for the warning' -Actual ($otherTrain.FoundVersions -join ',') -Expected '4.13.0'
-Assert-Equal -Label 'SBP: another release train never wins over the checkout version' `
+# Exact project version match still beats a release fallback.
+Assert-Equal -Label 'SBP: newest same-version snapshot still wins over release' `
     -Actual (Select-BundlePluginJar -Candidates @($imagesOldRelease, $imagesSnapshotA) -ProjectVersion '4.14.1-SNAPSHOT').Jar.FullName `
     -Expected $imagesSnapshotA.FullName
+
+# Locked plugin version scenario: repo at 4.17.x, plugins pinned to 4.14.3 release only.
+$pinDir = New-TempDir 'plugin-pin'
+$pinnedRelease = New-PluginJarFile -Directory $pinDir -Name 'browser4-images-4.14.3.jar' -LastWriteTime '2026-03-01T00:00:00'
+$pinFallback = Select-BundlePluginJar -Candidates @($pinnedRelease) -ProjectVersion '4.17.0-SNAPSHOT'
+Assert-NotNull -Label 'SBP: pinned 4.14.3 selected when repo is 4.17.x' -Value $pinFallback.Jar
+Assert-Equal -Label 'SBP: pinned plugin version bundled as-is' -Actual $pinFallback.Jar.Name -Expected 'browser4-images-4.14.3.jar'
+
+# Snapshot-only fallback: no release jar exists, pick the newest SNAPSHOT.
+$snapsOnlyDir = New-TempDir 'plugin-snapsonly'
+$snapLatest = New-PluginJarFile -Directory $snapsOnlyDir -Name 'browser4-markdown-4.15.0-SNAPSHOT.jar' -LastWriteTime '2026-03-15T00:00:00'
+$snapOlder = New-PluginJarFile -Directory $snapsOnlyDir -Name 'browser4-markdown-4.15.0-SNAPSHOT.jar' -LastWriteTime '2026-02-15T00:00:00'
+$snapFallback = Select-BundlePluginJar -Candidates @($snapLatest, $snapOlder) -ProjectVersion '4.16.0-SNAPSHOT'
+Assert-NotNull -Label 'SBP: snapshot fallback when no release exists' -Value $snapFallback.Jar
+Assert-Equal -Label 'SBP: newest snapshot chosen when fallback is used' -Actual $snapFallback.Jar.LastWriteTime -Expected $snapLatest.LastWriteTime
 
 $noCandidates = Select-BundlePluginJar -Candidates @() -ProjectVersion '4.14.1-SNAPSHOT'
 Assert-Null -Label 'SBP: empty candidate list → no JAR' -Value $noCandidates.Jar

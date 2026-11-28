@@ -80,11 +80,16 @@
 
     <dependencyManagement>
         <dependencies>
-            <!-- Import the PDK BOM for consistent dependency versions -->
+            <!-- Import the PDK BOM for consistent dependency versions.
+                 Uses an explicit property (resolved to browser4-pdk's own
+                 version at parse time, not the child plugin's version) so
+                 child plugins that pin their artifact version independently
+                 of the repo (e.g. browser4-markdown:4.14.3 while the PDK is
+                 4.17.0-SNAPSHOT) still find the correct BOM. -->
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>browser4-pdk-bom</artifactId>
-                <version>${project.version}</version>
+                <version>${browser4.pdk.bom.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -194,6 +199,13 @@
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+        <!-- BOM version: hard-coded to the PDK release so child plugins that
+             pin their own artifact version independently of the repo still
+             resolve the PDK BOM correctly (Maven interpolates ${project.version}
+             in the inherited dependencyManagement against the child, not the
+             parent, so we cannot use it here). -->
+        <browser4.pdk.bom.version>4.17.0-SNAPSHOT</browser4.pdk.bom.version>
 
         <!-- Language -->
         <javaVersion>17</javaVersion>

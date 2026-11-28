@@ -11,6 +11,11 @@
         <relativePath>../../browser4-pdk/pom.xml</relativePath>
     </parent>
 
+    <!-- Locked plugin version; does not follow repo version bumps.
+         Increment only when the plugin code itself changes.
+         Last actual release on Maven Central: 4.14.3 -->
+    <version>4.14.3</version>
+
     <artifactId>browser4-profile-import</artifactId>
     <packaging>jar</packaging>
 
