@@ -221,9 +221,11 @@ object B4Constants {
      * The session-level browser channel (`browser.channel`), set from the
      * [CHANNEL_CAPABILITY] capability. Absent or blank means the default Chrome;
      * [BROWSER_CHANNEL_EGO_LITE] launches the installed ego (lite) browser
-     * instead. The channel decides which browser binary the launch resolves
-     * (see `EgoLiteBrowserLauncher`); profile mode, display mode and every
-     * other launch setting apply unchanged.
+     * instead. The channel is routed through
+     * [ai.platon.pulsar.protocol.browser.resolver.BrowserBinaryResolverRegistry]
+     * to find the matching resolver, which decides which binary to launch and
+     * whether Browser4's stealth layer should apply. Profile mode, display mode
+     * and every other launch setting apply unchanged.
      */
     const val BROWSER_CHANNEL = "browser.channel"
 
