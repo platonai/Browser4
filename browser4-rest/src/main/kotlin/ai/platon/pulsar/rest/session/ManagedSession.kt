@@ -19,7 +19,16 @@ import kotlinx.coroutines.sync.withLock
 data class ManagedSession(
     val sessionId: String,
     val agenticSession: AgenticSession,
-    val capabilities: Map<String, String?>?,
+    /**
+     * The capabilities used to create the [AgenticSession].
+     *
+     * Mutable because session reuse through `computeIfAbsent` can carry a
+     * new caller-requested [PROFILE_MODE_CAPABILITY] override that must be
+     * observable via `getSession` — the normalized map from
+     * `PulsarSessionManager.normalizeCapabilities` is always the source of
+     * truth when it differs from what the session was first created with.
+     */
+    var capabilities: Map<String, String?>?,
     var url: String? = null,
     var status: SessionStatus = SessionStatus.ACTIVE,
     /** Explicit session kind — drives ownership and lifecycle decisions. */

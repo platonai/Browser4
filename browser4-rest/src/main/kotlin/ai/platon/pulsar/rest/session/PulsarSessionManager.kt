@@ -322,6 +322,7 @@ class PulsarSessionManager(
         val session = sessions.computeIfAbsent(resolvedId) {
             createManagedSession(resolvedId, normalizedCapabilities)
         }
+        applyRequestedCapabilityOverrides(session, normalizedCapabilities)
 
         val activeSession = resolveHealthySession(resolvedId, normalizedCapabilities, session)
 
@@ -347,9 +348,34 @@ class PulsarSessionManager(
         val session = sessions.computeIfAbsent(requestedId) {
             createManagedSession(requestedId, normalizedCapabilities)
         }
+        applyRequestedCapabilityOverrides(session, normalizedCapabilities)
         val activeSession = resolveHealthySession(requestedId, normalizedCapabilities, session)
         activeSession.lastAccessedAt = System.currentTimeMillis()
         return activeSession
+    }
+
+    /**
+     * After [computeIfAbsent] returns an already-existing session, apply any
+     * caller-requested capabilities overrides that were normalized on this call
+     * but never reached the session because creation was skipped.
+     *
+     * Only the capabilities keys that the caller can legitimately change after
+     * first creation are synced here — currently only [PROFILE_MODE_CAPABILITY].
+     * Other fields (SESSION_ID_CAPABILITY, CONTEXT_DIR_CAPABILITY, …) are
+     * structural and once set by creation must not silently be rewritten.
+     */
+    private fun applyRequestedCapabilityOverrides(
+        session: ManagedSession,
+        normalizedCapabilities: Map<String, String?>
+    ) {
+        val existing = session.capabilities ?: return
+        val newProfileMode = normalizedCapabilities[PROFILE_MODE_CAPABILITY]?.toString()
+        if (newProfileMode == null) return
+        val existingProfileMode = existing[PROFILE_MODE_CAPABILITY]?.toString()
+        if (newProfileMode == existingProfileMode) return
+        session.capabilities = LinkedHashMap(existing).apply {
+            put(PROFILE_MODE_CAPABILITY, newProfileMode)
+        }
     }
 
     fun checkHealthyBlocking(session: ManagedSession): CheckState {
@@ -1764,12 +1790,24 @@ class PulsarSessionManager(
         // against DEFAULT_SESSION_ID here would always be false, making the
         // three DEFAULT branches below dead code. Checking both the explicit
         // single-arg path and the capabilities-map path covers every caller.
+        // Also resolve "no session id given" (null / blank) as the DEFAULT
+        // slot — the capabilities-only overload (no explicitSessionId arg,
+        // no SESSION_ID_CAPABILITY) addresses the same DEFAULT session as
+        // getOrCreateSession("DEFAULT"). Without this branch the two entry
+        // points diverge: explicit DEFAULT is an isDefaultSession (and falls
+        // through to DEFAULT/SEQUENTIAL guard rails below) but a blank one
+        // looked like a named session and always got SEQUENTIAL.
         val isDefaultSession = when {
             hasExplicitSessionId && explicitSessionId.equals(
                 DEFAULT_SESSION_ID, ignoreCase = true
             ) -> true
             !requestedSessionId.isNullOrBlank() &&
                 requestedSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> true
+            // Only the capabilities-only (no explicitSessionId) overload with
+            // a blank/null SESSION_ID_CAPABILITY is the DEFAULT slot. If the
+            // caller passed an explicit sessionId (even "team-f") we must
+            // not absorb that into DEFAULT — it was a deliberate choice.
+            !hasExplicitSessionId && requestedSessionId.isNullOrBlank() -> true
             else -> false
         }
         val profileMode = when {
