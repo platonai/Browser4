@@ -609,7 +609,7 @@
              `AgentTaskEvent` → `AgentTaskRunStats` → `GET /api/commands/{id}/stats`
              → CLI `/stats`) read those fields; 4.11.31 and older do not carry them.
              Its pulsar-bom carries no dependency changes beyond the version element. -->
-        <browser4-base.version>4.11.32</browser4-base.version>
+        <browser4-base.version>4.11.35</browser4-base.version>
         <cdt-kotlin-client.version>4.8.0</cdt-kotlin-client.version>
 
         <!-- Agent memory system: SQLite FTS derived index (design: docs-dev/copilot/robust-browser-agent-memory-system-design.md) -->

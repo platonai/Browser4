@@ -9,6 +9,7 @@ import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.chrome.network.NetworkObserver
 import ai.platon.pulsar.chrome.network.RouteManager
 import ai.platon.pulsar.common.getLogger
+import kotlinx.coroutines.CancellationException
 import kotlin.reflect.KClass
 
 class BrowserToolExecutor(
@@ -19,6 +20,12 @@ class BrowserToolExecutor(
     private val closeMaxAttempts: Int = 3,
 ) : AbstractToolExecutor() {
     private val logger = getLogger(this)
+
+    // Per-tab timeout is already enforced by AbstractWebDriver.title() /
+    // currentUrl() (withTimeoutOrNull 2 s). safeDriverTitle / safeDriverCurrentUrl
+    // below add only exception-level fallback — the timeout budget lives in the
+    // base library and any driver implementation (PulsarWebDriver, tests, …)
+    // must inherit it.
 
     override val domain = "browser"
 
@@ -179,8 +186,14 @@ class BrowserToolExecutor(
                         // JSON should not depend on a client's leniency.
                         "index" to i,
                         "guid" to driver.guid,
-                        "title" to driver.title(),
-                        "url" to driver.currentUrl(),
+                        // Per-tab timeout so a dead per-target WebSocket (common
+                        // after `attach --cdp`, where the base library's recovery
+                        // registers drivers for unestablished page targets) cannot
+                        // hang the whole listing. Degrade to placeholders instead
+                        // of letting the transport's ~30 s bubble up and crash
+                        // the proxy.
+                        "title" to safeDriverTitle(driver),
+                        "url" to safeDriverCurrentUrl(driver),
                         // Emit a real Boolean so JSON consumers parse `active` without
                         // string-to-bool coercion.
                         "active" to (driver.guid == activeGuid)
@@ -308,6 +321,43 @@ class BrowserToolExecutor(
             is String -> raw.trim().takeIf { it.isNotEmpty() }?.toIntOrNull()
                 ?: throw IllegalArgumentException("Invalid tab index '$raw' for $functionName")
             else -> throw IllegalArgumentException("Invalid tab index '$raw' for $functionName")
+        }
+    }
+
+    /**
+     * Read a tab title, degrading gracefully on any failure.
+     *
+     * The transport-level timeout lives in [AbstractWebDriver.title()] (2 s),
+     * so we only need to catch exceptions here — a real `WebDriverException`, a
+     * stale driver, a rogue NPE in the implementation, all degrade to a
+     * placeholder rather than letting the whole listing crash.
+     */
+    private suspend fun safeDriverTitle(driver: AbstractWebDriver): String {
+        return try {
+            driver.title() ?: ""
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("listTabs: failed to read title for tab {} ({}) — degrading", driver.guid, e.message)
+            "<unavailable>"
+        }
+    }
+
+    /**
+     * Read a tab URL; same rationale as [safeDriverTitle] — defer to the
+     * driver's own timeout layer and degrade to a placeholder on exception.
+     * The "<unavailable>" marker matches [safeDriverTitle] so consumers of
+     * the listTabs JSON can distinguish "URL was empty (legal)" from "URL
+     * could not be read (driver broken / WS dead)".
+     */
+    private suspend fun safeDriverCurrentUrl(driver: AbstractWebDriver): String {
+        return try {
+            driver.currentUrl() ?: ""
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("listTabs: failed to read URL for tab {} ({}) — degrading", driver.guid, e.message)
+            "<unavailable>"
         }
     }
 
