@@ -47,7 +47,7 @@
         <connection>scm:git:https://github.com/platonai/browser4.git</connection>
         <developerConnection>scm:git:https://github.com/platonai/browser4.git</developerConnection>
         <url>https://github.com/platonai/browser4</url>
-        <tag>v4.16.12</tag>
+        <tag>v4.16.13</tag>
     </scm>
 
     <issueManagement>
