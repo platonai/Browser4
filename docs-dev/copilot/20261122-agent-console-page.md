@@ -21,13 +21,13 @@
 | 动作 | 接口 | 说明 |
 |---|---|---|
 | 提交 | `POST /api/commands/plain?async=true&sessionId=…[&workspace=…]`（`text/plain`） | `UserCommandExecutor.submitPlainCommand` → 与 `command_run` 相同的 agent runner；返回 `{id}`。`workspace` 由设置弹窗的工作区下拉框给出，后端用 `TaskWorkspaceOverride.resolve` 在**提交前**校验（不存在/非法 → `400`，body 仍是 `CommandStatus`） |
-| 步骤 | `GET /api/commands/{id}/events/stream` | SSE；按事件名注册监听（`AgentTaskEvent` 的类型清单写在页面 `SSE_EVENT_TYPES`） |
+| 步骤 | `GET /api/commands/{id}/events/stream` | SSE；按事件名注册监听（`AgentTaskEvent` 的类型清单写在页面 `SSE_EVENT_TYPES`）。其中 `task.titled` 不是步骤：`text` 是模型给任务起的短标题，页面只把它写进任务面板的标题（`setTaskTitle`），不画行 |
 | 步骤兜底 | `GET /api/commands/{id}/events?after=…` | SSE 失败自动切换为游标轮询，界面显示"轮询"徽标 |
 | 插话 | `POST /api/commands/{id}/input` | 与提交共用同一个输入框：运行中按 Enter 发 `{text, deliverAs: steer|followUp}` |
 | 停止 | `POST /api/commands/{id}/cancel` | 页面二次确认 |
-| 结果 | `GET /api/commands/{id}/result` | 渲染 结论 / 关键发现 / 字段 / 文件 / 问题 / 链接 / 工作目录 / 建议的下一步 |
+| 结果 | `GET /api/commands/{id}/result` | 渲染 结局 hero / 结论 / 接着做 / 关键发现 / 字段 / 文件 / 问题 / 链接 / 工作目录 |
 | 成本 | `GET /api/commands/{id}/stats` | 轮数、工具调用、tokens、缓存命中 |
-| 状态 | `GET /api/commands/{id}/status` | 终态与错误码；`?task=` 恢复时也用它 |
+| 状态 | `GET /api/commands/{id}/status` | 终态与错误码；`title` 是模型的任务标题；`?task=` 恢复时也用它 |
 | 会话树 | `GET /api/agent/sessions` | 工作区 → 会话树（`AgentSessionsController`）；`?refresh=true` 跳过 2s 复用缓存 |
 | 会话上下文 | `GET /api/agent/sessions/{sessionId}/context` | 该会话记得的对话轮次 + 任务列表；未知会话 404 |
 
@@ -51,6 +51,21 @@
 - 右侧"遇到问题"帮助面板整块删除；连接失败提示保留为顶部横幅（带"重新检测"）。
 - 所有后端文本通过 `textContent`/DOM API 渲染，**不用** `innerHTML` 拼模型输出（防 XSS）；无外部资源，`file://` 打开时也能跨域连本地后端（`@CrossOrigin`）。
 
+## 4.1 意图优先的执行过程与模型起名的任务标题（2026-11-28）
+
+目标：运行中一眼看出"它现在打算做什么"，结束时一眼看出"做成了没有、结果是什么"，面板标题是人话而不是"执行过程"。
+
+- **任务面板的标题是模型起的短标题**。后端在任务开始后（`task.started` 之后）用一次独立的小请求让模型起名（`StatefulAgentRunner.titleTaskAsync`，提示词与归一化是纯函数 `buildTaskTitlePrompt` / `normalizeTaskTitle`），把结果写进 `AgentTaskStatus.title`、落一条 `task.titled` 步骤；`CommandStatus.title` 与会话任务行的 `AgentSessionTaskView.title` 原样透出。它是**尽力而为的装饰**：跑在任务旁边、20 秒放弃、失败只记 debug，永远不会阻塞或拖垮任务；标题没到之前面板显示截成一行的任务原文（`showPendingTitle`，带微光），到了以后同时改写面板标题、结果卡的大标题与浏览器标签页（`setTaskTitle`）。`browser4.agent.title.enabled=false` 关掉这次请求（见 `docs/config.md`）。
+- **执行过程默认只展示意图**：`工具调用` 开关默认关闭（`b4.agent.web.toolcalls` 只有显式存了 `on` 才开）。每条 `model.intent` 是一张卡片（左边框 + 较大字号 + "进行中 / 已做完 / 未完成"状态徽标），紧跟其后的 `tool.call` / `tool.result` 归入这张卡片名下并折叠：卡片底部一枚"▸ N 次工具调用"的折叠按钮，点开只展开这一组（`group-open`），其余组照旧收着；打开开关则一次全部展开，折叠按钮随之隐藏。没有意图可归属的工具调用（意图开关关着、或模型没写这一行）折在一个朴素的"工具调用"组头下，保证没有任何一行够不着。分组在新的意图、模型给出文字回答（`model.text`）、新一轮（`round.start`）、任务结束时关闭（`closeCurrentGroup`）。
+- **两个开关都关**时，意图卡片缩成只剩折叠按钮的一行（`.steps.hide-intent.hide-toolcalls`），它的工具调用仍然可达；一条都还没折叠东西的意图卡片此时不显示。
+- **轮次分隔线降为技术细节**：`round.start` 的"── 第 N 轮 ──"只在打开"技术细节"时出现，意图卡片自己带时间，故事由卡片讲。步数统计随之只数叙述行（意图 / 生命周期 / 模型文字），工具行与组头不算"步"。
+- **结果卡以结局开头**（`renderResultHeading`）：左侧一个带颜色的大图标（✓ / ✕ / ⏹）+ 状态徽标 + **任务标题**（模型的短标题；没有时退回任务原文，颜色更淡），下面一行"任务：…"给出标题所指的原文；整张卡随结局变色（`is-failed` / `is-cancelled`）。操作按钮（再跑一次 / 复制文本 / 下载 .md / 复制 JSON）收到标题右侧。
+- **结论是主角，只讲一遍**：`结论` 分区用更大的字号渲染**一份**主文本——模型自己的收尾文字（最后一条 `model.text`）优先，没有时用引擎的 `summary`；两者都有且说的不是一回事时，`summary` 以折叠的"任务摘要"跟在后面（`sameAnswer` 判断是否重复）。失败时结论改名为"中断前的输出"，排在红色失败提示之后。
+- **失败提示先说原因**：标题"任务失败"+ 错误码 chip + 原因（可滚动）+ "可以这样处理：…" + "重试这个任务"。
+- **其余证据两列排布**（`.result-grid`，`auto-fit minmax(420px, 1fr)`，窄屏回到单列）：关键发现、字段、写出的文件、遗留问题、链接、工作目录、耗时拆分；宽内容（SQL 结果、页面摘要、失败证据）跨两列。"接着做"紧跟结论，是读完结论之后要做的事。分区图标写在 CSS 的 `::before` 里，导出的文本拿到的是干净的标题。
+- **导出**（复制文本 / 下载 .md）按新的结构走：`# 标题 — 状态`、任务原文、统计、各分区（含失败提示）；文件名用任务标题（`fileSafeTitle` 去掉非法字符），没有标题时退回任务 ID。
+- 恢复会话上下文时，"这个会话的任务"列表的每一行用模型标题命名，鼠标悬停看任务原文（`task.title || task.instruction`）。
+
 ## 5. 验证
 
 - **契约测试** `AgentConsolePageTest`：页面被打包、只调用已存在的端点、无外链资源、关键控件齐全、只有一个输入框（没有 `steerInput`/`steerBox`，也没有固定三步引导）：Maven surefire 4/4 通过（2026-11-23 改版后复跑）。
@@ -61,6 +76,13 @@
   - 环境备注：同一台机器上默认线程栈会触发 `StackOverflowError`（正则回溯），用 `-Xss16m` 启动后任务正常完成；与页面无关。
 - **会话侧边栏（2026-11-23）**：`AgentSessionGroupingTest` 6/6（工作区分组、临时工作区、归属规则、任务排序、Windows 路径归一、上下文恢复）、`AgentSessionsServiceTest` 3/3（两源合并、2s 复用缓存、注册表不可读时返回空树而不是 500、未知会话 404）、`AgentConsolePageTest` 6/6（侧边栏控件/端点/存储键契约）；页面内联脚本通过 `node --check`。
 - **左右结构 + 工作区下拉（2026-11-23 晚）**：`CommandControllerTest` 27/27（新增：`/plain?workspace=` 透传成 `Path`、非法工作区在提交前 400 且不触达 executor）；`AgentConsolePageTest` 8/8（新增左右结构断言、工作区控件与 `&workspace=` 断言）；`node --check` 通过、60 个 `$('id')` 全部有声明、`<div>` 开闭平衡。
+- **意图优先 + 模型标题（2026-11-28）**：
+  - 单元与契约：`TaskTitleTest` 8/8（提示词；归一化——多行取首行、剥 `Title:` / `标题：` 前缀、引号与 Markdown 包裹、尾部句读、空白折叠、40 字截断），`AgentTaskStatusTest` 补"快照带 title"；`CommandStatusTitleTest` 2/2，`AgentSessionGroupingTest` 新增 `taskRowsCarryTheTitle`；`AgentConsolePageTest` 14/14（新增：工具调用默认折叠、模型标题、结果卡以结局开头、**提交路径调用的辅助函数必须声明在脚本作用域**——`submitTask` / `startTask` 里出现的每个自由函数名都要匹配 `^  function|const|let|class <name>`）；`CommandControllerTest` 27/27；内联脚本 `node --check` 通过。
+  - 真实任务（dev 后端，都是"不用浏览器"的只读任务，原因见第 6 节）：
+    - `c4942c76…`，经 `POST /api/commands/plain?async=true` 提交：58 秒 `task.done`（statusCode 200），9 条意图、20 次工具调用；第 5 秒收到 `task.titled` =「统计agent页面行数与函数」，`status.title` 与会话任务行的 `title` 一致。事件流的结构是"意图 → 这一步的工具调用"，页面按它分组。
+    - `c78c3e60…`，**从页面实时提交**（`dev-server.js` 提供源码页面、`/api` 反代到同一后端）：25 秒完成，面板标题从任务原文变成「说明源码功能并列出函数名」，5 张意图卡片，11 次工具调用全部收在各自卡片下（首个折叠按钮「▸ 2 次工具调用」），结果卡「已完成」+ 结论 / 关键发现。
+    - `9d96a2f1…`，重建 runtime bundle 并重启 dev 后端之后，在**真实入口**（`agent run -i` 横幅里的 `http://127.0.0.1:8282/agent.html`）上从页面提交：10 秒完成，标题「说明config.md用途」，1 张意图卡片 + 1 个折叠按钮，结果卡「已完成」；该地址返回的页面与源码文件逐字节一致。
+  - 页面实测：恢复视图 `?session=…&task=c4942c76…` 的面板标题与结果标题都是模型标题，「任务：…」一行给出原文，耗时是事件里的 58 秒（不是打开页面的时刻）；展开前 0 行工具调用可见，点开第一组后可见 2 行。
 
 ## 6. 已知限制
 
@@ -70,3 +92,8 @@
 - 侧边栏的对话轮次是后端**跨任务会话记忆**的投影（压缩后的记忆另列），不是逐条完整聊天记录；恢复后是只读浏览，接着写才会产生新任务。
 - 未接入审批端点（`/api/agent/{taskId}/access`），因此按无人值守策略提交。
 - 与本地 REST API 同一信任边界（无鉴权）。页面自身用 CSP 禁止外部资源、所有模型输出走 `textContent` 渲染；不要把后端端口暴露到不可信网络。
+- **任务标题是尽力而为**：模型不起名、20 秒超时或那次小请求失败时，面板保留截成一行的任务原文，只记一条 debug 日志；任务已经结束才到的标题不再追加 `task.titled` 步骤（避免覆盖终态行）。代价是每个任务开头多一次很小的 LLM 调用，`browser4.agent.title.enabled=false` 可关。
+- **验证时本机起不了浏览器**：dev 后端（8282）与安装版 v4.16.13 的后端（18182）启动 Chrome 都报 `Failed to start chrome process. alive: false, exit code: 0`，所以 2026-11-28 的两次真实任务都是只读任务；需要浏览器的 `fcd04eac…` 拿到了标题但没有完成目标。直接启动同一版 Chrome（带/不带 `--do-not-de-elevate`、经 WMI）未复现，原因未定位，与页面改动无关。
+- **顺手修掉的既有缺陷**：提交 `1efedae800` 把 `parseModelPick` / `MODEL_PICK_SEP` 定义在 `bindEvents` 的嵌套作用域里，而 `startTask` 在脚本作用域调用它，网页端提交任务必然报「提交失败：parseModelPick is not defined」。现提升到脚本作用域，并由 `AgentConsolePageTest.consolePageDeclaresTheSubmitHelpersInScriptScope` 守住。
+- **小视口下输入区很高**：例如 1026×720 时停靠的输入区（提示条、输入框、工作区 / 模型 / 推理、示例任务）占去大半屏，结果卡要滚动才看得到。输入区本身这次没动。
+- **运行中的后端不会自动换页面**：`agent.html` 打在 runtime bundle 的 `browser4-rest` jar 里，改完要 `./b4w.ps1 stop` 再用 `-Rebuild` 重启后端才会生效；日常调页面用 `node dev-server.js`（8765，`B4_BACKEND_PORT` 指向已启动的后端）。

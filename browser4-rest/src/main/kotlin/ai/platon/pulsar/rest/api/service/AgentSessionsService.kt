@@ -247,6 +247,7 @@ internal object AgentSessionGrouping {
         return AgentSessionTaskView(
             id = status.id,
             instruction = status.submittedTask?.takeIf { it.isNotBlank() },
+            title = status.title?.takeIf { it.isNotBlank() },
             status = status.processState,
             statusCode = status.statusCode,
             cancelled = status.cancelled,
@@ -322,6 +323,8 @@ data class AgentSessionSummary(
 data class AgentSessionTaskView(
     val id: String,
     val instruction: String?,
+    /** The model-written short name of the task, when it has one (falls back to [instruction]). */
+    val title: String?,
     val status: String,
     val statusCode: Int,
     val cancelled: Boolean,

@@ -145,6 +145,9 @@ class CommandControllerTest {
                     anyOrNull(),
                     // intent (15th parameter, defaulted) — the console's live-view switch.
                     anyOrNull(),
+                    // providerName / modelName / reasoningEffort (16th–18th, defaulted) —
+                    // the task-scoped LLM overrides. Same rule one last time.
+                    anyOrNull(), anyOrNull(), anyOrNull(),
                 )
             ).thenReturn("agent-task-9")
 
@@ -184,6 +187,9 @@ class CommandControllerTest {
                     anyOrNull(),
                     // intent (15th parameter, defaulted) — see the async test above.
                     anyOrNull(),
+                    // providerName / modelName / reasoningEffort (16th–18th, defaulted) —
+                    // the sync route takes the same overrides as the async one.
+                    anyOrNull(), anyOrNull(), anyOrNull(),
                 )
             ).thenReturn(status)
 
@@ -209,6 +215,8 @@ class CommandControllerTest {
                         anyOrNull(),
                         // intent (15th, defaulted): every parameter needs its matcher.
                         anyOrNull(),
+                        // providerName / modelName / reasoningEffort (16th–18th, defaulted).
+                        anyOrNull(), anyOrNull(), anyOrNull(),
                     )
                 ).thenReturn("agent-task-ws")
 
@@ -224,6 +232,7 @@ class CommandControllerTest {
                     anyOrNull(), anyOrNull(), anyOrNull(),
                     eq(dir.toAbsolutePath().normalize()),
                     anyOrNull(),
+                    anyOrNull(), anyOrNull(), anyOrNull(),
                 )
             } finally {
                 dir.toFile().deleteRecursively()

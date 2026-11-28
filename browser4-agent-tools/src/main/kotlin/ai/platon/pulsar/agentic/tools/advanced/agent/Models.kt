@@ -140,6 +140,18 @@ data class AgentTaskStatus(
     var submittedTask: String? = null
 
     /**
+     * A short, model-written name for this task — what an operator surface (the web
+     * console's task panel, a session list) shows in place of the often long
+     * [submittedTask].
+     *
+     * Written once by the runner's titling job shortly after the task starts and
+     * announced as a `task.titled` step. `null` when the model gave nothing usable or
+     * the feature is off (`browser4.agent.title.enabled`). It is decoration: nothing
+     * but a view reads it, and a missing title never fails a task.
+     */
+    var title: String? = null
+
+    /**
      * The reason for failure when the agent task does not complete successfully.
      */
     var failureReason: String? = null
@@ -498,6 +510,7 @@ fun AgentTaskStatus.detachedSnapshot(includeHistory: Boolean = true): AgentTaskS
     snapshot.lastModifiedTime = lastModifiedTime
     snapshot.finishTime = finishTime
     snapshot.submittedTask = submittedTask
+    snapshot.title = title
     snapshot.failureReason = failureReason
     // The session the row belongs to and whether its workspace was named by the caller:
     // `copy()` resets body-declared fields, and without these the persisted row can no

@@ -186,6 +186,16 @@ data class CommandStatus(
      * `null` for page visits and for rows written before the field existed.
      */
     var goal: AgentGoalStatus? = null,
+
+    /**
+     * A short, model-written name for the task (see
+     * `AgentTaskStatus.title`), or `null` when the model gave none or the feature is off.
+     *
+     * On the envelope because the web console's task panel titles a run from its status
+     * poll — a view that attaches late (a `?task=` link, a refresh) must not have to
+     * replay the step log to learn the name.
+     */
+    var title: String? = null,
 ) {
     val status: String get() = ResourceStatus.getStatusText(statusCode)
     var lastModifiedTime: Instant? = null
@@ -411,6 +421,7 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     // while the run is in flight, and "what is this run for, is it still on it" must be
     // answerable from that poll.
     status.goal = this.goal
+    status.title = this.title
     // The page this task ended on. AgentTaskStatus now carries it (observed from
     // the live page, see DocumentHttpStatus); before that the conversion dropped
     // it and every agent/loop record shipped the model's 201/"created" default.

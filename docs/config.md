@@ -1068,6 +1068,23 @@ location and the effective property that won the priority chain.
   `agent run -i`'s `/intent off` — and the override is reset when the task ends, like the
   other per-task flags.
 
+* **`browser4.agent.title.enabled`** *(default: `true`)*
+  Give each agent task a short, model-written title. Shortly after a task starts the runner sends
+  one small request of its own («name this task in at most 16 CJK characters / 8 words, same
+  language as the task») and publishes the answer as a `task.titled` step and as `title` on the
+  status envelope (`GET /api/commands/{id}/status`) and on the session's task rows
+  (`GET /api/agent/sessions`). The web console (`agent run -i`) shows it as the task panel's
+  heading and in the session list, in place of the often long instruction.
+
+  It never blocks or fails the task: the request runs beside it, gives up after 20 seconds, and
+  is logged at debug when the model is unavailable or answers nothing usable — the run then
+  simply stays unnamed and the views fall back to the instruction. Set `false` to skip the
+  request altogether.
+
+  ```bash
+  BROWSER4_SERVER_OPTS="-Dbrowser4.agent.title.enabled=false" browser4-cli open
+  ```
+
 * **`browser4.agent.copyTaskInputs`** *(default: `true`)*
   Before a task runs, copy the files its instruction references but that live outside the agent
   workspace into `<workspace>/.b4inputs/`, and tell the model the workspace-relative paths in the
@@ -1117,7 +1134,10 @@ entries there are documentation comments only.
 * **`browser4.agent.skill.summary.registerMode`** *(default: `draft`)* — one of
   `draft` (write the draft only, never register — the most conservative usable
   value), `auto` (register a validated draft into the runtime registry), or `off`
-  (disable even when `enabled=true`).
+  (disable even when `enabled=true`). `auto` never replaces a skill it did not
+  deploy itself, or one whose deployed `SKILL.md` was edited afterwards: a taken
+  name gets a `-2`, `-3`, … suffix, and an append that would overwrite such a
+  skill is refused and kept in the draft.
 * **`browser4.agent.skill.summary.minRounds`** *(default: `1`)* — minimum agent
   rounds a task must reach before a summary is considered. Browse and research
   tasks complete in a single round regardless of how many tools they call, so the

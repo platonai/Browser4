@@ -122,6 +122,16 @@ data class AgentTaskEvent(
         /** The runner picked the task up and began executing the instruction. */
         const val TYPE_STARTED = "task.started"
 
+        /**
+         * The model gave the task a short title; `text` is the title.
+         *
+         * Produced by one small model request of its own, shortly after the task starts, so
+         * a live view can name the run before its first step exists. Like [TYPE_MODEL_INTENT]
+         * it is a live-view step only: the session transcript ignores it, and an existing
+         * consumer that does not know the type simply skips it.
+         */
+        const val TYPE_TITLED = "task.titled"
+
         /** A new outer agent round started (a model request is about to happen). */
         const val TYPE_ROUND = "round.start"
 

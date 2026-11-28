@@ -237,6 +237,7 @@ class AgentTaskStatusTest {
         val status = AgentTaskStatus(processState = "in_progress", statusCode = ResourceStatus.SC_PROCESSING)
         status.refresh(ResourceStatus.SC_PROCESSING)
         status.submittedTask = "refactor Browser4WebDriver"
+        status.title = "重构 Browser4WebDriver"
         status.workspace = "/workspace"
         status.sessionId = "interactive-abc"
         status.workspaceExplicit = true
@@ -254,6 +255,7 @@ class AgentTaskStatusTest {
         assertEquals(status.startedTime, snapshot.startedTime)
         assertEquals(status.lastModifiedTime, snapshot.lastModifiedTime)
         assertEquals("refactor Browser4WebDriver", snapshot.submittedTask)
+        assertEquals("重构 Browser4WebDriver", snapshot.title, "the task panel is named from the persisted row")
         assertEquals("/workspace", snapshot.workspace)
         assertEquals("interactive-abc", snapshot.sessionId, "the sidebar groups by this field")
         assertTrue(snapshot.workspaceExplicit, "a caller-named workspace must stay durable after a restart")

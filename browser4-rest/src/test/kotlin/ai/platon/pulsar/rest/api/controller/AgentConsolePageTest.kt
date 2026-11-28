@@ -105,6 +105,93 @@ class AgentConsolePageTest {
     }
 
     @Test
+    @DisplayName("the live view reads intent-first: tool calls are folded by default, one group at a time")
+    fun consolePageFoldsToolCallsUnderTheIntent() {
+        // The default view is the model's stated intents. Tool rows come back either all
+        // at once (the switch) or one intent at a time (the card's fold) — never dropped.
+        assertTrue(
+            html.contains("<input type=\"checkbox\" id=\"toolToggle\">"),
+            "the tool-call switch must be off unless the operator asks for it",
+        )
+        assertTrue(html.contains("readStore(STORE_TOOLCALLS) === 'on'"), "only a remembered choice turns it on")
+        assertTrue(
+            html.contains(".steps.hide-toolcalls .step-tool.group-open"),
+            "one intent's tool calls must be unfoldable while the rest stay folded",
+        )
+        listOf("openGroup", "closeCurrentGroup", "attachToGroup", "setGroupOpen").forEach { name ->
+            assertTrue(html.contains("function $name("), "missing fold helper $name")
+        }
+        // Tool calls with no intent above them still need a fold of their own.
+        assertTrue(html.contains("openPlainGroup("), "orphan tool calls fold under a plain head")
+        assertTrue(html.contains(".step-group"), "…and that head is styled as one")
+    }
+
+    @Test
+    @DisplayName("the task panel is named by the model's title, with the instruction until it arrives")
+    fun consolePageShowsTheModelWrittenTitle() {
+        assertTrue(html.contains("'task.titled'"), "the title arrives as its own step on the stream")
+        assertTrue(html.contains("setTaskTitle(ev.text)"), "…and is rendered into the heading")
+        assertTrue(html.contains("id=\"runTitle\""), "the task panel needs a heading to name")
+        assertTrue(html.contains("status.title"), "the status envelope names a task attached after the step")
+        assertTrue(html.contains("showPendingTitle("), "the instruction stands in until the title exists")
+        assertTrue(html.contains("task.title || task.instruction"), "a session's task rows are named the same way")
+    }
+
+    @Test
+    @DisplayName("the result leads with the outcome, the task's title and one answer")
+    fun consolePageLeadsWithOutcomeAndAnswer() {
+        listOf("resultIcon", "resultBadge", "resultTitle", "resultTaskLine").forEach { id ->
+            assertTrue(html.contains("id=\"$id\""), "missing result heading part #$id")
+        }
+        assertTrue(html.contains("renderResultHeading("), "the heading is rendered as one unit")
+        assertTrue(html.contains("is-failed"), "the card wears the outcome")
+        assertTrue(html.contains("answer-section"), "the answer is the primary block of the result")
+        assertFalse(html.contains("final-answer-fold"), "the answer is no longer a fold beside a second summary")
+    }
+
+    @Test
+    @DisplayName("every helper the submit path calls is declared at script scope")
+    fun consolePageDeclaresTheSubmitHelpersInScriptScope() {
+        // `submitTask` runs from a click and from the keyboard, so a helper declared inside
+        // another function is `undefined` there. Submitting used to fail with
+        // "parseModelPick is not defined" for exactly that reason while the rest of the page worked.
+        val keywords = setOf("if", "for", "while", "switch", "catch", "return", "throw", "new", "function", "async")
+        val browserGlobals = setOf(
+            "String", "Number", "Object", "Array", "Error", "Promise", "Date", "JSON", "Math",
+            "fetch", "setTimeout", "clearTimeout", "encodeURIComponent", "parseInt", "RegExp", "URLSearchParams",
+        )
+        val calls = Regex("""(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(""")
+        // Whole-line comments are dropped first: prose such as "… will appear (…)" reads as a call.
+        val submitPath = (scriptScopeFunction("submitTask") + "\n" + scriptScopeFunction("startTask"))
+            .replace(Regex("""(?m)^[ \t]*//.*$"""), "")
+
+        val called = calls.findAll(submitPath)
+            .map { it.groupValues[1] }
+            .filter { it !in keywords && it !in browserGlobals }
+            .toSortedSet()
+        assertTrue("parseModelPick" in called, "the submit path is expected to read the model pick")
+
+        called.forEach { name ->
+            assertTrue(
+                Regex("""(?m)^  (?:(?:async )?function|class|const|let|var) ${Regex.escape(name)}(?![\w$])""").containsMatchIn(html),
+                "$name is called while submitting but not declared at script scope",
+            )
+        }
+    }
+
+    /** The declaration line and body of a script-scope function: up to the next script-scope line. */
+    private fun scriptScopeFunction(name: String): String {
+        val lines = html.lines()
+        val start = lines.indexOfFirst {
+            Regex("""^  (?:async )?function ${Regex.escape(name)}\(""").containsMatchIn(it)
+        }
+        assertTrue(start >= 0, "$name must be declared at script scope (two-space indent)")
+        var end = start + 1
+        while (end < lines.size && (lines[end].isBlank() || lines[end].startsWith("    "))) end++
+        return lines.subList(start, end).joinToString("\n")
+    }
+
+    @Test
     @DisplayName("the console page has one composer: no separate steer box, no fixed tutorial steps")
     fun consolePageHasASingleComposer() {
         assertFalse(html.contains("id=\"steerInput\""), "steering must reuse the one composer input")

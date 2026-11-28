@@ -216,6 +216,25 @@ class AgentSessionGroupingTest {
     }
 
     @Test
+    @DisplayName("a task row carries its model-written title and falls back to the instruction")
+    fun taskRowsCarryTheTitle() {
+        val titled = status(
+            "t-titled", "s-1", workspace = "/work/a", explicit = true,
+            submittedTask = "collect the prices of every microwave on the first page",
+        )
+        titled.title = "采集微波炉价格"
+        val untitled = status("t-untitled", "s-1", workspace = "/work/a", explicit = true, minutesAgo = 10)
+
+        val session = AgentSessionGrouping.group(listOf(titled, untitled), emptyList(), emptySet())
+            .workspaces.single().sessions.single()
+
+        assertEquals("采集微波炉价格", session.tasks.single { it.id == "t-titled" }.title)
+        assertNull(session.tasks.single { it.id == "t-untitled" }.title, "an untitled task has no title, not a blank")
+        assertEquals("task t-untitled", session.tasks.single { it.id == "t-untitled" }.instruction)
+        assertEquals("采集微波炉价格", session.lastTask?.title, "the newest task names the session")
+    }
+
+    @Test
     @DisplayName("a session with a task but no conversation still has a task list to show")
     fun sessionWithoutConversationStillRestoresTasks() {
         val restored = AgentSessionGrouping.contextOf(

@@ -240,15 +240,32 @@
     display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0;
   }
   .run.collapsed { flex: 0 0 auto; }
-  .run-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .run-head { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; }
   .run-head .spacer { flex: 1; }
   .run-toggle {
     appearance: none; border: 0; background: none; color: var(--text); cursor: pointer;
-    display: inline-flex; align-items: center; gap: 7px; padding: 0; font: inherit;
+    display: inline-flex; align-items: center; gap: 8px; padding: 0; font: inherit;
+    min-width: 0; max-width: min(520px, 100%);
   }
-  .run-title { font-size: 15px; font-weight: 650; line-height: 1.3; }
-  .run-toggle .chev { color: var(--muted2); font-size: 12px; transition: transform .15s ease; }
+  .run-toggle .chev { color: var(--muted2); font-size: 12px; transition: transform .15s ease; flex: none; }
   .run.collapsed .run-toggle .chev { transform: rotate(-90deg); }
+  /* Kicker + title stack. The title is the model's name for the task (task.titled); the
+     kicker only says which panel this is, so the strip still reads when collapsed. */
+  .run-name { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+  .run-kicker { color: var(--muted2); font-size: 10.5px; letter-spacing: .6px; }
+  .run-title {
+    font-size: 15px; font-weight: 650; color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .run-title.idle { color: var(--muted); font-weight: 500; }
+  /* The model has not named the task yet: the instruction stands in, shimmering. */
+  .run-title.pending {
+    color: var(--muted); font-weight: 500;
+    background: linear-gradient(90deg, var(--muted) 30%, var(--text) 50%, var(--muted) 70%);
+    background-size: 200% 100%; -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; animation: titleShimmer 1.8s linear infinite;
+  }
+  @keyframes titleShimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
   .run-toggle:hover .run-title { color: var(--blue); }
   .run.collapsed .run-body { display: none; }
   .run.collapsed { padding-bottom: 12px; }
@@ -295,9 +312,24 @@
   .steps.show-tech .step.tech { display: grid; }
   /* Live-view switches: each hides one family of rows, without dropping anything from
      the log — turning it back on shows every later step of those kinds. The purpose
-     line ("下一步：目的与动机") and the tool rows are the two a reader may want apart. */
+     line ("下一步") and the tool rows are the two a reader may want apart. */
   .steps.hide-intent .step-intent { display: none; }
   .steps.hide-toolcalls .step-tool { display: none; }
+  /* Intent-first reading (the default: tool calls off). Each intent row is the head of a
+     group, and the tool calls that follow it fold underneath: they stay hidden with every
+     other tool row until that one group is opened (`group-open`). */
+  .steps.hide-toolcalls .step-tool.group-open { display: grid; box-shadow: inset 3px 0 0 #22303d; background: #0a0f14; }
+  /* With every tool row shown the per-group fold says nothing new. */
+  .steps:not(.hide-toolcalls) .group-toggle { display: none; }
+  .steps:not(.hide-toolcalls) .step-group { display: none; }
+  /* Both switches off: the intent row shrinks to its fold, so its tool calls stay reachable. */
+  .steps.hide-intent.hide-toolcalls .step-intent { display: grid; padding-top: 3px; padding-bottom: 3px; background: none; border-left-color: transparent; }
+  .steps.hide-intent.hide-toolcalls .step-intent > .step-icon,
+  .steps.hide-intent.hide-toolcalls .step-intent > .step-time,
+  .steps.hide-intent.hide-toolcalls .step-intent .step-top,
+  .steps.hide-intent.hide-toolcalls .step-intent .step-text { display: none; }
+  /* …and an intent that has folded nothing yet is not shown at all in that mode. */
+  .steps.hide-intent.hide-toolcalls .step-intent:not(:has(.group-toggle)) { display: none; }
   .step-icon { text-align: center; font-size: 13px; line-height: 1.5; opacity: .95; }
   .step-content { min-width: 0; }
   .step-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
@@ -315,10 +347,41 @@
   .step.bad .step-name { color: var(--red); }
   .step.mine { background: #122131; }
   .step.mine .step-name { color: var(--blue); }
+
+  /* An intent row is the one thing the default view is made of, so it reads as a card:
+     what the model is about to do, in its own words, large enough to be the headline. */
+  .step-intent {
+    margin-top: 4px; padding: 11px 10px 10px 12px;
+    border-left: 3px solid var(--blue);
+    background: linear-gradient(90deg, rgba(88,166,255,.12), rgba(88,166,255,.03) 70%, transparent);
+  }
+  .step-intent:first-child { margin-top: 0; }
+  .step-intent .step-name { color: var(--blue); font-size: 11px; letter-spacing: .5px; }
+  .step-intent .step-text { margin-top: 3px; color: var(--text); font-size: 14px; line-height: 1.55; }
+  /* Once the next intent opens, the previous one is history: dim it, it was done. */
+  .step-intent.done { border-left-color: #2f4a63; background: rgba(255,255,255,.018); }
+  .step-intent.done .step-text { color: #a9bccb; }
+  .step-intent.done > .step-icon, .step-intent.done .step-name { opacity: .55; }
+  /* Tool calls that arrive with no intent above them fold under a plain head instead. */
+  .step-group { margin-top: 4px; border-left: 3px solid #3a4b5c; background: rgba(255,255,255,.02); }
+  .step-group .step-name { color: var(--muted); }
+  .group-foot { margin-top: 7px; }
+  .group-foot:empty { display: none; }
+  .group-toggle {
+    appearance: none; font: inherit; font-size: 11.5px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px; padding: 2px 10px; border-radius: 999px;
+    color: var(--muted); background: rgba(12,18,24,.7); border: 1px solid var(--border-soft);
+  }
+  .group-toggle:hover { color: var(--text); border-color: #3a4b5c; }
+  .group-toggle[aria-expanded="true"] { color: var(--blue); border-color: #1f4c78; }
+
   .step.divider {
     display: block; padding: 6px 10px; color: var(--muted2); font-size: 10.5px;
     background: #0d151d; border-bottom: 1px solid #141d26; letter-spacing: .3px;
   }
+  /* A round divider is a technical landmark; the intent cards already tell the story. */
+  .step.divider.tech { display: none; }
+  .steps.show-tech .step.divider.tech { display: block; }
   details.more { margin-top: 4px; }
   details.more > summary { cursor: pointer; color: var(--blue); font-size: 11.5px; list-style: none; }
   details.more > summary::-webkit-details-marker { display: none; }
@@ -336,16 +399,39 @@
     background:
       radial-gradient(900px 240px at 15% -20%, rgba(47,129,247,.20), transparent 70%),
       linear-gradient(180deg, #17232f, var(--panel) 260px);
-    padding: 16px 18px 18px;
+    padding: 18px 20px 20px;
   }
-  .result-hero { border-bottom: 1px solid var(--border-soft); padding-bottom: 12px; }
-  .result-hero-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .result-hero-top h2 { margin: 0; font-size: 16px; font-weight: 650; }
-  .result-hero-top .spacer { flex: 1; }
-  .result-headline { margin: 10px 0 0; font-size: 16.5px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .result-headline:empty { display: none; }
-  .result-headline .result-empty { margin: 0; color: var(--muted); font-size: 13px; }
-  .result-stats { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 11px; }
+  /* The card itself wears the outcome: a failed run must not look like a green one. */
+  .result.is-failed {
+    border-color: #6a2624;
+    background:
+      radial-gradient(900px 240px at 15% -20%, rgba(248,81,73,.16), transparent 70%),
+      linear-gradient(180deg, #1f1a1c, var(--panel) 260px);
+  }
+  .result.is-cancelled {
+    border-color: #5a4415;
+    background:
+      radial-gradient(900px 240px at 15% -20%, rgba(210,153,34,.14), transparent 70%),
+      linear-gradient(180deg, #1e1c15, var(--panel) 260px);
+  }
+  .result-hero { border-bottom: 1px solid var(--border-soft); padding-bottom: 14px; }
+  .result-hero-main { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; }
+  /* Outcome icon: one glance tells "done" from "failed" from "stopped" before a word is read. */
+  .result-icon {
+    flex: none; width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center;
+    font-size: 22px; font-weight: 800; line-height: 1;
+    background: #10241a; color: var(--green); border: 1px solid #245c33;
+    box-shadow: 0 0 0 6px rgba(63,185,80,.08);
+  }
+  .result-icon.err { background: #2a1211; color: var(--red); border-color: #6a2624; box-shadow: 0 0 0 6px rgba(248,81,73,.08); }
+  .result-icon.warn { background: #241d0c; color: var(--yellow); border-color: #5a4415; box-shadow: 0 0 0 6px rgba(210,153,34,.08); }
+  .result-heading { flex: 1 1 240px; min-width: 0; }
+  .result-heading h2 { margin: 7px 0 0; font-size: 20px; font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; }
+  .result-heading h2.fallback { color: var(--muted); font-size: 16px; font-weight: 500; }
+  .result-task { margin-top: 4px; color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .result-task:empty { display: none; }
+  .result-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
+  .result-stats { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 12px; }
   .stat-chip {
     display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 11px; border-radius: 999px;
     background: rgba(28, 37, 48, .85); border: 1px solid var(--border-soft);
@@ -353,11 +439,17 @@
   }
   .stat-chip b { color: var(--text); font-size: 12.5px; font-weight: 650; }
   .alert {
-    padding: 11px 13px; border-radius: 10px; font-size: 12.5px; margin-top: 12px;
+    padding: 12px 14px; border-radius: 10px; font-size: 12.5px; margin-top: 12px;
     background: #2a1211; border: 1px solid #6a2624; color: #ffc9c6;
   }
   .alert b { color: #fff; }
   .alert .alert-actions { margin-top: 9px; }
+  .alert .alert-reason { margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12em; overflow: auto; }
+  .alert .alert-hint { margin-top: 6px; color: #e8b4b0; }
+  .alert .alert-code {
+    display: inline-block; margin-top: 8px; padding: 1px 8px; border-radius: 6px;
+    background: rgba(0,0,0,.25); font-family: var(--mono); font-size: 11.5px;
+  }
   .alert.warn { background: #241d0c; border-color: #5a4415; color: #dcc38a; }
   .alert.warn b { color: #ffdd9a; }
   .result-section {
@@ -368,9 +460,32 @@
     margin: 0 0 8px; font-size: 11.5px; font-weight: 650; letter-spacing: .5px; color: var(--muted);
     text-transform: uppercase;
   }
-  .summary { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
+  /* The one text the task was for. It is the result; everything below it is evidence. */
+  .result-section.answer-section { margin-top: 14px; padding: 16px 18px; background: #101820; border-left: 3px solid var(--green); }
+  .result-section.answer-section > h3 { color: var(--green); }
+  .answer-body { font-size: 15px; line-height: 1.75; color: #e2eaf1; }
+  .answer-body > :last-child { margin-bottom: 0; }
+  .answer-empty { margin: 0; color: var(--muted); font-size: 13.5px; }
+  /* Secondary evidence in a two-up grid; wide tables and logs span it. */
+  .result-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 12px; margin-top: 12px; }
+  .result-grid > .result-section { margin-top: 0; min-width: 0; }
+  .result-grid > .wide { grid-column: 1 / -1; }
+  /* Section icons live in CSS so the exports (which read textContent) get clean titles. */
+  .result-section > h3::before { margin-right: 6px; }
+  .result-section.sec-findings > h3::before { content: '💡'; }
+  .result-section.sec-fields > h3::before { content: '🗂️'; }
+  .result-section.sec-files > h3::before { content: '📝'; }
+  .result-section.sec-problems > h3::before { content: '⚠️'; }
+  .result-section.sec-links > h3::before { content: '🔗'; }
+  .result-section.sec-workspace > h3::before { content: '📁'; }
+  .result-section.sec-next > h3::before { content: '➡️'; }
+  .result-section.sec-sql > h3::before { content: '🗄️'; }
+  .result-section.sec-page > h3::before { content: '📄'; }
+  .result-section.sec-timings > h3::before { content: '⏱️'; }
+  .result-section.sec-evidence > h3::before { content: '🧾'; }
+  .result-section.sec-summary > h3::before { content: '📎'; }
 
-  /* Markdown rendering (tinyMarkdown) — used for result headline, full-answer fold, section bodies. */
+  /* Markdown rendering (tinyMarkdown) — used for the answer and the section bodies. */
   .md-p { margin: 0 0 8px; overflow-wrap: anywhere; }
   .md-h { margin: 12px 0 6px; font-weight: 650; }
   .md-h.md-h1 { font-size: 18px; }
@@ -406,20 +521,6 @@
   .markdown a { color: var(--blue, #4d9ad2); text-decoration: underline; text-underline-offset: 2px; }
   .markdown a:hover { color: #76b8ec; }
 
-  /* "完整回答" fold — where we surface the final model.text after runPanel collapse. */
-  .final-answer-fold {
-    margin-top: 10px; border-radius: 10px; border: 1px solid var(--border-soft);
-    background: #0f1620; overflow: hidden;
-  }
-  .final-answer-fold > summary {
-    cursor: pointer; padding: 8px 12px; list-style: none; font-size: 12px;
-    color: var(--muted); user-select: none;
-  }
-  .final-answer-fold > summary::-webkit-details-marker { display: none; }
-  .final-answer-fold > summary::before { content: '▸ '; display: inline-block; transition: transform .15s; }
-  .final-answer-fold[open] > summary::before { transform: rotate(90deg); }
-  .final-answer-fold > summary:hover { color: var(--text); }
-  .final-answer-fold .markdown { padding: 4px 14px 14px; font-size: 13.5px; line-height: 1.65; overflow-wrap: anywhere; }
   .result-section ul { margin: 0; padding-left: 20px; }
   .result-section li { margin: 4px 0; overflow-wrap: anywhere; }
   .result-section li.files { font-family: var(--mono); font-size: 12px; }
@@ -632,7 +733,10 @@
     .composer-wrap { padding-left: 10px; padding-right: 10px; }
     .top-links { display: none; }
     .run-head .switch { display: none; }
-    .result-headline { font-size: 15px; }
+    .result-heading h2 { font-size: 17px; }
+    .result-actions { justify-content: flex-start; margin-left: 0; }
+    .result-grid { grid-template-columns: 1fr; }
+    .step-intent .step-text { font-size: 13.5px; }
   }
   @media (prefers-reduced-motion: reduce) {
     * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
@@ -701,9 +805,14 @@
     <!-- ---------- run: what it is doing, collapsible ---------- -->
     <section id="runPanel" class="card run" aria-labelledby="runTitle">
       <div class="run-head">
+        <!-- The heading is the task's model-written title (task.titled); the instruction
+             stands in until the model has named it. -->
         <button id="runToggle" type="button" class="run-toggle" aria-expanded="true" title="收起 / 展开执行过程">
           <span class="chev" aria-hidden="true">▾</span>
-          <span id="runTitle" class="run-title">执行过程</span>
+          <span class="run-name">
+            <span class="run-kicker">执行过程</span>
+            <span id="runTitle" class="run-title idle">还没有任务</span>
+          </span>
         </button>
         <span id="runPill" class="pill idle">空闲</span>
         <span id="stepCount" class="hint"></span>
@@ -718,7 +827,7 @@
           <input type="checkbox" id="intentToggle" checked> 下一步意图
           <span class="toggle-hint">(关闭省 token)</span>
         </label>
-        <label class="switch" title="显示工具的调用与结果"><input type="checkbox" id="toolToggle" checked> 工具调用</label>
+        <label class="switch" title="展开每一次工具调用的参数与结果；默认折叠，只看意图，点意图卡片可以单独展开"><input type="checkbox" id="toolToggle"> 工具调用</label>
         <label class="switch"><input type="checkbox" id="verboseToggle"> 技术细节</label>
         <label class="switch"><input type="checkbox" id="autoScroll" checked> 自动滚动</label>
         <button id="cancelBtn" type="button" class="btn danger small hidden">停止任务</button>
@@ -732,7 +841,7 @@
           <div id="stepsEmpty" class="empty">
             <div class="empty-icon" aria-hidden="true">🤖</div>
             <p><b>它会在浏览器里替你做。</b></p>
-            <p class="muted">每一步（打开页面、点击、读取、思考）都会出现在这里。</p>
+            <p class="muted">模型每一步打算做什么会出现在这里；具体的工具调用折叠在每一步里，想看再展开。</p>
           </div>
         </div>
         <div class="steps-foot">
@@ -744,16 +853,21 @@
     <!-- ---------- result: the main thing once the task ends ---------- -->
     <section id="resultCard" class="card result hidden" aria-labelledby="resultTitle">
       <div class="result-hero">
-        <div class="result-hero-top">
-          <h2 id="resultTitle">结果</h2>
-          <span id="resultBadge" class="pill idle">—</span>
-          <span class="spacer"></span>
-          <button id="retryLastTaskBtn" type="button" class="btn small ghost" title="用刚才跑的那段任务文本重新开一轮">🔄 再跑一次</button>
-          <button id="copyTextBtn" type="button" class="btn small ghost" title="把 headline + 所有 section 拼成人类可读的纯文本复制">复制文本</button>
-          <button id="downloadMdBtn" type="button" class="btn small ghost" title="下载一份 Markdown 文件">下载 .md</button>
-          <button id="copyResultBtn" type="button" class="btn small ghost" title="原始 JSON（给脚本用）">复制 JSON</button>
+        <!-- Outcome first: a state icon and the status pill, then the task's title. -->
+        <div class="result-hero-main">
+          <span id="resultIcon" class="result-icon ok" aria-hidden="true">✓</span>
+          <div class="result-heading">
+            <span id="resultBadge" class="pill idle">—</span>
+            <h2 id="resultTitle">结果</h2>
+            <div id="resultTaskLine" class="result-task" title=""></div>
+          </div>
+          <div class="result-actions">
+            <button id="retryLastTaskBtn" type="button" class="btn small ghost" title="用刚才跑的那段任务文本重新开一轮">🔄 再跑一次</button>
+            <button id="copyTextBtn" type="button" class="btn small ghost" title="把结论 + 所有分区拼成人类可读的纯文本复制">复制文本</button>
+            <button id="downloadMdBtn" type="button" class="btn small ghost" title="下载一份 Markdown 文件">下载 .md</button>
+            <button id="copyResultBtn" type="button" class="btn small ghost" title="原始 JSON（给脚本用）">复制 JSON</button>
+          </div>
         </div>
-        <div id="resultHeadline" class="result-headline"></div>
         <div id="resultStats" class="result-stats"></div>
       </div>
       <div id="resultBody"></div>
@@ -924,7 +1038,11 @@
   const STORE_WORKSPACE = 'b4.agent.web.workspace';
   /** Live-view switch: render the purpose the model states for each next step. */
   const STORE_INTENT = 'b4.agent.web.intent';
-  /** Live-view switch: render the tool call/result rows. */
+  /**
+   * Live-view switch: render the tool call/result rows. Off by default — the log then
+   * reads as the model's stated intents, with each intent's tool calls folded under it
+   * (see `attachToGroup`).
+   */
   const STORE_TOOLCALLS = 'b4.agent.web.toolcalls';
   /** Per-session model override, stored as `provider|model` (`''` = backend default). */
   const STORE_MODEL = 'b4.agent.web.model';
@@ -973,7 +1091,7 @@
 
   /** Event names the backend publishes on the SSE step stream. */
   const SSE_EVENT_TYPES = [
-    'task.created', 'task.started', 'round.start', 'tool.call', 'tool.result',
+    'task.created', 'task.started', 'task.titled', 'round.start', 'tool.call', 'tool.result',
     'model.text', 'model.intent', 'steer', 'steering.undelivered', 'follow_up', 'follow_up.undelivered',
     'run.usage', 'task.done', 'task.failed', 'task.cancelled',
     'verify.verdict', 'gate.evaluated', 'repair.round', 'repair.exhausted',
@@ -1000,7 +1118,7 @@
   const TIPS_RUNNING = [
     '插一句话不会打断任务：agent 会在下一轮看到它。',
     '勾选「等当前步骤结束后再继续」，它会在收尾前读你的补充。',
-    '步骤里的 🔧 是工具调用，🧭 是下一步的目的，💬 是模型的思路。',
+    '🧭 卡片是模型为下一步写的目的；点卡片里的「N 次工具调用」可以看它具体做了什么。',
     '超过 20 秒没有新步骤通常是在等页面或模型，不是卡死。',
     '点「执行过程」的标题可以收起这块，专心看结果。',
   ];
@@ -1051,6 +1169,16 @@
     workspace: '',
     /** The last `model.text` event we saw while running — that's the agent's full natural-language answer. */
     finalModelText: null,
+    /** When the task in view ended (the terminal step's time), so its elapsed time is the run's own length. */
+    finishedAt: null,
+    /** The instruction of the task in view, as the user wrote it (names the tooltip and the result's task line). */
+    taskText: '',
+    /** The model-written title of the task in view (`task.titled`), or `''` until it arrives. */
+    taskTitle: '',
+    /** The group tool calls currently fold under: an intent row, or a plain head when the model stated none. */
+    currentGroup: null,
+    /** The outcome word of the result on screen (`done` / `failed` / `cancelled`), for late re-renders. */
+    resultWord: 'done',
   };
 
   // ---------------------------------------------------------------------------
@@ -1416,6 +1544,88 @@
     note.classList.toggle('err', !!isError);
   }
 
+  // ---------------------------------------------------------------------------
+  // Task title: the model's short name for the run
+  // ---------------------------------------------------------------------------
+  /**
+   * Name the run in the task panel.
+   *
+   * The backend asks the model for a short title right after the task starts and
+   * publishes it as a `task.titled` step (later also as `title` on the status envelope).
+   * Until it arrives the panel shows the instruction, cut to one line, so the heading is
+   * never blank. The title is kept for the life of the view: it also names the result
+   * card and the tab.
+   */
+  function setTaskTitle(title) {
+    const text = shorten(title, 80);
+    if (!text) return;
+    state.taskTitle = text;
+    const node = $('runTitle');
+    node.textContent = text;
+    node.classList.remove('pending', 'idle');
+    node.title = state.taskText || text;
+    document.title = text + ' · Browser4';
+    // A short task can finish before its title does: the result is already on screen.
+    if (!$('resultCard').classList.contains('hidden')) renderResultHeading(state.resultWord);
+  }
+
+  /** The instruction stands in for the title while the model is still naming the task. */
+  function showPendingTitle(instruction) {
+    state.taskTitle = '';
+    const node = $('runTitle');
+    node.textContent = shorten(instruction, 80) || '正在执行…';
+    node.classList.remove('idle');
+    node.classList.add('pending');
+    node.title = instruction || '';
+    document.title = 'Browser4 · agent run -i 的网页版';
+  }
+
+  /**
+   * Remember what the task in view was asked to do.
+   *
+   * `task.started` carries the instruction, so a view that attached late (a `?task=` link)
+   * learns it from the replayed log even when the session tree that would have named it
+   * first is still loading. It is what the heading's tooltip and the result's "任务：…"
+   * line show under the model's title.
+   */
+  function noteTaskText(text) {
+    const value = String(text || '').trim();
+    if (!value || state.taskText) return;
+    state.taskText = value;
+    $('runTitle').title = value;
+    if (state.taskTitle && !$('resultCard').classList.contains('hidden')) renderResultHeading(state.resultWord);
+  }
+
+  function resetTaskTitle() {
+    state.taskTitle = '';
+    state.taskText = '';
+    const node = $('runTitle');
+    node.textContent = '还没有任务';
+    node.classList.remove('pending');
+    node.classList.add('idle');
+    node.title = '';
+    document.title = 'Browser4 · agent run -i 的网页版';
+  }
+
+  /** A file-name-safe form of the task title, for the downloaded report. */
+  function fileSafeTitle() {
+    return state.taskTitle
+      .replace(/[\\/:*?"<>|\r\n]+/g, '-').replace(/\s+/g, '-').replace(/^-+|-+$/g, '')
+      .slice(0, 48);
+  }
+
+  /** The task as the session tree knows it (instruction and title), when it is listed. */
+  function findKnownTask(taskId) {
+    const groups = (state.sessionTree && state.sessionTree.workspaces) || [];
+    for (const group of groups) {
+      for (const session of group.sessions || []) {
+        const task = (session.tasks || []).find((item) => item.id === taskId);
+        if (task) return task;
+      }
+    }
+    return null;
+  }
+
   /**
    * How this task's steps are arriving. The badge stays visible after the run so
    * "the stream fell back to polling" is a fact the user can still see, instead of
@@ -1467,16 +1677,25 @@
     }
   }
 
+  /** The text of one rendered result block, without its heading (which is exported as a title). */
+  function sectionText(sectionNode) {
+    return Array.from(sectionNode.children)
+      .filter((child) => child.tagName !== 'H3' && !child.classList.contains('alert-title'))
+      .map((child) => child.textContent.trim())
+      .filter(Boolean)
+      .join('\n');
+  }
+
   /** Gather the currently rendered result into a Markdown document the caller can save. */
   function buildResultMarkdown() {
     const card = $('resultCard');
     if (!card || card.classList.contains('hidden')) return '';
     const parts = [];
-    const badge = $('resultBadge');
-    const badgeText = badge ? badge.textContent.trim() : '';
-    if (badgeText) parts.push('# 任务结果 — ' + badgeText + '\n');
-    const headline = $('resultHeadline');
-    if (headline && headline.textContent.trim()) parts.push(headline.textContent.trim() + '\n');
+    const badgeText = (($('resultBadge') || {}).textContent || '').trim();
+    const title = (($('resultTitle') || {}).textContent || '').trim();
+    if (title) parts.push('# ' + title + (badgeText ? ' — ' + badgeText : '') + '\n');
+    const task = (($('resultTaskLine') || {}).textContent || '').trim();
+    if (task) parts.push(task + '\n');
     const stats = $('resultStats');
     if (stats) {
       const chips = stats.querySelectorAll('.stat-chip');
@@ -1486,15 +1705,12 @@
     }
     const body = $('resultBody');
     if (body) {
-      body.querySelectorAll('.result-section').forEach((sectionNode) => {
-        const h3 = sectionNode.querySelector('h3');
-        const title = h3 ? h3.textContent.trim() : '';
-        const content = sectionNode.textContent.trim();
-        if (title && content) parts.push('\n## ' + title + '\n\n' + content + '\n');
+      body.querySelectorAll('.result-section, .alert').forEach((block) => {
+        const heading = block.querySelector('h3, .alert-title');
+        const headingText = heading ? heading.textContent.trim() : '';
+        const content = sectionText(block);
+        if (headingText && content) parts.push('\n## ' + headingText + '\n\n' + content + '\n');
       });
-      // final answer fold
-      const fold = body.querySelector('.final-answer-fold .markdown');
-      if (fold) parts.push('\n## 完整回答\n\n' + fold.textContent.trim() + '\n');
     }
     return parts.join('\n');
   }
@@ -1504,22 +1720,21 @@
     const card = $('resultCard');
     if (!card || card.classList.contains('hidden')) return '';
     const out = [];
-    const badgeText = ($('resultBadge') || {}).textContent || '';
-    const headline = ($('resultHeadline') || {}).textContent || '';
+    const badgeText = (($('resultBadge') || {}).textContent || '').trim();
+    const title = (($('resultTitle') || {}).textContent || '').trim();
     const chips = ($('resultStats') || {}).querySelectorAll ? Array.from($('resultStats').querySelectorAll('.stat-chip')).map((c) => c.textContent.trim()) : [];
-    out.push('结果: ' + badgeText.trim());
-    if (headline.trim()) out.push(headline.trim());
+    out.push((title ? title + ' · ' : '') + '结果: ' + badgeText);
+    const task = (($('resultTaskLine') || {}).textContent || '').trim();
+    if (task) out.push(task);
     if (chips.length) out.push('统计: ' + chips.join(' · '));
     const body = $('resultBody');
     if (body) {
-      body.querySelectorAll('.result-section').forEach((s) => {
-        const t = s.querySelector('h3');
-        const title = t ? t.textContent.trim() : '';
-        const content = s.textContent.trim();
-        if (title && content) out.push('\n—— ' + title + ' ——\n' + content);
+      body.querySelectorAll('.result-section, .alert').forEach((block) => {
+        const heading = block.querySelector('h3, .alert-title');
+        const headingText = heading ? heading.textContent.trim() : '';
+        const content = sectionText(block);
+        if (headingText && content) out.push('\n—— ' + headingText + ' ——\n' + content);
       });
-      const fold = body.querySelector('.final-answer-fold .markdown');
-      if (fold) out.push('\n—— 完整回答 ——\n' + fold.textContent.trim());
     }
     return out.join('\n');
   }
@@ -1706,8 +1921,13 @@
     updateStepCount();
   }
 
+  /**
+   * The step counter follows what the default view shows: the narrative rows (intents,
+   * lifecycle, the model's prose). Tool rows and the fold heads are not steps of their own
+   * — their number is on each card's fold — and tech rows are hidden unless asked for.
+   */
   function updateStepCount() {
-    const count = $('steps').querySelectorAll('.step:not(.divider)').length;
+    const count = $('steps').querySelectorAll('.step:not(.divider):not(.tech):not(.step-tool):not(.step-group)').length;
     $('stepCount').textContent = count ? count + ' 步' : '';
   }
 
@@ -1738,12 +1958,77 @@
     return el('span', 'badge ' + (kind || ''), text);
   }
 
-  function addDivider(text) {
-    const row = el('div', 'step divider', text);
-    row.style.display = 'block';
+  /** A landmark in the log. `tech` ones (round dividers) show only with 技术细节 on. */
+  function addDivider(text, tech) {
+    const row = el('div', 'step divider' + (tech ? ' tech' : ''), text);
     $('steps').appendChild(row);
     hideEmptyState();
     afterAppend(row);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Intent-first reading of the log: tool calls fold under the intent they serve
+  // ---------------------------------------------------------------------------
+  /**
+   * Each `model.intent` row is the head of a group, and the tool calls that follow belong
+   * to it until the model states a new intent, answers in prose (`model.text`), a new round
+   * starts or the task ends. With tool calls off (the default) the log therefore reads as
+   * the model's plan — one card per "next I will …" — and each card's fold shows what that
+   * step actually ran; the 工具调用 switch still unfolds every call at once.
+   *
+   * Tool calls that arrive with no intent above them (the intent switch is off, or the
+   * model skipped the line) fold under a plain-headed group instead, so no row is ever
+   * unreachable.
+   */
+  function openGroup(options) {
+    const group = { head: options.head, foot: options.foot, stateBadge: options.stateBadge || null, rows: [], open: false, toggle: null };
+    state.currentGroup = group;
+    return group;
+  }
+
+  /** Retire the group in progress: its card dims and, for an intent, reports how it ended. */
+  function closeCurrentGroup(word) {
+    const group = state.currentGroup;
+    if (!group) return;
+    state.currentGroup = null;
+    group.head.classList.remove('current');
+    group.head.classList.add('done');
+    if (!group.stateBadge) return;
+    const ended = { done: ['已做完', 'ok'], failed: ['未完成', 'err'], cancelled: ['未完成', 'warn'] }[word || 'done'];
+    group.stateBadge.className = 'badge ' + ended[1];
+    group.stateBadge.textContent = ended[0];
+  }
+
+  /** A fold for tool calls that have no intent to sit under. */
+  function openPlainGroup(timeMs) {
+    const parts = addRow({ icon: '🔧', title: '工具调用', timeMs, cls: 'step-group' });
+    const foot = el('div', 'group-foot');
+    parts.content.appendChild(foot);
+    return openGroup({ head: parts.row, foot });
+  }
+
+  function refreshGroup(group) {
+    if (!group.toggle) return;
+    group.toggle.textContent = (group.open ? '▾ ' : '▸ ') + group.rows.length + ' 次工具调用';
+    group.toggle.setAttribute('aria-expanded', group.open ? 'true' : 'false');
+  }
+
+  function setGroupOpen(group, open) {
+    group.open = !!open;
+    group.rows.forEach((row) => row.classList.toggle('group-open', group.open));
+    refreshGroup(group);
+  }
+
+  function attachToGroup(group, row) {
+    group.rows.push(row);
+    if (!group.toggle) {
+      group.toggle = el('button', 'group-toggle');
+      group.toggle.type = 'button';
+      group.toggle.addEventListener('click', () => setGroupOpen(group, !group.open));
+      group.foot.appendChild(group.toggle);
+    }
+    row.classList.toggle('group-open', group.open);
+    refreshGroup(group);
   }
 
   function toolKey(ev) {
@@ -1752,12 +2037,15 @@
 
   function renderToolCall(ev) {
     const tool = ev.tool || 'tool';
+    // The head goes in first, so the fold precedes the rows it unfolds.
+    const group = state.currentGroup || openPlainGroup(ev.epochMillis || Date.now());
     const running = badge('执行中', 'busy');
     const parts = addRow({
       icon: '🔧', title: tool, mono: true, badges: [running],
       detail: ev.arguments ? shorten(ev.arguments, 260) : '',
       timeMs: ev.epochMillis, cls: 'step-tool',
     });
+    attachToGroup(group, parts.row);
     state.toolRows.set(toolKey(ev), {
       row: parts.row, content: parts.content, badges: parts.badges,
       running, tool, seq: ev.seq,
@@ -1786,11 +2074,13 @@
       }
     }
     if (!entry) {
+      const group = state.currentGroup || openPlainGroup(ev.epochMillis || Date.now());
       entry = addRow({
         icon: '🔧', title: (ev.tool || 'tool') + ' 的结果', mono: true,
         badges: [badge(ev.ok === false ? '失败' : '完成', ev.ok === false ? 'err' : 'ok')],
         detail: shorten(ev.text || '', 260), timeMs: ev.epochMillis, cls: 'step-tool',
       });
+      attachToGroup(group, entry.row);
     } else {
       if (entry.running && entry.running.parentNode) entry.running.remove();
       if (entry.badges) {
@@ -1818,22 +2108,42 @@
   /**
    * The purpose the model stated with its tool calls ("what happens next, and why").
    *
-   * A separate row from 模型的思路 on purpose: this one belongs to the step that follows
-   * it, so it is always a short sentence — no clamping, no expand button. `/intent` in
-   * the terminal and this row are the same event (`model.intent`).
+   * In the default view this card IS the step: the tool calls it announces fold under it
+   * (see `openGroup`). A separate row from 模型的思路 on purpose: this one belongs to the
+   * step that follows it, so it is usually a short sentence. It is not clamped when short,
+   * but a model that writes its whole closing answer next to a tool call produces a long
+   * one — that is folded to six lines with an expand button, like any other long text.
+   * `/intent` in the terminal and this row are the same event (`model.intent`).
    */
   function renderIntent(ev) {
     const text = String(ev.text || '').trim();
     if (!text) return;
+    closeCurrentGroup();
+    const stateBadge = badge('进行中', 'busy');
     const parts = addRow({
-      icon: '🧭', title: '下一步：目的与动机', timeMs: ev.epochMillis, cls: 'step-intent',
+      icon: '🧭', title: '下一步', timeMs: ev.epochMillis, cls: 'step-intent current', badges: [stateBadge],
     });
-    parts.content.appendChild(el('div', 'step-text', text));
+    const body = el('div', 'step-text' + (text.length > 320 ? ' clamped' : ''), text);
+    parts.content.appendChild(body);
+    if (text.length > 320) {
+      const toggle = el('button', 'linkbtn', '展开');
+      toggle.type = 'button';
+      toggle.addEventListener('click', () => {
+        const clamped = body.classList.toggle('clamped');
+        toggle.textContent = clamped ? '展开' : '收起';
+      });
+      parts.content.appendChild(toggle);
+    }
+    const foot = el('div', 'group-foot');
+    parts.content.appendChild(foot);
+    openGroup({ head: parts.row, foot, stateBadge });
   }
 
   function renderModelText(ev) {
     const text = String(ev.text || '').trim();
     if (!text) return;
+    // Prose ends the step: whatever runs after it belongs to a new one.
+    closeCurrentGroup();
     // The most recent model.text event is the agent's natural-language answer,
     // including the final one. We stash it so renderResult can surface it after
     // the collapse — runPanel collapses but the answer still needs to be readable.
@@ -1917,6 +2227,12 @@
   }
 
   function renderLifecycle(ev) {
+    // The first steps say what the task was asked to do, the last ones when it ended —
+    // both matter to a view that attached late (see `noteTaskText` and `finishTask`).
+    if (ev.type === 'task.created' || ev.type === 'task.started') noteTaskText(ev.text);
+    if (ev.epochMillis && (ev.type === 'task.done' || ev.type === 'task.failed' || ev.type === 'task.cancelled')) {
+      state.finishedAt = ev.epochMillis;
+    }
     switch (ev.type) {
       case 'task.created':
         setRunPill('queued');
@@ -1965,12 +2281,18 @@
     else if (type === 'tool.result') renderToolResult(ev);
     else if (type === 'model.text') renderModelText(ev);
     else if (type === 'model.intent') renderIntent(ev);
+    // Not a step: the model's name for the task, shown in the panel heading.
+    else if (type === 'task.titled') setTaskTitle(ev.text);
     else if (type === 'steer' || type === 'follow_up' || type === 'steering.undelivered' || type === 'follow_up.undelivered') renderSteer(ev);
     else if (type === 'access.requested') renderAccess(ev);
     else if (type === 'goal.pinned') renderGoal(ev);
     else if (type === 'plan.update') renderPlan(ev);
     else if (type === 'run.usage') renderUsage(ev);
-    else if (type === 'round.start') addDivider('── 第 ' + (ev.turn != null ? ev.turn : '?') + ' 轮 · ' + fmtClock(ev.epochMillis) + ' ──');
+    else if (type === 'round.start') {
+      // A new round is a new plan: what ran before it is history.
+      closeCurrentGroup();
+      addDivider('── 第 ' + (ev.turn != null ? ev.turn : '?') + ' 轮 · ' + fmtClock(ev.epochMillis) + ' ──', true);
+    }
     else if (type === 'task.created' || type === 'task.started' || type === 'task.done' || type === 'task.failed' || type === 'task.cancelled') renderLifecycle(ev);
     else if (type) renderDecision(ev);
 
@@ -2101,6 +2423,23 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Task-scoped LLM override: the model dropdown's value is `provider|model`
+  // ---------------------------------------------------------------------------
+  // There is no provider picker: each model lives in an `<optgroup>` labelled with its
+  // provider, and the option value carries both halves so picking a model also decides
+  // the provider. Both selects persist per browser and are wired in `bindEvents`; the two
+  // halves live here, at script scope, because `startTask` reads the pick when it submits.
+  const MODEL_PICK_SEP = '|';
+
+  /** Split an option value (`provider|model`) into its two halves. */
+  function parseModelPick(value) {
+    const raw = (value || '').trim();
+    const at = raw.indexOf(MODEL_PICK_SEP);
+    if (at < 0) return { provider: '', model: raw };
+    return { provider: raw.slice(0, at), model: raw.slice(at + 1) };
+  }
+
+  // ---------------------------------------------------------------------------
   // The one composer: a new task when idle, a steering message while a task runs
   // ---------------------------------------------------------------------------
   async function submitTask() {
@@ -2124,6 +2463,10 @@
     state.lastTaskText = task;
 
     resetRunUi();
+    // The panel is named at once (by the instruction) and re-named when the model's
+    // title arrives, so there is never an unnamed run on screen.
+    state.taskText = task;
+    showPendingTitle(task);
     // The composer sinks to the bottom as soon as there is a run to watch: the centered
     // hero is the idle page, not a place to read steps.
     setComposerDocked(true);
@@ -2223,10 +2566,13 @@
     const taskId = state.taskId;
     state.finished = true;
     state.running = false;
+    closeCurrentGroup(word);
     stopFollowing();
     setRunningUi(false);
     setRunPill(word === 'unknown' ? 'done' : word);
-    $('elapsed').textContent = state.startedAt ? '⏱ ' + fmtDuration(Date.now() - state.startedAt) : '—';
+    // The run's own length, not "now minus the start": a view attached to an old task
+    // must not report the time passed since it ran.
+    $('elapsed').textContent = state.startedAt ? '⏱ ' + fmtDuration((state.finishedAt || Date.now()) - state.startedAt) : '—';
     $('heartbeat').textContent = '';
     setLiveNote(word === 'failed' ? '任务失败，原因见结果的红色提示。' :
       word === 'cancelled' ? '任务已停止。已经完成的步骤仍保留在上面。' : '任务结束，正在读取结果…');
@@ -2242,6 +2588,9 @@
       } catch (ignored) { /* the step log is often enough */ }
       if (state.taskId !== taskId) return;
 
+      // The title can land after the last step (a short task, a slow naming request):
+      // the envelope has it even when the stream did not.
+      if (status && status.title) setTaskTitle(status.title);
       if (status && status.isDone && status.statusCode && Number(status.statusCode) !== 200 && !state.failure) {
         state.failure = { text: status.message || '任务失败', errorCode: status.errorCode || null, resumable: !!status.resumable };
       }
@@ -2331,86 +2680,148 @@
     });
   }
 
-  function section(title, content) {
-    const wrap = el('div', 'result-section');
+  /** One titled block of the result. `cls` adds its icon class, `wide` spans the evidence grid. */
+  function section(title, content, options) {
+    const extra = options ? options.cls : '';
+    const wrap = el('div', 'result-section' + (extra ? ' ' + extra : '') + (options && options.wide ? ' wide' : ''));
     wrap.appendChild(el('h3', '', title));
     wrap.appendChild(content);
     return wrap;
   }
 
+  /** True when two texts say the same thing up to whitespace, or one contains the other. */
+  function sameAnswer(a, b) {
+    const x = a.replace(/\s+/g, ' ').trim();
+    const y = b.replace(/\s+/g, ' ').trim();
+    return x.includes(y) || y.includes(x) ||
+      (y.length > 60 && x.includes(y.slice(0, 60))) || (x.length > 60 && y.includes(x.slice(0, 60)));
+  }
+
+  /**
+   * The outcome hero: state icon, status pill, the task's title and, under it, the
+   * instruction the title stands for. Rendered on its own so a title that arrives after
+   * the result (a short task, a slow naming request) refreshes it in place.
+   */
+  function renderResultHeading(word) {
+    const kind = { done: 'ok', failed: 'err', cancelled: 'warn' }[word] || 'warn';
+    const card = $('resultCard');
+    card.classList.toggle('is-failed', word === 'failed');
+    card.classList.toggle('is-cancelled', word === 'cancelled');
+    const pill = $('resultBadge');
+    pill.className = 'pill ' + kind;
+    pill.textContent = statusText(word);
+    const icon = $('resultIcon');
+    icon.className = 'result-icon ' + kind;
+    icon.textContent = { done: '✓', failed: '✕', cancelled: '⏹' }[word] || '·';
+    icon.title = statusText(word);
+    // The model's title names the task; without one the instruction does, more quietly.
+    const heading = $('resultTitle');
+    heading.textContent = state.taskTitle || shorten(state.taskText, 80) || '结果';
+    heading.classList.toggle('fallback', !state.taskTitle);
+    heading.title = state.taskText || '';
+    // "任务：…" gives the title its context — only when the heading is not already the instruction.
+    const taskLine = $('resultTaskLine');
+    taskLine.textContent = state.taskTitle && state.taskText ? '任务：' + state.taskText : '';
+    taskLine.title = state.taskText || '';
+  }
+
+  /** Why the task failed, in the reader's terms: the reason first, then what to do about it. */
+  function renderFailure(text, status) {
+    const code = (state.failure && state.failure.errorCode) || (status && status.errorCode);
+    const alert = el('div', 'alert');
+    const title = el('div', 'alert-title');
+    title.appendChild(el('b', '', '任务失败'));
+    if (code) title.appendChild(el('span', 'alert-code', code));
+    alert.appendChild(title);
+    alert.appendChild(el('div', 'alert-reason', text));
+    const hint = failureHint(text, code);
+    if (hint) alert.appendChild(el('div', 'alert-hint', '可以这样处理：' + hint));
+    if (state.lastTaskText) {
+      const actions = el('div', 'alert-actions');
+      const retry = el('button', 'btn small', '重试这个任务');
+      retry.type = 'button';
+      retry.addEventListener('click', () => {
+        toast('重新执行同一个任务', 'ok');
+        startTask(state.lastTaskText);
+      });
+      actions.appendChild(retry);
+      alert.appendChild(actions);
+    }
+    return alert;
+  }
+
   function renderResult(result, status) {
     const card = $('resultCard');
-    const headline = $('resultHeadline');
     const body = $('resultBody');
-    clear(headline);
     clear(body);
     show(card, true);
 
     const word = status ? statusWord(status) : (state.failure ? 'failed' : 'done');
-    const badge = $('resultBadge');
-    const badgeClass = { done: 'ok', failed: 'err', cancelled: 'warn' }[word] || 'warn';
-    badge.className = 'pill ' + badgeClass;
-    badge.textContent = statusText(word);
+    state.resultWord = word;
+    renderResultHeading(word);
 
     const failureText = (state.failure && state.failure.text) ||
       (status && status.message) || '任务没有正常完成，具体原因见上面的步骤。';
-    if (word === 'failed') {
-      const alert = el('div', 'alert');
-      alert.appendChild(el('b', '', '任务失败。'));
-      alert.appendChild(el('div', '', failureText));
-      const code = (state.failure && state.failure.errorCode) || (status && status.errorCode);
-      if (code) alert.appendChild(el('div', '', '错误码：' + code));
-      const hint = failureHint(failureText, code);
-      if (hint) alert.appendChild(el('div', '', '💡 ' + hint));
-      if (state.lastTaskText) {
-        const actions = el('div', 'alert-actions');
-        const retry = el('button', 'btn small', '重试这个任务');
-        retry.addEventListener('click', () => {
-          toast('重新执行同一个任务', 'ok');
-          startTask(state.lastTaskText);
-        });
-        actions.appendChild(retry);
-        alert.appendChild(actions);
-      }
-      body.appendChild(alert);
-    }
+    if (word === 'failed') body.appendChild(renderFailure(failureText, status));
 
     if (!result) {
-      headline.appendChild(el('p', 'result-empty', '没有拿到结构化结果。上面的「执行过程」就是它这次做的全部动作。'));
-      const empty = el('div', 'alert warn');
-      empty.appendChild(el('b', '', '没有拿到结构化结果。'));
-      empty.appendChild(el('div', '', '上面的步骤就是它这次做的全部动作；失败原因通常写在红色行里。'));
-      body.appendChild(empty);
+      body.appendChild(section('结论', el('p', 'answer-empty',
+        '没有拿到结构化结果。上面的「执行过程」就是它这次做的全部动作；失败原因通常写在红色提示里。'),
+        { cls: 'answer-section' }));
       $('rawJson').textContent = status ? JSON.stringify(status, null, 2) : '';
       // Without a structured result the step log is the evidence: leave it open.
       finishResultLayout(false);
       return;
     }
 
-    // headline: Markdown-rendered summary. Wrap in .markdown so nested tables/code inherit style.
-    if (result.summary) {
-      const mdWrap = el('div', 'markdown');
-      mdWrap.appendChild(renderMarkdown(result.summary));
-      headline.appendChild(mdWrap);
+    // The answer is the result: one primary text, not two competing ones. The model's own
+    // closing words (the last model.text, richer Markdown) win; the engine's summary
+    // stands in when there are none, and follows in a fold when it says something else.
+    const answer = (state.finalModelText || '').trim();
+    const summary = String(result.summary || '').trim();
+    if (answer || summary) {
+      const md = el('div', 'markdown answer-body');
+      md.appendChild(renderMarkdown(answer || summary));
+      body.appendChild(section(word === 'failed' ? '中断前的输出' : '结论', md, { cls: 'answer-section' }));
+    } else if (word !== 'failed') {
+      body.appendChild(section('结论', el('p', 'answer-empty', '模型没有留下文字结论，下面是它整理出的结构化结果。'),
+        { cls: 'answer-section' }));
     }
-    // model.text's final message is the agent's full natural-language answer — surface it
-    // here after runPanel collapses, so the reader does not have to scroll back.
-    const finalAnswer = state.finalModelText;
-    const summaryText = String(result.summary || '').trim();
-    if (finalAnswer && finalAnswer.trim() && finalAnswer.trim() !== summaryText) {
-      const fold = el('details', 'final-answer-fold');
-      fold.open = true; // open by default so it is impossible to miss
-      const summ = el('summary', '', '完整回答（' + fmtChars(finalAnswer) + '）');
-      fold.appendChild(summ);
-      const mdWrap = el('div', 'markdown');
-      mdWrap.appendChild(renderMarkdown(finalAnswer));
-      fold.appendChild(mdWrap);
-      body.appendChild(fold);
+    if (answer && summary && !sameAnswer(answer, summary)) {
+      const fold = el('details', 'more');
+      fold.appendChild(el('summary', '', '引擎记录的摘要（' + fmtChars(summary) + '）'));
+      const md = el('div', 'markdown');
+      md.appendChild(renderMarkdown(summary));
+      fold.appendChild(md);
+      body.appendChild(section('任务摘要', fold, { cls: 'sec-summary' }));
     }
+
+    // Next actions sit right under the answer: they are what the reader does with it.
+    if (Array.isArray(result.nextSuggestions) && result.nextSuggestions.length) {
+      const next = el('div', 'next-grid');
+      result.nextSuggestions.slice(0, 5).forEach((suggestion) => {
+        const text = String(suggestion || '').trim();
+        if (!text) return;
+        const button = el('button', 'next');
+        button.type = 'button';
+        button.title = '点击直接执行：' + text;
+        button.appendChild(el('span', 'next-text', text));
+        button.appendChild(el('span', 'next-go', '执行 →'));
+        button.addEventListener('click', () => {
+          toast('已开始：' + shorten(text, 60), 'ok');
+          startTask(text);
+        });
+        next.appendChild(button);
+      });
+      if (next.children.length) body.appendChild(section('接着做（点一下直接执行）', next, { cls: 'sec-next' }));
+    }
+
+    // --- Evidence: two-up cards; wide tables and logs span both columns ---
+    const grid = el('div', 'result-grid');
     if (Array.isArray(result.keyFindings) && result.keyFindings.length) {
       const list = el('ul');
       result.keyFindings.forEach((item) => list.appendChild(el('li', '', item)));
-      body.appendChild(section('关键发现', list));
+      grid.appendChild(section('关键发现', list, { cls: 'sec-findings' }));
     }
     if (result.fields && Object.keys(result.fields).length) {
       const table = el('table');
@@ -2420,17 +2831,17 @@
         row.appendChild(el('td', '', value));
         table.appendChild(row);
       });
-      body.appendChild(section('字段', table));
+      grid.appendChild(section('字段', table, { cls: 'sec-fields' }));
     }
     if (Array.isArray(result.filesChanged) && result.filesChanged.length) {
       const list = el('ul');
       result.filesChanged.forEach((file) => list.appendChild(el('li', 'files', file)));
-      body.appendChild(section('写出的文件', list));
+      grid.appendChild(section('写出的文件', list, { cls: 'sec-files' }));
     }
     if (Array.isArray(result.problems) && result.problems.length) {
       const list = el('ul');
       result.problems.forEach((problem) => list.appendChild(el('li', '', problem)));
-      body.appendChild(section('遗留问题', list));
+      grid.appendChild(section('遗留问题', list, { cls: 'sec-problems' }));
     }
     if (Array.isArray(result.links) && result.links.length) {
       const list = el('ul');
@@ -2447,37 +2858,21 @@
         }
         list.appendChild(item);
       });
-      body.appendChild(section('链接', list));
+      grid.appendChild(section('链接', list, { cls: 'sec-links' }));
     }
     if (result.workspace) {
       const path = el('div', 'path');
       path.appendChild(el('code', '', result.workspace));
       const copy = el('button', 'btn small ghost', '复制路径');
+      copy.type = 'button';
       copy.addEventListener('click', async () => {
         toast((await copyText(result.workspace)) ? '路径已复制' : '复制失败，请手动选中', 'ok');
       });
       path.appendChild(copy);
-      body.appendChild(section('工作目录', path));
-    }
-    if (Array.isArray(result.nextSuggestions) && result.nextSuggestions.length) {
-      const grid = el('div', 'next-grid');
-      result.nextSuggestions.slice(0, 5).forEach((suggestion) => {
-        const text = String(suggestion || '').trim();
-        if (!text) return;
-        const button = el('button', 'next');
-        button.title = '点击直接执行：' + text;
-        button.appendChild(el('span', 'next-text', text));
-        button.appendChild(el('span', 'next-go', '执行 →'));
-        button.addEventListener('click', () => {
-          toast('已开始：' + shorten(text, 60), 'ok');
-          startTask(text);
-        });
-        grid.appendChild(button);
-      });
-      if (grid.children.length) body.appendChild(section('接着做（点一下直接执行）', grid));
+      grid.appendChild(section('工作目录', path, { cls: 'sec-workspace' }));
     }
 
-    // --- Fields the backend already computed but the previous renderer skipped ---
+    // --- Fields the backend already computed ---
 
     if (result.xsqlResultSet && Array.isArray(result.xsqlResultSet) && result.xsqlResultSet.length) {
       const table = el('table', 'md-table');
@@ -2498,15 +2893,15 @@
         tbody.appendChild(tr);
       });
       table.appendChild(tbody);
-      body.appendChild(section('SQL 查询结果（前 500 行）', table));
+      grid.appendChild(section('SQL 查询结果（' + Math.min(result.xsqlResultSet.length, 500) + ' 行）', table, { cls: 'sec-sql', wide: true }));
     }
 
-    // pageSummary — the page-level compress. Only show if summary did not already cover it.
+    // pageSummary — the page-level compress. Only show if the answer did not already cover it.
     if (result.pageSummary && String(result.pageSummary).trim() &&
-        String(result.pageSummary).trim() !== summaryText) {
+        !(answer && sameAnswer(answer, String(result.pageSummary)))) {
       const mdWrap = el('div', 'markdown');
       mdWrap.appendChild(renderMarkdown(result.pageSummary));
-      body.appendChild(section('页面摘要', mdWrap));
+      grid.appendChild(section('页面摘要', mdWrap, { cls: 'sec-page', wide: true }));
     }
 
     // timings — how the run spent its time, if the backend broke it down.
@@ -2530,21 +2925,22 @@
       });
       const box = document.createDocumentFragment();
       box.appendChild(chips);
-      body.appendChild(section('耗时拆分', box));
+      grid.appendChild(section('耗时拆分', box, { cls: 'sec-timings' }));
     }
 
     // failureDetail — structured failure evidence from the finish gate / repair loop.
     if (failureText && result.failureDetail && typeof result.failureDetail === 'object' &&
         Object.keys(result.failureDetail).length && word === 'failed') {
       const details = el('details', 'more');
-      const summary = el('summary', '', '结构化失败证据（系统判定）');
-      details.appendChild(summary);
+      const label = el('summary', '', '结构化失败证据（系统判定）');
+      details.appendChild(label);
       const pre = el('pre');
       pre.textContent = JSON.stringify(result.failureDetail, null, 2);
       details.appendChild(pre);
-      body.appendChild(section('系统判定的失败证据', details));
+      grid.appendChild(section('系统判定的失败证据', details, { cls: 'sec-evidence', wide: true }));
     }
 
+    if (grid.children.length) body.appendChild(grid);
     $('rawJson').textContent = JSON.stringify(result, null, 2);
     finishResultLayout();
   }
@@ -2753,6 +3149,8 @@
     state.source = 'idle';
     state.resultRevealed = false;
     state.finalModelText = null;
+    state.finishedAt = null;
+    state.currentGroup = null;
     setRunCollapsed(false);
     clear($('steps'));
     const empty = el('div', 'empty');
@@ -2761,7 +3159,7 @@
     const headline = el('p');
     headline.appendChild(el('b', '', '它会在浏览器里替你做。'));
     empty.appendChild(headline);
-    empty.appendChild(el('p', 'muted', '每一步（打开页面、点击、读取、思考）都会出现在这里。'));
+    empty.appendChild(el('p', 'muted', '模型每一步打算做什么会出现在这里；具体的工具调用折叠在每一步里，想看再展开。'));
     $('steps').appendChild(empty);
 
     show($('taskChip'), false);
@@ -2773,10 +3171,10 @@
     $('heartbeat').textContent = '';
     $('stepCount').textContent = '';
     setLiveNote('还没有任务。在下面写一句话，按 Ctrl+Enter 开始。');
-    clear($('resultHeadline'));
     $('resultBody').innerHTML = '';
     $('resultStats').innerHTML = '';
     $('rawJson').textContent = '';
+    resetTaskTitle();
     $('taskInput').placeholder = TASK_PLACEHOLDER;
     setRunPill('idle');
     setRunningUi(false);
@@ -2802,10 +3200,17 @@
     show($('taskChip'), true);
     setRunningUi(true);
     setLiveNote('正在读取任务 ' + taskId.slice(0, 8) + '…');
+    // The session tree already knows what this task was asked to do: name the panel with
+    // it until the model's title arrives (from the status envelope or the replayed log).
+    const known = findKnownTask(taskId);
+    state.taskText = (known && known.instruction) || '';
+    if (known && known.title) setTaskTitle(known.title);
+    else showPendingTitle(state.taskText || '任务 ' + taskId.slice(0, 8));
     syncUrl();
     try {
       const status = await apiJson(statusPath(), {}, 10000);
       if (status && status.startedTime) state.startedAt = Date.parse(status.startedTime) || Date.now();
+      if (status && status.title) setTaskTitle(status.title);
       // Replay the retained step log even for a finished task: the steps are what
       // makes the result readable, and an empty log simply means the backend no
       // longer has them (the terminal event then arrives from the polling fallback).
@@ -3370,9 +3775,10 @@
     row.appendChild(el('div', 'step-icon', '📌'));
     const content = el('div', 'step-content');
     const top = el('div', 'step-top');
-    const open = el('button', 'linkbtn', shorten(task.instruction || task.id, 120));
+    // The model's title names the row; the instruction it stands for is on hover.
+    const open = el('button', 'linkbtn', shorten(task.title || task.instruction || task.id, 120));
     open.type = 'button';
-    open.title = '打开这个任务：' + task.id;
+    open.title = (task.title && task.instruction ? task.instruction + '\n' : '') + '打开这个任务：' + task.id;
     open.addEventListener('click', () => { void loadExistingTask(task.id); });
     top.appendChild(open);
     const badges = el('span', 'step-badges');
@@ -3471,9 +3877,10 @@
     // The two live-view switches. They persist per browser, and the intent one also
     // reaches the backend on submit (`intent=false`): the line exists only because the
     // model is asked to write it, so hiding it must stop asking — otherwise the page
-    // would pay tokens for rows it never shows.
+    // would pay tokens for rows it never shows. Tool calls are off unless asked for: the
+    // default view is the intents, with each step's calls folded under it.
     $('intentToggle').checked = readStore(STORE_INTENT) !== 'off';
-    $('toolToggle').checked = readStore(STORE_TOOLCALLS) !== 'off';
+    $('toolToggle').checked = readStore(STORE_TOOLCALLS) === 'on';
     applyViewSwitches();
     $('intentToggle').addEventListener('change', () => {
       writeStore(STORE_INTENT, $('intentToggle').checked ? 'on' : 'off');
@@ -3486,19 +3893,12 @@
 
     // ---- task-scoped LLM overrides (model / effort) ----
     // There is no provider picker: each model lives in a `<optgroup>` labelled with its
-    // provider, and the option value carries `provider|model` so picking a model also
-    // decides the provider (see `parseModelPick`).  Both selects persist per browser.
+    // provider; the option value carries `provider|model`, so picking a model also
+    // decides the provider.  Both selects persist per browser.
     // Each select sits inside an .llm-pick-wrap, which owns a ✕ button visible only
     // when the select has a value; the wrap toggles `data-has-value` accordingly.
-    const MODEL_PICK_SEP = '|';
-
-    /** Split an option value (`provider|model`) into its two halves. */
-    function parseModelPick(value) {
-      const raw = (value || '').trim();
-      const at = raw.indexOf(MODEL_PICK_SEP);
-      if (at < 0) return { provider: '', model: raw };
-      return { provider: raw.slice(0, at), model: raw.slice(at + 1) };
-    }
+    // The option value format (`provider|model`, `parseModelPick`) is defined at
+    // script scope, next to the submit path that reads it.
 
     /** Build the value stored on an option: `provider|model`. */
     function modelPickValue(provider, model) { return provider + MODEL_PICK_SEP + model; }
@@ -3623,8 +4023,8 @@
     $('downloadMdBtn').addEventListener('click', () => {
       const md = buildResultMarkdown();
       if (!md) { toast('还没有结果', 'warn'); return; }
-      const taskTail = (state.taskId || 'result').slice(-8);
-      const fname = 'browser4-result-' + taskTail + '.md';
+      // Named after the task's title when the model gave one; the id keeps it unique.
+      const fname = 'browser4-' + (fileSafeTitle() || 'result-' + (state.taskId || 'result').slice(-8)) + '.md';
       downloadBlob(md, fname, 'text/markdown;charset=utf-8');
       toast('已下载 ' + fname, 'ok');
     });

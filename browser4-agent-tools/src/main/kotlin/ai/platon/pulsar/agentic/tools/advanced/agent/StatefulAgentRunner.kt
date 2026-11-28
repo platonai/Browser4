@@ -463,6 +463,44 @@ open class StatefulAgentRunner(
     }
 
     /**
+     * Give the task a short, model-written title (see [AgentTaskStatus.title]).
+     *
+     * Best-effort by construction: it runs in [taskScope] beside the task, never blocks it,
+     * gives up after [TITLE_TIMEOUT_MS] and swallows every failure at debug — a name is
+     * decoration, so an unavailable model costs the run nothing but the missing title. The
+     * title lands on the row (so `agent status` and the session list carry it) and as a
+     * `task.titled` step, which is how a view already following the task learns it.
+     *
+     * The row is re-persisted only while the task is still running: the terminal row is
+     * written once, at the end, and already carries whatever title the task has by then.
+     * A row written after it would have to be a history-less snapshot, and a later
+     * `statusFromDisk` keeps the newest row — the finished task would lose its result.
+     */
+    private fun titleTaskAsync(status: AgentTaskStatus, instruction: String) {
+        val text = instruction.trim()
+        if (text.isEmpty()) return
+        val enabled = runCatching { session.sessionConfig.getBoolean(TITLE_ENABLED_KEY, true) }
+            .getOrDefault(true)
+        if (!enabled) return
+        taskScope.launch {
+            val title = runCatching {
+                withTimeoutOrNull(TITLE_TIMEOUT_MS) {
+                    session.chat(buildTaskTitlePrompt(text)).content
+                }?.let(::normalizeTaskTitle)
+            }.onFailure { logger.debug("task {}: titling failed: {}", status.id, it.message) }
+                .getOrNull()
+            if (title == null || status.title != null) return@launch
+            status.title = title
+            if (!status.isDone) {
+                runCatching { persistProgress(status, force = true) }
+                    .onFailure { logger.debug("task {}: persisting the title failed: {}", status.id, it.message) }
+            }
+            eventLog(status.id).append(AgentTaskEvent.TYPE_TITLED, text = title)
+            logger.info("Agent task {} titled: {}", status.id, title)
+        }
+    }
+
+    /**
      * Post-success side effect: asynchronously trigger the auto skill summary.
      *
      * Only called from the success branch (failed/cancelled runs go through
@@ -1626,10 +1664,11 @@ open class StatefulAgentRunner(
             // "in progress" immediately so a restart cannot revive a task that had
             // already started as if it were still queued.
             persistProgress(status, force = true)
-            recordLifecycle(
-                status, AgentTaskEvent.TYPE_STARTED,
-                plainCommand.ifBlank { resume?.instruction.orEmpty() }.ifBlank { instruction },
-            )
+            val taskText = plainCommand.ifBlank { resume?.instruction.orEmpty() }.ifBlank { instruction }
+            recordLifecycle(status, AgentTaskEvent.TYPE_STARTED, taskText)
+            // Name the run while it is still warming up (browser start, first model round):
+            // one small request of its own, never on the task's critical path.
+            titleTaskAsync(status, taskText)
 
             // Per-task flags. Explicit values win; a null resets any stale
             // override left over from a previous task (the companion agent is
@@ -2501,6 +2540,17 @@ open class StatefulAgentRunner(
         const val PROGRESS_PERSIST_INTERVAL_MS = 10_000L
 
         /**
+         * Server-side switch of the task title (`browser4.agent.title.enabled`).
+         *
+         * `false` skips the titling request altogether — the same "nobody renders it, nobody
+         * pays for it" rule as the step intent's switch.
+         */
+        const val TITLE_ENABLED_KEY = "browser4.agent.title.enabled"
+
+        /** How long the titling request may take before the task stays unnamed. */
+        const val TITLE_TIMEOUT_MS = 20_000L
+
+        /**
          * Max tasks whose live step logs stay in memory (see the `eventLogs`
          * field): 128 × at most 1000 events is a few tens of MB worst case, and
          * the whole point of the log is the task the user is WATCHING.
@@ -2624,4 +2674,77 @@ open class StatefulAgentRunner(
             return AgentHistory(states)
         }
     }
+}
+
+/** Longest task title the runner keeps; anything longer is cut and ends with an ellipsis. */
+internal const val TASK_TITLE_MAX_CHARS = 40
+
+/** Instruction characters the titling request may see — a name rarely needs the tail. */
+private const val TASK_TITLE_PROMPT_CHARS = 2_000
+
+/** The label some models put in front of the answer despite being told not to. */
+private val TASK_TITLE_LABEL =
+    Regex("^(?:title|task title|标题|任务标题)\\s*(?:[:：]\\s*|-\\s+)", RegexOption.IGNORE_CASE)
+
+/** Characters a model wraps a title in: quotes, CJK corner brackets, markdown emphasis. */
+private const val TASK_TITLE_WRAPPERS = "*_`~「」『』“”‘’\"'《》〈〉【】"
+
+/** A markdown heading mark some models put in front of the answer. */
+private val TASK_TITLE_HEADING = Regex("^#+\\s*")
+
+/** Sentence punctuation that ends a title but is not part of its name. */
+private val TASK_TITLE_TAIL = Regex("[\\s.。!！?？,，;；:：]+$")
+
+/** Whitespace inside a title: collapsed so a title is always one line. */
+private val TASK_TITLE_SPACE = Regex("\\s+")
+
+/**
+ * The request that names a task: one short prompt, answered with the title only.
+ *
+ * Kept free of the task's own context on purpose — it is not part of the conversation, so
+ * the instruction is cut to [TASK_TITLE_PROMPT_CHARS] and nothing of the session leaks in.
+ *
+ * @param instruction the task as the user wrote it (already trimmed)
+ */
+internal fun buildTaskTitlePrompt(instruction: String): String {
+    val task = instruction.trim().take(TASK_TITLE_PROMPT_CHARS)
+    return "Name the task below with a short title.\n" +
+        "Rules:\n" +
+        "- Write it in the same language as the task.\n" +
+        "- At most 16 characters for Chinese/Japanese/Korean, at most 8 words otherwise.\n" +
+        "- Start with a verb and name the goal; mention a site by its short domain name only" +
+        " when the site is the subject.\n" +
+        "- No quotes, no trailing punctuation, no markdown, no explanation. Output the title only.\n" +
+        "\n" +
+        "Task:\n$task"
+}
+
+/**
+ * Turn a model's answer into a usable task title, or `null` when there is none.
+ *
+ * Only the first non-blank line counts (a model that explains itself still gets its title
+ * from line one), a `Title:` label and the usual quote/markdown wrappers are removed, and
+ * the result is capped at [maxChars]. Everything is read defensively: this feeds a heading,
+ * so an unexpected answer degrades to "no title" instead of showing the model's chatter.
+ *
+ * @param raw the model's answer, verbatim
+ * @param maxChars longest title kept
+ */
+internal fun normalizeTaskTitle(raw: String?, maxChars: Int = TASK_TITLE_MAX_CHARS): String? {
+    var text = raw.orEmpty().lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }
+        ?: return null
+    text = text.replace(TASK_TITLE_HEADING, "").replace(TASK_TITLE_SPACE, " ")
+    // Wrappers, a label and sentence punctuation can nest (`**标题：…**。`), so peel them
+    // until nothing changes.
+    repeat(3) {
+        val peeled = text
+            .trim { it in TASK_TITLE_WRAPPERS }
+            .replace(TASK_TITLE_LABEL, "")
+            .replace(TASK_TITLE_TAIL, "")
+            .trim()
+        if (peeled == text) return@repeat
+        text = peeled
+    }
+    if (text.isEmpty()) return null
+    return if (text.length <= maxChars) text else text.take(maxChars).trimEnd() + "…"
 }
