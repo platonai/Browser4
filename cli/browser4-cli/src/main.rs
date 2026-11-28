@@ -44830,14 +44830,14 @@ linkGroups:
             "selectedBy": "llm.provider=openai",
             "multipleProviders": false,
             "warning": null,
-            "activeModel": {"model": "gpt-5.6-sol", "client": "OpenAiChatModel"},
+            "activeModel": {"model": "gpt-6.1-sol", "client": "OpenAiChatModel"},
             "message": null
         });
 
         let text = render_llm_status_lines(&payload).join("\n");
 
         assert!(text.contains("Selected by: llm.provider=openai"));
-        assert!(text.contains("Active model: gpt-5.6-sol"));
+        assert!(text.contains("Active model: gpt-6.1-sol"));
         // "multiple" sources are already spelled out per key
         assert!(!text.contains("Source:"));
     }
@@ -44943,7 +44943,7 @@ linkGroups:
             "configured": true,
             "detectedVia": "env",
             "configuredKeys": [{"key": "OPENAI_API_KEY", "source": "env"}],
-            "activeModel": {"model": "gpt-5.6-sol", "client": "OpenAiChatModel"},
+            "activeModel": {"model": "gpt-6.1-sol", "client": "OpenAiChatModel"},
             "message": null
         });
 
