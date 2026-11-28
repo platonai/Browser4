@@ -311,3 +311,4 @@ It reports `PROCESS SURVIVED`/`PROCESS KILLED` plus `TABS CLOSED` (listing the t
 - [decision-trees.md](decision-trees.md) — which extraction method to use
 - [storage-state.md](storage-state.md) — moving auth state into managed sessions
 - [load-options-guide.md](load-options-guide.md) — `-interactLevel` and friends
+- **[external-agent-browser-selection.md](external-agent-browser-selection.md)** — how an external MCP agent (Claude Desktop, GPT, any MCP client) picks `session.open` vs `session.attach`, every `capabilities` key, channel/display/profileMode matrix, bot-detection escalation, and ready-to-copy examples by task type

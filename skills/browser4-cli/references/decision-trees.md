@@ -196,6 +196,7 @@ browser4-cli htmlsnapshot get all text ".price"      # quick test: how many elem
 
 - [SKILL.md §5](../SKILL.md#5-critical-warnings) — critical warnings (selectors go stale, shell quoting, stale snapshots)
 - [browser-modes.md](browser-modes.md) — which session / display mode / browser source to use
+- **[external-agent-browser-selection.md](external-agent-browser-selection.md)** — how an external MCP agent (Claude Desktop, GPT, any MCP client) picks `session.open` vs `session.attach`, every capability key, and the bot-detection escalation loop
 - [htmlsnapshot.md](htmlsnapshot.md) — command reference for `get` / `query` / `grep` / `summary` / `inspect` / `export`
 - [x-sql.md](x-sql.md) — X-SQL function reference
 - [crawl.md](crawl.md) — bulk multi-page extraction
