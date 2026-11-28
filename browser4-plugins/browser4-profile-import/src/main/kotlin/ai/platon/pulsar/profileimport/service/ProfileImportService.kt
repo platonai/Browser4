@@ -1,5 +1,6 @@
 package ai.platon.pulsar.profileimport.service
 
+import ai.platon.browser4.common.DataDirResolver
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
@@ -26,10 +27,7 @@ open class ProfileImportService(
     private val safariReader: SafariDataReader,
     private val importRoot: Path,
     private val allowPasswords: Boolean,
-    private val browser4Root: Path = Path.of(
-        System.getProperty("browser4.data.dir", System.getProperty("user.home")),
-        ".browser4"
-    ),
+    private val browser4Root: Path = DataDirResolver.resolveRoot(),
 ) {
 
     companion object {

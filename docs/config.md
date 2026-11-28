@@ -420,6 +420,48 @@ docker run -d -p 18182:18182 `
 
   Related keys: `mcp.http.port` (default `8088`), `mcp.http.host` (default `0.0.0.0`), `mcp.http.headless` (default `false`), `mcp.http.allowedHosts`, `mcp.http.dnsRebindingProtection`.
 
+### Storage: Data directory relocation (4.17+)
+
+Browser4 persists Chrome profiles, WebDB/H2, crawl checkpoints, agent task
+logs, knowledge store and rolling logs under a single root — `~/.browser4/`
+by default.  Every path is resolved by `DataDirResolver`.  Set one of these
+JVM properties to move all or part of the tree onto a different disk.
+
+**Property priority** (first set wins):
+
+1. **`browser4.data.root`** — **canonical root** (4.17). The value IS the root.
+2. `app.data.dir` — legacy AppContext root.
+3. `browser4.data.dir` — legacy scheme, treated as the **parent** of `.browser4/`.
+4. Default: `~/.browser4`.
+
+```bash
+# Move EVERYTHING onto another disk (most common)
+BROWSER4_SERVER_OPTS="-Dbrowser4.data.root=D:/Browser4-Data"
+
+# Move ONE subsystem independently
+BROWSER4_SERVER_OPTS="-Dbrowser4.data.crawl.dir=E:/BigDisk/crawl"
+
+# The CLI offers `relocate data` — the recommended end-to-end way to move
+# existing data (stops backend, platform-native copy with resume support,
+# persists env var, optional source deletion with safety gates).
+# Uses robocopy on Windows, rsync on Linux/macOS.
+browser4-cli relocate data --target D:/Browser4-Data --env-user
+```
+
+Per-subsystem overrides (all optional, default to `<root>/data/<name>` or
+`<root>/<name>`):
+
+| Property | What it relocates | Default derived path |
+|---|---|---|
+| `browser4.data.crawl.dir` | Crawl tasks + checkpoints | `<root>/data/crawl/` |
+| `browser4.data.agent.dir` | Agent tasks + event logs | `<root>/data/agent/` |
+| `browser4.data.swarm.dir` | Swarm responses | `<root>/data/swarm/` |
+| `browser4.data.knowledge.dir` | Knowledge store PEM | `<root>/knowledge/` |
+| `browser4.data.logs.dir` | Rolling logs | `<root>/logs/` |
+
+Use `browser4-cli doctor` (default output) to see every subsystem's resolved
+location and the effective property that won the priority chain.
+
 * **`browser.display.mode`** (`GUI` | `HEADLESS` | `SUPERVISED`)
   Controls how the browser is displayed:
 

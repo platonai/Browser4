@@ -125,6 +125,18 @@ class WorkspaceIsolation private constructor(
         const val MAX_PATCH_CHARS = 32 * 1024 * 1024
 
         /**
+         * Test-only hook: replaces [runGit] used by every git call inside this class
+         * (`begin`, `applyToMain`, `stageChangeSet`, etc.) when set. Production code
+         * must **never** read this field. Set before a call, clear after.
+         */
+        @Volatile
+        internal var testGitRunner: ((Path, List<String>) -> GitOutcome)? = null
+
+        /** Dispatches git invocations to the fake runner when injected, else [runGit]. */
+        private fun git(dir: Path, args: List<String>): GitOutcome =
+            testGitRunner?.invoke(dir, args) ?: runGit(dir, args)
+
+        /**
          * Pathspecs excluded from every changed-file / patch computation.
          *
          * Agent bookkeeping must never be treated as a deliverable: `.b4scratch`
@@ -169,15 +181,15 @@ class WorkspaceIsolation private constructor(
             val isolated = root.resolve(WORKTREE_DIR).resolve(sanitize(runId))
             val baseline = withContext(Dispatchers.IO) { captureBaseline(root, runId) }
             withContext(Dispatchers.IO) { Files.createDirectories(isolated.parent) }
-            val add = runGit(
+            val add = git(
                 root,
                 listOf("worktree", "add", "--detach", "--force", isolated.toString(), baseline.commit),
             )
             if (add.exitCode != 0) {
                 // Retry once after pruning stale metadata: a crashed run leaves
                 // an entry that blocks the same path.
-                runGit(root, listOf("worktree", "prune"))
-                val retry = runGit(
+                git(root, listOf("worktree", "prune"))
+                val retry = git(
                     root,
                     listOf("worktree", "add", "--detach", "--force", isolated.toString(), baseline.commit),
                 )
@@ -201,6 +213,25 @@ class WorkspaceIsolation private constructor(
                     isolated,
                 )
             }
+            // The MAIN checkout must also have OWNER RIGHTS for the merge step. `applyToMain`
+            // writes `.git/refs/b4/pre/<id>`, `.git/worktrees/<id>/index`, `.git/index`,
+            // `.browser4/patches/<id>.patch` and applies the patch — all inside the checkout
+            // root, which inherits DACL from its parent. A checkout copied from another
+            // account, extracted from an archive, or sitting under a restricted root (`D:\`,
+            // a junction, a defender-protected folder) may let the Medium JVM process read
+            // but not write `.git/`, and `git apply` then fails with "Permission denied".
+            //
+            // Granting OWNER RIGHTS to the checkout's owner (the JVM user) is the minimal repair:
+            // no read/write widening for other principals, no inheritance that reaches outside
+            // the checkout. Best effort like the worktree grant — a refused grant must not
+            // prevent task creation; the merge step will fail loudly later if the checkout
+            // truly is unwritable.
+            if (OwnerSecurityRights.isWindows() && !OwnerSecurityRights.grant(root)) {
+                logger.warn(
+                    "checkout {} did not get OWNER RIGHTS; the isolation merge may fail with permission errors",
+                    root,
+                )
+            }
             logger.info(
                 "Workspace isolation started: {} -> {} (baseline {}{})",
                 root, isolated, baseline.commit.take(12), if (baseline.fromDirtyTree) ", dirty tree" else "",
@@ -211,7 +242,7 @@ class WorkspaceIsolation private constructor(
         /** The enclosing git work tree of [path], or null when there is none. */
         fun resolveRepoRoot(path: Path): Path? {
             val dir = runCatching { path.toAbsolutePath().normalize() }.getOrNull() ?: return null
-            val result = runGit(dir, listOf("rev-parse", "--show-toplevel"))
+            val result = git(dir, listOf("rev-parse", "--show-toplevel"))
             if (result.exitCode != 0) return null
             val root = result.stdout.trim().lineSequence().lastOrNull()?.trim().orEmpty()
             if (root.isEmpty()) return null
@@ -290,7 +321,7 @@ class WorkspaceIsolation private constructor(
             val root = runCatching { isolatedRoot.toAbsolutePath().normalize() }.getOrNull() ?: return null
             if (!Files.isDirectory(root)) return null
             val mainRoot = resolveMainRepoRoot(root) ?: return null
-            val baseline = runGit(root, listOf("rev-parse", "HEAD")).stdout.trim()
+            val baseline = git(root, listOf("rev-parse", "HEAD")).stdout.trim()
             return WorkspaceIsolation(mainRoot, root, runId, baseline, null)
         }
 
@@ -302,7 +333,7 @@ class WorkspaceIsolation private constructor(
          * envelope) can say where an isolated change will land.
          */
         fun resolveMainRepoRoot(worktree: Path): Path? {
-            val common = runGit(worktree, listOf("rev-parse", "--path-format=absolute", "--git-common-dir"))
+            val common = git(worktree, listOf("rev-parse", "--path-format=absolute", "--git-common-dir"))
             if (common.exitCode == 0 && common.stdout.isNotBlank()) {
                 val gitDir = runCatching { Path.of(common.stdout.trim().lineSequence().last()) }.getOrNull()
                 val parent = gitDir?.parent
@@ -310,7 +341,7 @@ class WorkspaceIsolation private constructor(
             }
             // Fallback for git < 2.31 (no --path-format): the relative form is
             // resolved against the worktree itself.
-            val relative = runGit(worktree, listOf("rev-parse", "--git-common-dir"))
+            val relative = git(worktree, listOf("rev-parse", "--git-common-dir"))
             if (relative.exitCode != 0 || relative.stdout.isBlank()) return null
             val gitDir = runCatching { worktree.resolve(relative.stdout.trim()).normalize() }.getOrNull()
             return gitDir?.parent?.toAbsolutePath()?.normalize()
@@ -381,12 +412,12 @@ class WorkspaceIsolation private constructor(
                 logger.warn("refusing to remove a worktree outside {}: {}", managed, target)
                 return false
             }
-            val remove = runGit(root, listOf("worktree", "remove", "--force", target.toString()))
+            val remove = git(root, listOf("worktree", "remove", "--force", target.toString()))
             if (remove.exitCode != 0) {
                 logger.warn("could not remove worktree {}: {}", target, remove.output.takeLast(300))
                 return false
             }
-            runGit(root, listOf("worktree", "prune"))
+            git(root, listOf("worktree", "prune"))
             return true
         }
 
@@ -398,8 +429,8 @@ class WorkspaceIsolation private constructor(
          * merge would apply to the wrong checkout. Fail loudly instead.
          */
         private fun requireNotLinkedWorktree(root: Path) {
-            val gitDir = runGit(root, listOf("rev-parse", "--absolute-git-dir"))
-            val commonDir = runGit(root, listOf("rev-parse", "--git-common-dir"))
+            val gitDir = git(root, listOf("rev-parse", "--absolute-git-dir"))
+            val commonDir = git(root, listOf("rev-parse", "--git-common-dir"))
             if (gitDir.exitCode != 0 || commonDir.exitCode != 0) return
             val git = gitDir.stdout.trim()
             val common = runCatching { root.resolve(commonDir.stdout.trim()).normalize() }.getOrNull()
@@ -422,17 +453,17 @@ class WorkspaceIsolation private constructor(
          * while the task runs.
          */
         private fun captureBaseline(root: Path, runId: String): Baseline {
-            val head = runGit(root, listOf("rev-parse", "HEAD")).stdout.trim()
+            val head = git(root, listOf("rev-parse", "HEAD")).stdout.trim()
             // Untracked files cannot be captured by `git stash create`, so only tracked
             // modifications make the tree "dirty" here; a tree with only untracked files
             // still starts from HEAD (they are simply not part of the worktree).
-            val dirty = runGit(root, listOf("status", "--porcelain", "--untracked-files=no", "--", "."))
+            val dirty = git(root, listOf("status", "--porcelain", "--untracked-files=no", "--", "."))
                 .stdout.isNotBlank()
-            val captured = if (dirty) runGit(root, listOf("stash", "create")).stdout.trim() else ""
+            val captured = if (dirty) git(root, listOf("stash", "create")).stdout.trim() else ""
             val commit = captured.takeIf { it.isNotEmpty() } ?: head
             if (commit.isEmpty()) throw IllegalStateException("cannot determine a baseline commit in $root")
             val ref = baselineRef(runId)
-            val update = runGit(root, listOf("update-ref", ref, commit))
+            val update = git(root, listOf("update-ref", ref, commit))
             if (update.exitCode != 0 && update.output.isNotBlank()) {
                 logger.debug("could not pin baseline ref {}: {}", ref, update.output.trim())
             }
@@ -465,7 +496,7 @@ class WorkspaceIsolation private constructor(
      */
     suspend fun rebase(): Boolean = withContext(Dispatchers.IO) {
         val baseline = captureBaseline(repoRoot, runId)
-        val reset = runGit(isolatedRoot, listOf("reset", "--hard", baseline.commit))
+        val reset = git(isolatedRoot, listOf("reset", "--hard", baseline.commit))
         if (reset.exitCode != 0) {
             logger.warn(
                 "could not rebase the reused worktree {}: {}",
@@ -473,7 +504,7 @@ class WorkspaceIsolation private constructor(
             )
             return@withContext false
         }
-        runGit(isolatedRoot, listOf("clean", "-fd"))
+        git(isolatedRoot, listOf("clean", "-fd"))
         baselineCommit = baseline.commit
         baselineRef = baseline.ref
         logger.info("reused worktree {} reset to baseline {}", isolatedRoot, baseline.commit.take(12))
@@ -516,7 +547,7 @@ class WorkspaceIsolation private constructor(
         if (add.exitCode != 0) {
             return@withContext Outcome(false, changed, "git add failed: ${add.output.takeLast(400)}")
         }
-        val staged = runGit(
+        val staged = git(
             isolatedRoot,
             listOf("diff", "--cached", "--binary").let { base ->
                 if (baselineCommit.isNotBlank()) base + baselineCommit else base
@@ -536,16 +567,47 @@ class WorkspaceIsolation private constructor(
             )
         }
         val patch = repoRoot.resolve(PATCH_DIR).resolve("${sanitize(taskId)}.patch")
-        runCatching { Files.createDirectories(patch.parent) }
-        runCatching { Files.writeString(patch, staged.stdout) }
+        val dirCreate = runCatching { Files.createDirectories(patch.parent) }
+        if (dirCreate.isFailure) {
+            return@withContext Outcome(
+                false,
+                changed,
+                "Cannot create patch directory ${patch.parent}: ${dirCreate.exceptionOrNull()?.message} — " +
+                    "the checkout root $repoRoot is not writable. Check the checkout's DACL " +
+                    "(OwnerSecurityRights grant can repair a parent-inherited restriction). " +
+                    "Nothing was applied; the isolated worktree is kept at $isolatedRoot",
+            )
+        }
+        val patchWrite = runCatching { Files.writeString(patch, staged.stdout) }
+        if (patchWrite.isFailure) {
+            return@withContext Outcome(
+                false,
+                changed,
+                "Cannot write patch to $patch: ${patchWrite.exceptionOrNull()?.message} — " +
+                    "the checkout root $repoRoot is not writable. Check the checkout's DACL " +
+                    "(OwnerSecurityRights grant can repair a parent-inherited restriction). " +
+                    "Nothing was applied; the isolated worktree is kept at $isolatedRoot",
+            )
+        }
         val preRef = preRef(taskId)
-        val head = runGit(repoRoot, listOf("rev-parse", "HEAD")).stdout.trim()
-        if (head.isNotEmpty()) runGit(repoRoot, listOf("update-ref", preRef, head))
+        val head = git(repoRoot, listOf("rev-parse", "HEAD")).stdout.trim()
+        if (head.isNotEmpty()) {
+            val refUpdate = git(repoRoot, listOf("update-ref", preRef, head))
+            if (refUpdate.exitCode != 0) {
+                return@withContext Outcome(
+                    false,
+                    changed,
+                    "Cannot record pre-merge HEAD ref $preRef: ${refUpdate.output.takeLast(400)} — " +
+                        "the checkout root $repoRoot is not writable (DACL). Nothing was applied; " +
+                        "the isolated worktree is kept at $isolatedRoot",
+                )
+            }
+        }
 
         // Idempotency: a resumed task whose patch already reached the main tree (the
         // previous attempt merged, then crashed before the manifest was written) must
         // report "applied", not "refused". The reverse check is the cheapest proof.
-        if (runGit(repoRoot, listOf("apply", "--check", "-R", patch.toString())).exitCode == 0) {
+        if (git(repoRoot, listOf("apply", "--check", "-R", patch.toString())).exitCode == 0) {
             logger.info("Workspace isolation: the patch for {} is already applied to {}", taskId, repoRoot)
             return@withContext Outcome(
                 true,
@@ -563,8 +625,8 @@ class WorkspaceIsolation private constructor(
         // user edited after the baseline; when it is used the patched paths are
         // unstaged again afterwards.
         val applyMode = when {
-            runGit(repoRoot, listOf("apply", "--check", patch.toString())).exitCode == 0 -> "plain"
-            runGit(repoRoot, listOf("apply", "--check", "--3way", patch.toString())).exitCode == 0 -> "--3way"
+            git(repoRoot, listOf("apply", "--check", patch.toString())).exitCode == 0 -> "plain"
+            git(repoRoot, listOf("apply", "--check", "--3way", patch.toString())).exitCode == 0 -> "--3way"
             else -> ""
         }
         if (applyMode.isEmpty()) {
@@ -582,7 +644,7 @@ class WorkspaceIsolation private constructor(
         } else {
             listOf("apply", "--whitespace=nowarn", patch.toString())
         }
-        val apply = runGit(repoRoot, applyArgs)
+        val apply = git(repoRoot, applyArgs)
         if (apply.exitCode != 0) {
             return@withContext Outcome(
                 false,
@@ -599,7 +661,20 @@ class WorkspaceIsolation private constructor(
             // apply (worktree change, index untouched).
             // `:(literal)` keeps a path that begins with `:` or contains `*`/`[` from being
             // read as pathspec magic.
-            runGit(repoRoot, listOf("reset", "-q", "--") + changed.map { ":(literal)$it" })
+            val reset = git(repoRoot, listOf("reset", "-q", "--") + changed.map { ":(literal)$it" })
+            if (reset.exitCode != 0) {
+                return@withContext Outcome(
+                    false,
+                    changed,
+                    "Merge applied but could not restore the unstaged state (git reset failed: " +
+                        "${reset.output.takeLast(400)}). The checkout $repoRoot now has the changes " +
+                        "BOTH in the work tree AND staged; manually run `git reset -- " +
+                        changed.joinToString(" ") { ":(literal)$it" } + "` to finish, or revert the patch. " +
+                        "Patch kept at $patch; the isolated worktree is kept at $isolatedRoot",
+                    patch.toString(),
+                    preRef,
+                )
+            }
         }
         if (!keepWorktree) cleanupWorktree()
         logger.info("Workspace isolation merged {} file(s) into {} via {}", changed.size, repoRoot, applyMode)
@@ -628,7 +703,7 @@ class WorkspaceIsolation private constructor(
     private fun stageChangeSet(paths: List<String>): GitOutcome {
         var last = GitOutcome(0, "", "")
         for (batch in stageBatches(paths)) {
-            last = runGit(isolatedRoot, listOf("add", "-A", "--") + batch.map { ":(literal)$it" })
+            last = git(isolatedRoot, listOf("add", "-A", "--") + batch.map { ":(literal)$it" })
             if (last.exitCode != 0) return last
         }
         return last
@@ -654,8 +729,8 @@ class WorkspaceIsolation private constructor(
     }
 
     private fun cleanupWorktree() {
-        runGit(repoRoot, listOf("worktree", "remove", "--force", isolatedRoot.toString()))
-        runGit(repoRoot, listOf("worktree", "prune"))
+        git(repoRoot, listOf("worktree", "remove", "--force", isolatedRoot.toString()))
+        git(repoRoot, listOf("worktree", "prune"))
         // The patch is deliberately NOT deleted: it is the revert handle for
         // `b4w recover --revert <taskId>`.
     }

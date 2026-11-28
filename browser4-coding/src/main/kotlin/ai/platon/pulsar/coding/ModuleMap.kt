@@ -115,7 +115,8 @@ object ModuleMap {
             "browser4-plugins/browser4-pptx", "browser4-rest",
         ),
         "browser4-core/browser4-common" to listOf(
-            "browser4-agentic", "browser4-core/browser4-behavior-api",
+            "browser4-agentic", "browser4-coding",
+            "browser4-core/browser4-behavior-api",
             "browser4-core/browser4-behavior-default", "browser4-core/browser4-browser",
             "browser4-core/browser4-skeleton", "browser4-pdk/browser4-pdk-test-plugin",
             "browser4-tests/pulsar-tests-common", "examples/browser4-examples",

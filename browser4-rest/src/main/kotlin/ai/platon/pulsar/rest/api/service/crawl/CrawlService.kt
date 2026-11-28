@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.service.crawl
 
+import ai.platon.browser4.common.DataDirResolver
 import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.session.PulsarSessionManager
@@ -2158,10 +2159,8 @@ class CrawlService(
         const val REASON_NO_CHECKPOINT =
             "no resume checkpoint was found, so the work this crawl had already done is not recoverable"
 
-        fun crawlPersistencePath(): Path = Path.of(
-            System.getProperty("browser4.data.dir", System.getProperty("user.home")),
-            ".browser4", "data", "crawl", "crawl-tasks.jsonl"
-        )
+        fun crawlPersistencePath(): Path =
+            DataDirResolver.crawlDir().resolve("crawl-tasks.jsonl")
 
         /**
          * Where the resumable checkpoints live: a directory of their own, next to
@@ -2172,9 +2171,7 @@ class CrawlService(
          * it gets its own file per task and its own explicit deletion
          * (`crawl clear --all`, or a terminal state with nothing left to do).
          */
-        fun crawlCheckpointDir(): Path = Path.of(
-            System.getProperty("browser4.data.dir", System.getProperty("user.home")),
-            ".browser4", "data", "crawl", "checkpoints"
-        )
+        fun crawlCheckpointDir(): Path =
+            DataDirResolver.crawlDir().resolve("checkpoints")
     }
 }

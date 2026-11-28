@@ -1,5 +1,6 @@
 package ai.platon.pulsar.coding.sandbox
 
+import ai.platon.browser4.common.DataDirResolver
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
@@ -224,12 +225,9 @@ object SandboxDefaults {
 
     /**
      * The installation's data directory, resolved the same way the rest of the product resolves it
-     * (`<browser4.data.dir or user.home>/.browser4`).
+     * via [DataDirResolver].
      */
-    fun defaultDataDir(): Path = Path.of(
-        System.getProperty("browser4.data.dir", System.getProperty("user.home")),
-        ".browser4",
-    )
+    fun defaultDataDir(): Path = DataDirResolver.resolveRoot()
 
     /** A persisted decision and the marker schema that wrote it (`0` = the legacy bare id). */
     private data class Decision(val version: Int, val id: String)

@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.controller
 
+import ai.platon.browser4.common.DataDirResolver
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import com.codahale.metrics.*
@@ -277,6 +278,62 @@ class DoctorController(
             "meters" to meters,
             "histograms" to histograms,
             "timers" to timers
+        )
+    }
+
+    /**
+     * Report every data-directory path that Browser4 will actually read and write to,
+     * together with each one's on-disk footprint (top-level, not recursive — the
+     * recursive size is expensive and doctors should be cheap).
+     *
+     * Tells the user at a glance whether `browser4.data.root` / `app.data.dir` /
+     * `browser4.data.dir` / any of the per-system overrides have been applied,
+     * and which sub-system is consuming the most disk.
+     */
+    @GetMapping("data-paths")
+    fun dataPaths(): ResponseEntity<Map<String, Any?>> {
+        val root = DataDirResolver.resolveRoot()
+        val rows = listOf(
+            "root" to root,
+            "crawl" to DataDirResolver.crawlDir(),
+            "agent" to DataDirResolver.agentDir(),
+            "swarm" to DataDirResolver.swarmDir(),
+            "knowledge" to DataDirResolver.knowledgeDir(),
+            "logs" to DataDirResolver.logsDir(),
+            "memory" to DataDirResolver.memoryDir(),
+            "browser" to DataDirResolver.browserDir(),
+            "config" to DataDirResolver.configDir(),
+            "coworker" to DataDirResolver.coworkerDir(),
+        )
+
+        val entries = rows.map { (name, path) ->
+            val file = path.toFile()
+            mapOf(
+                "name" to name,
+                "path" to path.toAbsolutePath().toString(),
+                "exists" to file.exists(),
+                "isDirectory" to (file.exists() && file.isDirectory),
+                "directSize" to if (file.exists()) file.length() else 0L,
+                "directSizeHuman" to formatFileSize(if (file.exists()) file.length() else 0L),
+            )
+        }
+
+        // Which JVM property actually won the chain?  Report each of the three
+        // candidates so the user sees whether they're relying on an override
+        // or the default.
+        val effective = when {
+            System.getProperty(DataDirResolver.PROPERTY_ROOT).isNotBlank() -> DataDirResolver.PROPERTY_ROOT
+            System.getProperty(DataDirResolver.PROPERTY_APP_DATA_DIR).isNotBlank() -> DataDirResolver.PROPERTY_APP_DATA_DIR
+            System.getProperty(DataDirResolver.PROPERTY_LEGACY_PARENT).isNotBlank() -> DataDirResolver.PROPERTY_LEGACY_PARENT
+            else -> "~/.browser4 (default)"
+        }
+
+        return ResponseEntity.ok(
+            mapOf(
+                "root" to root.toAbsolutePath().toString(),
+                "effectiveProperty" to effective,
+                "entries" to entries,
+            )
         )
     }
 

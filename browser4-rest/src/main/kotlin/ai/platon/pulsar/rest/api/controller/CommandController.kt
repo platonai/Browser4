@@ -242,6 +242,9 @@ class CommandController(
         @RequestParam(name = "mode") mode: String? = null,
         @RequestParam(name = "workspace", required = false) workspace: String? = null,
         @RequestParam(name = "intent", required = false) intent: Boolean? = null,
+        @RequestParam(name = "providerName", required = false) providerName: String? = null,
+        @RequestParam(name = "modelName", required = false) modelName: String? = null,
+        @RequestParam(name = "reasoningEffort", required = false) reasoningEffort: String? = null,
     ): ResponseEntity<Any> {
         fun isAsync(): Boolean {
             val modeIsAsync = mode?.lowercase() == "async"
@@ -282,6 +285,7 @@ class CommandController(
                     CommandSubmitResponse(
                         commandExecutor.submitPlainCommand(
                             effectiveSessionId, plainCommand, workspace = taskWorkspace, intent = intent,
+                            providerName = providerName, modelName = modelName, reasoningEffort = reasoningEffort,
                         )
                     )
                 )
@@ -289,6 +293,7 @@ class CommandController(
             ResponseEntity.ok(
                 commandExecutor.executePlainCommand(
                     effectiveSessionId, plainCommand, workspace = taskWorkspace, intent = intent,
+                    providerName = providerName, modelName = modelName, reasoningEffort = reasoningEffort,
                 )
             )
         }

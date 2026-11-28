@@ -34,14 +34,60 @@ import java.nio.file.Path
 object LlmConfigNormalizer {
     private val logger = getLogger(LlmConfigNormalizer::class)
 
-    /** Env-style prefixes that identify LLM-related keys. */
+    /**
+     * Env-style prefixes that identify LLM-related keys. Mirrors every `apiKeyName`
+     * / `modelNameKey` / `baseUrlKey` entry in `config/llm/providers.json` so the
+     * normalizer rewrites env-style configuration for ALL 21 providers, not just the
+     * original 5.  Each entry's trailing `_` matches keys like `DEEPSEEK_API_KEY`,
+     * `ANTHROPIC_MODEL_NAME`, `MINIMAX_BASE_URL`, etc.
+     *
+     * Providers whose env-style prefix does NOT match their canonical `providerName`
+     * (e.g. DashScope → `DASHSCOPE_` env key but `bailian` providerName; Gemini →
+     * `GEMINI_` and `GOOGLE_GENERATIVE_AI_` env keys but `gemini` providerName)
+     * are intentionally listed by their ACTUAL env prefix — the dotted-form rewrite
+     * (`DASHSCOPE_API_KEY` → `dashscope.api.key`) mirrors whatever the engine
+     * ultimately reads.
+     */
     private val LLM_KEY_PREFIXES = listOf(
-        "LLM_", "DEEPSEEK_", "OPENROUTER_", "VOLCENGINE_", "OPENAI_"
+        "LLM_",              // Generic LLM_API_KEY / LLM_MODEL_NAME / ...
+        "DEEPSEEK_",         // deepseek
+        "OPENROUTER_",       // openrouter
+        "OPENAI_",           // openai
+        "ANTHROPIC_",        // anthropic
+        "MOONSHOT_",         // moonshot
+        "ZHIPU_",            // zhipu
+        "VOLCENGINE_",       // volcengine
+        "HUNYUAN_",          // hunyuan (Tencent)
+        "QIANFAN_",          // qianfan (Baidu)
+        "DASHSCOPE_",        // bailian (Aliyun Qwen) — env prefix ≠ providerName
+        "MINIMAX_",          // minimax
+        "GEMINI_",           // gemini — env prefix ≠ providerName
+        "GOOGLE_GENERATIVE_AI_", // gemini — long form
+        "GROQ_",             // groq
+        "TOGETHER_",         // together
+        "MISTRAL_",          // mistral
+        "XAI_",              // xai (Grok)
+        "PERPLEXITY_",       // perplexity
+        "FIREWORKS_",        // fireworks
+        "BAICHUAN_",         // baichuan
+        "YI_",               // yi (Lingyiwanwu)
+        "STEPFUN_",          // stepfun
     )
 
-    /** Dotted provider prefixes the engine resolves (`deepseek.api.key`, …). */
+    /**
+     * Dotted provider prefixes the engine resolves (`deepseek.api.key`, …).
+     * One per provider in providers.json; the generic `llm.` prefix catches
+     * `llm.api.key`, `llm.model.name`, `llm.max.input.token.length`, etc.
+     *
+     * Unlike [LLM_KEY_PREFIXES], dotted prefixes here use the canonical
+     * `providerName` from providers.json (bailian, gemini, …), which is what
+     * the engine's ImmutableConfig actually looks up.
+     */
     private val PROVIDER_KEY_PREFIXES = listOf(
-        "llm.", "deepseek.", "openrouter.", "volcengine.", "openai."
+        "llm.", "deepseek.", "openrouter.", "openai.", "anthropic.",
+        "moonshot.", "zhipu.", "volcengine.", "hunyuan.", "qianfan.",
+        "bailian.", "minimax.", "gemini.", "groq.", "together.", "mistral.",
+        "xai.", "perplexity.", "fireworks.", "baichuan.", "yi.", "stepfun.",
     )
 
     /**

@@ -155,6 +155,7 @@ pub fn public_command_name(name: &str) -> &str {
         "tool-list" => "tool list",
         "chat-result" => "chat result",
         "doctor-status" => "doctor status",
+        "relocate-data" => "relocate data",
         "skills-list" => "skills list",
         "skills-get" => "skills get",
         "skills-path" => "skills path",
@@ -5749,6 +5750,15 @@ const CLI_EXAMPLES: &[(&str, &[&str])] = &[
             "browser4-cli star",
             "browser4-cli star --gh",
             "browser4-cli star --check",
+        ],
+    ),
+    (
+        "relocate-data",
+        &[
+            "browser4-cli relocate data --target D:/Browser4-Data --dry-run",
+            "browser4-cli relocate data --target D:/Browser4-Data --env-user",
+            "browser4-cli relocate data --target D:/Browser4-Data --source C:/Users/me/.browser4",
+            "browser4-cli relocate data --target E:/BigDisk --env-user --yes",
         ],
     ),
 ];

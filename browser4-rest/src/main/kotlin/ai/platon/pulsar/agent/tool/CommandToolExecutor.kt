@@ -172,6 +172,27 @@ class CommandToolExecutor(
                         "instruction from the system prompt, so nothing is paid for a line nobody " +
                         "renders. Omit to use `browser4.agent.intent.enabled` (on by default).",
                 ),
+                ToolSpec.Arg(
+                    "providerName", "String?", "null",
+                    "LLM provider override for this task (e.g. `deepseek`, `openrouter`, `openai`, " +
+                        "`anthropic`, `moonshot`). Omit to use the server's default provider " +
+                        "(`browser4.agent.llm.defaultProvider`, or the first provider with an API key). " +
+                        "Accepted values are the canonical provider names in providers.json.",
+                ),
+                ToolSpec.Arg(
+                    "modelName", "String?", "null",
+                    "LLM model name override for this task (e.g. `deepseek-v4-flash`, `gpt-5.6-sol`, " +
+                        "`claude-sonnet-4-6`). Omit to use the selected provider's defaultModel " +
+                        "(`browser4.agent.llm.defaultModel`, or the provider's built-in default).",
+                ),
+                ToolSpec.Arg(
+                    "reasoningEffort", "String?", "null",
+                    "Reasoning effort / thinking intensity for this task, when the selected model " +
+                        "supports it (`low`, `medium`, `high`, or `off`). Controls how much hidden " +
+                        "reasoning the provider performs (and charges for). Omit to use the model's " +
+                        "default behaviour. Values are provider-specific; an unsupported value is " +
+                        "ignored silently.",
+                ),
             ),
             returnType = "String",
             description = "Execute a plain command (URL, instruction, or agent task). " +
@@ -529,6 +550,7 @@ class CommandToolExecutor(
                         "command", "async", "noopLimit", "engine", "coding", "freshWorkspace", "sharedWorkspace",
                         "access", "unattended", "resumeTaskId", "rewindTaskId", "tokenBudget", "addDirs",
                         "unrestricted", "workspace", "intent",
+                        "providerName", "modelName", "reasoningEffort",
                     ) + SESSION_ARG,
                     // `agent run --resume <id>` may omit the task text: the instruction
                     // comes from the interrupted task's checkpoint. Validated below.
@@ -610,15 +632,26 @@ class CommandToolExecutor(
                 // asked for a one-line purpose per tool call and whether that line is
                 // reported as a `model.intent` step.
                 val intent = paramBool(args, "intent", functionName, required = false, default = null)
+                // Task-scoped LLM overrides: providerName, modelName, reasoningEffort.
+                // Omitted values keep the server's default; blank strings are treated
+                // as absent (a CLI that sends "" instead of null means "use default").
+                val providerName = paramString(args, "providerName", functionName, required = false, default = null)
+                    ?.trim()?.takeIf { it.isNotEmpty() }
+                val modelName = paramString(args, "modelName", functionName, required = false, default = null)
+                    ?.trim()?.takeIf { it.isNotEmpty() }
+                val reasoningEffort = paramString(args, "reasoningEffort", functionName, required = false, default = null)
+                    ?.trim()?.takeIf { it.isNotEmpty() }
                 if (isAsync) {
                     service.submitPlainCommand(
                         sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
                         resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace, intent,
+                        providerName, modelName, reasoningEffort,
                     )
                 } else {
                     val status = service.executePlainCommand(
                         sessionId, command, noopLimit, coding, freshWorkspace, sharedWorkspace, access, unattended,
                         resumeTaskId, tokenBudget, addDirs, unrestricted, rewindTaskId, workspace, intent,
+                        providerName, modelName, reasoningEffort,
                     )
                     pulsarObjectMapper().writeValueAsString(status)
                 }

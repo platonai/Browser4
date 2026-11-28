@@ -1,5 +1,6 @@
 package ai.platon.pulsar.coding
 
+import ai.platon.browser4.common.DataDirResolver
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
@@ -134,20 +135,11 @@ object ReadablePaths {
     private val RUN_WORKSPACE_MARKERS = listOf("async-tasks.json", "cli-state.json", "cli-managed-processes.json")
 
     /**
-     * The Browser4 data root: `app.data.dir` when set, else `~/.browser4`.
-     *
-     * Returns `null` only when neither the property nor `user.home` is usable — a broken
-     * environment, in which case adding no built-in root is the safe answer.
+     * The Browser4 data root, resolved via [DataDirResolver]. Returns `null` only
+     * when the environment is so broken that not even `user.home` is usable.
      */
-    fun appDataRoot(): Path? {
-        val configured = System.getProperty(PROP_APP_DATA_DIR)?.trim()
-        if (!configured.isNullOrEmpty()) {
-            return absoluteOrNull(configured)
-        }
-        val home = System.getProperty("user.home")?.trim()
-        if (home.isNullOrEmpty()) return null
-        return absoluteOrNull(home)?.resolve(DEFAULT_DATA_DIR_NAME)?.normalize()
-    }
+    fun appDataRoot(): Path? =
+        runCatching { DataDirResolver.resolveRoot().toAbsolutePath().normalize() }.getOrNull()
 
     /**
      * The checkout the backend was started from, or `null` for a packaged runtime.

@@ -3784,13 +3784,14 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "all", description: "Also list the sessions persisted by every other workspace on this machine (adds a Workspace column)", is_bool: true, short: None },
                 OptionDef { name: "verbose", description: "Show full page URLs and session IDs without column width truncation", is_bool: true, short: None },
+                OptionDef { name: "browsers", description: "List every browser family Browser4 cares about (chrome, edge, firefox, ego-lite) with installed / running / debug port / reachability / CDP identity state instead of sessions. Client-side only — no backend, no session required", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             // `list` is handled entirely CLI-side (no MCP tool call), so these
-            // parameters only carry the two flags into the handler — without
+            // parameters only carry the three flags into the handler — without
             // them the dispatcher's `tool_params.get(...)` lookups always miss
-            // and both flags would silently do nothing.
+            // and all flags would silently do nothing.
             tool_params_fn: |args| {
                 let mut params = json!({});
                 if let Some(true) = get_bool(args, "all") {
@@ -3798,6 +3799,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if let Some(true) = get_bool(args, "verbose") {
                     params["verbose"] = json!(true);
+                }
+                if let Some(true) = get_bool(args, "browsers") {
+                    params["browsers"] = json!(true);
                 }
                 params
             },
@@ -4003,6 +4007,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                     is_bool: false,
                     short: None,
                 },
+                OptionDef {
+                    name: "recursive-sizes",
+                    short: None,
+                    is_bool: true,
+                    description: "Show recursive (full) directory sizes for each data-path subsystem. Expensive — walks every file under every data directory.",
+                },
             ],
             e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
@@ -4147,6 +4157,43 @@ pub fn all_commands() -> Vec<CommandDef> {
                 params
             },
         },
+        // ---- relocate-data ----
+        CommandDef {
+            name: "relocate-data",
+            description: "Move Browser4's data directory (Chrome profiles, WebDB, crawl checkpoints, agent logs, knowledge store) to another disk. Uses robocopy to copy, keeps the source intact until you confirm. Run with --dry-run first.",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "target", short: Some("t"), is_bool: false, description: "Target directory for the data root (e.g. D:/Browser4-Data). Required." },
+                OptionDef { name: "source", short: Some("s"), is_bool: false, description: "Source directory. Defaults to the resolved data root (detected via /api/doctor/data-paths). Override only if you know the root is wrong." },
+                OptionDef { name: "env-user", short: None, is_bool: true, description: "Write -Dbrowser4.data.root=<target> into the User-level BROWSER4_SERVER_OPTS environment variable on Windows. The CLI daemon reads this when launching the backend." },
+                OptionDef { name: "env-system", short: None, is_bool: true, description: "Write -Dbrowser4.data.root=<target> into the System-level BROWSER4_SERVER_OPTS environment variable (needs admin on Windows)." },
+                OptionDef { name: "dry-run", short: Some("n"), is_bool: true, description: "Print what would happen but do not execute anything — safe preview of the migration plan." },
+                OptionDef { name: "skip-stop", short: None, is_bool: true, description: "Skip stopping the backend first (use only when the backend is not running)." },
+                OptionDef { name: "skip-start", short: None, is_bool: true, description: "Do not restart the backend after migration — you can start it manually later." },
+                OptionDef { name: "verify", short: None, is_bool: true, description: "After copying, run robocopy again to verify 0 differences between source and target (adds time)." },
+                OptionDef { name: "delete-source", short: None, is_bool: true, description: "DELETE the source directory after a successful copy (DANGEROUS — default is copy-only)." },
+                OptionDef { name: "yes", short: Some("y"), is_bool: true, description: "Skip the interactive Y/N confirmation gate. For CI and scripts only — you are promising the plan was already reviewed upstream." },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(t) = get_opt_str(args, "target") { p["target"] = json!(t); }
+                if let Some(s) = get_opt_str(args, "source") { p["source"] = json!(s); }
+                if let Some(true) = get_bool(args, "env-user") { p["env_user"] = json!(true); }
+                if let Some(true) = get_bool(args, "env-system") { p["env_system"] = json!(true); }
+                if let Some(true) = get_bool(args, "dry-run") { p["dry_run"] = json!(true); }
+                if let Some(true) = get_bool(args, "skip-stop") { p["skip_stop"] = json!(true); }
+                if let Some(true) = get_bool(args, "skip-start") { p["skip_start"] = json!(true); }
+                if let Some(true) = get_bool(args, "verify") { p["verify"] = json!(true); }
+                if let Some(true) = get_bool(args, "delete-source") { p["delete_source"] = json!(true); }
+                if let Some(true) = get_bool(args, "yes") { p["yes"] = json!(true); }
+                p
+            },
+        },
         // ---- Agent ----
         CommandDef {
             name: "extract",
@@ -4266,6 +4313,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "ndjson", description: "With --follow: emit one JSON object per step (NDJSON) for machine consumption instead of human-readable lines", is_bool: true, short: None },
                 OptionDef { name: "interactive", description: "Open an interactive session: run tasks one after another, steer a running task by typing, and use /status, /stats, /cancel, /result, /new, /help. Pass an initial task to run it immediately", is_bool: true, short: Some("i") },
                 OptionDef { name: "continue", description: "With -i: resume the session the last interactive run recorded, so its conversation continues (the backend keeps it for browser4.agent.session.contextTtlMinutes, 12h by default). Cannot be combined with -s; the banner prints the session id to pass as -s instead", is_bool: true, short: None },
+                OptionDef { name: "provider", description: "Override the LLM provider for this task (e.g. `deepseek`, `openrouter`, `openai`, `anthropic`, `moonshot`). Omit to use the server's default provider (browser4.agent.llm.defaultProvider, or the first provider with an API key). In -i mode: every task of the session uses this provider until changed with /provider or reset", is_bool: false, short: None },
+                OptionDef { name: "model", description: "Override the LLM model name for this task (e.g. `deepseek-v4-flash`, `gpt-5.6-sol`, `claude-sonnet-4-6`). Omit to use the selected provider's defaultModel. In -i mode: every task uses this model until changed with /model or reset", is_bool: false, short: None },
+                OptionDef { name: "effort", description: "Reasoning effort / thinking intensity for this task: `low`, `medium`, `high`, or `off`. Only affects models that support it; unsupported values are ignored silently. Controls how much hidden reasoning the provider performs (and charges for). In -i mode: every task uses this until changed with /effort or reset", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "command_run".to_string(),
@@ -4361,6 +4411,17 @@ pub fn all_commands() -> Vec<CommandDef> {
                 // starting a new one; forwarded only when set (the key is the opt-in).
                 if get_bool(args, "continue").unwrap_or(false) {
                     p["continueSession"] = json!(true);
+                }
+                // LLM overrides: providerName, modelName, reasoningEffort.
+                // Blank values keep the server defaults (not forwarded).
+                if let Some(v) = get_opt_str(args, "provider").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+                    p["providerName"] = json!(v);
+                }
+                if let Some(v) = get_opt_str(args, "model").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+                    p["modelName"] = json!(v);
+                }
+                if let Some(v) = get_opt_str(args, "effort").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+                    p["reasoningEffort"] = json!(v);
                 }
                 p["engine"] = json!(get_opt_str(args, "engine").unwrap_or("cli"));
                 p
@@ -8769,7 +8830,7 @@ mod tests {
         assert_eq!(cmd.category, Category::Browsers);
         assert!(!cmd.batch_supported);
         assert_eq!(cmd.args.len(), 0);
-        assert_eq!(cmd.options.len(), 7);
+        assert_eq!(cmd.options.len(), 8);
         let option_names: Vec<&str> = cmd.options.iter().map(|o| o.name).collect();
         assert!(option_names.contains(&"fix"));
         assert!(option_names.contains(&"verbose"));
@@ -8778,6 +8839,7 @@ mod tests {
         assert!(option_names.contains(&"lines"));
         assert!(option_names.contains(&"log-filter"));
         assert!(option_names.contains(&"metric-filter"));
+        assert!(option_names.contains(&"recursive-sizes"));
         let args: HashMap<String, Value> = HashMap::new();
         assert!((cmd.tool_name_fn)(&args).is_empty());
     }

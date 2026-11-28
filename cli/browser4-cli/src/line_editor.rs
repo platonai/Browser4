@@ -690,6 +690,7 @@ fn write_history(path: &Path, entries: &[String]) -> std::io::Result<()> {
 /// Legacy editor kept for callers that use the simple key-decoding path. Prefer
 /// [Console] for new code — it owns the prompt line and the human writer together,
 /// so streamed output and typed input cannot tear each other apart.
+#[allow(dead_code)]
 pub struct Editor {
     prompt: String,
     state: Mutex<EditorState>,
@@ -697,6 +698,7 @@ pub struct Editor {
     out: Mutex<io::Stdout>,
 }
 
+#[allow(dead_code)]
 impl Editor {
     pub fn new(prompt: &str, enabled: bool) -> Arc<Self> {
         Arc::new(Self {

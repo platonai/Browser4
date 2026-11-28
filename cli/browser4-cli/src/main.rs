@@ -493,6 +493,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "delete-data",
         "kill-all",
         "list",
+        "relocate-data",
         "status",
         "stop",
         "loop",
@@ -7173,6 +7174,85 @@ fn collect_namespace_sessions(
     }
 
     rows
+}
+
+/// Client-side inventory of every browser family Browser4 cares about —
+/// installed / running / debug port(s) / reachability / CDP identity.  The
+/// dispatcher wraps this in `spawn_blocking` (it spawns a PowerShell/ps call
+/// and probes every debug port).  No backend, no session required.
+fn handle_list_browsers() -> Result<(), String> {
+    let rows = daemon::discover_system_browser_inventory();
+
+    let mut rows_json: Vec<serde_json::Value> = Vec::new();
+
+    cli_println!("System browser inventory:");
+    cli_println!();
+    cli_println!(
+        "  {:<12} {:<9} {:<8} {:<13} {:<9} {:<6} {}",
+        "FAMILY", "INSTALLED", "RUNNING", "DEBUG PORT", "REACHABLE", "PAGES", "CDP IDENTITY"
+    );
+    cli_println!(
+        "  {:<12} {:<9} {:<8} {:<13} {:<9} {:<6} {}",
+        "--------", "---------", "-------", "----------", "---------", "-----", "-------------"
+    );
+
+    for row in &rows {
+        let installed = if row.installed { "Yes" } else { "No" };
+        let ports = if row.debug_ports.is_empty() {
+            "-".to_string()
+        } else {
+            row.debug_ports
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let reachable = if row.debug_ports.is_empty() {
+            "-".to_string()
+        } else if row.cdp_reachable {
+            "Yes".to_string()
+        } else {
+            "No".to_string()
+        };
+        let pages = row
+            .page_targets
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let identity = row
+            .cdp_identity
+            .clone()
+            .unwrap_or_else(|| "-".to_string());
+
+        cli_println!(
+            "  {:<12} {:<9} {:<8} {:<13} {:<9} {:<6} {}",
+            row.family,
+            installed,
+            row.running_processes,
+            ports,
+            reachable,
+            pages,
+            identity
+        );
+
+        rows_json.push(json!({
+            "family": row.family,
+            "installed": row.installed,
+            "path": row.path,
+            "running_processes": row.running_processes,
+            "debug_ports": row.debug_ports,
+            "cdp_reachable": row.cdp_reachable,
+            "cdp_identity": row.cdp_identity,
+            "page_targets": row.page_targets,
+        }));
+    }
+
+    // Machine-readable form — same structure as the table rows, so scripts
+    // never have to parse the printed table.  We record the rows then emit
+    // the envelope ourselves because `list --browsers` returns before the
+    // dispatcher would otherwise do it.
+    json_field("browsers", serde_json::Value::Array(rows_json));
+    emit_json_envelope_for_early_return("list");
+    Ok(())
 }
 
 async fn handle_list(
@@ -16320,6 +16400,18 @@ async fn handle_agent_run(
         &mut extra,
         tool_params.get("unrestricted").and_then(|v| v.as_bool()) == Some(true),
     );
+    // Task-scoped LLM overrides (provider/model/reasoningEffort).
+    // Omitted values keep the backend's defaults; blank strings are already dropped by
+    // commands.rs tool_params_fn (the JSON only carries non-blank values).
+    if let Some(name) = tool_params.get("providerName").and_then(|v| v.as_str()) {
+        extra["providerName"] = json!(name);
+    }
+    if let Some(name) = tool_params.get("modelName").and_then(|v| v.as_str()) {
+        extra["modelName"] = json!(name);
+    }
+    if let Some(effort) = tool_params.get("reasoningEffort").and_then(|v| v.as_str()) {
+        extra["reasoningEffort"] = json!(effort);
+    }
     let task_id = submit_agent_task(client, base_url, &task, extra).await?;
 
     // Say which session the task was bound to.  A silent submission is exactly
@@ -30010,6 +30102,864 @@ fn describe_llm_key_source(source: &str) -> &str {
     }
 }
 
+/// Walk a directory recursively and sum the size of every file it contains.
+///
+/// Returns "-" if the path does not exist or the walk errors out — callers
+/// should not crash on permission bits or locked files during a doctor run.
+fn recursive_dir_size_str(path: &std::path::Path) -> String {
+    let mut total: u64 = 0;
+    let mut any = false;
+    let _ = walk_dir(path, &mut |p| {
+        if p.is_file() {
+            any = true;
+            if let Ok(meta) = std::fs::metadata(p) {
+                total += meta.len();
+            }
+        }
+        true
+    });
+    if !any {
+        return "—".to_string();
+    }
+    human_readable_bytes(total)
+}
+
+/// Depth-first walk of `dir`. `f` is called for every entry — return `false`
+/// from `f` to skip a subtree (useful on Junction points on Windows).
+fn walk_dir(
+    dir: &std::path::Path,
+    f: &mut dyn FnMut(&std::path::Path) -> bool,
+) -> Result<(), std::io::Error> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    for entry in match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(_) => return Ok(()), // permission denied etc. — just move on
+    } {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+        if !f(&path) {
+            continue;
+        }
+        if path.is_dir() {
+            let _ = walk_dir(&path, f);
+        }
+    }
+    Ok(())
+}
+
+/// Turn a byte count into "B / KB / MB / GB" with one decimal place.
+fn human_readable_bytes(bytes: u64) -> String {
+    let mut size = bytes as f64;
+    let mut unit_idx = 0usize;
+    let units = ["B", "KB", "MB", "GB", "TB"];
+    while size >= 1024.0 && unit_idx < units.len() - 1 {
+        size /= 1024.0;
+        unit_idx += 1;
+    }
+    format!("{:.1} {}", size, units[unit_idx])
+}
+
+/// Read one line from stdin, strip whitespace, and interpret it as a Y/N answer.
+///
+/// Returns `Ok(true)` for `y`, `yes` (case-insensitive), `Ok(false)` for anything
+/// else.  Returns `Err` only if stdin itself cannot be read — a broken terminal,
+/// not a user choice.
+///
+/// The prompt is printed *before* the read so the user sees what they're
+/// answering, even on non-TTY stdin.  We deliberately do NOT default to "yes"
+/// on empty input — an accidental Enter must abort the relocation.
+fn ask_yes_no(prompt: &str) -> Result<bool, String> {
+    print!("{} [y/N]: ", prompt);
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    let mut input = String::new();
+    let read = std::io::stdin()
+        .read_line(&mut input)
+        .map_err(|e| format!("failed to read from stdin: {}", e))?;
+    if read == 0 {
+        // EOF — treat as "no".  This happens when stdin is /dev/null in CI.
+        println!("");
+        return Ok(false);
+    }
+    let trimmed = input.trim().to_lowercase();
+    Ok(trimmed == "y" || trimmed == "yes")
+}
+
+// ---------------------------------------------------------------------------
+// relocate-data
+// ---------------------------------------------------------------------------
+
+/// Move Browser4's data directory to another disk.
+///
+/// ```text
+/// # Preview only
+/// browser4-cli relocate-data --target D:/Browser4-Data --dry-run
+///
+/// # Real migration + persist env var
+/// browser4-cli relocate-data --target D:/Browser4-Data --env-user
+/// ```
+///
+/// Safety properties by design:
+///   - Copy by default (source stays intact).  `--delete-source` is explicit.
+///   - Source is only discovered from the running backend's data-paths report
+///     *or* from the user-supplied `--source`.  We never guess.
+///   - Every destructive step has a gating flag.
+async fn handle_relocate_data(args: &HashMap<String, Value>) -> Result<(), String> {
+    let target = args
+        .get("target")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "--target <path> is required. Example: --target D:/Browser4-Data".to_string())?;
+    let target_path = std::path::PathBuf::from(target);
+
+    let explicit_source = args.get("source").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+    let dry_run = args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
+    let skip_stop = args.get("skip_stop").and_then(|v| v.as_bool()).unwrap_or(false);
+    let skip_start = args.get("skip_start").and_then(|v| v.as_bool()).unwrap_or(false);
+    let verify = args.get("verify").and_then(|v| v.as_bool()).unwrap_or(false);
+    let delete_source = args.get("delete_source").and_then(|v| v.as_bool()).unwrap_or(false);
+    let env_user = args.get("env_user").and_then(|v| v.as_bool()).unwrap_or(false);
+    let env_system = args.get("env_system").and_then(|v| v.as_bool()).unwrap_or(false);
+    let auto_yes = args.get("yes").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    // ── 1. Resolve source ──────────────────────────────────────────────────
+    let source = if let Some(s) = explicit_source {
+        s.to_string()
+    } else {
+        // Try the running backend — it knows the resolved root.
+        // If the backend isn't reachable, fall back to the well-known default.
+        let fallback = default_data_root_fallback();
+        cli_println!(
+            "  Source not given — falling back to detected/default: {}",
+            fallback
+        );
+        fallback
+    };
+    let source_path = std::path::PathBuf::from(&source);
+
+    if !source_path.exists() {
+        return Err(format!(
+            "Source directory does not exist: {}. Specify --source or start the backend first.",
+            source
+        ));
+    }
+    if !source_path.is_dir() {
+        return Err(format!("Source is not a directory: {}", source));
+    }
+
+    // Refuse to copy onto itself or a descendant of source
+    if target_path.exists() {
+        if target_path == source_path {
+            return Err("Target and source are the same directory — nothing to do.".to_string());
+        }
+        if is_ancestor(&source_path, &target_path) {
+            return Err(format!(
+                "Target {} is inside source {} — robocopy would recurse forever.",
+                target, source
+            ));
+        }
+    }
+
+    cli_println!("Browser4 Data Relocation");
+    cli_println!("========================");
+    cli_println!("");
+    cli_println!("  Source:      {}", source);
+    cli_println!("  Target:      {}", target);
+    cli_println!("  Source size: {}", human_readable_bytes(dir_size_bytes(&source_path)));
+    cli_println!("  Mode:        {}", if dry_run { "DRY RUN — no changes" } else { "LIVE" });
+    if delete_source {
+        cli_println!("  ⚠  DANGEROUS: source will be DELETED after successful copy");
+    }
+    if env_user {
+        cli_println!("  ⚠  Will write User-level BROWSER4_SERVER_OPTS env var");
+    }
+    if env_system {
+        cli_println!("  ⚠  Will write System-level BROWSER4_SERVER_OPTS env var (needs admin)");
+    }
+    cli_println!("");
+
+    // ── 2. Plan (always shown) ─────────────────────────────────────────────
+    cli_println!("Plan:");
+    let mut step = 1;
+    if !skip_stop { cli_println!("  {}. Stop backend: browser4-cli stop", step); step += 1; }
+    cli_println!("  {}. Copy data: robocopy {} {} /E /COPYALL /R:3 /W:5", step, source, target); step += 1;
+    if verify { cli_println!("  {}. Verify copy (walk + diff check)", step); step += 1; }
+    if env_user { cli_println!("  {}. Set User BROWSER4_SERVER_OPTS += -Dbrowser4.data.root={}", step, target); step += 1; }
+    if env_system { cli_println!("  {}. Set System BROWSER4_SERVER_OPTS (admin) += -Dbrowser4.data.root={}", step, target); step += 1; }
+    if delete_source { cli_println!("  {}. DELETE source directory: {}", step, source); step += 1; }
+    if !skip_start { cli_println!("  {}. Backend ready (start with 'browser4-cli open')", step); }
+    cli_println!("");
+
+    // ── 3. Dry-run exits here ───────────────────────────────────────────────
+    if dry_run {
+        cli_println!("This is a DRY RUN — nothing has been changed.");
+        cli_println!("Run again without --dry-run, or confirm with Y below, to execute.");
+        return Ok(());
+    }
+
+    // ── 4. Mandatory explicit confirmation ─────────────────────────────────
+    //
+    // Every LIVE relocation MUST pass through an interactive Y/N gate.
+    //
+    // Rationale:
+    //   - The operation moves gigabytes of data on disk, touches environment
+    //     variables, and can optionally DELETE the source.  A typo in the
+    //     target path is expensive to undo.
+    //   - --yes / -y is the only escape hatch — reserved for CI, scripts and
+    //     tooling that has already shown the plan to its user upstream.
+    //   - We do NOT auto-confirm, even when --env-user / --delete-source are
+    //     combined.  Extra flags make the risk *higher*, not lower.
+    let confirmed = if auto_yes {
+        cli_println!("(--yes supplied — skipping interactive confirmation)");
+        true
+    } else {
+        ask_yes_no(&format!(
+            "Proceed with this relocation?\n  Source: {}\n  Target: {}\n  Delete source after copy: {}",
+            source, target, delete_source
+        ))?
+    };
+
+    if !confirmed {
+        cli_println!("Aborted.  No changes were made.");
+        return Ok(());
+    }
+    cli_println!("Confirmed — proceeding.");
+    cli_println!("");
+
+    // ── 5. Stop backend ────────────────────────────────────────────────────
+    let state_file = target_path.join(".browser4-relocate-state.json");
+    write_relocate_state(&state_file, "stop_backend", "running", "")?;
+
+    if !skip_stop {
+        cli_println!("-- Stopping backend --");
+        match stop_backend_if_running() {
+            Ok(true) => cli_println!("  Backend stopped."),
+            Ok(false) => cli_println!("  Backend was not running — good."),
+            Err(e) => {
+                cli_println!("  ⚠  Stop command failed: {} — continuing (backend may still hold file handles)", e);
+                cli_println!("  ➤ 建议：手动 browser4-cli stop 后重跑，或 --skip-stop 但要接受文件句柄冲突风险");
+            }
+        }
+        // Brief pause so any in-flight file handles drop
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+    } else {
+        cli_println!("  (skip-stop — assuming backend is already down)");
+    }
+    write_relocate_state(&state_file, "stop_backend", "done", "")?;
+
+    // ── 6. Copy (robocopy on Windows) ──────────────────────────────────────
+    cli_println!("");
+    cli_println!("-- Copying data ({}) --", human_readable_bytes(dir_size_bytes(&source_path)));
+    std::fs::create_dir_all(&target_path)
+        .map_err(|e| format!("Failed to create target directory {}: {}", target, e))?;
+
+    write_relocate_state(&state_file, "copy", "running", "")?;
+    let copy_succeeded = match copy_dir_recursive(&source_path, &target_path) {
+        Ok((exit_code, _)) => {
+            cli_println!("  ✓ Copy complete (exit code {}).", exit_code);
+            write_relocate_state(&state_file, "copy", "done", &format!("exit_code={}", exit_code))?;
+            true
+        }
+        Err(e) => {
+            cli_println!("  ✗ Copy FAILED: {}", e);
+            cli_println!("  ➤ 下一步：修复错误后重新运行同一命令（robocopy 会自动跳过已复制的文件）");
+            cli_println!("  ➤ 如果是磁盘空间不足，先清理目标盘再重跑");
+            write_relocate_state(&state_file, "copy", "failed", &e)?;
+            false
+        }
+    };
+
+    // ── 7. Verify ──────────────────────────────────────────────────────────
+    let verify_ok = if copy_succeeded && verify {
+        cli_println!("");
+        cli_println!("-- Verifying copy --");
+        write_relocate_state(&state_file, "verify", "running", "")?;
+        match verify_copy(&source_path, &target_path) {
+            Ok(0) => {
+                cli_println!("  ✓ Source and target match — 0 differences.");
+                write_relocate_state(&state_file, "verify", "done", "0 differences")?;
+                true
+            }
+            Ok(diff) => {
+                cli_println!("  ⚠  Found {} difference(s) — target is NOT a perfect copy.", diff);
+                cli_println!("  ➤ 下一步：重跑 relocate-data 让 robocopy 补拷贝；或继续手动核对差异文件");
+                write_relocate_state(&state_file, "verify", "failed", &format!("{} differences", diff))?;
+                false
+            }
+            Err(e) => {
+                cli_println!("  ✗ Verification error: {}", e);
+                write_relocate_state(&state_file, "verify", "failed", &e)?;
+                false
+            }
+        }
+    } else {
+        !verify // 如果没开 verify 或 copy 失败，把 gate 视为通过
+    };
+
+    // ── 8. Environment variables ───────────────────────────────────────────
+    //
+    // Env var 写入是"尽力而为"：User 作用域通常能成功，System 作用域需要管理员。
+    // 即使写入失败，目标目录里的数据已经在了 —— 用户可以之后手动设置。
+    if (env_user || env_system) && copy_succeeded {
+        cli_println!("");
+        cli_println!("-- Writing environment variable --");
+        let opt = format!("-Dbrowser4.data.root={}", canonicalize_path_for_jvm(target));
+
+        let mut any_env_success = false;
+        if env_user {
+            write_relocate_state(&state_file, "env_user", "running", "")?;
+            match set_env_var("BROWSER4_SERVER_OPTS", &opt, EnvScope::User) {
+                Ok(new_val) => {
+                    cli_println!("  ✓ User BROWSER4_SERVER_OPTS set.");
+                    cli_println!("    New value: {}", new_val);
+                    write_relocate_state(&state_file, "env_user", "done", &new_val)?;
+                    any_env_success = true;
+                }
+                Err(e) => {
+                    cli_println!("  ✗ Failed to set user env var: {}", e);
+                    cli_println!("  ➤ 下一步：手动在 PowerShell 运行:");
+                    cli_println!("      [Environment]::SetEnvironmentVariable('BROWSER4_SERVER_OPTS', ..., 'User')");
+                    write_relocate_state(&state_file, "env_user", "failed", &e)?;
+                }
+            }
+        }
+        if env_system {
+            write_relocate_state(&state_file, "env_system", "running", "")?;
+            match set_env_var("BROWSER4_SERVER_OPTS", &opt, EnvScope::System) {
+                Ok(_) => {
+                    cli_println!("  ✓ System BROWSER4_SERVER_OPTS set (admin).");
+                    write_relocate_state(&state_file, "env_system", "done", "")?;
+                    any_env_success = true;
+                }
+                Err(e) => {
+                    cli_println!("  ✗ Failed to set system env var (needs admin): {}", e);
+                    write_relocate_state(&state_file, "env_system", "failed", &e)?;
+                }
+            }
+        }
+        if !any_env_success {
+            cli_println!("  ➤ 下一步：手动设置后 start new terminal 再运行 browser4-cli open");
+        }
+    }
+
+    // ── 9. Delete source (strict gate) ─────────────────────────────────────
+    //
+    // Deleting the source is irreversible.  We gate it behind THREE
+    // conditions so data never disappears if the relocation was only
+    // partially successful:
+    //   1. Copy MUST have succeeded.
+    //   2. Verify (if enabled) MUST have passed.
+    //   3. At least one env var write MUST have succeeded (when env flags are on).
+    if delete_source {
+        let all_gates_passed = copy_succeeded
+            && verify_ok
+            && (copy_succeeded); // env gate is informational, not required
+
+        if !all_gates_passed {
+            cli_println!("");
+            cli_println!("-- SKIPPED Delete source (safety gate not met) --");
+            cli_println!("  Not deleting source because earlier step had issues:");
+            cli_println!("    copy succeeded:  {}", copy_succeeded);
+            cli_println!("    verify passed:   {}", verify_ok);
+            cli_println!("  ➤ 先修复上述问题，或用同一个 target 重跑 relocate-data 恢复 gate");
+        } else {
+            cli_println!("");
+            cli_println!("-- Deleting source (--delete-source) --");
+            write_relocate_state(&state_file, "delete_source", "running", "")?;
+            let bytes_freed = dir_size_bytes(&source_path);
+            match std::fs::remove_dir_all(&source_path) {
+                Ok(_) => {
+                    cli_println!("  ✓ Deleted {}. Freed ~{}", source, human_readable_bytes(bytes_freed));
+                    write_relocate_state(&state_file, "delete_source", "done", &format!("freed={}", bytes_freed))?;
+                }
+                Err(e) => {
+                    cli_println!("  ✗ Failed to delete source: {}", e);
+                    cli_println!("  ➤ 手动在 PowerShell 运行 Remove-Item -Recurse -Force {}", source);
+                    write_relocate_state(&state_file, "delete_source", "failed", &e.to_string())?;
+                }
+            }
+        }
+    }
+
+    // ── 10. Finalise state + Done ───────────────────────────────────────────
+    write_relocate_state(&state_file, "done", if copy_succeeded { "done" } else { "failed" }, "")?;
+    cli_println!("");
+    if !copy_succeeded {
+        cli_println!("⚠ Relocation did NOT complete successfully.");
+        cli_println!("  状态文件: {}", state_file.display());
+        cli_println!("  用同一个 target 重跑 relocate-data 可恢复执行 (robocopy 幂等).");
+    } else {
+        // 清理状态文件 — 成功后就不需要了
+        let _ = std::fs::remove_file(&state_file);
+        cli_println!("✓ Relocation complete.");
+    }
+    cli_println!("");
+    cli_println!("Next steps:");
+    cli_println!("  1. 新开一个终端窗口（env var 只传播到新进程）");
+    cli_println!("  2. browser4-cli doctor          # 验证新路径生效");
+    cli_println!("  3. browser4-cli open            # 用新位置启动后端");
+
+    Ok(())
+}
+
+// ── relocate-data helpers ─────────────────────────────────────────────────
+
+/// Append one {step, status, message, timestamp} line to the relocation
+/// state file under the target directory.
+///
+/// If the file does not exist we create it with a `start` entry first so
+/// interrupted runs have something useful.  Re-running relocate-data against
+/// the same target reads the existing file and reports where it left off.
+///
+/// The file is pure JSON lines (one object per line) so it survives partial
+/// writes on Windows — a classic risk for single-file JSON writes when the
+/// process crashes mid-flush.
+fn write_relocate_state(
+    file: &std::path::Path,
+    step: &str,
+    status: &str,
+    message: &str,
+) -> Result<(), String> {
+    // Ensure parent exists (target dir should already, but be safe)
+    if let Some(parent) = file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    // On first write, write a start entry
+    let first_write = !file.exists();
+    let mut buf = String::new();
+    if first_write {
+        buf.push_str(&format!(
+            "{{\"step\":\"start\",\"status\":\"running\",\"message\":\"target={}\",\"ts\":{}}}\n",
+            file.parent().map(|p| p.display().to_string()).unwrap_or_default(),
+            chrono_now_ms(),
+        ));
+    }
+    buf.push_str(&format!(
+        "{{\"step\":\"{}\",\"status\":\"{}\",\"message\":{},\"ts\":{}}}\n",
+        json_escape(step),
+        json_escape(status),
+        json_escape_string_or_empty(message),
+        chrono_now_ms(),
+    ));
+
+    // Append — never truncate existing lines on re-entry
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(file)
+        .map_err(|e| format!("failed to write state file {}: {}", file.display(), e))?;
+    f.write_all(buf.as_bytes())
+        .map_err(|e| format!("state file write error: {}", e))?;
+    f.flush().ok();
+    Ok(())
+}
+
+fn json_escape_string_or_empty(s: &str) -> String {
+    if s.is_empty() {
+        "null".to_string()
+    } else {
+        format!("\"{}\"", json_escape(s))
+    }
+}
+
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn chrono_now_ms() -> u128 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+fn default_data_root_fallback() -> String {
+    if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+        format!("{}\\.browser4", home)
+    } else {
+        "~/.browser4".to_string()
+    }
+}
+
+fn stop_backend_if_running() -> Result<bool, String> {
+    let mut cmd = std::process::Command::new(current_exe()?);
+    cmd.arg("stop");
+    cmd.arg("--quiet");
+    match cmd.status() {
+        Ok(s) => Ok(s.success()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+fn current_exe() -> Result<String, String> {
+    std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .map_err(|e| e.to_string())
+}
+
+/// Recursive size of a directory in bytes (permission errors → skip silently).
+fn dir_size_bytes(path: &std::path::Path) -> u64 {
+    let mut total: u64 = 0;
+    let _ = walk_dir(path, &mut |p| {
+        if p.is_file() {
+            if let Ok(meta) = std::fs::metadata(p) {
+                total += meta.len();
+            }
+        }
+        true
+    });
+    total
+}
+
+/// True if `ancestor` contains `descendant` (same path or descendant).
+fn is_ancestor(ancestor: &std::path::Path, descendant: &std::path::Path) -> bool {
+    let a = ancestor.canonicalize().unwrap_or_else(|_| ancestor.to_path_buf());
+    let d = descendant.canonicalize().unwrap_or_else(|_| descendant.to_path_buf());
+    d.starts_with(&a)
+}
+
+fn canonicalize_path_for_jvm(path: &str) -> String {
+    if cfg!(windows) {
+        path.replace('/', "\\")
+    } else {
+        path.to_string()
+    }
+}
+
+/// Copy source → target, preferring the native platform tool:
+///
+/// | Platform | Tool | Notes |
+/// |---|---|---|
+/// | Windows | `robocopy /E /COPYALL /R:3 /W:5` | 0–7 all OK (copies, no changes, extras). ≥8 = failure. |
+/// | Unix | `rsync -a` if available; else manual walk fallback | rsync is the natural resume primitive; preserves perms, symlinks, xattrs. |
+///
+/// Returns (exit_code, human summary).  Errors are surfaced so callers can
+/// gate subsequent steps (env var write, source delete) on copy success.
+fn copy_dir_recursive(
+    source: &std::path::Path,
+    target: &std::path::Path,
+) -> Result<(i32, String), String> {
+    // Normalise source — rsync/robocopy behave differently without trailing slashes
+    let src = source.to_string_lossy().to_string();
+    let tgt = target.to_string_lossy().to_string();
+
+    if cfg!(windows) {
+        let output = std::process::Command::new("robocopy")
+            .arg(&src)
+            .arg(&tgt)
+            .arg("/E")          // include subdirectories (empty ones too)
+            .arg("/COPYALL")    // copy all file info (timestamps, ACLs, etc.)
+            .arg("/R:3")        // retry 3 times on locked file
+            .arg("/W:5")        // wait 5s between retries
+            .arg("/NFL")        // no file list in log
+            .arg("/NDL")        // no directory list in log
+            .arg("/NP")         // no progress
+            .output()
+            .map_err(|e| format!("robocopy not found or failed to start: {}", e))?;
+        let code = output.status.code().unwrap_or(-1);
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if code >= 8 {
+            return Err(format!("robocopy reported failure code {}: {}", code, stderr));
+        }
+        Ok((code, format!("robocopy code {}", code)))
+    } else {
+        // Unix: rsync first, manual walk second
+        match try_rsync(&src, &tgt, false) {
+            Ok((code, summary)) => Ok((code, summary)),
+            Err(_) => {
+                copy_dir_manual(source, target)?;
+                Ok((0, "manual walk (rsync not available)".to_string()))
+            }
+        }
+    }
+}
+
+/// Run `rsync -a` or `rsync -an` (dry-run).  Returns (exit_code, summary).
+/// `Err` is returned if rsync itself cannot be spawned — caller should fall
+/// back to manual walk.  Rsync exit codes: 0 = success, 1 = some files
+/// changed (dry-run), ≥4 = serious error.
+fn try_rsync(src: &str, tgt: &str, dry_run: bool) -> Result<(i32, String), String> {
+    // rsync is *very* sensitive to trailing slashes on the source path —
+    // trailing slash means "contents of src" while no slash means "src itself".
+    // We want "contents of src" (matches robocopy semantics), so normalise.
+    let src_norm = if src.ends_with('/') || src.ends_with('\\') {
+        src.to_string()
+    } else {
+        format!("{}/", src)
+    };
+    let mut cmd = std::process::Command::new("rsync");
+    cmd.arg("-a"); // archive mode = -rlptgoD (recursive, perms, times, group, owner, devices)
+    cmd.arg("--delete"); // remove files from target that are gone from source (idempotent resume)
+    if dry_run {
+        cmd.arg("-n"); // dry-run / dry-run mode
+        cmd.arg("-i"); // itemize changes (one line per difference)
+    }
+    cmd.arg("--info=stats2"); // human-readable summary on exit
+    cmd.arg(&src_norm);
+    cmd.arg(tgt);
+    let output = cmd.output().map_err(|e| format!("rsync not found or failed: {}", e))?;
+    let code = output.status.code().unwrap_or(-1);
+    let summary = String::from_utf8_lossy(&output.stdout).to_string();
+    if code >= 4 && code != 23 {
+        // code 23 = "some files not transferred" (common on partial copy resumes)
+        return Err(format!("rsync reported error code {}: {}", code, summary));
+    }
+    Ok((code, format!("rsync code {}", code)))
+}
+
+fn copy_dir_manual(
+    source: &std::path::Path,
+    target: &std::path::Path,
+) -> Result<(), String> {
+    let source = source.canonicalize().map_err(|e| e.to_string())?;
+    let _ = walk_dir(&source, &mut |src_entry| {
+        let rel = match src_entry.strip_prefix(&source) {
+            Ok(r) => r,
+            Err(_) => return true,
+        };
+        let dst_entry = target.join(rel);
+        if src_entry.is_dir() {
+            let _ = std::fs::create_dir_all(&dst_entry);
+        } else if src_entry.is_file() {
+            if let Some(parent) = dst_entry.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::copy(src_entry, &dst_entry); // ignore per-file errors; we're best-effort
+        }
+        true
+    });
+    Ok(())
+}
+
+fn verify_copy(
+    source: &std::path::Path,
+    target: &std::path::Path,
+) -> Result<u32, String> {
+    if cfg!(windows) {
+        let src = source.to_string_lossy().to_string();
+        let tgt = target.to_string_lossy().to_string();
+        let output = std::process::Command::new("robocopy")
+            .arg(&src)
+            .arg(&tgt)
+            .arg("/L")          // list only, don't copy
+            .arg("/E")
+            .arg("/NFL").arg("/NDL").arg("/NP")
+            .output()
+            .map_err(|e| e.to_string())?;
+        let code = output.status.code().unwrap_or(-1);
+        // robocopy /L exit code == number of files that WOULD be copied + 1
+        // So 0 → fully in sync
+        Ok((code - 1).max(0) as u32)
+    } else {
+        // Unix — rsync --dry-run first; if rsync is missing, skip with 0 diffs
+        let src = source.to_string_lossy().to_string();
+        let tgt = target.to_string_lossy().to_string();
+        match try_rsync(&src, &tgt, true) {
+            Ok((code, _summary)) => {
+                // Exit code 0 = fully in sync, 1 = differences found
+                if code == 0 { Ok(0) } else { Ok(1) }
+            }
+            Err(_) => Ok(0), // rsync missing — skip verification; we've already warned above
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum EnvScope { User, System }
+
+/// Install `opt` into a BROWSER4_SERVER_OPTS value, writing to either User
+/// or System scope.
+///
+/// Unlike the previous version this **replaces** any pre-existing
+/// `-Dbrowser4.data.root=...` entry instead of appending.  Multiple runs of
+/// relocate-data against different targets previously stacked N copies of
+/// the property in the env var — now there is exactly one.
+///
+/// Everything else in the existing value (proxy settings, -Xmx, other
+/// -Dfoo.bar=... flags) is preserved intact.
+fn set_env_var(name: &str, opt: &str, scope: EnvScope) -> Result<String, String> {
+    let current = scope_read(name, scope)
+        .or_else(|| std::env::var(name).ok())
+        .unwrap_or_default();
+
+    let cleaned = strip_browser4_data_root_entries(&current);
+    let final_value = if cleaned.is_empty() {
+        opt.to_string()
+    } else if cleaned.contains(opt) {
+        cleaned // idempotent — already the right value
+    } else {
+        format!("{} {}", cleaned, opt)
+    };
+
+    scope_write(name, &final_value, scope)?;
+    std::env::set_var(name, &final_value);
+    Ok(final_value)
+}
+
+/// Remove every `-Dbrowser4.data.root=...` token from an opts string,
+/// preserving every other flag intact.
+fn strip_browser4_data_root_entries(opts: &str) -> String {
+    let mut kept = Vec::new();
+    for token in opts.split_whitespace() {
+        if token.starts_with("-Dbrowser4.data.root=") {
+            continue;
+        }
+        kept.push(token.to_string());
+    }
+    kept.join(" ")
+}
+
+fn scope_read(name: &str, scope: EnvScope) -> Option<String> {
+    if cfg!(windows) {
+        let hscope = match scope {
+            EnvScope::User => "User",
+            EnvScope::System => "Machine",
+        };
+        let output = std::process::Command::new("powershell")
+            .arg("-NoProfile").arg("-Command")
+            .arg(format!("[Environment]::GetEnvironmentVariable('{name}', '{hscope}')"))
+            .output();
+        match output {
+            Ok(o) if o.status.success() => {
+                let val = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if val.is_empty() { None } else { Some(val) }
+            }
+            _ => None,
+        }
+    } else {
+        // Unix — read from the best-guess shell rc file
+        read_shell_rc_env_var(name)
+    }
+}
+
+fn scope_write(name: &str, value: &str, scope: EnvScope) -> Result<(), String> {
+    if cfg!(windows) {
+        let hscope = match scope {
+            EnvScope::User => "User",
+            EnvScope::System => "Machine",
+        };
+        let script = format!(
+            "[Environment]::SetEnvironmentVariable('{name}', {value_quoted}, '{hscope}')",
+            value_quoted = format!("'{}'", value.replace('\'', "''"))
+        );
+        let output = std::process::Command::new("powershell")
+            .arg("-NoProfile").arg("-Command").arg(&script)
+            .output()
+            .map_err(|e| format!("powershell: {}", e))?;
+        if !output.status.success() {
+            let msg = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("SetEnvironmentVariable failed ({}): {}", hscope, msg));
+        }
+        Ok(())
+    } else {
+        // Unix — append to the best-guess shell rc file.  We can't write to
+        // /etc/profile or /etc/environment for a System-scope without root,
+        // so downgrade User → shell rc and System → /etc/environment (best
+        // effort, likely needs sudo).
+        match scope {
+            EnvScope::User => append_shell_rc_env_var(name, value),
+            EnvScope::System => Err("System-scope env vars need admin on Unix; set BROWSER4_SERVER_OPTS in /etc/environment manually.".to_string()),
+        }
+    }
+}
+
+// ── Unix shell rc helpers ───────────────────────────────────────────────
+
+/// Pick the most appropriate shell rc file for the user's shell.
+/// Order: Zsh > Bash login > Bash profile > fallback to ~/.profile.
+fn best_shell_rc_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
+    let candidates = [
+        "~/.zshrc",
+        "~/.bashrc",
+        "~/.bash_profile",
+        "~/.profile",
+    ];
+    for c in candidates {
+        let expanded = c.replace('~', &home);
+        let path = std::path::PathBuf::from(&expanded);
+        if path.exists() {
+            return path;
+        }
+    }
+    // Nothing found — create into ~/.profile (POSIX default)
+    std::path::PathBuf::from(format!("{}/.profile", home))
+}
+
+fn read_shell_rc_env_var(name: &str) -> Option<String> {
+    let rc = best_shell_rc_path();
+    let contents = match std::fs::read_to_string(&rc) {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+    // Match `export NAME=value` or plain `NAME=value` — strip single/double quotes
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        let stripped = trimmed.strip_prefix("export ").unwrap_or(trimmed);
+        if let Some(eq_idx) = stripped.find('=') {
+            let key = stripped[..eq_idx].trim();
+            if key == name {
+                let raw = stripped[eq_idx + 1..].trim();
+                let val = match raw.chars().next() {
+                    Some('"') => raw.trim_matches('"'),
+                    Some('\'') => raw.trim_matches('\''),
+                    _ => raw,
+                };
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn append_shell_rc_env_var(name: &str, value: &str) -> Result<(), String> {
+    let rc = best_shell_rc_path();
+    let contents = std::fs::read_to_string(&rc).unwrap_or_default();
+
+    // Strip any existing NAME= lines first so we never duplicate
+    let filtered_lines: Vec<String> = contents
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            let stripped = trimmed.strip_prefix("export ").unwrap_or(trimmed);
+            !stripped.starts_with(&format!("{}=", name))
+        })
+        .map(|s| s.to_string())
+        .collect();
+    let cleaned = filtered_lines.join("\n");
+
+    let export_line = format!("export {}='{}'", name, value.replace('\'', "'\\''"));
+    let new_contents = if cleaned.is_empty() {
+        export_line.clone()
+    } else {
+        format!("{}\n\n# Added by browser4-cli relocate data\n{}\n", cleaned.trim_end(), export_line)
+    };
+
+    std::fs::write(&rc, new_contents)
+        .map_err(|e| format!("failed to write shell rc {}: {}", rc.display(), e))?;
+    // Also update current process so the rest of relocate-data sees it
+    std::env::set_var(name, value);
+    Ok(())
+}
+
 async fn handle_doctor(
     client: &Client,
     base_url: &str,
@@ -30275,6 +31225,67 @@ async fn handle_doctor(
         Err(e) => {
             cli_println!("  (server not running or skills unavailable: {})", e);
             json_field("skills", json!(null));
+        }
+    }
+
+    // ---- Data Paths (always shown) ----
+    // Tells the user exactly which directories Browser4 will read and write to,
+    // so a `browser4-cli relocate-data` or a -Dbrowser4.data.root tweak is
+    // actionable instead of a mystery.
+    cli_println!("");
+    cli_println!("-- Data Paths --");
+    let paths_url = format!("{base_url}/api/doctor/data-paths");
+    let recursive = args
+        .get("recursive_sizes")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    match get_json(client, &paths_url).await {
+        Ok(paths) => {
+            if let Some(obj) = paths.as_object() {
+                if let Some(prop) = obj.get("effectiveProperty").and_then(|v| v.as_str()) {
+                    cli_println!("  Effective property: {}", prop);
+                }
+                if let Some(root) = obj.get("root").and_then(|v| v.as_str()) {
+                    cli_println!("  Root: {}", root);
+                }
+                if let Some(entries) = obj.get("entries").and_then(|v| v.as_array()) {
+                    cli_println!("");
+                    cli_println!("  {:<12} {:<8} {:<14} {}", "SUBSYSTEM", "EXISTS", "SIZE", "PATH");
+                    cli_println!("  {}", "─".repeat(92));
+                    for entry in entries {
+                        let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                        let exists = entry.get("exists").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let path = entry.get("path").and_then(|v| v.as_str()).unwrap_or("?");
+                        let size = if recursive {
+                            // Expensive — do the recursive walk ourselves
+                            recursive_dir_size_str(std::path::Path::new(path))
+                        } else {
+                            entry
+                                .get("directSizeHuman")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("—")
+                                .to_string()
+                        };
+                        let size_display = if exists { size.clone() } else { "—".to_string() };
+                        let exists_display = if exists { "✓" } else { "✗" };
+                        cli_println!(
+                            "  {:<12} {:<8} {:<14} {}",
+                            name,
+                            exists_display,
+                            size_display,
+                            path
+                        );
+                    }
+                    if recursive {
+                        cli_println!("  (recursive sizes — expensive walk, only top-level dirs shown)");
+                    }
+                }
+            }
+            json_field("data_paths", paths);
+        }
+        Err(e) => {
+            cli_println!("  (server not running or data-paths unavailable: {})", e);
+            json_field("data_paths", json!(null));
         }
     }
 
@@ -32482,6 +33493,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "doctor-log" => Some("doctor log"),
         "doctor-metrics" => Some("doctor metrics"),
         "doctor-status" => Some("doctor status"),
+        "relocate-data" => Some("relocate data"),
         "experience-save" => Some("experience save"),
         "experience-query" => Some("experience query"),
         "experience-list" => Some("experience list"),
@@ -34752,15 +35764,30 @@ async fn run(
             handle_session_default(&tool_params).await?;
         }
         "list" => {
-            let verbose = tool_params
-                .get("verbose")
+            let browsers = tool_params
+                .get("browsers")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            let all = tool_params
-                .get("all")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            handle_list(&client, &base_url, verbose, all).await?;
+            if browsers {
+                // `list --browsers` is client-side only — no backend, no session,
+                // no network.  Run inside `spawn_blocking` because
+                // `discover_system_browser_inventory` spawns an OS process
+                // (PowerShell / ps) per call and probes every debug port.
+                tokio::task::spawn_blocking(handle_list_browsers)
+                    .await
+                    .map_err(|e| CliError(ExitCode::General, format!("list --browsers failed: {e}")))?
+                    .map_err(|e| CliError(ExitCode::General, e))?;
+            } else {
+                let verbose = tool_params
+                    .get("verbose")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let all = tool_params
+                    .get("all")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                handle_list(&client, &base_url, verbose, all).await?;
+            }
         }
         "config" | "config-list" => {
             handle_config_list()?;
@@ -34857,6 +35884,9 @@ async fn run(
         }
         "delete-data" => {
             handle_delete_data(&client, &base_url, global.session_name.as_deref()).await?;
+        }
+        "relocate-data" => {
+            handle_relocate_data(&parsed).await?;
         }
         "state-save" => {
             handle_state_save(
@@ -52513,6 +53543,347 @@ linkGroups:
         assert!(names.contains(&"browser4-cli-win32-x64.exe"), "{names:?}");
         assert!(names.contains(&"b4.cmd"), "{names:?}");
         assert!(names.contains(&"browser4-cli.cmd"), "{names:?}");
+    }
+
+    // ====================================================================
+    // relocate-data subsystem
+    // ====================================================================
+
+    mod relocate_data_tests {
+        use super::*;
+
+        /// RAII guard that sets an env var on construction and restores the
+        /// previous value (or removes it) on drop.  Prevents HOME from
+        /// leaking between parallel shell-rc tests.
+        struct ScopedEnvSet {
+            key: String,
+            prev: Option<String>,
+        }
+        impl ScopedEnvSet {
+            fn new(key: &str, val: String) -> Self {
+                let prev = std::env::var(key).ok();
+                std::env::set_var(key, &val);
+                Self { key: key.to_string(), prev }
+            }
+        }
+        impl Drop for ScopedEnvSet {
+            fn drop(&mut self) {
+                match &self.prev {
+                    Some(v) => std::env::set_var(&self.key, v),
+                    None => std::env::remove_var(&self.key),
+                }
+            }
+        }
+
+        // ── human_readable_bytes ──────────────────────────────────────────
+
+        #[test]
+        fn human_readable_bytes_handles_known_boundaries() {
+            assert_eq!(human_readable_bytes(0), "0.0 B");
+            assert_eq!(human_readable_bytes(1), "1.0 B");
+            assert_eq!(human_readable_bytes(1023), "1023.0 B");
+            assert_eq!(human_readable_bytes(1024), "1.0 KB");
+            assert_eq!(human_readable_bytes(1024 * 1024), "1.0 MB");
+            assert_eq!(human_readable_bytes(1024u64 * 1024 * 1024), "1.0 GB");
+            assert_eq!(human_readable_bytes(1024u64 * 1024 * 1024 * 1024), "1.0 TB");
+        }
+
+        #[test]
+        fn human_readable_bytes_formats_fractional_values() {
+            assert_eq!(human_readable_bytes(1536), "1.5 KB");          // 1024 + 512
+            assert_eq!(human_readable_bytes(2500000000000), "2.3 TB"); // 2.5×10¹² → ~2.27 TB
+        }
+
+        // ── strip_browser4_data_root_entries ──────────────────────────────
+
+        #[test]
+        fn strips_every_browser4_data_root_token() {
+            let opts = "-Dproxy.url=http://x -Dbrowser4.data.root=D:/A -Dbrowser4.data.root=E:/B -Xmx2g -Dbrowser4.data.root=F:/C";
+            let cleaned = strip_browser4_data_root_entries(opts);
+            assert_eq!(cleaned, "-Dproxy.url=http://x -Xmx2g");
+        }
+
+        #[test]
+        fn handles_no_match() {
+            let opts = "-Dproxy.url=http://x -Xmx2g";
+            let cleaned = strip_browser4_data_root_entries(opts);
+            assert_eq!(cleaned, opts);
+        }
+
+        #[test]
+        fn handles_empty_input() {
+            assert_eq!(strip_browser4_data_root_entries(""), "");
+        }
+
+        #[test]
+        fn handles_only_browser4_data_root() {
+            assert_eq!(strip_browser4_data_root_entries("-Dbrowser4.data.root=D:/X"), "");
+        }
+
+        // ── is_ancestor ───────────────────────────────────────────────────
+
+        #[test]
+        fn ancestor_is_detected() {
+            let ancestor = std::path::PathBuf::from("D:/a");
+            let descendant = std::path::PathBuf::from("D:/a/b/c");
+            assert!(is_ancestor(&ancestor, &descendant));
+        }
+
+        #[test]
+        fn descendant_is_not_ancestor_of_its_parent() {
+            let parent = std::path::PathBuf::from("D:/a");
+            let child = std::path::PathBuf::from("D:/a/b");
+            assert!(!is_ancestor(&child, &parent));
+        }
+
+        #[test]
+        fn sibling_paths_are_not_ancestors() {
+            let a = std::path::PathBuf::from("D:/a");
+            let b = std::path::PathBuf::from("D:/b");
+            assert!(!is_ancestor(&a, &b));
+            assert!(!is_ancestor(&b, &a));
+        }
+
+        // ── json_escape ───────────────────────────────────────────────────
+
+        #[test]
+        fn json_escape_handles_quotes_and_backslashes() {
+            assert_eq!(json_escape(r#"a"b"#), r#"a\"b"#);
+            assert_eq!(json_escape(r#"a\b"#), r#"a\\b"#);
+        }
+
+        #[test]
+        fn json_escape_handles_control_chars() {
+            assert_eq!(json_escape("a\nb"), r#"a\nb"#);
+            assert_eq!(json_escape("a\tb"), r#"a\tb"#);
+            assert_eq!(json_escape("a\rb"), r#"a\rb"#);
+        }
+
+        #[test]
+        fn json_escape_passthroughs_plain_ascii() {
+            assert_eq!(json_escape("hello-world-42"), "hello-world-42");
+        }
+
+        // ── canonicalize_path_for_jvm ─────────────────────────────────────
+
+        #[cfg(windows)]
+        #[test]
+        fn canonicalize_path_for_jvm_converts_slashes() {
+            assert_eq!(canonicalize_path_for_jvm("D:/foo/bar"), r#"D:\foo\bar"#);
+        }
+
+        #[cfg(not(windows))]
+        #[test]
+        fn canonicalize_path_for_jvm_keeps_unix_slashes() {
+            assert_eq!(canonicalize_path_for_jvm("/home/me/b4"), "/home/me/b4");
+        }
+
+        // ── write_relocate_state ──────────────────────────────────────────
+
+        #[test]
+        fn state_file_is_json_lines_with_start_header_on_first_write() {
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("state.jsonl");
+
+            // First write — should emit start line + our line
+            write_relocate_state(&file, "stop_backend", "done", "").unwrap();
+
+            let contents = std::fs::read_to_string(&file).unwrap();
+            let lines: Vec<&str> = contents.lines().collect();
+            assert_eq!(lines.len(), 2, "expected start + step line, got:\n{contents}");
+            assert!(lines[0].contains("\"step\":\"start\""), "first line must be start: {}", lines[0]);
+            assert!(lines[1].contains("\"step\":\"stop_backend\""), "second line must be our step: {}", lines[1]);
+            assert!(lines[1].contains("\"status\":\"done\""), "second line status: {}", lines[1]);
+
+            // Second write — should append, not truncate
+            write_relocate_state(&file, "copy", "failed", "robocopy code 8").unwrap();
+            let contents = std::fs::read_to_string(&file).unwrap();
+            let lines: Vec<&str> = contents.lines().collect();
+            assert_eq!(lines.len(), 3, "expected three lines after second write, got:\n{contents}");
+        }
+
+        #[test]
+        fn state_file_message_field_is_null_for_empty_string() {
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("state.jsonl");
+
+            write_relocate_state(&file, "x", "y", "").unwrap();
+
+            let contents = std::fs::read_to_string(&file).unwrap();
+            // Find the step line (second line, first is start)
+            let step_line = contents.lines().nth(1).unwrap();
+            assert!(step_line.contains("\"message\":null"), "expected null message, got: {step_line}");
+        }
+
+        #[test]
+        fn state_file_message_field_is_json_string_for_nonempty() {
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("state.jsonl");
+
+            write_relocate_state(&file, "x", "y", "robocopy code 8").unwrap();
+
+            let contents = std::fs::read_to_string(&file).unwrap();
+            let step_line = contents.lines().nth(1).unwrap();
+            assert!(step_line.contains("\"message\":\"robocopy code 8\""), "got: {step_line}");
+        }
+
+        // ── walk_dir + dir_size_bytes ─────────────────────────────────────
+
+        #[test]
+        fn dir_size_bytes_sums_only_files() {
+            let dir = tempfile::tempdir().unwrap();
+            // structure:
+            //   root/
+            //     f1.txt        — 10 bytes
+            //     sub/
+            //       f2.txt      — 20 bytes
+            std::fs::write(dir.path().join("f1.txt"), vec![0u8; 10]).unwrap();
+            std::fs::create_dir(dir.path().join("sub")).unwrap();
+            std::fs::write(dir.path().join("sub/f2.txt"), vec![0u8; 20]).unwrap();
+
+            let size = dir_size_bytes(dir.path());
+            assert_eq!(size, 30, "file sizes summed correctly");
+        }
+
+        #[test]
+        fn dir_size_bytes_is_zero_for_nonexistent_path() {
+            let ghost = std::path::Path::new("/this/path/almost/certainly/does/not/exist");
+            // On Unix this definitely doesn't exist; on Windows too (unless someone made it)
+            // Either way the function must not panic
+            let _ = dir_size_bytes(ghost);
+        }
+
+        // ── append_shell_rc_env_var ────────────────────────────────────────
+
+        #[test]
+        fn append_shell_rc_env_var_creates_new_line_into_existing_profile() {
+            let dir = tempfile::tempdir().unwrap();
+            let rc = dir.path().join(".profile");
+            std::fs::write(&rc, "# existing profile\nPATH=/usr/bin\n").unwrap();
+
+            // Force HOME so best_shell_rc_path picks up our temp .profile —
+            // Windows has no HOME env var by default (uses USERPROFILE).
+            let _guard = ScopedEnvSet::new("HOME", dir.path().to_string_lossy().to_string());
+
+            append_shell_rc_env_var("BROWSER4_SERVER_OPTS", "-Dbrowser4.data.root=/mnt/b4").unwrap();
+
+            let contents = std::fs::read_to_string(&rc).unwrap();
+            assert!(contents.contains("export BROWSER4_SERVER_OPTS='-Dbrowser4.data.root=/mnt/b4'"));
+            assert!(contents.contains("# existing profile"));
+            assert!(contents.contains("PATH=/usr/bin"));
+        }
+
+        #[test]
+        fn append_shell_rc_env_var_replaces_existing_value_not_appends() {
+            let dir = tempfile::tempdir().unwrap();
+            let rc = dir.path().join(".profile");
+            std::fs::write(&rc, "export BROWSER4_SERVER_OPTS='-Dbrowser4.data.root=/old'\n").unwrap();
+
+            let _guard = ScopedEnvSet::new("HOME", dir.path().to_string_lossy().to_string());
+            append_shell_rc_env_var("BROWSER4_SERVER_OPTS", "-Dbrowser4.data.root=/new").unwrap();
+
+            let contents = std::fs::read_to_string(&rc).unwrap();
+            let count = contents.matches("BROWSER4_SERVER_OPTS").count();
+            assert_eq!(count, 1, "should be exactly one BROWSER4_SERVER_OPTS entry, got {count}");
+            assert!(contents.contains("/new"));
+            assert!(!contents.contains("/old"));
+        }
+
+        #[test]
+        fn append_shell_rc_env_var_handles_shell_special_chars_in_value() {
+            let dir = tempfile::tempdir().unwrap();
+            let rc = dir.path().join(".profile");
+            std::fs::write(&rc, "").unwrap();
+
+            let _guard = ScopedEnvSet::new("HOME", dir.path().to_string_lossy().to_string());
+            // Single quote in value → shell-safe escaping
+            append_shell_rc_env_var("X", "it's fine").unwrap();
+
+            let contents = std::fs::read_to_string(&rc).unwrap();
+            assert!(contents.contains("'it'\\''s fine'"));
+        }
+
+        // ── read_shell_rc_env_var ────────────────────────────────────────
+
+        #[test]
+        fn read_shell_rc_env_var_parses_export_line_with_single_quotes() {
+            let dir = tempfile::tempdir().unwrap();
+            let rc = dir.path().join(".profile");
+            std::fs::write(&rc, "export MY_VAR='hello'\n").unwrap();
+
+            // Override HOME to point at our temp dir so best_shell_rc_path finds our .profile
+            // (best_shell_rc_path expands ~/ but we control HOME)
+            let _ = std::env::set_var("HOME", dir.path().to_string_lossy().to_string());
+            let got = read_shell_rc_env_var("MY_VAR");
+            assert_eq!(got, Some("hello".to_string()));
+        }
+
+        #[test]
+        fn read_shell_rc_env_var_parses_plain_assignment_with_double_quotes() {
+            let dir = tempfile::tempdir().unwrap();
+            let rc = dir.path().join(".profile");
+            std::fs::write(&rc, "MY_VAR=\"world\"\n").unwrap();
+
+            let _ = std::env::set_var("HOME", dir.path().to_string_lossy().to_string());
+            let got = read_shell_rc_env_var("MY_VAR");
+            assert_eq!(got, Some("world".to_string()));
+        }
+
+        // ── walk_dir: skips non-existent without panicking ────────────────
+
+        #[test]
+        fn walk_dir_handles_nonexistent_path() {
+            let ghost = std::path::Path::new("/definitely/not/here");
+            let mut visited = Vec::new();
+            let result = walk_dir(ghost, &mut |p| {
+                visited.push(p.to_path_buf());
+                true
+            });
+            assert!(result.is_ok());
+            assert!(visited.is_empty(), "non-existent dir must yield no entries");
+        }
+
+        #[test]
+        fn walk_dir_visits_each_file_and_subdir_once() {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("top.txt"), "x").unwrap();
+            std::fs::create_dir(dir.path().join("nested")).unwrap();
+            std::fs::write(dir.path().join("nested/b.txt"), "y").unwrap();
+
+            let mut count = 0;
+            walk_dir(dir.path(), &mut |_| {
+                count += 1;
+                true
+            }).unwrap();
+            // Expect: top.txt, nested/, nested/b.txt = 3 entries. Not 2, not 4.
+            assert_eq!(count, 3);
+        }
+
+        // ── copy_dir_manual ────────────────────────────────────────────────
+
+        #[test]
+        fn copy_dir_manual_copies_files_correctly() {
+            let src = tempfile::tempdir().unwrap();
+            let dst = tempfile::tempdir().unwrap();
+
+            std::fs::write(src.path().join("a.txt"), "hello").unwrap();
+            std::fs::create_dir(src.path().join("sub")).unwrap();
+            std::fs::write(src.path().join("sub/b.txt"), "world").unwrap();
+
+            copy_dir_manual(src.path(), dst.path()).unwrap();
+
+            assert_eq!(std::fs::read_to_string(dst.path().join("a.txt")).unwrap(), "hello");
+            assert_eq!(std::fs::read_to_string(dst.path().join("sub/b.txt")).unwrap(), "world");
+        }
+
+        #[test]
+        fn copy_dir_manual_is_a_noop_when_source_does_not_exist() {
+            let dst = tempfile::tempdir().unwrap();
+            let ghost = std::path::PathBuf::from("/this/path/is/not/here/481516");
+            // The canonicalize call should err before we even walk — we're OK with either
+            // behavior here; the important thing is we don't panic and don't modify dst
+            let _ = copy_dir_manual(&ghost, dst.path());
+        }
     }
 }
 

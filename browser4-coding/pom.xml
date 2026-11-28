@@ -35,6 +35,12 @@
             <artifactId>slf4j-api</artifactId>
         </dependency>
 
+        <!-- Unified data-directory path resolver (ai.platon.browser4.common). -->
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-common</artifactId>
+        </dependency>
+
         <!-- Kotlin coroutines for suspend-based IO -->
         <dependency>
             <groupId>org.jetbrains.kotlinx</groupId>

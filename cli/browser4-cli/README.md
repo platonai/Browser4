@@ -64,6 +64,22 @@ entirely (production ports and the flat `~/.browser4` state), and
 status` prints the workspace app data root in use; the backend keeps using the
 shared `~/.browser4` if that root cannot be prepared (the CLI warns and says so).
 
+The **backend data root** itself — where Chrome profiles, WebDB/H2, crawl
+checkpoints, agent task logs and knowledge store actually live — is controlled
+by JVM system properties (see `docs/config.md` § Storage):
+
+- `-Dbrowser4.data.root=<path>` — canonical root (4.17+). This IS the root.
+- `-Dapp.data.dir=<path>` — legacy AppContext root.
+- `-Dbrowser4.data.dir=<path>` — legacy scheme, treated as **parent** of `.browser4/`.
+- Default: `~/.browser4/`.
+
+Use `browser4-cli relocate data --target <new-path> --env-user` to move an
+existing installation; `browser4-cli doctor` (default output) shows every
+subsystem's resolved path. Dev mode injects `-Dbrowser4.data.root=<state>/app-data`
+per checkout so they don't collide. `BROWSER4_SERVER_OPTS` appends to, not
+replaces, the CLI's own JVM flags, and explicit `-Dbrowser4.data.root=...` there
+wins (append order at JVM launch — last one wins).
+
 ### Dev mode only serves the checked-out code
 
 Dev mode only ever serves the checked-out code: an already assembled runtime bundle

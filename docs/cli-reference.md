@@ -23,7 +23,8 @@ English | [简体中文](cli-reference.zh.md)
 | `doctor` | Run diagnostics: build info, LLM status (including the configuration file it reads, the winning provider key and the active model), stale daemon cleanup, optional repair. Supports `--verbose` and `--fix`; `--fix` also writes a commented LLM config template. |
 | `doctor log [name]` | List, view, tail, or grep backend log files. Supports `--tail`, grep-style flags, and `doctor log <name> grep <pattern>`. |
 | `doctor metrics [filter]` | List, filter, or grep backend metrics. Supports `doctor metrics grep <pattern>`. |
-| `doctor status [--section <name>] [--verbose]` | Print the aggregated status panel report in the terminal: summary layer by default, full detail with `--verbose`, one report with `--section` (health, build, runtime, llm, sessions, pulsar-sessions, swarm, url-pool, browsers, drivers, privacy, plugins, skills, metrics, logs), machine-readable JSON with `--json`. |
+| `doctor status [--section <name>] [--verbose]` | Print the aggregated status panel report in the terminal: summary layer by default, full detail with `--verbose`, one report with `--section` (health, build, runtime, llm, sessions, pulsar-sessions, swarm, url-pool, browsers, drivers, privacy, plugins, skills, metrics, logs), machine-readable JSON with `--json`. **New in 4.17:** default output always includes a **Data Paths** table showing the effective root, which JVM property won the chain, and every sub-system's location + on-disk size. Use `--recursive-sizes` for expensive recursive walks. |
+| `relocate data --target <path>` | Move Browser4's entire data directory (Chrome profiles, WebDB, crawl checkpoints, agent logs, knowledge store, logs) to another disk. `--dry-run` for a safe preview. `--env-user` writes `-Dbrowser4.data.root=<target>` into the User-level `BROWSER4_SERVER_OPTS` env var so the backend picks it up on next launch. `--delete-source` DELETES the source after a verified copy — default is copy-only. **Every LIVE run requires an interactive Y/N confirmation; `--yes` / `-y` skips it for CI/scripts only.** Writes a JSON Lines state file under the target so interrupted runs can resume (`robocopy` is naturally idempotent). See [§9 Storage: Relocating data](#9-storage-relocating-data). |
 | `delete data` | Delete session data. |
 | `install` | Install the Browser4 runtime bundle. Supports `--tag <version>` and `--force`. |
 | `upgrade` | Upgrade the CLI/runtime bundle. Supports `--tag <version>` and `--force`. |
@@ -59,6 +60,86 @@ show placeholders. Screenshots load **asynchronously** — the backend captures 
 (`202 Accepted` with `Retry-After` while capturing, cached `image/png` when ready), so the panel
 never blocks on a capture. Backed by `GET /api/pages` and
 `GET /api/pages/{sessionId}/{guid}/screenshot.png` (`?refresh=1` forces a new capture).
+
+## Storage: Relocating data (4.17+)
+
+Browser4's data root defaults to `~/.browser4/` and contains every sub-system
+that persists to disk — Chrome profiles, WebDB/H2, crawl checkpoints, agent
+task logs, knowledge store PEM, rolling logs.  The root and every sub-system's
+path are resolved by `DataDirResolver`, introduced in 4.17.
+
+### Property priority (first set wins)
+
+| Order | Property | Effect |
+|---|---|---|
+| 1 | `-Dbrowser4.data.root=<path>` | **Canonical root** (4.17). The value IS the root. |
+| 2 | `-Dapp.data.dir=<path>` | Legacy AppContext root. |
+| 3 | `-Dbrowser4.data.dir=<path>` | Legacy scheme — treated as the **parent** of `.browser4/`, so the effective root becomes `<path>/.browser4`. |
+| 4 | Default | `~/.browser4` |
+
+### Per-subsystem relocation (one subsystem on a different disk)
+
+```text
+-Dbrowser4.data.crawl.dir=E:/BigDisk/crawl        # Crawl tasks + checkpoints
+-Dbrowser4.data.agent.dir=E:/BigDisk/agent        # Agent tasks + event logs
+-Dbrowser4.data.swarm.dir=E:/BigDisk/swarm        # Swarm responses
+-Dbrowser4.data.knowledge.dir=D:/PEM               # Knowledge store
+-Dbrowser4.data.logs.dir=F:/SSD/logs              # Rolling logs
+```
+
+### The `relocate data` command
+
+This is the **recommended** way to move everything.  It stops the backend,
+uses `robocopy /E /COPYALL /R:3` on Windows or `rsync -a --delete` on Linux/macOS
+(both are idempotent resume primitives), can write the env var so the backend
+picks up the new root on next launch, and can optionally delete the source
+after a verified copy.
+
+All risky steps are gated:
+
+- Always plan + confirm: the command prints a full step-by-step plan and
+  **blocks on an interactive Y/N prompt before doing anything**.  `--yes`
+  skips it — reserved for CI and tooling.
+- `--delete-source` is off by default.  Even when on, the command **skips
+  deletion** unless copy + verify both succeeded.
+- Every stage writes a JSON-Lines state file at
+  `<target>/.browser4-relocate-state.json` so interrupted runs resume
+  naturally — robocopy/rsync are both idempotent and skip already-copied files.
+
+```bash
+# 1. Preview (no changes)
+browser4-cli relocate data --target D:/Browser4-Data --dry-run
+
+# 2. Execute + persist env var (most common)
+browser4-cli relocate data --target D:/Browser4-Data --env-user
+
+# 3. With CI-safe flags
+browser4-cli relocate data --target D:/Browser4-Data --env-user --yes
+```
+
+### Diagnose current paths
+
+```bash
+browser4-cli doctor           # default: prints the Data Paths table
+browser4-cli doctor --recursive-sizes   # expensive: recursive walk of every subsystem
+```
+
+The Data Paths section shows which JVM property won the priority chain, the
+resolved root, and every subsystem's effective location + on-disk size.
+Backed by `GET /api/doctor/data-paths`.
+
+### Notes
+
+- `BROWSER4_SERVER_OPTS` is **appended to**, not overwritten.  Other flags
+  already there (proxy, `-Xmx`, existing `-Dfoo=bar`) survive intact.
+  `relocate data` also **replaces** any prior `-Dbrowser4.data.root=` entry
+  so multiple runs don't stack duplicate values.
+- Env var changes only propagate to **new terminal processes**.  Restart
+  your shell before `browser4-cli open`.
+- Dev mode (`./b4w.ps1 <cmd>`) always injects a per-workspace
+  `-Dbrowser4.data.root=<state>/app-data` so parallel clones don't share
+  state.  The override still works — `-Dbrowser4.data.root=...` from
+  `BROWSER4_SERVER_OPTS` wins because it's appended last.
 
 ## Navigation
 
