@@ -87,12 +87,16 @@ object TaskContextCollector {
 
         // 策略切换：同一工具第一次失败之后，用不同参数（或不同做法）成功。每个工具最多记一次。
         var strategySwitches = 0
-        actionSequence.groupBy { it.tool }.forEach { (_, calls) ->
+        val corrections = mutableListOf<Correction>()
+        actionSequence.groupBy { it.tool }.forEach { (tool, calls) ->
             val firstFail = calls.indexOfFirst { it.ok == false }
             if (firstFail >= 0) {
                 val failedArgs = calls[firstFail].argumentsPreview
                 val laterSuccess = calls.drop(firstFail + 1).firstOrNull { it.ok == true }
-                if (laterSuccess != null && laterSuccess.argumentsPreview != failedArgs) strategySwitches++
+                if (laterSuccess != null && laterSuccess.argumentsPreview != failedArgs) {
+                    strategySwitches++
+                    corrections += Correction(tool, failedArgs, laterSuccess.argumentsPreview)
+                }
             }
         }
 
@@ -110,6 +114,7 @@ object TaskContextCollector {
             mutations = mutations,
             strategySwitches = strategySwitches,
             verbatimRetries = verbatimRetries,
+            corrections = corrections,
             toolCounts = sortedToolCounts,
             toolSequence = sequence,
             verifyVerdict = verifyVerdict,

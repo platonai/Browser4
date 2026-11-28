@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -109,6 +110,62 @@ class SkillRegistrarTest {
             val outcome = registrar.register(dir, skillId, SkillSummaryConfig.RegisterMode.AUTO)
             assertTrue(outcome is SkillRegistrar.Outcome.Failed, "got $outcome")
             assertFalse(registry.contains(skillId))
+        }
+    }
+
+    @Test
+    @DisplayName("reinstall redeploys a skill this registrar deployed and whose deployed copy was left alone")
+    fun reinstallReplacesOwnUnmodifiedDeployment() {
+        runBlocking {
+            val dir = writeSkillDir()
+            val outcome = registrar.register(dir, skillId, SkillSummaryConfig.RegisterMode.AUTO)
+            assertTrue(outcome is SkillRegistrar.Outcome.Installed, "got $outcome")
+            val deployed = Path.of(outcome.deployedPath!!)
+
+            // The draft gains an example, as the append path would, plus the review sidecar.
+            Files.writeString(dir.resolve("SKILL.md"), validSkillMd().replace("## Examples", "## Examples\n- A second run."))
+            Files.writeString(dir.resolve("context.json"), """{"prompt":"the source task"}""")
+
+            val re = registrar.reinstall(dir, skillId)
+            assertTrue(re is SkillRegistrar.Outcome.Installed, "got $re")
+            assertTrue(Files.readString(deployed.resolve("SKILL.md")).contains("A second run."))
+            assertFalse(Files.exists(deployed.resolve("context.json")), "the draft sidecar must not ship with the skill")
+            assertTrue(Files.exists(deployed.resolve(DefaultSkillRegistrar.DEPLOY_MARKER)))
+        }
+    }
+
+    @Test
+    @DisplayName("reinstall refuses to overwrite a deployed SKILL.md that was edited by hand")
+    fun reinstallRefusesEditedDeployment() {
+        runBlocking {
+            val dir = writeSkillDir()
+            val outcome = registrar.register(dir, skillId, SkillSummaryConfig.RegisterMode.AUTO)
+            val deployed = Path.of((outcome as SkillRegistrar.Outcome.Installed).deployedPath!!)
+            val edited = Files.readString(deployed.resolve("SKILL.md")) + "\na hand-written note\n"
+            Files.writeString(deployed.resolve("SKILL.md"), edited)
+
+            val failed = registrar.reinstall(dir, skillId) as? SkillRegistrar.Outcome.Failed
+            assertNotNull(failed, "an edited deployment must not be overwritten")
+            assertTrue(failed.reason.contains("edited"), failed.reason)
+            assertEquals(edited, Files.readString(deployed.resolve("SKILL.md")))
+        }
+    }
+
+    @Test
+    @DisplayName("reinstall refuses to overwrite a skill that was not deployed by auto skill summary")
+    fun reinstallRefusesForeignSkill() {
+        runBlocking {
+            // Installed the ordinary way, so the deployed directory carries no deploy marker.
+            val dir = writeSkillDir()
+            val result = installer.install(dir, SkillContext("test-foreign"), overwrite = false)
+            assertTrue(result.success, result.message)
+            val deployed = Path.of(result.deployedPath!!)
+            val before = Files.readString(deployed.resolve("SKILL.md"))
+
+            val failed = registrar.reinstall(dir, skillId) as? SkillRegistrar.Outcome.Failed
+            assertNotNull(failed, "a foreign skill must not be overwritten")
+            assertTrue(failed.reason.contains("not deployed by auto skill summary"), failed.reason)
+            assertEquals(before, Files.readString(deployed.resolve("SKILL.md")))
         }
     }
 }

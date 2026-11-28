@@ -76,6 +76,17 @@ class SkillFingerprintIndex(private val indexFile: Path) {
         }
     }
 
+    /**
+     * 忘记一个 skill 的全部条目：草稿已被删除或拒绝，或者生成/注册没有成功时调用。
+     *
+     * 条目留着会让这个指纹一直命中一个不可用的 skill：之后的相似任务既不重新生成，也追加不上。
+     */
+    fun remove(skillId: String) {
+        synchronized(this) {
+            if (entries.removeAll { it.skillId == skillId }) save()
+        }
+    }
+
     internal fun size(): Int = synchronized(this) { entries.size }
 
     private fun load(): MutableList<FingerprintEntry> {

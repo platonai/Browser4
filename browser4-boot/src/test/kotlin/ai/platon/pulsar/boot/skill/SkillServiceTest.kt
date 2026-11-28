@@ -288,6 +288,10 @@ class SkillServiceTest {
             assertTrue(result.success, "promote failed: ${result.message}")
             assertEquals("promote-me", result.skillId)
             assertTrue(registry.contains("promote-me"), "skill should be registered after promote")
+            assertFalse(
+                Files.exists(Path.of(result.deployedPath!!).resolve("context.json")),
+                "context.json must not be deployed with the skill",
+            )
 
             val after = service.listDrafts()
             assertEquals(1, after.size)

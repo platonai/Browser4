@@ -360,7 +360,9 @@ repository `skills/` tree. The mechanism is conservative and best-effort: it is 
 any failure is swallowed and never affects the task's success status or verdict, and
 `registerMode` defaults to `draft` so generated skills are never auto-activated — they must be
 promoted manually through the endpoint above (or set `registerMode=auto` to register validated
-drafts immediately). Repeated similar runs append a new `## Examples` entry to the existing draft
+drafts immediately). In `auto` mode a taken name gets a `-2`, `-3`, … suffix, and a skill the
+mechanism did not deploy itself — or whose deployed `SKILL.md` was edited afterwards — is never
+overwritten. Repeated similar runs append a new `## Examples` entry to the existing draft
 and bump its patch version instead of creating duplicates, and every generated file is scanned by
 the same `SecretRedactor` used for task events so no secrets leak into a draft. See
 [`docs/config.md`](../../../../../docs/config.md) under "Auto-generated skill summaries" for all

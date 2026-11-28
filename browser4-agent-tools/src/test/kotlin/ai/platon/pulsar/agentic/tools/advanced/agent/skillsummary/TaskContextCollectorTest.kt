@@ -111,6 +111,24 @@ class TaskContextCollectorTest {
     }
 
     @Test
+    @DisplayName("TR-2.4 a strategy switch carries both argument previews, for the LLM to learn from")
+    fun correctionCarriesBothPreviews() {
+        val events = listOf(
+            event(AgentTaskEvent.TYPE_TOOL_CALL, 1, tool = "click", arguments = "{\"ref\":\"#buy\"}", callId = "c1"),
+            event(AgentTaskEvent.TYPE_TOOL_RESULT, 2, callId = "c1", ok = false),
+            event(AgentTaskEvent.TYPE_TOOL_CALL, 3, tool = "click", arguments = "{\"text\":\"Buy now\"}", callId = "c2"),
+            event(AgentTaskEvent.TYPE_TOOL_RESULT, 4, callId = "c2", ok = true),
+        )
+
+        val ctx = TaskContextCollector.collect(AgentTaskStatus(), events)
+
+        assertEquals(
+            listOf(Correction("click", "{\"ref\":\"#buy\"}", "{\"text\":\"Buy now\"}")),
+            ctx.corrections,
+        )
+    }
+
+    @Test
     @DisplayName("filesChanged extracted from finish.amend detail with map-shaped entries")
     fun collectsFilesChangedFromAmend() {
         val status = AgentTaskStatus()

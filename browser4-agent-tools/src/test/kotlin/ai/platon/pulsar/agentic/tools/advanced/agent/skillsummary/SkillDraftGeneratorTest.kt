@@ -141,7 +141,9 @@ class SkillDraftGeneratorTest {
 
         assertEquals("refactor-auth-module", result.skillId)
         val content = Files.readString(result.dir.resolve("SKILL.md"))
-        assertTrue(content.contains("name: refactor-auth-module"))
+        // the whole line: a leftover token (`name: refactor-auth-module Auth_Module`) is not a loadable name
+        assertEquals("name: refactor-auth-module", content.lineSequence().first { it.startsWith("name:") })
+        assertTrue(result.validation.valid, "issues: ${result.validation.issues}")
     }
 
     @Test
@@ -182,5 +184,87 @@ class SkillDraftGeneratorTest {
             "an invalid draft must not be listed or promotable as a skill",
         )
         assertTrue(Files.exists(result.dir.resolve("context.json")), "context.json is still useful for triage")
+    }
+
+    @Test
+    @DisplayName("a draft the regex validator accepts but the real loader cannot parse is rejected, not written")
+    fun unparseableFrontmatterIsRejectedByRealLoader() = runBlocking {
+        // An unquoted `: ` inside the description is invalid YAML: promote / auto install would fail on it.
+        val broken = validSkillMd.replace(
+            "description: Generalized steps for refactoring an authentication module.",
+            "description: Use when: the auth module needs restructuring",
+        )
+        val gen = generator { _, _ -> broken }
+        val result = gen.generate(ctx())
+
+        assertFalse(result.validation.valid, "the real loader must be the final gate")
+        assertFalse(Files.exists(result.dir.resolve("SKILL.md")))
+        assertTrue(
+            result.validation.issues.any { it.severity == Severity.ERROR && it.message.contains("SkillDefinitionLoader") },
+            "issues: ${result.validation.issues}",
+        )
+    }
+
+    @Test
+    @DisplayName("a name longer than the loader's 64-character limit is cut to fit")
+    fun longNameIsCutToLoaderLimit() = runBlocking {
+        val longName = "a" + "-bc".repeat(24)
+        val gen = generator { _, _ -> validSkillMd.replace("name: refactor-auth", "name: $longName") }
+        val result = gen.generate(ctx())
+
+        assertTrue(result.validation.valid, "issues: ${result.validation.issues}")
+        assertEquals(64, result.skillId.length)
+        assertEquals(result.skillId, result.dir.fileName.toString())
+        assertTrue(Files.exists(result.dir.resolve("SKILL.md")))
+    }
+
+    @Test
+    @DisplayName("a name taken by a registered, deployed or already drafted skill gets a suffix instead of overwriting it")
+    fun takenNameGetsSuffix() = runBlocking {
+        val taken = mutableSetOf<String>()
+        val gen = SkillDraftGenerator(tempDir, llm = { _, _ -> validSkillMd }, isNameTaken = { it in taken })
+
+        // taken by a registered / deployed skill
+        taken += "refactor-auth"
+        assertEquals("refactor-auth-2", gen.generate(ctx()).skillId)
+
+        // nothing taken and no draft yet: the name itself, and the draft lands on disk
+        taken.clear()
+        val plain = gen.generate(ctx())
+        assertEquals("refactor-auth", plain.skillId)
+        assertTrue(Files.exists(plain.dir.resolve("SKILL.md")))
+
+        // a draft already carries the name (and so does the first suffixed one)
+        assertEquals("refactor-auth-3", gen.generate(ctx()).skillId)
+    }
+
+    @Test
+    @DisplayName("renderContext gives the LLM argument previews and the failed -> succeeded pairs, redacted")
+    fun renderContextCarriesCorrections() {
+        val failed = """{"selector":"#price"}"""
+        val succeeded = """{"selector":".price"}"""
+        val context = ctx().copy(
+            toolSequence = listOf(
+                ToolCallRecord("tab.click", failed, false, 120L, "not found"),
+                ToolCallRecord("tab.click", succeeded, true, 90L, "ok"),
+                ToolCallRecord("fill", """{"selector":"#password","text":"hunter2"}""", true, 50L, "ok"),
+            ),
+            corrections = listOf(Correction("tab.click", failed, succeeded)),
+        )
+        val text = generator { _, _ -> validSkillMd }.renderContext(context)
+
+        assertTrue(text.contains("failed with {\"selector\":\"#price\"} -> succeeded with {\"selector\":\".price\"}"))
+        assertFalse(text.contains("hunter2"), "a value typed into a credential field must not reach the LLM context")
+    }
+
+    @Test
+    @DisplayName("free text is redacted before it is truncated")
+    fun redactsBeforeTruncating() {
+        // The result is cut at 2000 chars: a secret straddling that line must still be redacted.
+        val result = "x".repeat(1985) + " password: hunter2 the end"
+        val text = generator { _, _ -> validSkillMd }.renderContext(ctx().copy(result = result))
+
+        assertFalse(text.contains("hunte"), "truncating first would leave half of the secret")
+        assertTrue(text.contains("password: ***"))
     }
 }

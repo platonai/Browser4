@@ -279,4 +279,84 @@ class SkillSummarizerTest {
             assertFalse("generate" in secondActions, "second run must not generate a duplicate draft")
         }
     }
+
+    @Test
+    @DisplayName("a degraded run (LLM unavailable) does not occupy the fingerprint index or reach the registrar")
+    fun degradedRunDoesNotClaimFingerprint() = runBlocking {
+        val idx = SkillFingerprintIndex(tempDir.resolve("degraded-index.json"))
+        SkillSummarizer.indexFactory = { idx }
+        SkillSummarizer.generatorFactory = { _, _ -> SkillDraftGenerator(tempDir, llm = { _, _ -> null }) }
+        val emitted = capturedEmitter()
+
+        SkillSummarizer.maybeSummarize(
+            AgentTaskStatus().apply { submittedTask = "refactor the auth module" }, generateEvents(),
+            { type, detail, _ -> emitted.add(Triple(type, detail, null)) },
+            SkillSummaryConfig(enabled = true, registerMode = SkillSummaryConfig.RegisterMode.AUTO),
+        )
+
+        val actions = emitted.map { it.second?.get("action") }
+        assertTrue("degraded" in actions, "actions=$actions")
+        assertFalse("generate" in actions, "a degraded run is not a generation: $actions")
+        assertTrue(registrar.calls.isEmpty(), "a degraded run must not be registered")
+        assertEquals(0, idx.size(), "a degraded run must not occupy the fingerprint")
+    }
+
+    @Test
+    @DisplayName("a failed or colliding registration rolls the fingerprint back so a similar run can generate again")
+    fun registerFailureRollsBackFingerprint() = runBlocking {
+        val idx = SkillFingerprintIndex(tempDir.resolve("rollback-index.json"))
+        SkillSummarizer.indexFactory = { idx }
+        val outcomes = listOf(
+            SkillRegistrar.Outcome.Failed("refactor-auth", "install boom"),
+            SkillRegistrar.Outcome.AlreadyExists("refactor-auth"),
+        )
+        for (outcome in outcomes) {
+            registrar.outcome = outcome
+            registrar.calls.clear()
+            val emitted = capturedEmitter()
+            SkillSummarizer.maybeSummarize(
+                AgentTaskStatus().apply { submittedTask = "refactor the auth module" }, generateEvents(),
+                { type, detail, _ -> emitted.add(Triple(type, detail, null)) },
+                SkillSummaryConfig(enabled = true, registerMode = SkillSummaryConfig.RegisterMode.AUTO),
+            )
+            assertEquals(1, registrar.calls.size)
+            assertEquals(0, idx.size(), "$outcome must not occupy the fingerprint")
+        }
+
+        // once the registration succeeds the fingerprint is recorded
+        registrar.outcome = SkillRegistrar.Outcome.Installed("refactor-auth", "/tmp/skills/refactor-auth")
+        SkillSummarizer.maybeSummarize(
+            AgentTaskStatus().apply { submittedTask = "refactor the auth module" }, generateEvents(),
+            { _, _, _ -> },
+            SkillSummaryConfig(enabled = true, registerMode = SkillSummaryConfig.RegisterMode.AUTO),
+        )
+        assertEquals(1, idx.size())
+    }
+
+    @Test
+    @DisplayName("an index entry whose draft is gone is removed and a new draft is generated instead of failing forever")
+    fun staleIndexEntryIsRemovedAndRegenerated() = runBlocking {
+        val tokens = SkillFingerprint.tokensOf("refactor the auth module")
+        val idx = SkillFingerprintIndex(tempDir.resolve("stale-index.json"))
+        idx.record(tokens, "context-only-no-llm-1", 0L)
+        SkillSummarizer.indexFactory = { idx }
+        val emitted = capturedEmitter()
+
+        SkillSummarizer.maybeSummarize(
+            AgentTaskStatus().apply { submittedTask = "refactor the auth module" }, generateEvents(),
+            { type, detail, _ -> emitted.add(Triple(type, detail, null)) },
+            SkillSummaryConfig(
+                enabled = true,
+                registerMode = SkillSummaryConfig.RegisterMode.DRAFT,
+                cooldownHours = 0L,
+            ),
+        )
+
+        val actions = emitted.map { it.second?.get("action") }
+        assertTrue("regenerate" in actions, "actions=$actions")
+        assertTrue("generate" in actions, "actions=$actions")
+        assertEquals("refactor-auth", idx.lookup(tokens, 0.85)?.skillId)
+        assertEquals(1, idx.size())
+        assertTrue(Files.exists(tempDir.resolve("refactor-auth").resolve("SKILL.md")))
+    }
 }

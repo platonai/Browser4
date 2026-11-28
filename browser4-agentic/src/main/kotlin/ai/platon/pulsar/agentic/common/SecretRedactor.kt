@@ -88,6 +88,29 @@ object SecretRedactor {
     /** A query parameter inside a URL. */
     private val URL_PARAM = Regex("""([?&])([^=&#\s]+)=([^&#\s]*)""")
 
+    /**
+     * A credential named in prose or YAML: `password: hunter2`, `api_key=...`, `密码：…`, `密码是…`.
+     * The value is a quoted literal or a bare token of the literal alphabet.
+     */
+    private val PROSE_PAIR = Regex(
+        """((?i:\b(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|cookie)\b""" +
+            """|密码|口令|密钥)\s*[:=：是为]\s*)("[^"\n]*"|'[^'\n]*'|[A-Za-z0-9._~+/=-]{6,256})""",
+    )
+
+    /** A `Bearer` credential in a header line or a prose mention. */
+    private val BEARER_TOKEN = Regex("""(?i)\b(Bearer)(\s+)[A-Za-z0-9._~+/=-]{8,}=*""")
+
+    /** An http(s) URL inside free text; its credential-bearing query parameters are redacted. */
+    private val URL_IN_TEXT = Regex("""https?://[^\s<>"'`\\]+""")
+
+    /** Key formats that carry their own signature: JWT, OpenAI, GitHub, AWS, Slack. */
+    private val PROVIDER_KEY = Regex(
+        """\b(?:eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}""" +
+            """|sk-[A-Za-z0-9_-]{16,}""" +
+            """|(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{16,}""" +
+            """|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,})""",
+    )
+
     /** True when [key] names a credential (case/`_`/`-` insensitive). */
     fun isSensitiveKey(key: String): Boolean =
         // A nested key may arrive dotted (`credentials.token`): the last segment is the part
@@ -126,6 +149,30 @@ object SecretRedactor {
             INLINE_SENSITIVE_MARKERS.any { key.contains(it, ignoreCase = true) }
         }
         return INLINE_FLAG_SECRET.replace(jsonish) { match -> "${match.groupValues[1]}$REDACTED" }
+    }
+
+    /**
+     * Redact credentials in prose: a prompt, a task result, a generated SKILL draft.
+     *
+     * [redactText] targets tool payloads — JSON-shaped pairs and CLI flags. The same credential in
+     * prose is `password: hunter2`, `密码：hunter2`, `token=...`, a `Bearer` header, a signed URL or
+     * a bare provider key, none of which the pair scanners recognise.
+     *
+     * A quoted value is a literal and always goes. A bare value is only treated as a secret when it
+     * looks like one — at least six characters of the literal alphabet and a digit — so that code
+     * such as `token = settings.authToken` stays readable.
+     */
+    fun redactProse(raw: String): String {
+        if (raw.isEmpty()) return raw
+        var text = redactText(raw)
+        text = PROSE_PAIR.replace(text) { match ->
+            val value = match.groupValues[2]
+            val quoted = value.startsWith('"') || value.startsWith('\'')
+            if (quoted || value.any { it in '0'..'9' }) "${match.groupValues[1]}$REDACTED" else match.value
+        }
+        text = BEARER_TOKEN.replace(text) { "${it.groupValues[1]}${it.groupValues[2]}$REDACTED" }
+        text = URL_IN_TEXT.replace(text) { redactUrl(it.value) ?: it.value }
+        return PROVIDER_KEY.replace(text) { REDACTED }
     }
 
     /**

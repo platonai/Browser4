@@ -222,4 +222,52 @@ class SecretRedactorTest {
         assertEquals("""{"password": "hunter2""", SecretRedactor.redactText("""{"password": "hunter2"""))
         assertEquals("""a "quote""", SecretRedactor.redactText("""a "quote"""))
     }
+
+    @Test
+    @DisplayName("prose: YAML / key=value / Chinese credentials are redacted")
+    fun redactsProsePairs() {
+        assertEquals("password: ***", SecretRedactor.redactProse("password: hunter2"))
+        assertEquals("- api_key=***", SecretRedactor.redactProse("- api_key=sk_live_abc123"))
+        assertEquals("密码：***", SecretRedactor.redactProse("密码：abc123"))
+        assertEquals("密码是***，然后保存", SecretRedactor.redactProse("密码是abc123，然后保存"))
+        // a quoted value is always a literal
+        assertEquals("token: ***", SecretRedactor.redactProse("token: 'abc'"))
+    }
+
+    @Test
+    @DisplayName("prose: code that merely mentions a credential name stays readable")
+    fun proseKeepsNonLiteralValues() {
+        val code = "const token = settings.authToken; password = readFromEnv()"
+        assertEquals(code, SecretRedactor.redactProse(code))
+        // too short, and without a digit, to look like a secret
+        assertEquals("password: abc", SecretRedactor.redactProse("password: abc"))
+    }
+
+    @Test
+    @DisplayName("prose: Bearer headers, signed URLs and well-known key formats are redacted")
+    fun redactsProseTokensAndUrls() {
+        assertEquals("Authorization: Bearer ***", SecretRedactor.redactProse("Authorization: Bearer abc.def.ghi"))
+        assertEquals(
+            "GET https://example.com/v1/items?page=2&access_token=***",
+            SecretRedactor.redactProse("GET https://example.com/v1/items?page=2&access_token=sk_live_123"),
+        )
+        val jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+        assertEquals("key ***", SecretRedactor.redactProse("key $jwt"))
+        assertEquals("use *** now", SecretRedactor.redactProse("use sk-abcdefghijklmnopqrstuvwxyz now"))
+        assertEquals("***", SecretRedactor.redactProse("ghp_${"a".repeat(36)}"))
+    }
+
+    @Test
+    @DisplayName("prose: redaction stays linear on adversarial input")
+    fun proseRedactionStaysLinear() {
+        val unterminatedQuote = "password: \"" + "a".repeat(200_000)
+        val manyPairs = "password: aaaaaaa1 ".repeat(20_000)
+
+        val redacted = assertTimeout(
+            Duration.ofSeconds(5),
+            ThrowingSupplier { SecretRedactor.redactProse("$unterminatedQuote $manyPairs") },
+        )
+
+        assertFalse(redacted.contains("aaaaaaa1"), "every pair must be redacted")
+    }
 }

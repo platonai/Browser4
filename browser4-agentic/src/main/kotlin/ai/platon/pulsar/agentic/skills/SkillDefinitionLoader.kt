@@ -315,10 +315,14 @@ class SkillDefinitionLoader {
     /**
      * Load a single skill definition from a directory.
      *
+     * Throws when SKILL.md is present but cannot be parsed (invalid YAML, missing or invalid metadata).
+     * Callers that generate SKILL.md themselves use this to verify, with the very same code path,
+     * that a draft is installable before writing it to its final location.
+     *
      * @param skillDirectory Path to skill directory
      * @return Skill definition or null if SKILL.md not found
      */
-    private fun loadSkillDefinition(skillDirectory: Path): SkillDefinition? {
+    fun loadSkillDefinition(skillDirectory: Path): SkillDefinition? {
         val skillMdPath = skillDirectory.resolve("SKILL.md")
         if (!Files.exists(skillMdPath)) {
             logger.warn("SKILL.md not found in ${skillDirectory.fileName}")

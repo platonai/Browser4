@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agentic.tools.advanced.agent.skillsummary
 
 import ai.platon.pulsar.agentic.common.AgentPaths
+import ai.platon.pulsar.agentic.skills.SkillRegistry
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskEvent
 import ai.platon.pulsar.agentic.tools.advanced.agent.AgentTaskStatus
 import org.slf4j.LoggerFactory
@@ -98,6 +99,9 @@ object SkillSummarizer {
      *
      * Task 2 为 no-op（采集已在 [maybeSummarize] 完成并发射 `collect` 事件）；
      * Task 3 起逐步接入。每一步都通过 [emit] 发射 `skill.summarize` 事件留痕。
+     *
+     * 指纹索引只在草稿确实可用之后才记录：降级、校验失败、注册失败的运行不占指纹，
+     * 索引指向的草稿不存在时清掉条目并重新生成。
      */
     private suspend fun summarizePipeline(
         status: AgentTaskStatus,
@@ -129,6 +133,18 @@ object SkillSummarizer {
                     detail,
                     "auto skill summary append to $targetSkillId: ${result.reason}",
                 )
+                if (result.notFound) {
+                    // 索引指向的草稿已被删除或拒绝。条目不清掉，这个指纹会一直命中一个不存在的
+                    // skill：冷却期内被跳过，冷却期后每次追加失败，永远不再生成。
+                    forget(index, targetSkillId)
+                    emit(
+                        AgentTaskEvent.TYPE_SKILL_SUMMARIZE,
+                        mapOf("action" to "regenerate", "targetSkillId" to targetSkillId),
+                        "auto skill summary: indexed skill $targetSkillId is gone, generating a new draft",
+                    )
+                    generateAndRegister(status, context, config, emit, llmCall, index)
+                    return
+                }
                 if (result.appended) {
                     runCatching { index.bump(targetSkillId) }
                         .onFailure { logger.warn("skill summary index bump failed for {}: {}", targetSkillId, it.message) }
@@ -156,47 +172,80 @@ object SkillSummarizer {
                     )
                 }
             }
-            SummaryDecision.Action.GENERATE -> {
-                val draft = generatorFactory(config, llmCall).generate(context)
-                val detail = linkedMapOf<String, Any?>(
-                    "action" to if (draft.validation.valid) "generate" else "fail",
-                    "skillId" to draft.skillId,
-                    "dir" to draft.dir.toString(),
-                    "llmUsed" to draft.llmUsed,
-                    "valid" to draft.validation.valid,
-                )
-                if (!draft.validation.valid) {
-                    detail["issues"] = draft.validation.issues.joinToString("; ") { it.message }
-                }
-                emit(
-                    AgentTaskEvent.TYPE_SKILL_SUMMARIZE,
-                    detail,
-                    "auto skill summary ${if (draft.validation.valid) "generated" else "failed validation"}: ${draft.skillId}",
-                )
-                if (draft.validation.valid) {
-                    runCatching { index.record(SkillFingerprint.tokensOf(context.prompt), draft.skillId) }
-                        .onFailure { logger.warn("skill summary index record failed for {}: {}", draft.skillId, it.message) }
-                    val outcome = registrarFactory(config).register(draft.dir, draft.skillId, config.registerMode)
-                    val regAction = when (outcome) {
-                        is SkillRegistrar.Outcome.DraftOnly -> "draft"
-                        is SkillRegistrar.Outcome.Installed -> "registered"
-                        is SkillRegistrar.Outcome.AlreadyExists -> "already-exists"
-                        is SkillRegistrar.Outcome.Failed -> "register-failed"
-                    }
-                    val regText = when (outcome) {
-                        is SkillRegistrar.Outcome.DraftOnly -> "kept as draft (not registered)"
-                        is SkillRegistrar.Outcome.Installed -> "registered to runtime registry (auto)"
-                        is SkillRegistrar.Outcome.AlreadyExists -> "already registered; append path (Task 6)"
-                        is SkillRegistrar.Outcome.Failed -> "register failed: ${outcome.reason}"
-                    }
-                    emit(
-                        AgentTaskEvent.TYPE_SKILL_SUMMARIZE,
-                        mapOf("action" to regAction, "skillId" to draft.skillId, "mode" to config.registerMode.name),
-                        "auto skill summary $regText: ${draft.skillId}",
-                    )
-                }
-            }
+            SummaryDecision.Action.GENERATE -> generateAndRegister(status, context, config, emit, llmCall, index)
         }
+    }
+
+    /** 生成草稿并按注册模式安装；只有产出可用 SKILL.md 的运行才占用指纹。 */
+    private suspend fun generateAndRegister(
+        status: AgentTaskStatus,
+        context: TaskSummaryContext,
+        config: SkillSummaryConfig,
+        emit: (type: String, detail: Map<String, Any?>?, text: String?) -> Unit,
+        llmCall: (suspend (instruction: String, contextText: String) -> String?)?,
+        index: SkillFingerprintIndex,
+    ) {
+        val draft = generatorFactory(config, llmCall).generate(context)
+        // 没有 SKILL.md 的结果是降级（LLM 不可用），不是一次生成。
+        val degraded = draft.skillMd == null
+        val action = when {
+            degraded -> "degraded"
+            draft.validation.valid -> "generate"
+            else -> "fail"
+        }
+        val detail = linkedMapOf<String, Any?>(
+            "action" to action,
+            "skillId" to draft.skillId.takeIf { !degraded },
+            "dir" to draft.dir.toString(),
+            "llmUsed" to draft.llmUsed,
+            "valid" to draft.validation.valid,
+        )
+        if (!draft.validation.valid) {
+            detail["issues"] = draft.validation.issues.joinToString("; ") { it.message }
+        }
+        emit(
+            AgentTaskEvent.TYPE_SKILL_SUMMARIZE,
+            detail,
+            when (action) {
+                "degraded" -> "auto skill summary degraded (no SKILL.md produced): ${draft.dir.fileName}"
+                "generate" -> "auto skill summary generated: ${draft.skillId}"
+                else -> "auto skill summary failed validation: ${draft.skillId}"
+            },
+        )
+        if (degraded || !draft.validation.valid) return
+
+        val outcome = registrarFactory(config).register(draft.dir, draft.skillId, config.registerMode)
+        val regAction = when (outcome) {
+            is SkillRegistrar.Outcome.DraftOnly -> "draft"
+            is SkillRegistrar.Outcome.Installed -> "registered"
+            is SkillRegistrar.Outcome.AlreadyExists -> "already-exists"
+            is SkillRegistrar.Outcome.Failed -> "register-failed"
+        }
+        val regText = when (outcome) {
+            is SkillRegistrar.Outcome.DraftOnly -> "kept as draft (not registered)"
+            is SkillRegistrar.Outcome.Installed -> "registered to runtime registry (auto)"
+            is SkillRegistrar.Outcome.AlreadyExists ->
+                "name already registered by another skill; the draft is kept for manual review"
+            is SkillRegistrar.Outcome.Failed -> "register failed: ${outcome.reason}"
+        }
+        emit(
+            AgentTaskEvent.TYPE_SKILL_SUMMARIZE,
+            mapOf("action" to regAction, "skillId" to draft.skillId, "mode" to config.registerMode.name),
+            "auto skill summary $regText: ${draft.skillId}",
+        )
+        when (outcome) {
+            is SkillRegistrar.Outcome.Failed, is SkillRegistrar.Outcome.AlreadyExists ->
+                // 装不上或撞名：不占指纹，下一次相似任务才能重新生成。
+                forget(index, draft.skillId)
+            else -> runCatching { index.record(SkillFingerprint.tokensOf(context.prompt), draft.skillId) }
+                .onFailure { logger.warn("skill summary index record failed for {}: {}", draft.skillId, it.message) }
+        }
+    }
+
+    /** 索引条目对应不上一个可用草稿时清掉它；失败只记日志。 */
+    private fun forget(index: SkillFingerprintIndex, skillId: String) {
+        runCatching { index.remove(skillId) }
+            .onFailure { logger.warn("skill summary index remove failed for {}: {}", skillId, it.message) }
     }
 
     /** 草稿区根目录（config.draftsDir 非空时用它，否则 `<app data>/agent/skills-drafts`）。 */
@@ -228,9 +277,20 @@ object SkillSummarizer {
      */
     internal var llmCall: (suspend (instruction: String, contextText: String) -> String?)? = null
 
-    /** 草稿生成器工厂，可替换以便测试注入 mock LLM / 临时目录。 */
+    /**
+     * 草稿生成器工厂，可替换以便测试注入 mock LLM / 临时目录。
+     *
+     * 生成的名字要避开已注册和已部署的 skill：同名草稿在 auto 模式下会经追加路径的覆盖安装
+     * 替换掉一个已有的 skill。
+     */
     internal var generatorFactory: (SkillSummaryConfig, (suspend (instruction: String, contextText: String) -> String?)?) -> SkillDraftGenerator = { cfg, llm ->
-        SkillDraftGenerator(draftsDirOf(cfg), llm = llm ?: llmCall ?: { _, _ -> null })
+        SkillDraftGenerator(
+            draftsDirOf(cfg),
+            llm = llm ?: llmCall ?: { _, _ -> null },
+            isNameTaken = { name ->
+                SkillRegistry.instance.contains(name) || Files.exists(AgentPaths.SKILLS_DIR.resolve(name))
+            },
+        )
     }
 
     /** 注册器工厂，可替换以便测试注入 fake。 */

@@ -26,7 +26,7 @@ import kotlin.io.path.writeText
 class SkillAppender(
     private val draftsDir: Path,
     private val skillsDir: Path = AgentPaths.SKILLS_DIR,
-    private val redactor: (String) -> String = { SecretRedactor.redactText(it) },
+    private val redactor: (String) -> String = { SecretRedactor.redactProse(it) },
 ) {
     private val logger = LoggerFactory.getLogger(SkillAppender::class.java)
 
@@ -35,11 +35,13 @@ class SkillAppender(
         val skillFile: Path?,
         val appended: Boolean,
         val reason: String,
+        /** 索引指向的 skill 在草稿区和部署目录都不存在：调用方应清掉索引条目并重新生成。 */
+        val notFound: Boolean = false,
     )
 
     fun append(targetSkillId: String, taskId: String, context: TaskSummaryContext): Result {
         val skillFile = locateSkillFile(targetSkillId)
-            ?: return Result(null, null, appended = false, reason = "target skill not found: $targetSkillId")
+            ?: return Result(null, null, appended = false, reason = "target skill not found: $targetSkillId", notFound = true)
         return runCatching {
             var content = skillFile.readText()
             val marker = "<!-- task-id: $taskId -->"
@@ -82,7 +84,8 @@ class SkillAppender(
         val tools = redactor(
             context.toolCounts.entries.joinToString(", ") { (k, v) -> "$k($v)" }.ifBlank { "n/a" },
         )
-        val prompt = redactor((context.prompt ?: "").take(80).replace("\n", " "))
+        // 先脱敏再截断：截断可能把一个密钥切成脱敏器认不出的半截。
+        val prompt = redactor(context.prompt ?: "").replace("\n", " ").take(80)
         val entry = "- $prompt — tools: $tools $marker\n"
         val header = "## Examples"
         val idx = content.indexOf(header)

@@ -217,7 +217,7 @@ class SkillService(
         check(dir.startsWith(draftsDir)) { "Invalid draft id: $draftId" }
         require(Files.isDirectory(dir)) { "Draft not found: $draftId" }
         require(Files.exists(dir.resolve("SKILL.md"))) { "SKILL.md not found in draft: $draftId" }
-        val result = installSkill(dir, overwrite)
+        val result = withoutContextSidecar(installSkill(dir, overwrite))
         if (result.success) return result
         // Older drafts were named `<skillId>-<epochMillis>`, which SkillInstaller rejects
         // because it requires `name == directoryName`. Retry from a staging directory named
@@ -228,7 +228,18 @@ class SkillService(
             dir.toFile().copyRecursively(staging.toFile(), overwrite = true)
             installSkill(staging, overwrite)
         }.getOrElse { return result }
-        return retried
+        return withoutContextSidecar(retried)
+    }
+
+    /**
+     * The draft sidecar `context.json` (the source task's prompt and result) is review material,
+     * not part of the skill: it must not ship with the deployed directory.
+     */
+    private fun withoutContextSidecar(result: SkillInstaller.InstallResult): SkillInstaller.InstallResult {
+        result.deployedPath?.let { path ->
+            runCatching { Files.deleteIfExists(Path.of(path).resolve("context.json")) }
+        }
+        return result
     }
 
     // ---- Install ----
